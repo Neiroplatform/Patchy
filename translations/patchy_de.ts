@@ -2362,6 +2362,10 @@
         <translation>Die PSD-PackBits-Zeile wurde auf eine falsche Länge decodiert</translation>
     </message>
     <message>
+        <source>This PSD/PSB document is too large to import safely.</source>
+        <translation>Dieses PSD/PSB-Dokument ist zu groß, um sicher importiert zu werden.</translation>
+    </message>
+    <message>
         <source>PSD saved channels must be full-canvas 8-bit grayscale images</source>
         <translation>Gespeicherte PSD-Kanäle müssen 8-Bit-Graustufenbilder in voller Arbeitsflächengröße sein</translation>
     </message>

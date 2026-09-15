@@ -7886,6 +7886,10 @@ Mixed selection</source>
         <translation>PSD の PackBits 行のデコード後の長さが正しくありません</translation>
     </message>
     <message>
+        <source>This PSD/PSB document is too large to import safely.</source>
+        <translation>この PSD/PSB ドキュメントは、安全に読み込めるサイズを超えています。</translation>
+    </message>
+    <message>
         <source>PSD saved channels must be full-canvas 8-bit grayscale images</source>
         <translation>PSD の保存されたチャンネルはカンバス全体の 8 ビットグレースケール画像である必要があります</translation>
     </message>

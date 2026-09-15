@@ -55,6 +55,54 @@ namespace patchy::psd {
 
 namespace {
 
+class PrimaryPixelBudgetExceeded final : public std::length_error {
+public:
+  PrimaryPixelBudgetExceeded()
+      : std::length_error(PATCHY_TRANSLATE_NOOP(
+            "QObject", "This PSD/PSB document is too large to import safely.")) {}
+};
+
+class PrimaryPixelBudget {
+public:
+  PrimaryPixelBudget(const ParseBudget& budget, ParseUsage* usage)
+      : remaining_(budget.max_primary_pixel_bytes), usage_(usage) {
+    if (usage_ != nullptr) {
+      usage_->primary_pixel_bytes = 0;
+    }
+  }
+
+  void charge(std::int32_t width, std::int32_t height, std::size_t channels) {
+    if (width <= 0 || height <= 0 || channels == 0U) {
+      return;
+    }
+    const auto width_u64 = static_cast<std::uint64_t>(width);
+    const auto height_u64 = static_cast<std::uint64_t>(height);
+    if (height_u64 > std::numeric_limits<std::uint64_t>::max() / width_u64) {
+      throw PrimaryPixelBudgetExceeded();
+    }
+    const auto pixels = width_u64 * height_u64;
+    const auto channels_u64 = static_cast<std::uint64_t>(channels);
+    if (channels_u64 > std::numeric_limits<std::uint64_t>::max() / pixels) {
+      throw PrimaryPixelBudgetExceeded();
+    }
+    charge_bytes(pixels * channels_u64);
+  }
+
+private:
+  void charge_bytes(std::uint64_t bytes) {
+    if (bytes > remaining_) {
+      throw PrimaryPixelBudgetExceeded();
+    }
+    remaining_ -= bytes;
+    if (usage_ != nullptr) {
+      usage_->primary_pixel_bytes += bytes;
+    }
+  }
+
+  std::uint64_t remaining_;
+  ParseUsage* usage_;
+};
+
 void append_document_channels_for_write(
     const Document& document, std::vector<std::span<const std::uint8_t>>& planes,
     std::vector<CompositeChannelInfo>& channel_info) {
@@ -101,11 +149,26 @@ bool records_look_like_legacy_top_to_bottom(const std::vector<Layer>& layers, st
 Document read_flat_composite(BigEndianReader& reader, const Header& header,
                              const CmykToRgbTransform* cmyk_icc,
                              const ParsedCompositeChannelResources& channel_resources,
-                             bool has_merged_transparency, std::size_t* damaged_rows = nullptr) {
+                             bool has_merged_transparency, PrimaryPixelBudget& budget,
+                             std::size_t* damaged_rows = nullptr) {
   const auto format = format_from_header(header);
   const auto compression = reader.read_u16();
   const auto source_is_cmyk = is_cmyk_color_mode(header.color_mode);
+  const auto color_channel_count = composite_color_channel_count(header.color_mode);
+  const auto first_saved_channel = static_cast<std::uint16_t>(
+      color_channel_count + (has_merged_transparency ? 1U : 0U));
+  if (first_saved_channel > header.channels) {
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD merged transparency flag has no matching composite channel"));
+  }
 
+  budget.charge(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
+                format.channels);
+  if (has_merged_transparency) {
+    budget.charge(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
+                  PixelFormat::gray8().channels);
+  }
+  budget.charge(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
+                static_cast<std::size_t>(header.channels - first_saved_channel));
   Document document(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
   PixelBuffer pixels(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
   const auto channel_data = read_flat_image_channels(reader, header, compression, damaged_rows);
@@ -123,12 +186,6 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
     }
   }
 
-  const auto color_channel_count = composite_color_channel_count(header.color_mode);
-  const auto first_saved_channel = static_cast<std::uint16_t>(
-      color_channel_count + (has_merged_transparency ? 1U : 0U));
-  if (first_saved_channel > header.channels) {
-    throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD merged transparency flag has no matching composite channel"));
-  }
   Layer& background = document.add_pixel_layer("Background", std::move(pixels));
   if (has_merged_transparency) {
     const auto& merged_alpha = channel_data[color_channel_count];
@@ -400,7 +457,8 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
                                            const CmykToRgbTransform* cmyk_icc,
                                            bool& has_merged_transparency,
                                            std::vector<std::string>* notices,
-                                           std::size_t* damaged_rows) {
+                                           std::size_t* damaged_rows,
+                                           PrimaryPixelBudget& budget) {
   has_merged_transparency = false;
   int unrendered_color_balance_count = 0;
   const auto layer_count_raw = static_cast<std::int16_t>(layer_reader.read_u16());
@@ -428,7 +486,9 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
     const auto has_alpha = std::any_of(record.channels.begin(), record.channels.end(), [](LayerChannelInfo channel) {
       return channel.id == kChannelTransparency;
     });
-    PixelBuffer pixels(width, height, (has_alpha || !has_color) ? PixelFormat::rgba8() : PixelFormat::rgb8());
+    const auto pixel_format = (has_alpha || !has_color) ? PixelFormat::rgba8() : PixelFormat::rgb8();
+    budget.charge(width, height, pixel_format.channels);
+    PixelBuffer pixels(width, height, pixel_format);
     if (has_alpha) {
       for (std::int32_t y = 0; y < height; ++y) {
         for (std::int32_t x = 0; x < width; ++x) {
@@ -479,6 +539,9 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
       const auto channel_pixel_count =
           static_cast<std::size_t>(channel_width) * static_cast<std::size_t>(channel_height);
       const auto sample_bytes = static_cast<std::size_t>(depth / 8U);
+      if (channel.id == kChannelUserMask && record.mask.has_value() && channel_width > 0 && channel_height > 0) {
+        budget.charge(channel_width, channel_height, PixelFormat::gray8().channels);
+      }
       if (compression == kCompressionRaw && payload_length < channel_pixel_count * sample_bytes) {
         throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD layer channel data is truncated"));
       }
@@ -906,7 +969,8 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
                                const CmykToRgbTransform* cmyk_icc,
                                bool& has_merged_transparency,
                                std::vector<std::string>* notices,
-                               std::size_t* damaged_rows) {
+                               std::size_t* damaged_rows,
+                               PrimaryPixelBudget& budget) {
   has_merged_transparency = false;
   const auto layer_info_length = large_document
                                      ? read_section_length_u64(layer_reader, "layer info")
@@ -918,7 +982,7 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
   const auto layer_info_end = layer_reader.position() + static_cast<std::size_t>(layer_info_length);
   auto layers = read_layer_info_records(layer_reader, canvas_width, canvas_height, source_color_mode, depth,
                                         global_light_angle, global_light_altitude, large_document, cmyk_icc,
-                                        has_merged_transparency, notices, damaged_rows);
+                                        has_merged_transparency, notices, damaged_rows, budget);
   if (layer_reader.position() < layer_info_end) {
     layer_reader.skip(layer_info_end - layer_reader.position());
   }
@@ -998,6 +1062,7 @@ bool DocumentIo::can_read(std::span<const std::uint8_t> bytes) noexcept {
 }
 
 Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions options) {
+  PrimaryPixelBudget primary_pixel_budget(options.budget, options.usage);
   BigEndianReader reader(bytes);
   const auto header = read_header(reader);
   {
@@ -1093,7 +1158,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     auto grid_settings = document.grid_settings();
     auto guides = std::move(document.guides());
     document = read_flat_composite(reader, header, cmyk_icc, channel_resources,
-                                   has_merged_transparency, &damaged_rows);
+                                   has_merged_transparency, primary_pixel_budget, &damaged_rows);
     document.metadata() = std::move(metadata);
     document.color_state().embedded_icc_profile = std::move(color_state.embedded_icc_profile);
     document.color_state().ocio_view = std::move(color_state.ocio_view);
@@ -1115,7 +1180,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     BigEndianReader layer_reader(layer_mask_payload);
     auto layers = read_layers(layer_reader, document.width(), document.height(), header.color_mode,
                               header.depth, global_light_angle, global_light_altitude, header.large_document,
-                              cmyk_icc, has_merged_transparency, options.notices, &damaged_rows);
+                              cmyk_icc, has_merged_transparency, options.notices, &damaged_rows,
+                              primary_pixel_budget);
     const auto add_layer = [&document](const Layer& source) {
       document.add_layer(clone_layer_with_document_ids(document, source));
     };
@@ -1178,7 +1244,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
         auto deep_layers = read_layer_info_records(
             block_reader, document.width(), document.height(), header.color_mode, header.depth,
             global_light_angle, global_light_altitude, header.large_document, cmyk_icc,
-            has_merged_transparency, options.notices, &damaged_rows);
+            has_merged_transparency, options.notices, &damaged_rows, primary_pixel_budget);
         // Always Photoshop's bottom-to-top order: legacy Patchy never wrote these
         // blocks, so the legacy-order heuristic used for the standard section
         // could only misfire here.
@@ -1240,7 +1306,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     auto grid_settings = document.grid_settings();
     auto guides = std::move(document.guides());
     document = read_flat_composite(reader, header, cmyk_icc, channel_resources,
-                                   has_merged_transparency, &damaged_rows);
+                                   has_merged_transparency, primary_pixel_budget, &damaged_rows);
     document.metadata() = std::move(metadata);
     document.color_state().embedded_icc_profile = std::move(color_state.embedded_icc_profile);
     document.color_state().ocio_view = std::move(color_state.ocio_view);
@@ -1261,7 +1327,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     if (options.retain_flat_composite) {
       try {
         auto flat_composite = read_flat_composite(reader, header, cmyk_icc, channel_resources,
-                                                  has_merged_transparency, &damaged_rows);
+                                                  has_merged_transparency, primary_pixel_budget,
+                                                  &damaged_rows);
         if (!flat_composite.layers().empty() && flat_composite.layers().front().kind() == LayerKind::Pixel) {
           document.metadata().psd_flat_composite =
               std::as_const(flat_composite).layers().front().pixels();
@@ -1269,6 +1336,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
             document.add_channel(std::move(channel));
           }
         }
+      } catch (const PrimaryPixelBudgetExceeded&) {
+        throw;
       } catch (const std::exception&) {
         document.metadata().psd_flat_composite.reset();
         if (saved_channel_count != 0U) {
@@ -1280,6 +1349,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
         throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite image data is missing"));
       }
       const auto compression = reader.read_u16();
+      primary_pixel_budget.charge(document.width(), document.height(), saved_channel_count);
       auto saved_channels = read_flat_image_channels_from(reader, header, compression,
                                                           first_saved_channel, &damaged_rows);
       add_saved_composite_channels(document, std::move(saved_channels), first_saved_channel, header,

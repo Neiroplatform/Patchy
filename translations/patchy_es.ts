@@ -2362,6 +2362,10 @@
         <translation>La fila PackBits del PSD se decodificó con una longitud incorrecta</translation>
     </message>
     <message>
+        <source>This PSD/PSB document is too large to import safely.</source>
+        <translation>Este documento PSD/PSB es demasiado grande para importarlo de forma segura.</translation>
+    </message>
+    <message>
         <source>PSD saved channels must be full-canvas 8-bit grayscale images</source>
         <translation>Los canales guardados del PSD deben ser imágenes en escala de grises de 8 bits a tamaño completo del lienzo</translation>
     </message>

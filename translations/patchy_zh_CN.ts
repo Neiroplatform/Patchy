@@ -2362,6 +2362,10 @@
         <translation>PSD PackBits 行解码后的长度错误</translation>
     </message>
     <message>
+        <source>This PSD/PSB document is too large to import safely.</source>
+        <translation>此 PSD/PSB 文档过大，无法安全导入。</translation>
+    </message>
+    <message>
         <source>PSD saved channels must be full-canvas 8-bit grayscale images</source>
         <translation>PSD 存储通道必须是整幅画布大小的 8 位灰度图像</translation>
     </message>

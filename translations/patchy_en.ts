@@ -2362,6 +2362,10 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>This PSD/PSB document is too large to import safely.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>PSD saved channels must be full-canvas 8-bit grayscale images</source>
         <translation type="unfinished"></translation>
     </message>

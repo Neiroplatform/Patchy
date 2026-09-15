@@ -847,6 +847,48 @@ std::vector<std::uint8_t> psd_with_zero_length_channel_layer() {
   return writer.bytes();
 }
 
+std::vector<std::uint8_t> tiny_psb_with_huge_zero_channel_layer() {
+  patchy::psd::BigEndianWriter layer_info;
+  layer_info.write_u16(1);
+  layer_info.write_u32(0);
+  layer_info.write_u32(0);
+  layer_info.write_u32(300000);
+  layer_info.write_u32(300000);
+  layer_info.write_u16(0);
+  write_ascii4(layer_info, "8BIM");
+  write_ascii4(layer_info, "norm");
+  layer_info.write_u8(255);
+  layer_info.write_u8(0);
+  layer_info.write_u8(0);
+  layer_info.write_u8(0);
+  patchy::psd::BigEndianWriter extra;
+  extra.write_u32(0);
+  extra.write_u32(0);
+  write_pascal_padded(extra, "Huge", 4);
+  layer_info.write_u32(static_cast<std::uint32_t>(extra.bytes().size()));
+  layer_info.write_bytes(extra.bytes());
+  if ((layer_info.bytes().size() % 2U) != 0U) {
+    layer_info.write_u8(0);
+  }
+
+  patchy::psd::BigEndianWriter layer_mask;
+  layer_mask.write_u64(layer_info.bytes().size());
+  layer_mask.write_bytes(layer_info.bytes());
+  layer_mask.write_u32(0);
+
+  patchy::psd::BigEndianWriter writer;
+  patchy::psd::write_header(writer, patchy::psd::Header{true, 3, 1, 1, 8, 3});
+  writer.write_u32(0);
+  writer.write_u32(0);
+  writer.write_u64(layer_mask.bytes().size());
+  writer.write_bytes(layer_mask.bytes());
+  writer.write_u16(0);
+  writer.write_u8(0);
+  writer.write_u8(0);
+  writer.write_u8(0);
+  return writer.bytes();
+}
+
 void psd_zero_length_layer_channels_read_as_empty() {
   const auto read = patchy::psd::DocumentIo::read(psd_with_zero_length_channel_layer());
   CHECK(read.width() == 1);
@@ -860,6 +902,217 @@ void psd_zero_length_layer_channels_read_as_empty() {
   CHECK(read.layers()[1].name() == "Empty");
   CHECK(read.layers()[1].bounds().width == 0);
   CHECK(read.layers()[1].bounds().height == 0);
+}
+
+void expect_primary_pixel_budget_rejection(std::span<const std::uint8_t> bytes,
+                                           std::uint64_t limit,
+                                           std::uint64_t accepted_bytes_before_failure,
+                                           bool retain_flat_composite = false) {
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.retain_flat_composite = retain_flat_composite;
+  options.budget.max_primary_pixel_bytes = limit;
+  options.usage = &usage;
+  bool rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+  } catch (const std::length_error& error) {
+    rejected = std::string(error.what()) ==
+               "This PSD/PSB document is too large to import safely.";
+  }
+  CHECK(rejected);
+  CHECK(usage.primary_pixel_bytes == accepted_bytes_before_failure);
+}
+
+void psd_primary_pixel_budget_accepts_exact_flat_limit_and_rejects_one_less() {
+  const auto bytes = flat_psd_with_test_planes(
+      false, 3, 2, 1, {{10, 20}, {30, 40}, {50, 60}});
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.budget.max_primary_pixel_bytes = 6;
+  options.usage = &usage;
+  const auto document = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(document.width() == 2);
+  CHECK(document.height() == 1);
+  CHECK(usage.primary_pixel_bytes == 6);
+
+  expect_primary_pixel_budget_rejection(bytes, 5, 0);
+}
+
+void psd_primary_pixel_budget_is_aggregate_for_layers_masks_and_saved_channels() {
+  patchy::Document layered(2, 1, patchy::PixelFormat::rgb8());
+  layered.add_pixel_layer("Bottom", solid_rgb(2, 1, 10, 20, 30));
+  layered.add_pixel_layer("Top", solid_rgb(2, 1, 40, 50, 60));
+  const auto layered_bytes = patchy::psd::DocumentIo::write_layered_rgb8(layered);
+
+  patchy::psd::ParseUsage layered_usage;
+  patchy::psd::ReadOptions layered_options;
+  layered_options.budget.max_primary_pixel_bytes = 12;
+  layered_options.usage = &layered_usage;
+  CHECK(patchy::psd::DocumentIo::read(layered_bytes).layers().size() == 2);
+  CHECK(patchy::psd::DocumentIo::read(layered_bytes, layered_options).layers().size() == 2);
+  CHECK(layered_usage.primary_pixel_bytes == 12);
+  expect_primary_pixel_budget_rejection(layered_bytes, 11, 6);
+
+  patchy::Document masked(2, 1, patchy::PixelFormat::rgb8());
+  auto& masked_layer = masked.add_pixel_layer("Masked", solid_rgb(2, 1, 70, 80, 90));
+  patchy::PixelBuffer mask(1, 1, patchy::PixelFormat::gray8());
+  mask.clear(128);
+  masked_layer.set_mask(
+      patchy::LayerMask{patchy::Rect{0, 0, 1, 1}, std::move(mask), 255, false});
+  const auto masked_bytes = patchy::psd::DocumentIo::write_layered_rgb8(masked);
+  patchy::psd::ParseUsage masked_usage;
+  patchy::psd::ReadOptions masked_options;
+  masked_options.budget.max_primary_pixel_bytes = 7;
+  masked_options.usage = &masked_usage;
+  CHECK(patchy::psd::DocumentIo::read(masked_bytes, masked_options)
+            .layers().front().mask().has_value());
+  CHECK(masked_usage.primary_pixel_bytes == 7);
+  expect_primary_pixel_budget_rejection(masked_bytes, 6, 6);
+
+  patchy::Document with_channel(2, 1, patchy::PixelFormat::rgb8());
+  with_channel.add_pixel_layer("Layer", solid_rgb(2, 1, 100, 110, 120));
+  patchy::PixelBuffer alpha(2, 1, patchy::PixelFormat::gray8());
+  alpha.clear(200);
+  with_channel.add_channel(patchy::DocumentChannel(
+      with_channel.allocate_channel_id(), "Saved Alpha", patchy::DocumentChannelKind::Alpha,
+      std::move(alpha)));
+  const auto channel_bytes = patchy::psd::DocumentIo::write_layered_rgb8(with_channel);
+  patchy::psd::ParseUsage channel_usage;
+  patchy::psd::ReadOptions channel_options;
+  channel_options.budget.max_primary_pixel_bytes = 8;
+  channel_options.usage = &channel_usage;
+  CHECK(patchy::psd::DocumentIo::read(channel_bytes, channel_options).channels().size() == 1);
+  CHECK(channel_usage.primary_pixel_bytes == 8);
+  expect_primary_pixel_budget_rejection(channel_bytes, 7, 6);
+}
+
+void psd_primary_pixel_budget_covers_flat_masks_and_saved_channels() {
+  patchy::Document transparent(2, 1, patchy::PixelFormat::rgb8());
+  transparent.add_pixel_layer("Transparent", solid_rgba(2, 1, 10, 20, 30, 128));
+  const auto transparent_bytes = patchy::psd::DocumentIo::write_layered_rgb8(transparent);
+  patchy::psd::ParseUsage transparent_usage;
+  patchy::psd::ReadOptions transparent_options;
+  transparent_options.prefer_flat_composite = true;
+  transparent_options.budget.max_primary_pixel_bytes = 8;
+  transparent_options.usage = &transparent_usage;
+  const auto transparent_read =
+      patchy::psd::DocumentIo::read(transparent_bytes, transparent_options);
+  CHECK(transparent_read.layers().front().mask().has_value());
+  CHECK(transparent_usage.primary_pixel_bytes == 8);
+
+  patchy::psd::ReadOptions transparent_reject_options;
+  transparent_reject_options.prefer_flat_composite = true;
+  transparent_reject_options.budget.max_primary_pixel_bytes = 7;
+  patchy::psd::ParseUsage transparent_reject_usage;
+  transparent_reject_options.usage = &transparent_reject_usage;
+  bool transparent_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read(transparent_bytes, transparent_reject_options);
+  } catch (const std::length_error& error) {
+    transparent_rejected = std::string(error.what()) ==
+                           "This PSD/PSB document is too large to import safely.";
+  }
+  CHECK(transparent_rejected);
+  CHECK(transparent_reject_usage.primary_pixel_bytes == 6);
+
+  patchy::Document with_channel(2, 1, patchy::PixelFormat::rgb8());
+  with_channel.add_pixel_layer("Layer", solid_rgb(2, 1, 40, 50, 60));
+  patchy::PixelBuffer alpha(2, 1, patchy::PixelFormat::gray8());
+  alpha.clear(180);
+  with_channel.add_channel(patchy::DocumentChannel(
+      with_channel.allocate_channel_id(), "Saved Alpha", patchy::DocumentChannelKind::Alpha,
+      std::move(alpha)));
+  const auto channel_bytes = patchy::psd::DocumentIo::write_layered_rgb8(with_channel);
+  patchy::psd::ParseUsage channel_usage;
+  patchy::psd::ReadOptions channel_options;
+  channel_options.prefer_flat_composite = true;
+  channel_options.budget.max_primary_pixel_bytes = 8;
+  channel_options.usage = &channel_usage;
+  CHECK(patchy::psd::DocumentIo::read(channel_bytes, channel_options).channels().size() == 1);
+  CHECK(channel_usage.primary_pixel_bytes == 8);
+
+  patchy::psd::ReadOptions channel_reject_options;
+  channel_reject_options.prefer_flat_composite = true;
+  channel_reject_options.budget.max_primary_pixel_bytes = 7;
+  patchy::psd::ParseUsage channel_reject_usage;
+  channel_reject_options.usage = &channel_reject_usage;
+  bool channel_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read(channel_bytes, channel_reject_options);
+  } catch (const std::length_error& error) {
+    channel_rejected = std::string(error.what()) ==
+                       "This PSD/PSB document is too large to import safely.";
+  }
+  CHECK(channel_rejected);
+  CHECK(channel_reject_usage.primary_pixel_bytes == 6);
+}
+
+void psd_primary_pixel_budget_failure_escapes_retained_composite_recovery() {
+  patchy::Document document(2, 1, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Layer", solid_rgb(2, 1, 10, 20, 30));
+  const auto bytes = patchy::psd::DocumentIo::write_layered_rgb8(document);
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.retain_flat_composite = true;
+  options.budget.max_primary_pixel_bytes = 12;
+  options.usage = &usage;
+  const auto read = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(read.metadata().psd_flat_composite.has_value());
+  CHECK(usage.primary_pixel_bytes == 12);
+
+  expect_primary_pixel_budget_rejection(bytes, 11, 6, true);
+}
+
+void psd_primary_pixel_budget_read_file_matches_span_and_defaults_unlimited() {
+  CHECK(patchy::psd::ParseBudget{}.max_primary_pixel_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
+
+  patchy::Document document(2, 1, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Bottom", solid_rgb(2, 1, 10, 20, 30));
+  document.add_pixel_layer("Top", solid_rgb(2, 1, 40, 50, 60));
+  std::filesystem::create_directories("test-artifacts");
+  const auto path = std::filesystem::path("test-artifacts") /
+                    "psd-primary-pixel-budget.psd";
+  patchy::psd::DocumentIo::write_layered_rgb8_file(document, path);
+
+  patchy::psd::ParseUsage exact_usage;
+  patchy::psd::ReadOptions exact_options;
+  exact_options.budget.max_primary_pixel_bytes = 12;
+  exact_options.usage = &exact_usage;
+  CHECK(patchy::psd::DocumentIo::read_file(path, exact_options).layers().size() == 2);
+  CHECK(exact_usage.primary_pixel_bytes == 12);
+
+  patchy::psd::ParseUsage rejected_usage;
+  patchy::psd::ReadOptions rejected_options;
+  rejected_options.budget.max_primary_pixel_bytes = 11;
+  rejected_options.usage = &rejected_usage;
+  bool rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read_file(path, rejected_options);
+  } catch (const std::length_error& error) {
+    rejected = std::string(error.what()) ==
+               "This PSD/PSB document is too large to import safely.";
+  }
+  CHECK(rejected);
+  CHECK(rejected_usage.primary_pixel_bytes == 6);
+}
+
+void psb_primary_pixel_budget_rejects_huge_tiny_file_before_allocation() {
+  const auto layered = tiny_psb_with_huge_zero_channel_layer();
+  CHECK(layered.size() < 256);
+  expect_primary_pixel_budget_rejection(layered, 359999999999ULL, 0);
+
+  patchy::psd::BigEndianWriter writer;
+  patchy::psd::write_header(writer, patchy::psd::Header{true, 3, 300000, 300000, 8, 3});
+  writer.write_u32(0);
+  writer.write_u32(0);
+  writer.write_u64(0);
+  writer.write_u16(0);
+
+  expect_primary_pixel_budget_rejection(writer.bytes(), 269999999999ULL, 0);
 }
 
 void psd_layered_writer_uses_rle_for_compressible_layer_channels() {
@@ -2283,6 +2536,18 @@ std::vector<patchy::test::TestCase> psd_core_io_tests() {
        psd_grid_guides_resource_round_trip_and_replaces_duplicates},
       {"psd_layered_rgb8_round_trips_pixel_layers", psd_layered_rgb8_round_trips_pixel_layers},
       {"psd_zero_length_layer_channels_read_as_empty", psd_zero_length_layer_channels_read_as_empty},
+      {"psd_primary_pixel_budget_accepts_exact_flat_limit_and_rejects_one_less",
+       psd_primary_pixel_budget_accepts_exact_flat_limit_and_rejects_one_less},
+      {"psd_primary_pixel_budget_is_aggregate_for_layers_masks_and_saved_channels",
+       psd_primary_pixel_budget_is_aggregate_for_layers_masks_and_saved_channels},
+      {"psd_primary_pixel_budget_covers_flat_masks_and_saved_channels",
+       psd_primary_pixel_budget_covers_flat_masks_and_saved_channels},
+      {"psd_primary_pixel_budget_failure_escapes_retained_composite_recovery",
+       psd_primary_pixel_budget_failure_escapes_retained_composite_recovery},
+      {"psd_primary_pixel_budget_read_file_matches_span_and_defaults_unlimited",
+       psd_primary_pixel_budget_read_file_matches_span_and_defaults_unlimited},
+      {"psb_primary_pixel_budget_rejects_huge_tiny_file_before_allocation",
+       psb_primary_pixel_budget_rejects_huge_tiny_file_before_allocation},
       {"psd_interface_mock2_loads_if_available", psd_interface_mock2_loads_if_available},
       {"psd_empty_real_user_mask_channel_does_not_truncate_layer",
        psd_empty_real_user_mask_channel_does_not_truncate_layer},
