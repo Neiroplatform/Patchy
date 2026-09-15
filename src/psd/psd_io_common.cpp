@@ -32,7 +32,6 @@
 #include <fstream>
 #include <future>
 #include <iomanip>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -125,14 +124,6 @@ PixelFormat format_from_header(const Header& header) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "CMYK PSD file must contain at least 4 channels"));
   }
   return PixelFormat::rgb8();
-}
-
-std::vector<std::uint8_t> read_file_bytes(const std::filesystem::path& path) {
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
-    throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Could not open PSD file for reading"));
-  }
-  return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(file), {});
 }
 
 void write_file_bytes(const std::filesystem::path& path, std::span<const std::uint8_t> bytes) {

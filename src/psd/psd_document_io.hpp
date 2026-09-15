@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -18,10 +19,31 @@ struct ParseBudget {
   // Smart Filter masks/caches, or render-time previews; future budget fields can
   // cover those independently.
   std::uint64_t max_primary_pixel_bytes{std::numeric_limits<std::uint64_t>::max()};
+  // Encoded PSD/PSB source bytes accepted by read()/read_file(). Kept after the
+  // original field so existing aggregate initialization retains its meaning.
+  std::uint64_t max_input_bytes{std::numeric_limits<std::uint64_t>::max()};
 };
 
 struct ParseUsage {
   std::uint64_t primary_pixel_bytes{0};
+  std::uint64_t input_bytes{0};
+};
+
+enum class ParseBudgetDimension : std::uint8_t {
+  InputBytes,
+  PrimaryPixelBytes,
+};
+
+class ParseBudgetExceeded final : public std::length_error {
+public:
+  explicit ParseBudgetExceeded(ParseBudgetDimension dimension);
+
+  [[nodiscard]] ParseBudgetDimension dimension() const noexcept {
+    return dimension_;
+  }
+
+private:
+  ParseBudgetDimension dimension_;
 };
 
 struct ReadOptions {
@@ -32,8 +54,8 @@ struct ReadOptions {
   // etc.) for the UI's import-notices dialog.
   std::vector<std::string>* notices{nullptr};
   ParseBudget budget{};
-  // Optional observation hook. Reset to zero at the start of every read and updated
-  // only after a budget charge succeeds.
+  // Optional observation hook. Every field is reset to zero at the start of every
+  // read and updated only after the corresponding budget charge succeeds.
   ParseUsage* usage{nullptr};
 };
 

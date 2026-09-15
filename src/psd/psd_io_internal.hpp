@@ -327,7 +327,6 @@ void check_write_dimensions(const Document& document, bool large_document);
 void skip_length_block(BigEndianReader& reader, const char* section_name);
 std::vector<std::uint8_t> read_length_block(BigEndianReader& reader, const char* section_name);
 PixelFormat format_from_header(const Header& header);
-std::vector<std::uint8_t> read_file_bytes(const std::filesystem::path& path);
 void write_file_bytes(const std::filesystem::path& path, std::span<const std::uint8_t> bytes);
 std::uint32_t read_section_length(BigEndianReader& reader, const char* section_name);
 std::uint64_t read_section_length_u64(BigEndianReader& reader, const char* section_name);

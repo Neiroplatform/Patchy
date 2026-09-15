@@ -25,7 +25,7 @@ Run `patchy_ui_visual_tests.exe` with `QT_QPA_PLATFORM=offscreen`. Both release 
 
 Never run two test processes (or a test process and the app) at the same time: they share the QSettings store, and a concurrent run rewrites preference keys mid-test, producing failures such as `ui_language_saved_preference_overrides_system_language` seeing its saved language clobbered. Run suites sequentially.
 
-### PSD/PSB primary-pixel budget tests
+### PSD/PSB parse-budget tests
 
 `psd::ReadOptions::budget.max_primary_pixel_bytes` is an opt-in aggregate guard for
 the primary `PixelBuffer`s requested from PSD/PSB layer, flat-composite, layer-mask,
@@ -33,15 +33,21 @@ merged-transparency, and saved-channel geometry. The default is unlimited for so
 compatibility. Tests must set an explicit limit and, when checking accounting, attach
 `ParseUsage`.
 
-This first budget slice is deliberately narrower than a process-memory limit: it
-does not count encoded input, decoder working buffers, patterns, Smart Filter
-masks/caches, layer clones, or render-generated previews. Keep those omissions explicit
-until separate fields and boundary tests cover them. The `primary_pixel_budget`
-tests pin exact-fit and one-byte-short behavior, aggregate accounting, retained-flat
-exception propagation, and tiny malicious PSB headers that declare enormous flat
-or zero-channel layer buffers. A rejection test must catch `std::length_error` and
-match the stable message so `bad_alloc`, truncation, or an unrelated parser error
-cannot pass accidentally.
+`max_input_bytes` independently limits encoded PSD/PSB source bytes and is also
+unlimited by default. `read(span)` charges the entire input before constructing its
+binary reader. `read_file` charges fixed-size reads before appending them and does not
+trust a path-based size hint, so a replaced, changing, or unknown file cannot grow the
+byte vector past the limit. `ParseUsage::input_bytes` records only successful charges.
+
+These fields are deliberately narrower than a process-memory limit: they do not count
+decoder working buffers, patterns, Smart Filter masks/caches, layer clones, or
+render-generated previews. Keep those omissions explicit until separate fields and
+boundary tests cover them. The `input_budget` and `primary_pixel_budget` tests pin
+exact-fit and one-byte-short behavior, aggregate accounting, file/span parity,
+retained-flat exception propagation, and tiny malicious PSB headers that declare
+enormous flat or zero-channel layer buffers. A rejection test must catch
+`ParseBudgetExceeded`, match its dimension and the stable safe-import message, so
+`bad_alloc`, truncation, or an unrelated parser error cannot pass accidentally.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

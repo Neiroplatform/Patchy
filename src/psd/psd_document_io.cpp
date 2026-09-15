@@ -53,55 +53,107 @@
 
 namespace patchy::psd {
 
+ParseBudgetExceeded::ParseBudgetExceeded(ParseBudgetDimension dimension)
+    : std::length_error(PATCHY_TRANSLATE_NOOP(
+          "QObject", "This PSD/PSB document is too large to import safely.")),
+      dimension_(dimension) {}
+
 namespace {
 
-class PrimaryPixelBudgetExceeded final : public std::length_error {
+class ParseBudgetTracker {
 public:
-  PrimaryPixelBudgetExceeded()
-      : std::length_error(PATCHY_TRANSLATE_NOOP(
-            "QObject", "This PSD/PSB document is too large to import safely.")) {}
-};
+  ParseBudgetTracker(std::uint64_t limit, std::uint64_t* usage, ParseBudgetDimension dimension)
+      : remaining_(limit), usage_(usage), dimension_(dimension) {}
 
-class PrimaryPixelBudget {
-public:
-  PrimaryPixelBudget(const ParseBudget& budget, ParseUsage* usage)
-      : remaining_(budget.max_primary_pixel_bytes), usage_(usage) {
-    if (usage_ != nullptr) {
-      usage_->primary_pixel_bytes = 0;
-    }
-  }
-
-  void charge(std::int32_t width, std::int32_t height, std::size_t channels) {
+  void charge_dimensions(std::int32_t width, std::int32_t height, std::size_t channels) {
     if (width <= 0 || height <= 0 || channels == 0U) {
       return;
     }
     const auto width_u64 = static_cast<std::uint64_t>(width);
     const auto height_u64 = static_cast<std::uint64_t>(height);
     if (height_u64 > std::numeric_limits<std::uint64_t>::max() / width_u64) {
-      throw PrimaryPixelBudgetExceeded();
+      reject();
     }
     const auto pixels = width_u64 * height_u64;
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+      if (channels > std::numeric_limits<std::uint64_t>::max()) {
+        reject();
+      }
+    }
     const auto channels_u64 = static_cast<std::uint64_t>(channels);
     if (channels_u64 > std::numeric_limits<std::uint64_t>::max() / pixels) {
-      throw PrimaryPixelBudgetExceeded();
+      reject();
     }
-    charge_bytes(pixels * channels_u64);
+    charge(pixels * channels_u64);
   }
 
-private:
-  void charge_bytes(std::uint64_t bytes) {
+  void charge_size(std::size_t bytes) {
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+      if (bytes > std::numeric_limits<std::uint64_t>::max()) {
+        reject();
+      }
+    }
+    charge(static_cast<std::uint64_t>(bytes));
+  }
+
+  void charge(std::uint64_t bytes) {
     if (bytes > remaining_) {
-      throw PrimaryPixelBudgetExceeded();
+      reject();
+    }
+    if (usage_ != nullptr && bytes > std::numeric_limits<std::uint64_t>::max() - *usage_) {
+      reject();
     }
     remaining_ -= bytes;
     if (usage_ != nullptr) {
-      usage_->primary_pixel_bytes += bytes;
+      *usage_ += bytes;
     }
   }
 
+  [[noreturn]] void reject() const {
+    throw ParseBudgetExceeded(dimension_);
+  }
+
+private:
   std::uint64_t remaining_;
-  ParseUsage* usage_;
+  std::uint64_t* usage_;
+  ParseBudgetDimension dimension_;
 };
+
+void reset_parse_usage(ParseUsage* usage) {
+  if (usage != nullptr) {
+    *usage = {};
+  }
+}
+
+std::vector<std::uint8_t> read_file_bytes_with_budget(const std::filesystem::path& path,
+                                                      const ParseBudget& budget) {
+  ParseBudgetTracker input_budget(budget.max_input_bytes, nullptr,
+                                  ParseBudgetDimension::InputBytes);
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Could not open PSD file for reading"));
+  }
+
+  std::vector<std::uint8_t> bytes;
+  std::array<std::uint8_t, 64U * 1024U> chunk{};
+  while (file) {
+    file.read(reinterpret_cast<char*>(chunk.data()), static_cast<std::streamsize>(chunk.size()));
+    const auto count = file.gcount();
+    if (count <= 0) {
+      break;
+    }
+    const auto count_size = static_cast<std::size_t>(count);
+    if (count_size > bytes.max_size() - bytes.size()) {
+      input_budget.reject();
+    }
+    input_budget.charge_size(count_size);
+    bytes.insert(bytes.end(), chunk.begin(), chunk.begin() + count_size);
+  }
+  if (file.fail() && !file.eof()) {
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Could not open PSD file for reading"));
+  }
+  return bytes;
+}
 
 void append_document_channels_for_write(
     const Document& document, std::vector<std::span<const std::uint8_t>>& planes,
@@ -149,7 +201,7 @@ bool records_look_like_legacy_top_to_bottom(const std::vector<Layer>& layers, st
 Document read_flat_composite(BigEndianReader& reader, const Header& header,
                              const CmykToRgbTransform* cmyk_icc,
                              const ParsedCompositeChannelResources& channel_resources,
-                             bool has_merged_transparency, PrimaryPixelBudget& budget,
+                             bool has_merged_transparency, ParseBudgetTracker& budget,
                              std::size_t* damaged_rows = nullptr) {
   const auto format = format_from_header(header);
   const auto compression = reader.read_u16();
@@ -161,14 +213,16 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD merged transparency flag has no matching composite channel"));
   }
 
-  budget.charge(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
-                format.channels);
+  budget.charge_dimensions(static_cast<std::int32_t>(header.width),
+                           static_cast<std::int32_t>(header.height), format.channels);
   if (has_merged_transparency) {
-    budget.charge(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
-                  PixelFormat::gray8().channels);
+    budget.charge_dimensions(static_cast<std::int32_t>(header.width),
+                             static_cast<std::int32_t>(header.height),
+                             PixelFormat::gray8().channels);
   }
-  budget.charge(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
-                static_cast<std::size_t>(header.channels - first_saved_channel));
+  budget.charge_dimensions(
+      static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
+      static_cast<std::size_t>(header.channels - first_saved_channel));
   Document document(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
   PixelBuffer pixels(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
   const auto channel_data = read_flat_image_channels(reader, header, compression, damaged_rows);
@@ -458,7 +512,7 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
                                            bool& has_merged_transparency,
                                            std::vector<std::string>* notices,
                                            std::size_t* damaged_rows,
-                                           PrimaryPixelBudget& budget) {
+                                           ParseBudgetTracker& budget) {
   has_merged_transparency = false;
   int unrendered_color_balance_count = 0;
   const auto layer_count_raw = static_cast<std::int16_t>(layer_reader.read_u16());
@@ -487,7 +541,7 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
       return channel.id == kChannelTransparency;
     });
     const auto pixel_format = (has_alpha || !has_color) ? PixelFormat::rgba8() : PixelFormat::rgb8();
-    budget.charge(width, height, pixel_format.channels);
+    budget.charge_dimensions(width, height, pixel_format.channels);
     PixelBuffer pixels(width, height, pixel_format);
     if (has_alpha) {
       for (std::int32_t y = 0; y < height; ++y) {
@@ -540,7 +594,7 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
           static_cast<std::size_t>(channel_width) * static_cast<std::size_t>(channel_height);
       const auto sample_bytes = static_cast<std::size_t>(depth / 8U);
       if (channel.id == kChannelUserMask && record.mask.has_value() && channel_width > 0 && channel_height > 0) {
-        budget.charge(channel_width, channel_height, PixelFormat::gray8().channels);
+        budget.charge_dimensions(channel_width, channel_height, PixelFormat::gray8().channels);
       }
       if (compression == kCompressionRaw && payload_length < channel_pixel_count * sample_bytes) {
         throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD layer channel data is truncated"));
@@ -970,7 +1024,7 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
                                bool& has_merged_transparency,
                                std::vector<std::string>* notices,
                                std::size_t* damaged_rows,
-                               PrimaryPixelBudget& budget) {
+                               ParseBudgetTracker& budget) {
   has_merged_transparency = false;
   const auto layer_info_length = large_document
                                      ? read_section_length_u64(layer_reader, "layer info")
@@ -1062,7 +1116,15 @@ bool DocumentIo::can_read(std::span<const std::uint8_t> bytes) noexcept {
 }
 
 Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions options) {
-  PrimaryPixelBudget primary_pixel_budget(options.budget, options.usage);
+  reset_parse_usage(options.usage);
+  ParseBudgetTracker input_budget(options.budget.max_input_bytes,
+                                  options.usage != nullptr ? &options.usage->input_bytes : nullptr,
+                                  ParseBudgetDimension::InputBytes);
+  input_budget.charge_size(bytes.size());
+  ParseBudgetTracker primary_pixel_budget(
+      options.budget.max_primary_pixel_bytes,
+      options.usage != nullptr ? &options.usage->primary_pixel_bytes : nullptr,
+      ParseBudgetDimension::PrimaryPixelBytes);
   BigEndianReader reader(bytes);
   const auto header = read_header(reader);
   {
@@ -1336,7 +1398,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
             document.add_channel(std::move(channel));
           }
         }
-      } catch (const PrimaryPixelBudgetExceeded&) {
+      } catch (const ParseBudgetExceeded&) {
         throw;
       } catch (const std::exception&) {
         document.metadata().psd_flat_composite.reset();
@@ -1349,7 +1411,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
         throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite image data is missing"));
       }
       const auto compression = reader.read_u16();
-      primary_pixel_budget.charge(document.width(), document.height(), saved_channel_count);
+      primary_pixel_budget.charge_dimensions(document.width(), document.height(), saved_channel_count);
       auto saved_channels = read_flat_image_channels_from(reader, header, compression,
                                                           first_saved_channel, &damaged_rows);
       add_saved_composite_channels(document, std::move(saved_channels), first_saved_channel, header,
@@ -1382,7 +1444,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
 }
 
 Document DocumentIo::read_file(const std::filesystem::path& path, ReadOptions options) {
-  const auto bytes = read_file_bytes(path);
+  reset_parse_usage(options.usage);
+  const auto bytes = read_file_bytes_with_budget(path, options.budget);
   return read(bytes, options);
 }
 

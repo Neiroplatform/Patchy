@@ -913,15 +913,190 @@ void expect_primary_pixel_budget_rejection(std::span<const std::uint8_t> bytes,
   options.retain_flat_composite = retain_flat_composite;
   options.budget.max_primary_pixel_bytes = limit;
   options.usage = &usage;
-  bool rejected = false;
   try {
     (void)patchy::psd::DocumentIo::read(bytes, options);
-  } catch (const std::length_error& error) {
-    rejected = std::string(error.what()) ==
-               "This PSD/PSB document is too large to import safely.";
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() == patchy::psd::ParseBudgetDimension::PrimaryPixelBytes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
   }
-  CHECK(rejected);
+  CHECK(usage.input_bytes == bytes.size());
   CHECK(usage.primary_pixel_bytes == accepted_bytes_before_failure);
+}
+
+void expect_input_budget_rejection(std::span<const std::uint8_t> bytes,
+                                   std::uint64_t limit) {
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.budget.max_input_bytes = limit;
+  options.usage = &usage;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() == patchy::psd::ParseBudgetDimension::InputBytes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
+  }
+  CHECK(usage.input_bytes == 0);
+  CHECK(usage.primary_pixel_bytes == 0);
+}
+
+void psd_input_budget_accepts_exact_span_limit_and_rejects_one_less() {
+  const auto bytes = flat_psd_with_test_planes(
+      false, 3, 2, 1, {{10, 20}, {30, 40}, {50, 60}});
+
+  CHECK(patchy::psd::ParseBudget{}.max_input_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
+  const patchy::psd::ParseBudget positional_budget{123};
+  CHECK(positional_budget.max_primary_pixel_bytes == 123);
+  CHECK(positional_budget.max_input_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.budget.max_input_bytes = bytes.size();
+  options.usage = &usage;
+  const auto document = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(document.width() == 2);
+  CHECK(document.height() == 1);
+  CHECK(usage.input_bytes == bytes.size());
+  CHECK(usage.primary_pixel_bytes == 6);
+
+  expect_input_budget_rejection(bytes, bytes.size() - 1U);
+}
+
+void psd_input_budget_precedes_parsing_and_reports_exact_malformed_usage() {
+  const std::array<std::uint8_t, 4> malformed{'8', 'B', 'P', 'S'};
+  expect_input_budget_rejection(malformed, malformed.size() - 1U);
+
+  patchy::psd::ParseUsage usage{41, 42};
+  patchy::psd::ReadOptions options;
+  options.budget.max_input_bytes = malformed.size();
+  options.usage = &usage;
+  bool malformed_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read(malformed, options);
+  } catch (const patchy::psd::ParseBudgetExceeded&) {
+    CHECK(false);
+  } catch (const std::exception&) {
+    malformed_rejected = true;
+  }
+  CHECK(malformed_rejected);
+  CHECK(usage.input_bytes == malformed.size());
+  CHECK(usage.primary_pixel_bytes == 0);
+}
+
+void psd_input_budget_zero_limit_distinguishes_empty_and_nonempty_input() {
+  patchy::psd::ParseUsage empty_usage{41, 42};
+  patchy::psd::ReadOptions empty_options;
+  empty_options.budget.max_input_bytes = 0;
+  empty_options.usage = &empty_usage;
+  bool empty_reached_parser = false;
+  try {
+    (void)patchy::psd::DocumentIo::read({}, empty_options);
+  } catch (const patchy::psd::ParseBudgetExceeded&) {
+    CHECK(false);
+  } catch (const std::exception&) {
+    empty_reached_parser = true;
+  }
+  CHECK(empty_reached_parser);
+  CHECK(empty_usage.input_bytes == 0);
+  CHECK(empty_usage.primary_pixel_bytes == 0);
+
+  const std::array<std::uint8_t, 1> nonempty{0};
+  expect_input_budget_rejection(nonempty, 0);
+}
+
+void psd_input_budget_reused_usage_resets_before_missing_file_open() {
+  const std::array<std::uint8_t, 1> malformed{0};
+  patchy::psd::ParseUsage usage{41, 42};
+  patchy::psd::ReadOptions options;
+  options.budget.max_input_bytes = malformed.size();
+  options.usage = &usage;
+  bool malformed_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read(malformed, options);
+  } catch (const std::exception&) {
+    malformed_rejected = true;
+  }
+  CHECK(malformed_rejected);
+  CHECK(usage.input_bytes == malformed.size());
+  CHECK(usage.primary_pixel_bytes == 0);
+
+  std::filesystem::create_directories("test-artifacts");
+  const auto missing_path = std::filesystem::path("test-artifacts") /
+                            "psd-input-budget-missing-file.psd";
+  std::filesystem::remove(missing_path);
+  bool open_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read_file(missing_path, options);
+  } catch (const std::runtime_error&) {
+    open_rejected = true;
+  }
+  CHECK(open_rejected);
+  CHECK(usage.input_bytes == 0);
+  CHECK(usage.primary_pixel_bytes == 0);
+}
+
+void psd_input_budget_read_file_matches_span_and_rejects_before_growth() {
+  patchy::Document document(2, 1, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Layer", solid_rgb(2, 1, 10, 20, 30));
+  auto bytes = patchy::psd::DocumentIo::write_layered_rgb8(document);
+  auto exact_chunk_bytes = bytes;
+  exact_chunk_bytes.resize(64U * 1024U, 0);
+  const auto exact_chunk_path = std::filesystem::path("test-artifacts") /
+                                "psd-input-budget-exact-chunk.psd";
+  std::filesystem::create_directories("test-artifacts");
+  {
+    std::ofstream file(exact_chunk_path, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(exact_chunk_bytes.data()),
+               static_cast<std::streamsize>(exact_chunk_bytes.size()));
+    CHECK(static_cast<bool>(file));
+  }
+  patchy::psd::ParseUsage exact_chunk_usage;
+  patchy::psd::ReadOptions exact_chunk_options;
+  exact_chunk_options.budget.max_input_bytes = exact_chunk_bytes.size();
+  exact_chunk_options.usage = &exact_chunk_usage;
+  CHECK(patchy::psd::DocumentIo::read_file(exact_chunk_path, exact_chunk_options)
+            .layers().size() == 1);
+  CHECK(exact_chunk_usage.input_bytes == exact_chunk_bytes.size());
+  CHECK(exact_chunk_usage.primary_pixel_bytes == 6);
+
+  bytes.resize(64U * 1024U + 17U, 0);
+  CHECK(bytes.size() > 64U * 1024U);
+  const auto path = std::filesystem::path("test-artifacts") /
+                    "psd-input-budget.psd";
+  {
+    std::ofstream file(path, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    CHECK(static_cast<bool>(file));
+  }
+
+  patchy::psd::ParseUsage exact_usage;
+  patchy::psd::ReadOptions exact_options;
+  exact_options.budget.max_input_bytes = bytes.size();
+  exact_options.usage = &exact_usage;
+  CHECK(patchy::psd::DocumentIo::read_file(path, exact_options).layers().size() == 1);
+  CHECK(exact_usage.input_bytes == bytes.size());
+  CHECK(exact_usage.primary_pixel_bytes == 6);
+
+  patchy::psd::ParseUsage rejected_usage;
+  patchy::psd::ReadOptions rejected_options;
+  rejected_options.budget.max_input_bytes = bytes.size() - 1U;
+  rejected_options.usage = &rejected_usage;
+  try {
+    (void)patchy::psd::DocumentIo::read_file(path, rejected_options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() == patchy::psd::ParseBudgetDimension::InputBytes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
+  }
+  CHECK(rejected_usage.input_bytes == 0);
+  CHECK(rejected_usage.primary_pixel_bytes == 0);
 }
 
 void psd_primary_pixel_budget_accepts_exact_flat_limit_and_rejects_one_less() {
@@ -1007,14 +1182,15 @@ void psd_primary_pixel_budget_covers_flat_masks_and_saved_channels() {
   transparent_reject_options.budget.max_primary_pixel_bytes = 7;
   patchy::psd::ParseUsage transparent_reject_usage;
   transparent_reject_options.usage = &transparent_reject_usage;
-  bool transparent_rejected = false;
   try {
     (void)patchy::psd::DocumentIo::read(transparent_bytes, transparent_reject_options);
-  } catch (const std::length_error& error) {
-    transparent_rejected = std::string(error.what()) ==
-                           "This PSD/PSB document is too large to import safely.";
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() == patchy::psd::ParseBudgetDimension::PrimaryPixelBytes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
   }
-  CHECK(transparent_rejected);
+  CHECK(transparent_reject_usage.input_bytes == transparent_bytes.size());
   CHECK(transparent_reject_usage.primary_pixel_bytes == 6);
 
   patchy::Document with_channel(2, 1, patchy::PixelFormat::rgb8());
@@ -1038,14 +1214,15 @@ void psd_primary_pixel_budget_covers_flat_masks_and_saved_channels() {
   channel_reject_options.budget.max_primary_pixel_bytes = 7;
   patchy::psd::ParseUsage channel_reject_usage;
   channel_reject_options.usage = &channel_reject_usage;
-  bool channel_rejected = false;
   try {
     (void)patchy::psd::DocumentIo::read(channel_bytes, channel_reject_options);
-  } catch (const std::length_error& error) {
-    channel_rejected = std::string(error.what()) ==
-                       "This PSD/PSB document is too large to import safely.";
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() == patchy::psd::ParseBudgetDimension::PrimaryPixelBytes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
   }
-  CHECK(channel_rejected);
+  CHECK(channel_reject_usage.input_bytes == channel_bytes.size());
   CHECK(channel_reject_usage.primary_pixel_bytes == 6);
 }
 
@@ -1077,26 +1254,29 @@ void psd_primary_pixel_budget_read_file_matches_span_and_defaults_unlimited() {
   const auto path = std::filesystem::path("test-artifacts") /
                     "psd-primary-pixel-budget.psd";
   patchy::psd::DocumentIo::write_layered_rgb8_file(document, path);
+  const auto input_size = static_cast<std::uint64_t>(std::filesystem::file_size(path));
 
   patchy::psd::ParseUsage exact_usage;
   patchy::psd::ReadOptions exact_options;
   exact_options.budget.max_primary_pixel_bytes = 12;
   exact_options.usage = &exact_usage;
   CHECK(patchy::psd::DocumentIo::read_file(path, exact_options).layers().size() == 2);
+  CHECK(exact_usage.input_bytes == input_size);
   CHECK(exact_usage.primary_pixel_bytes == 12);
 
   patchy::psd::ParseUsage rejected_usage;
   patchy::psd::ReadOptions rejected_options;
   rejected_options.budget.max_primary_pixel_bytes = 11;
   rejected_options.usage = &rejected_usage;
-  bool rejected = false;
   try {
     (void)patchy::psd::DocumentIo::read_file(path, rejected_options);
-  } catch (const std::length_error& error) {
-    rejected = std::string(error.what()) ==
-               "This PSD/PSB document is too large to import safely.";
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() == patchy::psd::ParseBudgetDimension::PrimaryPixelBytes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
   }
-  CHECK(rejected);
+  CHECK(rejected_usage.input_bytes == input_size);
   CHECK(rejected_usage.primary_pixel_bytes == 6);
 }
 
@@ -2536,6 +2716,16 @@ std::vector<patchy::test::TestCase> psd_core_io_tests() {
        psd_grid_guides_resource_round_trip_and_replaces_duplicates},
       {"psd_layered_rgb8_round_trips_pixel_layers", psd_layered_rgb8_round_trips_pixel_layers},
       {"psd_zero_length_layer_channels_read_as_empty", psd_zero_length_layer_channels_read_as_empty},
+      {"psd_input_budget_accepts_exact_span_limit_and_rejects_one_less",
+       psd_input_budget_accepts_exact_span_limit_and_rejects_one_less},
+      {"psd_input_budget_precedes_parsing_and_reports_exact_malformed_usage",
+       psd_input_budget_precedes_parsing_and_reports_exact_malformed_usage},
+      {"psd_input_budget_zero_limit_distinguishes_empty_and_nonempty_input",
+       psd_input_budget_zero_limit_distinguishes_empty_and_nonempty_input},
+      {"psd_input_budget_reused_usage_resets_before_missing_file_open",
+       psd_input_budget_reused_usage_resets_before_missing_file_open},
+      {"psd_input_budget_read_file_matches_span_and_rejects_before_growth",
+       psd_input_budget_read_file_matches_span_and_rejects_before_growth},
       {"psd_primary_pixel_budget_accepts_exact_flat_limit_and_rejects_one_less",
        psd_primary_pixel_budget_accepts_exact_flat_limit_and_rejects_one_less},
       {"psd_primary_pixel_budget_is_aggregate_for_layers_masks_and_saved_channels",
