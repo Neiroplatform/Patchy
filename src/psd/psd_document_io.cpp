@@ -60,65 +60,6 @@ ParseBudgetExceeded::ParseBudgetExceeded(ParseBudgetDimension dimension)
 
 namespace {
 
-class ParseBudgetTracker {
-public:
-  ParseBudgetTracker(std::uint64_t limit, std::uint64_t* usage, ParseBudgetDimension dimension)
-      : remaining_(limit), usage_(usage), dimension_(dimension) {}
-
-  void charge_dimensions(std::int32_t width, std::int32_t height, std::size_t channels) {
-    if (width <= 0 || height <= 0 || channels == 0U) {
-      return;
-    }
-    const auto width_u64 = static_cast<std::uint64_t>(width);
-    const auto height_u64 = static_cast<std::uint64_t>(height);
-    if (height_u64 > std::numeric_limits<std::uint64_t>::max() / width_u64) {
-      reject();
-    }
-    const auto pixels = width_u64 * height_u64;
-    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
-      if (channels > std::numeric_limits<std::uint64_t>::max()) {
-        reject();
-      }
-    }
-    const auto channels_u64 = static_cast<std::uint64_t>(channels);
-    if (channels_u64 > std::numeric_limits<std::uint64_t>::max() / pixels) {
-      reject();
-    }
-    charge(pixels * channels_u64);
-  }
-
-  void charge_size(std::size_t bytes) {
-    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
-      if (bytes > std::numeric_limits<std::uint64_t>::max()) {
-        reject();
-      }
-    }
-    charge(static_cast<std::uint64_t>(bytes));
-  }
-
-  void charge(std::uint64_t bytes) {
-    if (bytes > remaining_) {
-      reject();
-    }
-    if (usage_ != nullptr && bytes > std::numeric_limits<std::uint64_t>::max() - *usage_) {
-      reject();
-    }
-    remaining_ -= bytes;
-    if (usage_ != nullptr) {
-      *usage_ += bytes;
-    }
-  }
-
-  [[noreturn]] void reject() const {
-    throw ParseBudgetExceeded(dimension_);
-  }
-
-private:
-  std::uint64_t remaining_;
-  std::uint64_t* usage_;
-  ParseBudgetDimension dimension_;
-};
-
 void reset_parse_usage(ParseUsage* usage) {
   if (usage != nullptr) {
     *usage = {};
@@ -202,6 +143,7 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
                              const CmykToRgbTransform* cmyk_icc,
                              const ParsedCompositeChannelResources& channel_resources,
                              bool has_merged_transparency, ParseBudgetTracker& budget,
+                             ParseBudgetTracker& decompressed_budget,
                              std::size_t* damaged_rows = nullptr) {
   const auto format = format_from_header(header);
   const auto compression = reader.read_u16();
@@ -212,7 +154,6 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
   if (first_saved_channel > header.channels) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD merged transparency flag has no matching composite channel"));
   }
-
   budget.charge_dimensions(static_cast<std::int32_t>(header.width),
                            static_cast<std::int32_t>(header.height), format.channels);
   if (has_merged_transparency) {
@@ -223,9 +164,10 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
   budget.charge_dimensions(
       static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
       static_cast<std::size_t>(header.channels - first_saved_channel));
+  const auto channel_data = read_flat_image_channels(
+      reader, header, compression, decompressed_budget, damaged_rows);
   Document document(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
   PixelBuffer pixels(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
-  const auto channel_data = read_flat_image_channels(reader, header, compression, damaged_rows);
   const auto channel_pixels = static_cast<std::size_t>(header.width) * static_cast<std::size_t>(header.height);
 
   if (source_is_cmyk) {
@@ -512,7 +454,8 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
                                            bool& has_merged_transparency,
                                            std::vector<std::string>* notices,
                                            std::size_t* damaged_rows,
-                                           ParseBudgetTracker& budget) {
+                                           ParseBudgetTracker& budget,
+                                           ParseBudgetTracker& decompressed_budget) {
   has_merged_transparency = false;
   int unrendered_color_balance_count = 0;
   const auto layer_count_raw = static_cast<std::int16_t>(layer_reader.read_u16());
@@ -590,15 +533,16 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
       const auto channel_height = channel.id == kChannelUserMask && record.mask.has_value()
                                       ? std::max(0, record.mask->bounds.height)
                                       : height;
-      const auto channel_pixel_count =
-          static_cast<std::size_t>(channel_width) * static_cast<std::size_t>(channel_height);
       const auto sample_bytes = static_cast<std::size_t>(depth / 8U);
       if (channel.id == kChannelUserMask && record.mask.has_value() && channel_width > 0 && channel_height > 0) {
         budget.charge_dimensions(channel_width, channel_height, PixelFormat::gray8().channels);
       }
-      if (compression == kCompressionRaw && payload_length < channel_pixel_count * sample_bytes) {
+      const auto source_byte_count = decompressed_budget.checked_decompressed_dimensions(
+          channel_width, channel_height, 1U, sample_bytes);
+      if (compression == kCompressionRaw && payload_length < source_byte_count) {
         throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD layer channel data is truncated"));
       }
+      decompressed_budget.charge_size(source_byte_count);
       std::vector<std::uint8_t> channel_data;
       try {
         channel_data = read_channel_data(
@@ -1024,7 +968,8 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
                                bool& has_merged_transparency,
                                std::vector<std::string>* notices,
                                std::size_t* damaged_rows,
-                               ParseBudgetTracker& budget) {
+                               ParseBudgetTracker& budget,
+                               ParseBudgetTracker& decompressed_budget) {
   has_merged_transparency = false;
   const auto layer_info_length = large_document
                                      ? read_section_length_u64(layer_reader, "layer info")
@@ -1036,7 +981,8 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
   const auto layer_info_end = layer_reader.position() + static_cast<std::size_t>(layer_info_length);
   auto layers = read_layer_info_records(layer_reader, canvas_width, canvas_height, source_color_mode, depth,
                                         global_light_angle, global_light_altitude, large_document, cmyk_icc,
-                                        has_merged_transparency, notices, damaged_rows, budget);
+                                        has_merged_transparency, notices, damaged_rows, budget,
+                                        decompressed_budget);
   if (layer_reader.position() < layer_info_end) {
     layer_reader.skip(layer_info_end - layer_reader.position());
   }
@@ -1125,6 +1071,10 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       options.budget.max_primary_pixel_bytes,
       options.usage != nullptr ? &options.usage->primary_pixel_bytes : nullptr,
       ParseBudgetDimension::PrimaryPixelBytes);
+  ParseBudgetTracker decompressed_budget(
+      options.budget.max_decompressed_bytes,
+      options.usage != nullptr ? &options.usage->decompressed_bytes : nullptr,
+      ParseBudgetDimension::DecompressedBytes);
   BigEndianReader reader(bytes);
   const auto header = read_header(reader);
   {
@@ -1220,7 +1170,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     auto grid_settings = document.grid_settings();
     auto guides = std::move(document.guides());
     document = read_flat_composite(reader, header, cmyk_icc, channel_resources,
-                                   has_merged_transparency, primary_pixel_budget, &damaged_rows);
+                                   has_merged_transparency, primary_pixel_budget,
+                                   decompressed_budget, &damaged_rows);
     document.metadata() = std::move(metadata);
     document.color_state().embedded_icc_profile = std::move(color_state.embedded_icc_profile);
     document.color_state().ocio_view = std::move(color_state.ocio_view);
@@ -1243,7 +1194,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     auto layers = read_layers(layer_reader, document.width(), document.height(), header.color_mode,
                               header.depth, global_light_angle, global_light_altitude, header.large_document,
                               cmyk_icc, has_merged_transparency, options.notices, &damaged_rows,
-                              primary_pixel_budget);
+                              primary_pixel_budget, decompressed_budget);
     const auto add_layer = [&document](const Layer& source) {
       document.add_layer(clone_layer_with_document_ids(document, source));
     };
@@ -1306,7 +1257,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
         auto deep_layers = read_layer_info_records(
             block_reader, document.width(), document.height(), header.color_mode, header.depth,
             global_light_angle, global_light_altitude, header.large_document, cmyk_icc,
-            has_merged_transparency, options.notices, &damaged_rows, primary_pixel_budget);
+            has_merged_transparency, options.notices, &damaged_rows, primary_pixel_budget,
+            decompressed_budget);
         // Always Photoshop's bottom-to-top order: legacy Patchy never wrote these
         // blocks, so the legacy-order heuristic used for the standard section
         // could only misfire here.
@@ -1338,13 +1290,15 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
         auto shared_payload =
             std::make_shared<const std::vector<std::uint8_t>>(std::move(payload));
         document.metadata().smart_filter_effects.add_block(parse_filter_effects_block(
-            key, std::move(shared_payload), wide_length, global_block_index));
+            key, std::move(shared_payload), wide_length, global_block_index,
+            decompressed_budget));
       } else if (key == "Patt" || key == "Pat2" || key == "Pat3") {
         // Pattern pixel data: decode into the store so pattern overlays / bevel
         // textures can render, AND keep the raw block preserved verbatim (Patchy
         // never rewrites imported pattern blocks). Decode into a local before the
         // payload moves — the argument-evaluation-order rule.
-        auto decoded = parse_patterns_block(payload, cmyk_icc);
+        auto decoded = parse_patterns_block(payload, cmyk_icc,
+                                            decompressed_budget);
         for (auto& resource : decoded) {
           document.metadata().patterns.adopt(resource);
         }
@@ -1368,7 +1322,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     auto grid_settings = document.grid_settings();
     auto guides = std::move(document.guides());
     document = read_flat_composite(reader, header, cmyk_icc, channel_resources,
-                                   has_merged_transparency, primary_pixel_budget, &damaged_rows);
+                                   has_merged_transparency, primary_pixel_budget,
+                                   decompressed_budget, &damaged_rows);
     document.metadata() = std::move(metadata);
     document.color_state().embedded_icc_profile = std::move(color_state.embedded_icc_profile);
     document.color_state().ocio_view = std::move(color_state.ocio_view);
@@ -1390,6 +1345,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       try {
         auto flat_composite = read_flat_composite(reader, header, cmyk_icc, channel_resources,
                                                   has_merged_transparency, primary_pixel_budget,
+                                                  decompressed_budget,
                                                   &damaged_rows);
         if (!flat_composite.layers().empty() && flat_composite.layers().front().kind() == LayerKind::Pixel) {
           document.metadata().psd_flat_composite =
@@ -1413,7 +1369,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       const auto compression = reader.read_u16();
       primary_pixel_budget.charge_dimensions(document.width(), document.height(), saved_channel_count);
       auto saved_channels = read_flat_image_channels_from(reader, header, compression,
-                                                          first_saved_channel, &damaged_rows);
+                                                          first_saved_channel,
+                                                          decompressed_budget, &damaged_rows);
       add_saved_composite_channels(document, std::move(saved_channels), first_saved_channel, header,
                                    channel_resources);
     }

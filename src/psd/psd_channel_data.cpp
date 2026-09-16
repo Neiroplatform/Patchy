@@ -608,6 +608,7 @@ void convert_cmyk_planes_to_rgb(PixelBuffer& pixels, const std::uint8_t* cyan,
 
 std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader& reader, const Header& header,
                                                                 std::uint16_t compression,
+                                                                ParseBudgetTracker& decompressed_budget,
                                                                 std::size_t* damaged_rows) {
   std::vector<std::vector<std::uint8_t>> channels;
   channels.reserve(header.channels);
@@ -618,6 +619,13 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader&
 
   if (compression == kCompressionRaw) {
     for (std::uint16_t channel = 0; channel < header.channels; ++channel) {
+      const auto byte_count = decompressed_budget.checked_decompressed_dimensions(
+          width, height, 1U, bytes_per_sample(header.depth));
+      if (byte_count > reader.remaining()) {
+        throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite channel data is truncated"));
+      }
+      decompressed_budget.charge_decompressed_dimensions(
+          width, height, 1U, bytes_per_sample(header.depth));
       channels.push_back(read_channel_data(reader, compression, width, height, header.large_document,
                                            ChannelDecodeInfo{header.depth, is_color(channel), 0U}));
     }
@@ -637,6 +645,16 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader&
       const auto offset = static_cast<std::size_t>(channel) * static_cast<std::size_t>(header.height);
       const auto rows =
           std::span<const std::uint32_t>(row_lengths.data() + offset, static_cast<std::size_t>(header.height));
+      std::size_t encoded_size = 0U;
+      for (const auto row_length : rows) {
+        if (encoded_size > reader.remaining() ||
+            static_cast<std::size_t>(row_length) > reader.remaining() - encoded_size) {
+          throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite channel data is truncated"));
+        }
+        encoded_size += static_cast<std::size_t>(row_length);
+      }
+      decompressed_budget.charge_decompressed_dimensions(
+          width, height, 1U, bytes_per_sample(header.depth));
       channels.push_back(
           convert_channel_to_8bit(read_rle_channel_from_counts(reader, rows, row_bytes, damaged_rows),
                                   header.depth, is_color(channel)));
@@ -652,25 +670,32 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader&
 // encoded rows for unwanted planes are skipped without decoding or storing them.
 std::vector<std::vector<std::uint8_t>> read_flat_image_channels_from(
     BigEndianReader& reader, const Header& header, std::uint16_t compression,
-    std::uint16_t first_channel, std::size_t* damaged_rows) {
+    std::uint16_t first_channel, ParseBudgetTracker& decompressed_budget,
+    std::size_t* damaged_rows) {
   if (first_channel > header.channels) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Invalid PSD saved channel index"));
   }
   const auto width = static_cast<std::int32_t>(header.width);
   const auto height = static_cast<std::int32_t>(header.height);
-  const auto channel_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
-                             bytes_per_sample(header.depth);
   const auto color_channels = composite_color_channel_count(header.color_mode);
   std::vector<std::vector<std::uint8_t>> channels;
   channels.reserve(static_cast<std::size_t>(header.channels - first_channel));
 
   if (compression == kCompressionRaw) {
-    const auto skip_bytes = channel_bytes * static_cast<std::size_t>(first_channel);
-    if (skip_bytes > reader.remaining()) {
+    const auto channel_bytes = decompressed_budget.checked_decompressed_dimensions(
+        width, height, 1U, bytes_per_sample(header.depth));
+    const auto skip_bytes_u64 = static_cast<std::uint64_t>(channel_bytes) *
+                                static_cast<std::uint64_t>(first_channel);
+    if (skip_bytes_u64 > reader.remaining()) {
       throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite channel data is truncated"));
     }
-    reader.skip(skip_bytes);
+    reader.skip(static_cast<std::size_t>(skip_bytes_u64));
     for (std::uint16_t channel = first_channel; channel < header.channels; ++channel) {
+      if (channel_bytes > reader.remaining()) {
+        throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite channel data is truncated"));
+      }
+      decompressed_budget.charge_decompressed_dimensions(
+          width, height, 1U, bytes_per_sample(header.depth));
       channels.push_back(read_channel_data(reader, compression, width, height, header.large_document,
                                            ChannelDecodeInfo{header.depth, channel < color_channels, 0U}));
     }
@@ -704,6 +729,16 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels_from(
         }
         reader.skip(encoded_size);
       } else {
+        std::size_t encoded_size = 0U;
+        for (const auto row_length : rows) {
+          if (encoded_size > reader.remaining() ||
+              static_cast<std::size_t>(row_length) > reader.remaining() - encoded_size) {
+            throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite channel data is truncated"));
+          }
+          encoded_size += static_cast<std::size_t>(row_length);
+        }
+        decompressed_budget.charge_decompressed_dimensions(
+            width, height, 1U, bytes_per_sample(header.depth));
         channels.push_back(
             convert_channel_to_8bit(read_rle_channel_from_counts(reader, rows, row_bytes, damaged_rows),
                                     header.depth, channel < color_channels));

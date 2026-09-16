@@ -1,5 +1,7 @@
 #include "psd/psd_filter_effects.hpp"
 
+#include "psd/psd_parse_budget_internal.hpp"
+
 #include "psd/psd_binary.hpp"
 #include "psd/psd_descriptor.hpp"
 #include "core/smart_filter.hpp"
@@ -177,7 +179,8 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
 
 [[nodiscard]] bool decode_filter_mask(std::span<const std::uint8_t> bytes,
                                       const Rect &bounds,
-                                      SmartFilterEffectsRecord &record) {
+                                      SmartFilterEffectsRecord &record,
+                                      ParseBudgetTracker* decompressed_budget) {
   const auto pixels64 = static_cast<std::uint64_t>(bounds.width) *
                         static_cast<std::uint64_t>(bounds.height);
   if (pixels64 == 0U ||
@@ -197,11 +200,30 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
       if (reader.remaining() != expected) {
         return false;
       }
+      if (decompressed_budget != nullptr) {
+        decompressed_budget->charge_size(expected);
+      }
       samples = reader.read_bytes(expected);
     } else if (compression == 1U) {
       const auto table_bytes = static_cast<std::uint64_t>(bounds.height) * 4ULL;
       if (table_bytes > reader.remaining()) {
         return false;
+      }
+      auto probe = reader;
+      std::size_t encoded_size = 0U;
+      for (std::int32_t row = 0; row < bounds.height; ++row) {
+        const auto row_length = probe.read_u32();
+        if (static_cast<std::size_t>(row_length) >
+            std::numeric_limits<std::size_t>::max() - encoded_size) {
+          return false;
+        }
+        encoded_size += static_cast<std::size_t>(row_length);
+      }
+      if (encoded_size > probe.remaining()) {
+        return false;
+      }
+      if (decompressed_budget != nullptr) {
+        decompressed_budget->charge_size(expected);
       }
       std::vector<std::uint32_t> row_lengths(
           static_cast<std::size_t>(bounds.height));
@@ -244,7 +266,8 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
 
 [[nodiscard]] bool
 parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
-                           SmartFilterEffectsRecord &record) {
+                           SmartFilterEffectsRecord &record,
+                           ParseBudgetTracker* decompressed_budget) {
   // A record may end immediately when no filter mask was written. Some versions
   // instead append a zero presence byte; both forms are accepted.
   if (bytes.empty()) {
@@ -278,7 +301,7 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
         record.cache_depth != kSupportedCacheDepth) {
       return false;
     }
-    return decode_filter_mask(mask_body, *bounds, record);
+    return decode_filter_mask(mask_body, *bounds, record, decompressed_budget);
   } catch (const std::runtime_error &) {
     return false;
   }
@@ -287,7 +310,8 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
 [[nodiscard]] SmartFilterEffectsRecord parse_filter_effects_record(
     const SmartFilterEffectsBlock &block,
     const std::shared_ptr<const std::vector<std::uint8_t>> &storage,
-    std::size_t body_offset, std::size_t body_length) {
+    std::size_t body_offset, std::size_t body_length,
+    ParseBudgetTracker* decompressed_budget = nullptr) {
   SmartFilterEffectsRecord record;
   record.source_block_key = block.key;
   record.source_block_version = block.version;
@@ -327,7 +351,8 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
     // record could otherwise force a large bounded allocation before failing.
     const auto mask_supported =
         cache_supported &&
-        parse_optional_filter_mask(body.subspan(reader.position()), record);
+        parse_optional_filter_mask(body.subspan(reader.position()), record,
+                                   decompressed_budget);
     record.data_supported = cache_supported && mask_supported;
   } catch (const std::runtime_error &) {
     // The outer u64 record boundary remains useful for byte preservation and
@@ -534,9 +559,12 @@ bool replace_filter_effects_mask(SmartFilterEffectsStore &store,
   }
 }
 
-SmartFilterEffectsBlock parse_filter_effects_block(
+namespace {
+
+SmartFilterEffectsBlock parse_filter_effects_block_impl(
     std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
-    bool long_length, std::size_t original_global_index) {
+    bool long_length, std::size_t original_global_index,
+    ParseBudgetTracker* decompressed_budget) {
   SmartFilterEffectsBlock block;
   block.key = std::move(key);
   block.long_length = long_length;
@@ -582,7 +610,8 @@ SmartFilterEffectsBlock parse_filter_effects_block(
       const auto body_offset = reader.position();
       block.records.push_back(
           parse_filter_effects_record(block, payload, body_offset,
-                                      static_cast<std::size_t>(record_length)));
+                                      static_cast<std::size_t>(record_length),
+                                      decompressed_budget));
       reader.skip(static_cast<std::size_t>(record_length));
       // Photoshop aligns every length-prefixed FEid/FXid record to four bytes,
       // not only the final block payload. The padding is outside the declared
@@ -635,6 +664,25 @@ SmartFilterEffectsBlock parse_filter_effects_block(
     block.records.clear();
   }
   return block;
+}
+
+} // namespace
+
+SmartFilterEffectsBlock parse_filter_effects_block(
+    std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
+    bool long_length, std::size_t original_global_index) {
+  return parse_filter_effects_block_impl(
+      std::move(key), std::move(payload), long_length, original_global_index,
+      nullptr);
+}
+
+SmartFilterEffectsBlock parse_filter_effects_block(
+    std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
+    bool long_length, std::size_t original_global_index,
+    ParseBudgetTracker& decompressed_budget) {
+  return parse_filter_effects_block_impl(
+      std::move(key), std::move(payload), long_length, original_global_index,
+      &decompressed_budget);
 }
 
 SmartFilterEffectsBlock parse_filter_effects_block(

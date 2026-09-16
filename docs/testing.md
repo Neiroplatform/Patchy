@@ -39,15 +39,25 @@ binary reader. `read_file` charges fixed-size reads before appending them and do
 trust a path-based size hint, so a replaced, changing, or unknown file cannot grow the
 byte vector past the limit. `ParseUsage::input_bytes` records only successful charges.
 
-These fields are deliberately narrower than a process-memory limit: they do not count
-decoder working buffers, patterns, Smart Filter masks/caches, layer clones, or
-render-generated previews. Keep those omissions explicit until separate fields and
-boundary tests cover them. The `input_budget` and `primary_pixel_budget` tests pin
-exact-fit and one-byte-short behavior, aggregate accounting, file/span parity,
-retained-flat exception propagation, and tiny malicious PSB headers that declare
+`max_decompressed_bytes` is a separate cumulative guard for source raster bytes
+admitted to decoding. Each decoded layer, user-mask, complete or saved-only composite,
+relevant pattern, and Smart Filter mask plane is charged once at its on-disk sample
+depth (one, two, or four bytes), independently of RAW/RLE/ZIP compression. A successful
+admission remains in `ParseUsage::decompressed_bytes` when the decoder later recovers
+from corrupt payload data. Unsupported compression, zero-length or skipped planes,
+real-user masks, irrelevant pattern slots, and Smart Filter cache planes are not
+charged. The guard also excludes converted/output buffers, retained raw blocks, layer
+clones, and render-generated previews; it is not a complete process-memory limit.
+
+The `input_budget`, `primary_pixel_budget`, and `psd_decompressed_budget` tests pin
+exact-fit and one-byte-short behavior, aggregate accounting, compression-independent
+source-depth accounting, file/span behavior where applicable, retained-flat and
+recovery-catch exception propagation, and tiny malicious PSB headers that declare
 enormous flat or zero-channel layer buffers. A rejection test must catch
 `ParseBudgetExceeded`, match its dimension and the stable safe-import message, so
 `bad_alloc`, truncation, or an unrelated parser error cannot pass accidentally.
+`ParseBudget` and `ParseUsage` are aggregate-initializable public structs: add fields
+only at the end and rebuild all consumers when their layout changes.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

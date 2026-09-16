@@ -22,16 +22,22 @@ struct ParseBudget {
   // Encoded PSD/PSB source bytes accepted by read()/read_file(). Kept after the
   // original field so existing aggregate initialization retains its meaning.
   std::uint64_t max_input_bytes{std::numeric_limits<std::uint64_t>::max()};
+  // Aggregate source-depth bytes admitted for raster decompression. This counts
+  // decoded source planes once, independently of their on-disk compression,
+  // and deliberately excludes converted output buffers and retained raw data.
+  std::uint64_t max_decompressed_bytes{std::numeric_limits<std::uint64_t>::max()};
 };
 
 struct ParseUsage {
   std::uint64_t primary_pixel_bytes{0};
   std::uint64_t input_bytes{0};
+  std::uint64_t decompressed_bytes{0};
 };
 
 enum class ParseBudgetDimension : std::uint8_t {
-  InputBytes,
-  PrimaryPixelBytes,
+  InputBytes = 0,
+  PrimaryPixelBytes = 1,
+  DecompressedBytes = 2,
 };
 
 class ParseBudgetExceeded final : public std::length_error {

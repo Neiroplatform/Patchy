@@ -16,6 +16,7 @@
 #include "psd/psd_binary.hpp"
 #include "psd/psd_descriptor.hpp"
 #include "psd/psd_document_io.hpp"
+#include "psd/psd_parse_budget_internal.hpp"
 #include "psd/psd_smart_objects.hpp"
 #include "psd/psd_text_runs.hpp"
 
@@ -411,10 +412,12 @@ std::vector<std::uint8_t> read_channel_data(BigEndianReader& reader, std::uint16
                                             std::size_t* damaged_rows = nullptr);
 std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader& reader, const Header& header,
                                                                 std::uint16_t compression,
+                                                                ParseBudgetTracker& decompressed_budget,
                                                                 std::size_t* damaged_rows = nullptr);
 std::vector<std::vector<std::uint8_t>> read_flat_image_channels_from(
     BigEndianReader& reader, const Header& header, std::uint16_t compression,
-    std::uint16_t first_channel, std::size_t* damaged_rows = nullptr);
+    std::uint16_t first_channel, ParseBudgetTracker& decompressed_budget,
+    std::size_t* damaged_rows = nullptr);
 // Appends the "some scanlines were damaged" import notice when the count is nonzero.
 void append_damaged_row_notice(std::size_t damaged_rows, std::vector<std::string>* notices);
 bool is_cmyk_color_mode(std::uint16_t color_mode) noexcept;

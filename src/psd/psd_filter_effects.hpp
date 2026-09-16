@@ -26,7 +26,6 @@ inline constexpr std::uint64_t kMaximumEditableSmartFilterMaskPixels =
 [[nodiscard]] SmartFilterEffectsBlock parse_filter_effects_block(
     std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
     bool long_length = false, std::size_t original_global_index = SIZE_MAX);
-
 // Convenience overload for tests/callers that do not already own shared bytes.
 [[nodiscard]] SmartFilterEffectsBlock parse_filter_effects_block(
     std::string_view key, std::span<const std::uint8_t> payload,

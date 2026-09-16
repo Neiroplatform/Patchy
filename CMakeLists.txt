@@ -1532,6 +1532,7 @@ if(PATCHY_BUILD_TESTS)
     tests/core/photo_divide_tests.cpp
     tests/core/pixel_tools_tests.cpp
     tests/core/psd_core_io_tests.cpp
+    tests/core/psd_parse_budget_tests.cpp
     tests/core/psd_structure_tests.cpp
     tests/core/psd_text_tests.cpp
     tests/core/psd_vector_fixtures_tests.cpp

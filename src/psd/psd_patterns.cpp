@@ -3,6 +3,7 @@
 #include "color/color_management.hpp"
 #include "psd/psd_binary.hpp"
 #include "psd/psd_descriptor.hpp"
+#include "psd/psd_parse_budget_internal.hpp"
 #include "support/translate_noop.hpp"
 
 #include <algorithm>
@@ -48,7 +49,7 @@ struct DecodedPlane {
 // their declared length and remain inside the VMA, but their payload is skipped
 // without parsing or decompressing it.
 bool read_plane(BigEndianReader& reader, DecodedPlane& plane, std::size_t container_end,
-                bool decode_samples) {
+                bool decode_samples, ParseBudgetTracker* decompressed_budget) {
   if (reader.position() > container_end || container_end - reader.position() < 4U) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD pattern channel list is truncated"));
   }
@@ -103,6 +104,9 @@ bool read_plane(BigEndianReader& reader, DecodedPlane& plane, std::size_t contai
     if (data_length < expected) {
       throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD pattern channel data is truncated"));
     }
+    if (decompressed_budget != nullptr) {
+      decompressed_budget->charge_size(expected);
+    }
     raw = reader.read_bytes(expected);
   } else if (compression == 1U) {
     // PackBits with the per-row big-endian u16 count table (the channel-image
@@ -110,6 +114,22 @@ bool read_plane(BigEndianReader& reader, DecodedPlane& plane, std::size_t contai
     const auto table_bytes = static_cast<std::size_t>(height) * 2U;
     if (data_length < table_bytes) {
       throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD pattern RLE table is truncated"));
+    }
+    auto probe = reader;
+    std::size_t encoded_size = 0U;
+    for (std::int32_t row = 0; row < height; ++row) {
+      const auto count = probe.read_u16();
+      if (static_cast<std::size_t>(count) >
+          std::numeric_limits<std::size_t>::max() - encoded_size) {
+        throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD pattern RLE row is truncated"));
+      }
+      encoded_size += static_cast<std::size_t>(count);
+    }
+    if (encoded_size > end_position - probe.position()) {
+      throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD pattern RLE row is truncated"));
+    }
+    if (decompressed_budget != nullptr) {
+      decompressed_budget->charge_size(expected);
     }
     std::vector<std::uint16_t> counts(static_cast<std::size_t>(height));
     for (auto& count : counts) {
@@ -170,7 +190,8 @@ bool read_plane(BigEndianReader& reader, DecodedPlane& plane, std::size_t contai
 // Parses one pattern starting at the reader's position; the reader is positioned
 // at the pattern's u32 length field. Returns nullopt for undecodable content.
 std::optional<PatternResource> parse_single_pattern(BigEndianReader& reader,
-                                                    const CmykToRgbTransform* cmyk_icc) {
+                                                    const CmykToRgbTransform* cmyk_icc,
+                                                    ParseBudgetTracker* decompressed_budget) {
   const auto declared_length = reader.read_u32();
   if (declared_length < 16U || declared_length > reader.remaining()) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD pattern length is invalid"));
@@ -233,7 +254,7 @@ std::optional<PatternResource> parse_single_pattern(BigEndianReader& reader,
       for (std::uint32_t slot = 0; slot < slot_count && reader.position() < vma_end; ++slot) {
         DecodedPlane plane;
         const auto relevant = slot < color_channel_count || slot == declared_channels + 1U;
-        if (!read_plane(reader, plane, vma_end, relevant)) {
+        if (!read_plane(reader, plane, vma_end, relevant, decompressed_budget)) {
           continue;
         }
         if (slot < color_channel_count) {
@@ -308,6 +329,8 @@ std::optional<PatternResource> parse_single_pattern(BigEndianReader& reader,
         result = std::move(resource);
       }
     }
+  } catch (const ParseBudgetExceeded&) {
+    throw;
   } catch (const std::exception&) {
     result.reset();  // undecodable pattern: the raw block preserves it
   }
@@ -324,21 +347,39 @@ std::optional<PatternResource> parse_single_pattern(BigEndianReader& reader,
 
 }  // namespace
 
-std::vector<PatternResource> parse_patterns_block(std::span<const std::uint8_t> payload,
-                                                  const CmykToRgbTransform* cmyk_icc) {
+namespace {
+
+std::vector<PatternResource> parse_patterns_block_impl(
+    std::span<const std::uint8_t> payload, const CmykToRgbTransform* cmyk_icc,
+    ParseBudgetTracker* decompressed_budget) {
   std::vector<PatternResource> resources;
   BigEndianReader reader(payload);
   try {
     while (reader.remaining() >= 16U) {
-      auto resource = parse_single_pattern(reader, cmyk_icc);
+      auto resource = parse_single_pattern(reader, cmyk_icc, decompressed_budget);
       if (resource.has_value()) {
         resources.push_back(std::move(*resource));
       }
     }
+  } catch (const ParseBudgetExceeded&) {
+    throw;
   } catch (const std::exception&) {
     // Malformed block: keep whatever decoded cleanly; the raw bytes stay preserved.
   }
   return resources;
+}
+
+}  // namespace
+
+std::vector<PatternResource> parse_patterns_block(std::span<const std::uint8_t> payload,
+                                                  const CmykToRgbTransform* cmyk_icc) {
+  return parse_patterns_block_impl(payload, cmyk_icc, nullptr);
+}
+
+std::vector<PatternResource> parse_patterns_block(
+    std::span<const std::uint8_t> payload, const CmykToRgbTransform* cmyk_icc,
+    ParseBudgetTracker& decompressed_budget) {
+  return parse_patterns_block_impl(payload, cmyk_icc, &decompressed_budget);
 }
 
 std::vector<std::string> pattern_ids_in_block(std::span<const std::uint8_t> payload) {

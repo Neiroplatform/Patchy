@@ -139,6 +139,7 @@ int main(int argc, char** argv) {
            compositor_layer_styles_tests,
            gradients_interior_effects_tests,
            psd_core_io_tests,
+           psd_parse_budget_tests,
            stroke_mask_effects_tests,
            smart_objects_warp_tests,
            smart_filter_pixels_tests,
