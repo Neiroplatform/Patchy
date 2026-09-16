@@ -60,6 +60,21 @@ namespace patchy::psd {
 
 namespace {
 
+[[nodiscard]] TrackedByteBuffer make_tracked_buffer(
+    ParseLiveBudgetTracker& budget, std::size_t bytes) {
+  auto reservation = budget.reserve_size(bytes);
+  std::vector<std::uint8_t> storage(bytes);
+  return TrackedByteBuffer(std::move(reservation), std::move(storage));
+}
+
+[[nodiscard]] TrackedByteBuffer make_tracked_reserved_buffer(
+    ParseLiveBudgetTracker& budget, std::size_t capacity) {
+  auto reservation = budget.reserve_size(capacity);
+  std::vector<std::uint8_t> storage;
+  storage.reserve(capacity);
+  return TrackedByteBuffer(std::move(reservation), std::move(storage));
+}
+
 // encode_packbits_row moved to psd_descriptor.{hpp,cpp} (shared with the ILBM writer).
 
 // Photoshop's smart-object embed parser reads a composite's RLE rows in two-byte
@@ -191,20 +206,25 @@ std::vector<std::uint8_t> planar_rgb8_data(const PixelBuffer& pixels) {
   return &layer;
 }
 
-std::vector<std::uint8_t> read_rle_channel_from_counts(BigEndianReader& reader,
-                                                       std::span<const std::uint32_t> row_lengths,
-                                                       std::size_t row_bytes,
-                                                       std::size_t* damaged_rows) {
-  std::vector<std::uint8_t> channel;
-  channel.reserve(row_bytes * row_lengths.size());
+TrackedByteBuffer read_rle_channel_from_counts(
+    BigEndianReader& reader, std::span<const std::uint32_t> row_lengths,
+    std::size_t row_bytes, ParseLiveBudgetTracker& tracked_live_budget,
+    std::size_t* damaged_rows) {
+  if (row_bytes != 0U &&
+      row_lengths.size() > std::numeric_limits<std::size_t>::max() / row_bytes) {
+    tracked_live_budget.reject();
+  }
+  auto channel = make_tracked_reserved_buffer(
+      tracked_live_budget, row_bytes * row_lengths.size());
   for (const auto row_length : row_lengths) {
-    const auto row = reader.read_bytes(row_length);
+    const auto row = reader.read_span(row_length);
     bool damaged = false;
+    auto row_reservation = tracked_live_budget.reserve_size(row_bytes);
     auto decoded = decode_packbits_scanline(row, row_bytes, &damaged);
     if (damaged && damaged_rows != nullptr) {
       ++*damaged_rows;
     }
-    channel.insert(channel.end(), decoded.begin(), decoded.end());
+    channel.bytes.insert(channel.bytes.end(), decoded.begin(), decoded.end());
   }
   return channel;
 }
@@ -215,11 +235,12 @@ std::vector<std::uint8_t> read_rle_channel_from_counts(BigEndianReader& reader,
 
 // Inflates one zip/zip-prediction channel payload. Photoshop writes standard zlib
 // streams and the decoded size is exactly the planar sample data.
-[[nodiscard]] std::vector<std::uint8_t> inflate_zip_channel(std::span<const std::uint8_t> compressed,
-                                                            std::size_t expected_size) {
-  std::vector<std::uint8_t> data(expected_size);
+[[nodiscard]] TrackedByteBuffer inflate_zip_channel(
+    std::span<const std::uint8_t> compressed, std::size_t expected_size,
+    ParseLiveBudgetTracker& tracked_live_budget) {
+  auto data = make_tracked_buffer(tracked_live_budget, expected_size);
   mz_ulong out_length = static_cast<mz_ulong>(expected_size);
-  if (mz_uncompress(data.data(), &out_length, compressed.data(),
+  if (mz_uncompress(data.bytes.data(), &out_length, compressed.data(),
                     static_cast<mz_ulong>(compressed.size())) != MZ_OK ||
       out_length != expected_size) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD zip-compressed channel data is corrupt"));
@@ -231,10 +252,13 @@ std::vector<std::uint8_t> read_rle_channel_from_counts(BigEndianReader& reader,
 // delta-encoded per big-endian u16; 32-bit rows are byte-delta-encoded and then
 // stored as four byte planes per row (all MSBs first), which interleave back into
 // big-endian floats here. 8-bit rows are plain byte deltas.
-void unpredict_channel_rows(std::vector<std::uint8_t>& data, std::int32_t width, std::int32_t height,
-                            std::uint16_t depth) {
+void unpredict_channel_rows(std::vector<std::uint8_t>& data, std::int32_t width,
+                            std::int32_t height, std::uint16_t depth,
+                            ParseLiveBudgetTracker& tracked_live_budget) {
   const auto columns = static_cast<std::size_t>(std::max(0, width));
   const auto row_bytes = columns * bytes_per_sample(depth);
+  auto shuffle_reservation =
+      tracked_live_budget.reserve_size(depth == 32 ? row_bytes : 0U);
   std::vector<std::uint8_t> shuffled(depth == 32 ? row_bytes : 0U);
   for (std::int32_t y = 0; y < height; ++y) {
     auto* row = data.data() + static_cast<std::size_t>(y) * row_bytes;
@@ -447,53 +471,64 @@ void write_rgb8_image_data_with_extra_channels(
   }
 }
 
-std::vector<std::uint8_t> convert_channel_to_8bit(std::vector<std::uint8_t>&& data, std::uint16_t depth,
-                                                  bool color_channel) {
+TrackedByteBuffer convert_channel_to_8bit(TrackedByteBuffer data,
+                                          std::uint16_t depth,
+                                          bool color_channel) {
   if (depth == 16) {
     // Full-range big-endian u16; value/257 with rounding, like the Affinity importer.
-    const auto samples = data.size() / 2U;
+    const auto samples = data.bytes.size() / 2U;
     for (std::size_t i = 0; i < samples; ++i) {
       const auto value =
-          static_cast<std::uint32_t>((data[i * 2U] << 8U) | data[i * 2U + 1U]);
-      data[i] = static_cast<std::uint8_t>((value + 128U) / 257U);
+          static_cast<std::uint32_t>((data.bytes[i * 2U] << 8U) |
+                                     data.bytes[i * 2U + 1U]);
+      data.bytes[i] = static_cast<std::uint8_t>((value + 128U) / 257U);
     }
-    data.resize(samples);
+    data.bytes.resize(samples);
   } else if (depth == 32) {
-    const auto samples = data.size() / 4U;
+    const auto samples = data.bytes.size() / 4U;
     for (std::size_t i = 0; i < samples; ++i) {
-      const auto bits = (static_cast<std::uint32_t>(data[i * 4U]) << 24U) |
-                        (static_cast<std::uint32_t>(data[i * 4U + 1U]) << 16U) |
-                        (static_cast<std::uint32_t>(data[i * 4U + 2U]) << 8U) |
-                        static_cast<std::uint32_t>(data[i * 4U + 3U]);
+      const auto bits = (static_cast<std::uint32_t>(data.bytes[i * 4U]) << 24U) |
+                        (static_cast<std::uint32_t>(data.bytes[i * 4U + 1U]) << 16U) |
+                        (static_cast<std::uint32_t>(data.bytes[i * 4U + 2U]) << 8U) |
+                        static_cast<std::uint32_t>(data.bytes[i * 4U + 3U]);
       const auto value = std::bit_cast<float>(bits);
       // PSD 32-bit channels are linear-light floats; color planes bake through the shared
       // sRGB transfer, transparency/masks/saved channels scale linearly instead.
-      data[i] = color_channel
-                    ? linear_to_srgb8(value)
-                    : static_cast<std::uint8_t>(std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));
+      data.bytes[i] = color_channel
+                          ? linear_to_srgb8(value)
+                          : static_cast<std::uint8_t>(
+                                std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));
     }
-    data.resize(samples);
+    data.bytes.resize(samples);
   }
-  return std::move(data);
+  return data;
 }
 
-std::vector<std::uint8_t> read_channel_data(BigEndianReader& reader, std::uint16_t compression, std::int32_t width,
-                                            std::int32_t height, bool wide_rle_counts,
-                                            const ChannelDecodeInfo& decode_info,
-                                            std::size_t* damaged_rows) {
+TrackedByteBuffer read_channel_data(BigEndianReader& reader, std::uint16_t compression,
+                                    std::int32_t width, std::int32_t height,
+                                    bool wide_rle_counts,
+                                    ParseLiveBudgetTracker& tracked_live_budget,
+                                    const ChannelDecodeInfo& decode_info,
+                                    std::size_t* damaged_rows) {
   const auto depth = decode_info.depth;
   const auto row_bytes = static_cast<std::size_t>(width) * bytes_per_sample(depth);
   const auto byte_count = row_bytes * static_cast<std::size_t>(height);
 
   if (compression == kCompressionRaw) {
-    return convert_channel_to_8bit(reader.read_bytes(byte_count), depth, decode_info.color_channel);
+    auto data = make_tracked_buffer(tracked_live_budget, byte_count);
+    const auto payload = reader.read_span(byte_count);
+    std::copy(payload.begin(), payload.end(), data.bytes.begin());
+    return convert_channel_to_8bit(std::move(data), depth,
+                                   decode_info.color_channel);
   }
 
   if (compression == kCompressionZip || compression == kCompressionZipPrediction) {
-    const auto payload = reader.read_bytes(static_cast<std::size_t>(decode_info.zip_payload_length));
-    auto data = inflate_zip_channel(payload, byte_count);
+    const auto payload = reader.read_span(
+        static_cast<std::size_t>(decode_info.zip_payload_length));
+    auto data = inflate_zip_channel(payload, byte_count, tracked_live_budget);
     if (compression == kCompressionZipPrediction) {
-      unpredict_channel_rows(data, width, height, depth);
+      unpredict_channel_rows(data.bytes, width, height, depth,
+                             tracked_live_budget);
     }
     return convert_channel_to_8bit(std::move(data), depth, decode_info.color_channel);
   }
@@ -502,13 +537,22 @@ std::vector<std::uint8_t> read_channel_data(BigEndianReader& reader, std::uint16
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Unsupported PSD channel compression"));
   }
 
+  const auto row_count = static_cast<std::size_t>(height);
+  const auto count_width = wide_rle_counts ? 4U : 2U;
+  if (row_count > reader.remaining() / count_width) {
+    throw std::runtime_error(
+        PATCHY_TRANSLATE_NOOP("QObject", "PSD channel RLE table is truncated"));
+  }
+  auto row_table_reservation = tracked_live_budget.reserve_product(
+      row_count, sizeof(std::uint32_t));
   std::vector<std::uint32_t> row_lengths;
   row_lengths.reserve(static_cast<std::size_t>(height));
   for (std::int32_t y = 0; y < height; ++y) {
     row_lengths.push_back(wide_rle_counts ? reader.read_u32() : reader.read_u16());
   }
 
-  auto channel = read_rle_channel_from_counts(reader, row_lengths, row_bytes, damaged_rows);
+  auto channel = read_rle_channel_from_counts(
+      reader, row_lengths, row_bytes, tracked_live_budget, damaged_rows);
   return convert_channel_to_8bit(std::move(channel), depth, decode_info.color_channel);
 }
 
@@ -545,7 +589,8 @@ RgbColor rgb_from_cmyk_ink_fractions(double cyan, double magenta, double yellow,
 void convert_cmyk_planes_to_rgb(PixelBuffer& pixels, const std::uint8_t* cyan,
                                 const std::uint8_t* magenta, const std::uint8_t* yellow,
                                 const std::uint8_t* black, std::size_t pixel_count,
-                                const CmykToRgbTransform* icc) {
+                                const CmykToRgbTransform* icc,
+                                ParseLiveBudgetTracker& tracked_live_budget) {
   if (icc == nullptr) {
     for (std::size_t i = 0; i < pixel_count; ++i) {
       write_rgb_from_cmyk(pixels, i, cyan[i], magenta[i], yellow[i], black[i]);
@@ -554,8 +599,16 @@ void convert_cmyk_planes_to_rgb(PixelBuffer& pixels, const std::uint8_t* cyan,
   }
   const auto channels = static_cast<std::size_t>(pixels.format().channels);
   auto* target = pixels.data().data();
+  constexpr std::size_t kChunkPixels = 65536;
+  constexpr std::size_t kParallelThresholdPixels = 4U << 20U;
+  constexpr std::size_t kMaxWorkers = 16U;
+  constexpr std::size_t kScratchBytesPerPixel = 7U;
+  const auto scratch_pixels = pixel_count < kParallelThresholdPixels
+                                  ? std::min(pixel_count, kChunkPixels)
+                                  : kMaxWorkers * kChunkPixels;
+  auto scratch_reservation = tracked_live_budget.reserve_product(
+      scratch_pixels, kScratchBytesPerPixel);
   const auto convert_range = [&](std::size_t begin, std::size_t end) {
-    constexpr std::size_t kChunkPixels = 65536;
     std::vector<std::uint8_t> cmyk(std::min(kChunkPixels, end - begin) * 4U);
     std::vector<std::uint8_t> rgb(std::min(kChunkPixels, end - begin) * 3U);
     for (std::size_t start = begin; start < end; start += kChunkPixels) {
@@ -575,7 +628,6 @@ void convert_cmyk_planes_to_rgb(PixelBuffer& pixels, const std::uint8_t* cyan,
       }
     }
   };
-  constexpr std::size_t kParallelThresholdPixels = 4U << 20U;
   if (pixel_count < kParallelThresholdPixels) {
     convert_range(0, pixel_count);
     return;
@@ -606,11 +658,11 @@ void convert_cmyk_planes_to_rgb(PixelBuffer& pixels, const std::uint8_t* cyan,
   }
 }
 
-std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader& reader, const Header& header,
-                                                                std::uint16_t compression,
-                                                                ParseBudgetTracker& decompressed_budget,
-                                                                std::size_t* damaged_rows) {
-  std::vector<std::vector<std::uint8_t>> channels;
+std::vector<TrackedByteBuffer> read_flat_image_channels(
+    BigEndianReader& reader, const Header& header, std::uint16_t compression,
+    ParseBudgetTracker& decompressed_budget,
+    ParseLiveBudgetTracker& tracked_live_budget, std::size_t* damaged_rows) {
+  std::vector<TrackedByteBuffer> channels;
   channels.reserve(header.channels);
   const auto width = static_cast<std::int32_t>(header.width);
   const auto height = static_cast<std::int32_t>(header.height);
@@ -626,14 +678,25 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader&
       }
       decompressed_budget.charge_decompressed_dimensions(
           width, height, 1U, bytes_per_sample(header.depth));
-      channels.push_back(read_channel_data(reader, compression, width, height, header.large_document,
-                                           ChannelDecodeInfo{header.depth, is_color(channel), 0U}));
+      channels.push_back(read_channel_data(
+          reader, compression, width, height, header.large_document,
+          tracked_live_budget,
+          ChannelDecodeInfo{header.depth, is_color(channel), 0U}));
     }
     return channels;
   }
 
   if (compression == kCompressionRle) {
     const auto row_bytes = static_cast<std::size_t>(width) * bytes_per_sample(header.depth);
+    const auto row_count = static_cast<std::size_t>(header.channels) *
+                           static_cast<std::size_t>(header.height);
+    const auto count_width = header.large_document ? 4U : 2U;
+    if (row_count > reader.remaining() / count_width) {
+      throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+          "QObject", "PSD composite RLE table is truncated"));
+    }
+    auto row_table_reservation = tracked_live_budget.reserve_product(
+        row_count, sizeof(std::uint32_t));
     std::vector<std::uint32_t> row_lengths;
     row_lengths.reserve(static_cast<std::size_t>(header.channels) * static_cast<std::size_t>(header.height));
     for (std::uint16_t channel = 0; channel < header.channels; ++channel) {
@@ -656,7 +719,9 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader&
       decompressed_budget.charge_decompressed_dimensions(
           width, height, 1U, bytes_per_sample(header.depth));
       channels.push_back(
-          convert_channel_to_8bit(read_rle_channel_from_counts(reader, rows, row_bytes, damaged_rows),
+          convert_channel_to_8bit(read_rle_channel_from_counts(
+                                      reader, rows, row_bytes,
+                                      tracked_live_budget, damaged_rows),
                                   header.depth, is_color(channel)));
     }
     return channels;
@@ -668,17 +733,17 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader&
 // Reads only a contiguous suffix of the composite planes. Raw data can skip the
 // color planes directly; RLE still needs the complete row-count table, but the
 // encoded rows for unwanted planes are skipped without decoding or storing them.
-std::vector<std::vector<std::uint8_t>> read_flat_image_channels_from(
+std::vector<TrackedByteBuffer> read_flat_image_channels_from(
     BigEndianReader& reader, const Header& header, std::uint16_t compression,
     std::uint16_t first_channel, ParseBudgetTracker& decompressed_budget,
-    std::size_t* damaged_rows) {
+    ParseLiveBudgetTracker& tracked_live_budget, std::size_t* damaged_rows) {
   if (first_channel > header.channels) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Invalid PSD saved channel index"));
   }
   const auto width = static_cast<std::int32_t>(header.width);
   const auto height = static_cast<std::int32_t>(header.height);
   const auto color_channels = composite_color_channel_count(header.color_mode);
-  std::vector<std::vector<std::uint8_t>> channels;
+  std::vector<TrackedByteBuffer> channels;
   channels.reserve(static_cast<std::size_t>(header.channels - first_channel));
 
   if (compression == kCompressionRaw) {
@@ -696,14 +761,25 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels_from(
       }
       decompressed_budget.charge_decompressed_dimensions(
           width, height, 1U, bytes_per_sample(header.depth));
-      channels.push_back(read_channel_data(reader, compression, width, height, header.large_document,
-                                           ChannelDecodeInfo{header.depth, channel < color_channels, 0U}));
+      channels.push_back(read_channel_data(
+          reader, compression, width, height, header.large_document,
+          tracked_live_budget,
+          ChannelDecodeInfo{header.depth, channel < color_channels, 0U}));
     }
     return channels;
   }
 
   if (compression == kCompressionRle) {
     const auto row_bytes = static_cast<std::size_t>(width) * bytes_per_sample(header.depth);
+    const auto row_count = static_cast<std::size_t>(header.channels) *
+                           static_cast<std::size_t>(header.height);
+    const auto count_width = header.large_document ? 4U : 2U;
+    if (row_count > reader.remaining() / count_width) {
+      throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+          "QObject", "PSD composite RLE table is truncated"));
+    }
+    auto row_table_reservation = tracked_live_budget.reserve_product(
+        row_count, sizeof(std::uint32_t));
     std::vector<std::uint32_t> row_lengths;
     row_lengths.reserve(static_cast<std::size_t>(header.channels) * static_cast<std::size_t>(header.height));
     for (std::uint16_t channel = 0; channel < header.channels; ++channel) {
@@ -740,7 +816,9 @@ std::vector<std::vector<std::uint8_t>> read_flat_image_channels_from(
         decompressed_budget.charge_decompressed_dimensions(
             width, height, 1U, bytes_per_sample(header.depth));
         channels.push_back(
-            convert_channel_to_8bit(read_rle_channel_from_counts(reader, rows, row_bytes, damaged_rows),
+            convert_channel_to_8bit(read_rle_channel_from_counts(
+                                        reader, rows, row_bytes,
+                                        tracked_live_budget, damaged_rows),
                                     header.depth, channel < color_channels));
       }
     }

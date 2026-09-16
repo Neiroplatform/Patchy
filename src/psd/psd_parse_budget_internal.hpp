@@ -2,12 +2,14 @@
 
 #include "psd/psd_document_io.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace patchy {
@@ -122,13 +124,148 @@ private:
   ParseBudgetDimension dimension_;
 };
 
+class ParseLiveBudgetTracker {
+public:
+  class Reservation {
+  public:
+    Reservation() = default;
+    Reservation(const Reservation&) = delete;
+    Reservation& operator=(const Reservation&) = delete;
+
+    Reservation(Reservation&& other) noexcept
+        : tracker_(std::exchange(other.tracker_, nullptr)),
+          bytes_(std::exchange(other.bytes_, 0U)) {}
+
+    Reservation& operator=(Reservation&& other) noexcept {
+      if (this != &other) {
+        release();
+        tracker_ = std::exchange(other.tracker_, nullptr);
+        bytes_ = std::exchange(other.bytes_, 0U);
+      }
+      return *this;
+    }
+
+    ~Reservation() { release(); }
+
+    void release() noexcept {
+      if (tracker_ != nullptr) {
+        tracker_->release(bytes_);
+        tracker_ = nullptr;
+        bytes_ = 0U;
+      }
+    }
+
+  private:
+    friend class ParseLiveBudgetTracker;
+    Reservation(ParseLiveBudgetTracker* tracker, std::uint64_t bytes) noexcept
+        : tracker_(tracker), bytes_(bytes) {}
+
+    ParseLiveBudgetTracker* tracker_{nullptr};
+    std::uint64_t bytes_{0};
+  };
+
+  ParseLiveBudgetTracker(std::uint64_t limit, std::uint64_t* current_usage,
+                         std::uint64_t* high_water_usage)
+      : limit_(limit), current_usage_(current_usage),
+        high_water_usage_(high_water_usage) {}
+
+  ParseLiveBudgetTracker(const ParseLiveBudgetTracker&) = delete;
+  ParseLiveBudgetTracker& operator=(const ParseLiveBudgetTracker&) = delete;
+  ParseLiveBudgetTracker(ParseLiveBudgetTracker&&) = delete;
+  ParseLiveBudgetTracker& operator=(ParseLiveBudgetTracker&&) = delete;
+
+  [[nodiscard]] Reservation reserve(std::uint64_t bytes) {
+    if (bytes > limit_ - current_) {
+      reject();
+    }
+    const auto next = current_ + bytes;
+    current_ = next;
+    high_water_ = std::max(high_water_, next);
+    publish();
+    return Reservation(this, bytes);
+  }
+
+  [[nodiscard]] Reservation reserve_size(std::size_t bytes) {
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+      if (bytes > std::numeric_limits<std::uint64_t>::max()) {
+        reject();
+      }
+    }
+    return reserve(static_cast<std::uint64_t>(bytes));
+  }
+
+  [[nodiscard]] Reservation reserve_product(std::size_t count,
+                                            std::size_t element_size) {
+    if (element_size != 0U && count > std::numeric_limits<std::size_t>::max() / element_size) {
+      reject();
+    }
+    return reserve_size(count * element_size);
+  }
+
+  [[noreturn]] void reject() const {
+    throw ParseBudgetExceeded(ParseBudgetDimension::TrackedLiveBytes);
+  }
+
+private:
+  void release(std::uint64_t bytes) noexcept {
+    current_ -= bytes;
+    publish();
+  }
+
+  void publish() noexcept {
+    if (current_usage_ != nullptr) {
+      *current_usage_ = current_;
+    }
+    if (high_water_usage_ != nullptr) {
+      *high_water_usage_ = high_water_;
+    }
+  }
+
+  std::uint64_t limit_;
+  std::uint64_t current_{0};
+  std::uint64_t high_water_{0};
+  std::uint64_t* current_usage_;
+  std::uint64_t* high_water_usage_;
+};
+
+// The reservation is declared before the vector so destruction releases the
+// logical charge only after the allocation itself has died. Move assignment
+// similarly replaces the vector before transferring the reservation.
+class TrackedByteBuffer {
+private:
+  ParseLiveBudgetTracker::Reservation reservation_;
+
+public:
+  TrackedByteBuffer() = default;
+  TrackedByteBuffer(ParseLiveBudgetTracker::Reservation reservation,
+                    std::vector<std::uint8_t> value)
+      : reservation_(std::move(reservation)), bytes(std::move(value)) {}
+  TrackedByteBuffer(const TrackedByteBuffer&) = delete;
+  TrackedByteBuffer& operator=(const TrackedByteBuffer&) = delete;
+  TrackedByteBuffer(TrackedByteBuffer&& other) noexcept
+      : reservation_(std::move(other.reservation_)), bytes(std::move(other.bytes)) {}
+  TrackedByteBuffer& operator=(TrackedByteBuffer&& other) noexcept {
+    if (this != &other) {
+      bytes = std::move(other.bytes);
+      reservation_ = std::move(other.reservation_);
+    }
+    return *this;
+  }
+
+  void release_reservation() noexcept { reservation_.release(); }
+
+  std::vector<std::uint8_t> bytes;
+};
+
 [[nodiscard]] std::vector<PatternResource> parse_patterns_block(
     std::span<const std::uint8_t> payload, const CmykToRgbTransform* cmyk_icc,
-    ParseBudgetTracker& decompressed_budget);
+    ParseBudgetTracker& decompressed_budget,
+    ParseLiveBudgetTracker& tracked_live_budget);
 
 [[nodiscard]] SmartFilterEffectsBlock parse_filter_effects_block(
     std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
     bool long_length, std::size_t original_global_index,
-    ParseBudgetTracker& decompressed_budget);
+    ParseBudgetTracker& decompressed_budget,
+    ParseLiveBudgetTracker& tracked_live_budget);
 
 }  // namespace patchy::psd

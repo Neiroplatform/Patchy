@@ -401,22 +401,28 @@ struct ChannelDecodeInfo {
 };
 // Converts big-endian 16/32-bit planar samples to 8 bits in place of the input
 // vector; depth 8 passes through untouched.
-[[nodiscard]] std::vector<std::uint8_t> convert_channel_to_8bit(std::vector<std::uint8_t>&& data,
-                                                                std::uint16_t depth, bool color_channel);
+[[nodiscard]] TrackedByteBuffer convert_channel_to_8bit(TrackedByteBuffer data,
+                                                        std::uint16_t depth,
+                                                        bool color_channel);
 // damaged_rows, when given, counts the RLE scanlines that did not decode to exactly the
 // channel width. Those rows are recovered rather than thrown on (see
 // decode_packbits_scanline), and the readers turn a nonzero count into an import notice.
-std::vector<std::uint8_t> read_channel_data(BigEndianReader& reader, std::uint16_t compression, std::int32_t width,
-                                            std::int32_t height, bool wide_rle_counts,
-                                            const ChannelDecodeInfo& decode_info = {},
-                                            std::size_t* damaged_rows = nullptr);
-std::vector<std::vector<std::uint8_t>> read_flat_image_channels(BigEndianReader& reader, const Header& header,
-                                                                std::uint16_t compression,
-                                                                ParseBudgetTracker& decompressed_budget,
-                                                                std::size_t* damaged_rows = nullptr);
-std::vector<std::vector<std::uint8_t>> read_flat_image_channels_from(
+TrackedByteBuffer read_channel_data(BigEndianReader& reader, std::uint16_t compression,
+                                    std::int32_t width, std::int32_t height,
+                                    bool wide_rle_counts,
+                                    ParseLiveBudgetTracker& tracked_live_budget,
+                                    const ChannelDecodeInfo& decode_info = {},
+                                    std::size_t* damaged_rows = nullptr);
+std::vector<TrackedByteBuffer> read_flat_image_channels(BigEndianReader& reader,
+                                                        const Header& header,
+                                                        std::uint16_t compression,
+                                                        ParseBudgetTracker& decompressed_budget,
+                                                        ParseLiveBudgetTracker& tracked_live_budget,
+                                                        std::size_t* damaged_rows = nullptr);
+std::vector<TrackedByteBuffer> read_flat_image_channels_from(
     BigEndianReader& reader, const Header& header, std::uint16_t compression,
     std::uint16_t first_channel, ParseBudgetTracker& decompressed_budget,
+    ParseLiveBudgetTracker& tracked_live_budget,
     std::size_t* damaged_rows = nullptr);
 // Appends the "some scanlines were damaged" import notice when the count is nonzero.
 void append_damaged_row_notice(std::size_t damaged_rows, std::vector<std::string>* notices);
@@ -424,7 +430,8 @@ bool is_cmyk_color_mode(std::uint16_t color_mode) noexcept;
 void convert_cmyk_planes_to_rgb(PixelBuffer& pixels, const std::uint8_t* cyan,
                                 const std::uint8_t* magenta, const std::uint8_t* yellow,
                                 const std::uint8_t* black, std::size_t pixel_count,
-                                const CmykToRgbTransform* icc);
+                                const CmykToRgbTransform* icc,
+                                ParseLiveBudgetTracker& tracked_live_budget);
 
 // Adjustment-layer codec: the Photoshop levl/curv/hue2 payloads and the private
 // plAD block (definitions in psd_adjustments.cpp). hue2 payloads patch in place
@@ -580,13 +587,15 @@ void parse_document_path_resources(Document& document, std::span<const std::uint
 void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t id,
                            std::vector<std::uint8_t> payload);
 void remove_image_resource(std::vector<ImageResource>& resources, std::uint16_t id);
-std::optional<std::vector<std::uint8_t>> find_image_resource_payload(std::span<const std::uint8_t> resources,
-                                                                     std::uint16_t id);
+std::optional<std::vector<std::uint8_t>> find_image_resource_payload(
+    std::span<const std::uint8_t> resources, std::uint16_t id);
+std::optional<std::span<const std::uint8_t>> find_image_resource_payload_view(
+    std::span<const std::uint8_t> resources, std::uint16_t id);
 ParsedCompositeChannelResources parse_composite_channel_resources(
     std::span<const std::uint8_t> image_resources);
 std::uint16_t composite_color_channel_count(std::uint16_t color_mode) noexcept;
 void add_saved_composite_channels(Document& document,
-                                  std::vector<std::vector<std::uint8_t>> channel_planes,
+                                  std::vector<TrackedByteBuffer> channel_planes,
                                   std::uint16_t first_saved_channel, const Header& header,
                                   const ParsedCompositeChannelResources& resources);
 std::optional<DocumentPrintSettings> print_settings_from_resolution_resource(std::span<const std::uint8_t> payload);

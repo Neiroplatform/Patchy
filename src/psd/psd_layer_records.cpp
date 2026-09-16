@@ -465,9 +465,11 @@ LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
         break;
       }
       auto payload = extra_reader.read_bytes(static_cast<std::size_t>(block_length));
-      record.additional_blocks.push_back(UnknownPsdBlock{key, payload, wide_length});
-      if (key == "iOpa" && payload.size() == 4U) {
-        record.fill_opacity = payload[0];
+      record.additional_blocks.push_back(
+          UnknownPsdBlock{key, std::move(payload), wide_length});
+      if (key == "iOpa" &&
+          record.additional_blocks.back().payload.size() == 4U) {
+        record.fill_opacity = record.additional_blocks.back().payload[0];
       }
       if (key == "luni") {
         if (auto unicode_name = read_unicode_string_payload(record.additional_blocks.back().payload);

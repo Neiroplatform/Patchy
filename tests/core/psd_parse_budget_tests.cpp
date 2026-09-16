@@ -1,11 +1,15 @@
 #include "core/document.hpp"
 #include "core/pattern_resource.hpp"
+#include "color/color_management.hpp"
 #include "formats/miniz/miniz.h"
 #include "psd/psd_binary.hpp"
 #include "psd/psd_descriptor.hpp"
 #include "psd/psd_document_io.hpp"
 #include "psd/psd_filter_effects.hpp"
 #include "psd/psd_patterns.hpp"
+#include "psd/psd_parse_budget_internal.hpp"
+#include "psd/psd_io_internal.hpp"
+#include "psd_test_support.hpp"
 #include "test_groups.hpp"
 #include "test_harness.hpp"
 
@@ -88,6 +92,28 @@ std::vector<std::uint8_t> flat_psd(std::uint16_t depth,
     }
     for (const auto& row : rows) {
       writer.write_bytes(row);
+    }
+  }
+  return writer.bytes();
+}
+
+std::vector<std::uint8_t> flat_cmyk_raw_psd(std::uint16_t depth) {
+  constexpr std::int32_t kWidth = 2;
+  constexpr std::int32_t kHeight = 1;
+  constexpr std::uint16_t kChannels = 4;
+  const auto plane_bytes = static_cast<std::size_t>(kWidth) *
+                           static_cast<std::size_t>(depth / 8U);
+  patchy::psd::BigEndianWriter writer;
+  patchy::psd::write_header(
+      writer,
+      patchy::psd::Header{false, kChannels, kHeight, kWidth, depth, 4U});
+  writer.write_u32(0U);
+  writer.write_u32(0U);
+  writer.write_u32(0U);
+  writer.write_u16(0U);
+  for (std::uint16_t channel = 0; channel < kChannels; ++channel) {
+    for (std::size_t byte = 0; byte < plane_bytes; ++byte) {
+      writer.write_u8(static_cast<std::uint8_t>(255U - channel * 17U - byte));
     }
   }
   return writer.bytes();
@@ -290,13 +316,38 @@ patchy::psd::ParseUsage read_with_exact_decompressed_limit(
   return usage;
 }
 
+void expect_tracked_live_rejection(
+    std::span<const std::uint8_t> bytes, std::uint64_t limit,
+    std::uint64_t expected_high_water,
+    patchy::psd::ReadOptions options = {}) {
+  patchy::psd::ParseUsage usage;
+  options.budget.max_tracked_live_bytes = limit;
+  options.usage = &usage;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
+  }
+  CHECK(usage.input_bytes == bytes.size());
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == expected_high_water);
+}
+
 void psd_decompressed_budget_api_defaults_and_usage_reset() {
   CHECK(patchy::psd::ParseBudget{}.max_decompressed_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
+  CHECK(patchy::psd::ParseBudget{}.max_tracked_live_bytes ==
         std::numeric_limits<std::uint64_t>::max());
   const patchy::psd::ParseBudget positional{11U, 22U};
   CHECK(positional.max_primary_pixel_bytes == 11U);
   CHECK(positional.max_input_bytes == 22U);
   CHECK(positional.max_decompressed_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
+  CHECK(positional.max_tracked_live_bytes ==
         std::numeric_limits<std::uint64_t>::max());
   CHECK(static_cast<std::underlying_type_t<patchy::psd::ParseBudgetDimension>>(
             patchy::psd::ParseBudgetDimension::InputBytes) == 0U);
@@ -304,6 +355,8 @@ void psd_decompressed_budget_api_defaults_and_usage_reset() {
             patchy::psd::ParseBudgetDimension::PrimaryPixelBytes) == 1U);
   CHECK(static_cast<std::underlying_type_t<patchy::psd::ParseBudgetDimension>>(
             patchy::psd::ParseBudgetDimension::DecompressedBytes) == 2U);
+  CHECK(static_cast<std::underlying_type_t<patchy::psd::ParseBudgetDimension>>(
+            patchy::psd::ParseBudgetDimension::TrackedLiveBytes) == 3U);
 
   const auto valid = flat_psd(8U, 0U);
   patchy::psd::ParseUsage usage{41U, 42U, 43U};
@@ -313,6 +366,8 @@ void psd_decompressed_budget_api_defaults_and_usage_reset() {
   CHECK(usage.input_bytes == valid.size());
   CHECK(usage.primary_pixel_bytes == 6U);
   CHECK(usage.decompressed_bytes == 6U);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 6U);
 
   const std::array<std::uint8_t, 4> malformed{'8', 'B', 'P', 'S'};
   bool rejected = false;
@@ -327,6 +382,275 @@ void psd_decompressed_budget_api_defaults_and_usage_reset() {
   CHECK(usage.input_bytes == malformed.size());
   CHECK(usage.primary_pixel_bytes == 0U);
   CHECK(usage.decompressed_bytes == 0U);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 0U);
+}
+
+void psd_tracked_live_budget_raii_is_exact_and_move_safe() {
+  std::uint64_t current = 99U;
+  std::uint64_t high_water = 99U;
+  patchy::psd::ParseLiveBudgetTracker tracker(10U, &current, &high_water);
+  {
+    auto outer = tracker.reserve(4U);
+    CHECK(current == 4U);
+    CHECK(high_water == 4U);
+    {
+      auto nested = tracker.reserve(3U);
+      CHECK(current == 7U);
+      CHECK(high_water == 7U);
+      auto moved = std::move(nested);
+      CHECK(current == 7U);
+      moved.release();
+      CHECK(current == 4U);
+      CHECK(high_water == 7U);
+      moved.release();
+      CHECK(current == 4U);
+    }
+    bool rejected = false;
+    try {
+      (void)tracker.reserve(7U);
+    } catch (const patchy::psd::ParseBudgetExceeded& error) {
+      rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+    }
+    CHECK(rejected);
+    CHECK(current == 4U);
+    CHECK(high_water == 7U);
+  }
+  CHECK(current == 0U);
+  CHECK(high_water == 7U);
+
+  {
+    auto first = tracker.reserve(4U);
+    auto second = tracker.reserve(2U);
+    CHECK(current == 6U);
+    first = std::move(second);
+    CHECK(current == 2U);
+  }
+  CHECK(current == 0U);
+  CHECK(high_water == 7U);
+
+  {
+    patchy::psd::TrackedByteBuffer first(
+        tracker.reserve(4U), std::vector<std::uint8_t>(4U));
+    patchy::psd::TrackedByteBuffer second(
+        tracker.reserve(2U), std::vector<std::uint8_t>(2U));
+    CHECK(current == 6U);
+    first = std::move(second);
+    CHECK(current == 2U);
+  }
+  CHECK(current == 0U);
+  CHECK(high_water == 7U);
+
+  bool overflow_rejected = false;
+  try {
+    (void)tracker.reserve_product(std::numeric_limits<std::size_t>::max(),
+                                  2U);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    overflow_rejected = true;
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(overflow_rejected);
+  CHECK(current == 0U);
+  CHECK(high_water == 7U);
+}
+
+void psd_tracked_live_budget_flat_raw_precedence_and_unwind() {
+  const auto bytes = flat_psd(8U, 0U);
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_decompressed_bytes = 5U;
+  options.budget.max_tracked_live_bytes = 5U;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::DecompressedBytes);
+  }
+  CHECK(usage.decompressed_bytes == 4U);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 4U);
+
+  options.budget.max_decompressed_bytes = 6U;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(usage.decompressed_bytes == 6U);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 4U);
+
+  options.budget.max_tracked_live_bytes = 6U;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options).width() == 2);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 6U);
+}
+
+void psd_tracked_live_budget_rle_and_deep_prediction_are_exact() {
+  const auto rle = flat_psd(8U, 1U);
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_tracked_live_bytes = 20U;
+  CHECK(patchy::psd::DocumentIo::read(rle, options).width() == 2);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 20U);
+
+  options.budget.max_tracked_live_bytes = 19U;
+  try {
+    (void)patchy::psd::DocumentIo::read(rle, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(usage.decompressed_bytes == 6U);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 18U);
+
+  const auto deep = deep_layer_psd(32U);
+  options.budget.max_tracked_live_bytes = 16U;
+  CHECK(patchy::psd::DocumentIo::read(deep, options).layers().size() == 1U);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 16U);
+
+  options.budget.max_tracked_live_bytes = 15U;
+  try {
+    (void)patchy::psd::DocumentIo::read(deep, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 8U);
+
+  auto truncated_table = flat_psd(8U, 1U);
+  // Header + three empty length blocks + compression marker = 40 bytes;
+  // retain only five of the six required u16 row counts.
+  truncated_table.resize(45U);
+  usage = {};
+  options.budget.max_tracked_live_bytes =
+      std::numeric_limits<std::uint64_t>::max();
+  bool malformed_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read(truncated_table, options);
+  } catch (const patchy::psd::ParseBudgetExceeded&) {
+    CHECK(false);
+  } catch (const std::exception&) {
+    malformed_rejected = true;
+  }
+  CHECK(malformed_rejected);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 0U);
+}
+
+void psd_tracked_live_budget_cmyk_scratch_is_topology_independent() {
+  const auto source = patchy::psd::DocumentIo::read_file(
+      patchy::test::committed_psd_fixture_path(
+          "photoshop-cmyk-style-colors.psd"));
+  const auto profile = patchy::psd::find_image_resource_payload(
+      source.metadata().raw_psd_image_resources,
+      patchy::psd::kImageResourceIccProfile);
+  CHECK(profile.has_value());
+  const auto transform =
+      patchy::CmykToRgbTransform::from_icc_profile(*profile);
+  CHECK(transform.has_value());
+
+  const std::array<std::uint8_t, 2> cyan{255U, 0U};
+  const std::array<std::uint8_t, 2> magenta{255U, 255U};
+  const std::array<std::uint8_t, 2> yellow{255U, 255U};
+  const std::array<std::uint8_t, 2> black{255U, 255U};
+  patchy::PixelBuffer pixels(2, 1, patchy::PixelFormat::rgb8());
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  patchy::psd::ParseLiveBudgetTracker small_tracker(14U, &current,
+                                                    &high_water);
+  patchy::psd::convert_cmyk_planes_to_rgb(
+      pixels, cyan.data(), magenta.data(), yellow.data(), black.data(), 2U,
+      &*transform, small_tracker);
+  CHECK(current == 0U);
+  CHECK(high_water == 14U);
+
+  current = 0U;
+  high_water = 0U;
+  patchy::psd::ParseLiveBudgetTracker no_icc_tracker(0U, &current,
+                                                     &high_water);
+  patchy::psd::convert_cmyk_planes_to_rgb(
+      pixels, cyan.data(), magenta.data(), yellow.data(), black.data(), 2U,
+      nullptr, no_icc_tracker);
+  CHECK(current == 0U);
+  CHECK(high_water == 0U);
+
+  constexpr std::size_t kParallelThresholdPixels = 4U << 20U;
+  constexpr std::uint64_t kParallelScratchBytes = 16ULL * 65536ULL * 7ULL;
+  current = 0U;
+  high_water = 0U;
+  patchy::psd::ParseLiveBudgetTracker parallel_tracker(
+      kParallelScratchBytes - 1U, &current, &high_water);
+  bool rejected = false;
+  try {
+    patchy::psd::convert_cmyk_planes_to_rgb(
+        pixels, cyan.data(), magenta.data(), yellow.data(), black.data(),
+        kParallelThresholdPixels, &*transform, parallel_tracker);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    rejected = true;
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(rejected);
+  CHECK(current == 0U);
+  CHECK(high_water == 0U);
+
+  patchy::PixelBuffer parallel_pixels(
+      static_cast<std::int32_t>(kParallelThresholdPixels), 1,
+      patchy::PixelFormat::rgb8());
+  const std::vector<std::uint8_t> parallel_plane(kParallelThresholdPixels,
+                                                  255U);
+  current = 0U;
+  high_water = 0U;
+  patchy::psd::ParseLiveBudgetTracker exact_parallel_tracker(
+      kParallelScratchBytes, &current, &high_water);
+  patchy::psd::convert_cmyk_planes_to_rgb(
+      parallel_pixels, parallel_plane.data(), parallel_plane.data(),
+      parallel_plane.data(), parallel_plane.data(), kParallelThresholdPixels,
+      &*transform, exact_parallel_tracker);
+  CHECK(current == 0U);
+  CHECK(high_water == kParallelScratchBytes);
+}
+
+void psd_tracked_live_budget_cmyk_planes_retain_source_capacity() {
+  for (const auto depth : {16U, 32U}) {
+    const auto bytes = flat_cmyk_raw_psd(static_cast<std::uint16_t>(depth));
+    const auto plane_bytes = 2U * (depth / 8U);
+    const auto exact = 4U * plane_bytes;
+    patchy::psd::ParseUsage usage;
+    patchy::psd::ReadOptions options;
+    options.usage = &usage;
+    options.budget.max_tracked_live_bytes = exact;
+    CHECK(patchy::psd::DocumentIo::read(bytes, options).width() == 2);
+    CHECK(usage.tracked_live_bytes == 0U);
+    CHECK(usage.tracked_live_bytes_high_water == exact);
+
+    options.budget.max_tracked_live_bytes = exact - 1U;
+    try {
+      (void)patchy::psd::DocumentIo::read(bytes, options);
+      CHECK(false);
+    } catch (const patchy::psd::ParseBudgetExceeded& error) {
+      CHECK(error.dimension() ==
+            patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+    }
+    CHECK(usage.decompressed_bytes == exact);
+    CHECK(usage.tracked_live_bytes == 0U);
+    CHECK(usage.tracked_live_bytes_high_water == 3U * plane_bytes);
+  }
 }
 
 void psd_decompressed_budget_flat_depths_and_compressions_are_exact() {
@@ -354,7 +678,9 @@ void psd_decompressed_budget_deep_layers_cover_raw_zip_and_prediction() {
   const auto corrupt = deep_layer_psd(16U, true);
   // All four planes are admitted at four source bytes each. The corrupt final
   // ZIP plane is recovered by the layer parser but keeps its successful charge.
-  (void)read_with_exact_decompressed_limit(corrupt, 16U);
+  const auto corrupt_usage = read_with_exact_decompressed_limit(corrupt, 16U);
+  CHECK(corrupt_usage.tracked_live_bytes == 0U);
+  CHECK(corrupt_usage.tracked_live_bytes_high_water == 4U);
   expect_decompressed_rejection(corrupt, 15U, 12U);
 }
 
@@ -401,6 +727,8 @@ void psd_decompressed_budget_charges_admitted_damaged_rle_planes() {
   options.notices = &notices;
   CHECK(patchy::psd::DocumentIo::read(bytes, options).layers().size() == 1U);
   CHECK(usage.decompressed_bytes == 6U);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 8U);
   CHECK(std::any_of(notices.begin(), notices.end(), [](const std::string& notice) {
     return notice.find("damaged") != std::string::npos;
   }));
@@ -463,12 +791,16 @@ void psd_decompressed_budget_pattern_planes_escape_recovery_catches() {
   patchy::psd::ParseUsage usage;
   patchy::psd::ReadOptions options;
   options.budget.max_decompressed_bytes = 11U;
+  options.budget.max_tracked_live_bytes = 16U;
   options.usage = &usage;
   const auto read = patchy::psd::DocumentIo::read(bytes, options);
   CHECK(read.metadata().patterns.find(pattern.id) != nullptr);
   CHECK(usage.decompressed_bytes == 11U);  // RGB layer 3 + RGBA pattern 8.
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 16U);
 
   expect_decompressed_rejection(bytes, 10U, 9U);
+  expect_tracked_live_rejection(bytes, 15U, 8U);
 }
 
 void psd_decompressed_budget_filter_mask_excludes_cache_planes() {
@@ -491,6 +823,7 @@ void psd_decompressed_budget_filter_mask_excludes_cache_planes() {
   patchy::psd::ParseUsage usage;
   patchy::psd::ReadOptions options;
   options.budget.max_decompressed_bytes = 8U;
+  options.budget.max_tracked_live_bytes = 8U;
   options.usage = &usage;
   const auto read = patchy::psd::DocumentIo::read(bytes, options);
   CHECK(read.metadata().smart_filter_effects.blocks.size() == 1U);
@@ -500,8 +833,11 @@ void psd_decompressed_budget_filter_mask_excludes_cache_planes() {
   // The RGB layer contributes 6 bytes and the decoded mask contributes 2.
   // Four 2-byte FEid cache planes are validated and skipped, not decompressed.
   CHECK(usage.decompressed_bytes == 8U);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water == 8U);
 
   expect_decompressed_rejection(bytes, 7U, 6U);
+  expect_tracked_live_rejection(bytes, 7U, 6U);
 }
 
 }  // namespace
@@ -510,6 +846,16 @@ std::vector<patchy::test::TestCase> psd_parse_budget_tests() {
   return {
       {"psd_decompressed_budget_api_defaults_and_usage_reset",
        psd_decompressed_budget_api_defaults_and_usage_reset},
+      {"psd_tracked_live_budget_raii_is_exact_and_move_safe",
+       psd_tracked_live_budget_raii_is_exact_and_move_safe},
+      {"psd_tracked_live_budget_flat_raw_precedence_and_unwind",
+       psd_tracked_live_budget_flat_raw_precedence_and_unwind},
+      {"psd_tracked_live_budget_rle_and_deep_prediction_are_exact",
+       psd_tracked_live_budget_rle_and_deep_prediction_are_exact},
+      {"psd_tracked_live_budget_cmyk_scratch_is_topology_independent",
+       psd_tracked_live_budget_cmyk_scratch_is_topology_independent},
+      {"psd_tracked_live_budget_cmyk_planes_retain_source_capacity",
+       psd_tracked_live_budget_cmyk_planes_retain_source_capacity},
       {"psd_decompressed_budget_flat_depths_and_compressions_are_exact",
        psd_decompressed_budget_flat_depths_and_compressions_are_exact},
       {"psd_decompressed_budget_deep_layers_cover_raw_zip_and_prediction",

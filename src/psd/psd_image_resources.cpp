@@ -121,6 +121,50 @@ std::optional<std::vector<ImageResource>> read_image_resources(std::span<const s
   return resources;
 }
 
+template <typename Visitor>
+bool visit_image_resource_payloads(std::span<const std::uint8_t> bytes,
+                                   Visitor&& visitor) {
+  BigEndianReader reader(bytes);
+  while (reader.remaining() > 0U) {
+    if (reader.remaining() < 12U) {
+      return false;
+    }
+    const auto signature = read_signature(reader);
+    if (signature != std::array<char, 4>{'8', 'B', 'I', 'M'} &&
+        signature != std::array<char, 4>{'8', 'B', '6', '4'}) {
+      return false;
+    }
+    const auto id = reader.read_u16();
+    const auto name_length = static_cast<std::size_t>(reader.read_u8());
+    if (name_length > reader.remaining()) {
+      return false;
+    }
+    reader.skip(name_length);
+    if (((name_length + 1U) % 2U) != 0U) {
+      if (reader.remaining() == 0U) {
+        return false;
+      }
+      reader.skip(1U);
+    }
+    if (reader.remaining() < 4U) {
+      return false;
+    }
+    const auto payload_length = static_cast<std::size_t>(reader.read_u32());
+    if (payload_length > reader.remaining()) {
+      return false;
+    }
+    const auto payload = reader.read_span(payload_length);
+    visitor(id, payload);
+    if ((payload_length % 2U) != 0U) {
+      if (reader.remaining() == 0U) {
+        return false;
+      }
+      reader.skip(1U);
+    }
+  }
+  return true;
+}
+
 void write_image_resource(BigEndianWriter& writer, const ImageResource& resource) {
   write_signature(writer, resource.signature);
   writer.write_u16(resource.id);
@@ -449,59 +493,69 @@ std::vector<std::uint8_t> display_info_resource(std::span<const CompositeChannel
 
 }  // namespace
 
-std::optional<std::vector<std::uint8_t>> find_image_resource_payload(std::span<const std::uint8_t> resources,
-                                                                     std::uint16_t id) {
-  auto parsed = read_image_resources(resources);
-  if (!parsed.has_value()) {
+std::optional<std::span<const std::uint8_t>> find_image_resource_payload_view(
+    std::span<const std::uint8_t> resources, std::uint16_t id) {
+  std::optional<std::span<const std::uint8_t>> result;
+  const auto valid = visit_image_resource_payloads(
+      resources, [&result, id](std::uint16_t candidate,
+                               std::span<const std::uint8_t> payload) {
+        if (!result.has_value() && candidate == id) {
+          result = payload;
+        }
+      });
+  return valid ? result : std::nullopt;
+}
+
+std::optional<std::vector<std::uint8_t>> find_image_resource_payload(
+    std::span<const std::uint8_t> resources, std::uint16_t id) {
+  const auto payload = find_image_resource_payload_view(resources, id);
+  if (!payload.has_value()) {
     return std::nullopt;
   }
-  for (const auto& resource : *parsed) {
-    if (resource.id == id) {
-      return resource.payload;
-    }
-  }
-  return std::nullopt;
+  return std::vector<std::uint8_t>(payload->begin(), payload->end());
 }
 
 ParsedCompositeChannelResources parse_composite_channel_resources(
     std::span<const std::uint8_t> image_resources) {
   ParsedCompositeChannelResources result;
-  const auto parsed = read_image_resources(image_resources);
-  if (!parsed.has_value()) {
-    return result;
-  }
   std::optional<std::span<const std::uint8_t>> legacy_display;
   std::optional<std::span<const std::uint8_t>> modern_display;
-  for (const auto& resource : *parsed) {
-    switch (resource.id) {
+  const auto valid = visit_image_resource_payloads(
+      image_resources,
+      [&result, &legacy_display, &modern_display](
+          std::uint16_t id, std::span<const std::uint8_t> payload) {
+    switch (id) {
       case kImageResourceAlphaChannelNames:
         if (result.legacy_names.empty()) {
-          result.legacy_names = parse_legacy_alpha_channel_names(resource.payload);
+          result.legacy_names = parse_legacy_alpha_channel_names(payload);
         }
         break;
       case kImageResourceUnicodeAlphaChannelNames:
         if (result.unicode_names.empty()) {
-          result.unicode_names = parse_unicode_alpha_channel_names(resource.payload);
+          result.unicode_names = parse_unicode_alpha_channel_names(payload);
         }
         break;
       case kImageResourceAlphaIdentifiers:
         if (result.identifiers.empty()) {
-          result.identifiers = parse_alpha_identifiers(resource.payload);
+          result.identifiers = parse_alpha_identifiers(payload);
         }
         break;
       case kImageResourceDisplayInfo:
         if (!legacy_display.has_value()) {
-          legacy_display = resource.payload;
+          legacy_display = payload;
         }
         break;
       case kImageResourceDisplayInfoFloat:
         if (!modern_display.has_value()) {
-          modern_display = resource.payload;
+          modern_display = payload;
         }
         break;
       default:
         break;
     }
+  });
+  if (!valid) {
+    return {};
   }
   if (modern_display.has_value()) {
     result.display_records = parse_display_info_records(*modern_display, true);
@@ -517,7 +571,7 @@ std::uint16_t composite_color_channel_count(std::uint16_t color_mode) noexcept {
 }
 
 void add_saved_composite_channels(Document& document,
-                                  std::vector<std::vector<std::uint8_t>> channel_planes,
+                                  std::vector<TrackedByteBuffer> channel_planes,
                                   std::uint16_t first_saved_channel, const Header& header,
                                   const ParsedCompositeChannelResources& resources) {
   const auto color_channels = composite_color_channel_count(header.color_mode);
@@ -532,7 +586,7 @@ void add_saved_composite_channels(Document& document,
   const auto pixel_count = static_cast<std::size_t>(document.width()) * static_cast<std::size_t>(document.height());
   std::size_t alpha_identifier_index = 0;
   for (std::size_t index = 0; index < channel_planes.size(); ++index) {
-    if (channel_planes[index].size() != pixel_count) {
+    if (channel_planes[index].bytes.size() != pixel_count) {
       throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD saved channel dimensions do not match the document"));
     }
     const auto aligned_index = [first_resource_index, index, saved_count = channel_planes.size()](
@@ -566,7 +620,8 @@ void add_saved_composite_channels(Document& document,
                           ? DocumentChannelKind::Spot
                           : DocumentChannelKind::Alpha;
     PixelBuffer pixels(document.width(), document.height(), PixelFormat::gray8());
-    std::copy(channel_planes[index].begin(), channel_planes[index].end(), pixels.data().begin());
+    std::copy(channel_planes[index].bytes.begin(), channel_planes[index].bytes.end(),
+              pixels.data().begin());
     DocumentChannel channel(document.allocate_channel_id(), std::move(name), kind, std::move(pixels));
     // Resource 1053 contains identifiers for saved alpha channels only.
     // Photoshop omits spot channels, so consume this array independently of

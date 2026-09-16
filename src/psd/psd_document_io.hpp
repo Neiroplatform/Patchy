@@ -26,18 +26,26 @@ struct ParseBudget {
   // decoded source planes once, independently of their on-disk compression,
   // and deliberately excludes converted output buffers and retained raw data.
   std::uint64_t max_decompressed_bytes{std::numeric_limits<std::uint64_t>::max()};
+  // Conservative logical reservations for instrumented parser-owned temporary
+  // buffers. This is not an RSS, allocator-capacity, or committed-WASM-heap cap.
+  std::uint64_t max_tracked_live_bytes{std::numeric_limits<std::uint64_t>::max()};
 };
 
 struct ParseUsage {
   std::uint64_t primary_pixel_bytes{0};
   std::uint64_t input_bytes{0};
   std::uint64_t decompressed_bytes{0};
+  // Current successfully reserved parser workspace and its monotonic high-water.
+  // A completed or unwound read always leaves tracked_live_bytes at zero.
+  std::uint64_t tracked_live_bytes{0};
+  std::uint64_t tracked_live_bytes_high_water{0};
 };
 
 enum class ParseBudgetDimension : std::uint8_t {
   InputBytes = 0,
   PrimaryPixelBytes = 1,
   DecompressedBytes = 2,
+  TrackedLiveBytes = 3,
 };
 
 class ParseBudgetExceeded final : public std::length_error {

@@ -144,6 +144,7 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
                              const ParsedCompositeChannelResources& channel_resources,
                              bool has_merged_transparency, ParseBudgetTracker& budget,
                              ParseBudgetTracker& decompressed_budget,
+                             ParseLiveBudgetTracker& tracked_live_budget,
                              std::size_t* damaged_rows = nullptr) {
   const auto format = format_from_header(header);
   const auto compression = reader.read_u16();
@@ -164,27 +165,29 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
   budget.charge_dimensions(
       static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height),
       static_cast<std::size_t>(header.channels - first_saved_channel));
-  const auto channel_data = read_flat_image_channels(
-      reader, header, compression, decompressed_budget, damaged_rows);
+  auto channel_data = read_flat_image_channels(
+      reader, header, compression, decompressed_budget, tracked_live_budget,
+      damaged_rows);
   Document document(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
   PixelBuffer pixels(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
   const auto channel_pixels = static_cast<std::size_t>(header.width) * static_cast<std::size_t>(header.height);
 
   if (source_is_cmyk) {
-    convert_cmyk_planes_to_rgb(pixels, channel_data[0].data(), channel_data[1].data(),
-                               channel_data[2].data(), channel_data[3].data(), channel_pixels,
-                               cmyk_icc);
+    convert_cmyk_planes_to_rgb(
+        pixels, channel_data[0].bytes.data(), channel_data[1].bytes.data(),
+        channel_data[2].bytes.data(), channel_data[3].bytes.data(), channel_pixels,
+        cmyk_icc, tracked_live_budget);
   } else {
     for (std::uint16_t channel = 0; channel < 3; ++channel) {
       for (std::size_t i = 0; i < channel_pixels; ++i) {
-        pixels.data()[i * 3 + channel] = channel_data[channel][i];
+        pixels.data()[i * 3 + channel] = channel_data[channel].bytes[i];
       }
     }
   }
 
   Layer& background = document.add_pixel_layer("Background", std::move(pixels));
   if (has_merged_transparency) {
-    const auto& merged_alpha = channel_data[color_channel_count];
+    const auto& merged_alpha = channel_data[color_channel_count].bytes;
     if (merged_alpha.size() != channel_pixels) {
       throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD merged transparency dimensions do not match the document"));
     }
@@ -194,7 +197,7 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
                                   std::move(mask_pixels), 255, false});
     set_layer_mask_is_document_alpha(background, true);
   }
-  std::vector<std::vector<std::uint8_t>> saved_channels;
+  std::vector<TrackedByteBuffer> saved_channels;
   saved_channels.reserve(static_cast<std::size_t>(header.channels - first_saved_channel));
   for (std::uint16_t channel = first_saved_channel; channel < header.channels; ++channel) {
     saved_channels.push_back(std::move(channel_data[channel]));
@@ -455,7 +458,8 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
                                            std::vector<std::string>* notices,
                                            std::size_t* damaged_rows,
                                            ParseBudgetTracker& budget,
-                                           ParseBudgetTracker& decompressed_budget) {
+                                           ParseBudgetTracker& decompressed_budget,
+                                           ParseLiveBudgetTracker& tracked_live_budget) {
   has_merged_transparency = false;
   int unrendered_color_balance_count = 0;
   const auto layer_count_raw = static_cast<std::int16_t>(layer_reader.read_u16());
@@ -472,7 +476,7 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
 
   std::vector<DecodedLayer> decoded_layers;
   decoded_layers.reserve(layer_count);
-  for (const auto& record : records) {
+  for (auto& record : records) {
     const auto width = std::max(0, record.bounds.width);
     const auto height = std::max(0, record.bounds.height);
     const auto source_is_cmyk = is_cmyk_color_mode(source_color_mode);
@@ -493,12 +497,7 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
         }
       }
     }
-    std::array<std::vector<std::uint8_t>, 4> cmyk_channels;
-    if (source_is_cmyk) {
-      for (auto& component : cmyk_channels) {
-        component.resize(pixel_count, 0);
-      }
-    }
+    std::array<TrackedByteBuffer, 4> cmyk_channels;
 
     std::optional<LayerMask> decoded_mask;
     for (const auto channel : record.channels) {
@@ -543,12 +542,15 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
         throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD layer channel data is truncated"));
       }
       decompressed_budget.charge_size(source_byte_count);
-      std::vector<std::uint8_t> channel_data;
+      TrackedByteBuffer channel_data;
       try {
         channel_data = read_channel_data(
           channel_reader, compression, channel_width, channel_height, large_document,
+          tracked_live_budget,
           ChannelDecodeInfo{depth, is_source_color_channel(channel.id, source_color_mode), payload_length},
           damaged_rows);
+      } catch (const ParseBudgetExceeded&) {
+        throw;
       } catch (const std::runtime_error&) {
         if (damaged_rows != nullptr) {
           *damaged_rows += static_cast<std::size_t>(channel_height);
@@ -557,7 +559,8 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
       }
       if (channel.id == kChannelUserMask && record.mask.has_value() && channel_width > 0 && channel_height > 0) {
         PixelBuffer mask_pixels(channel_width, channel_height, PixelFormat::gray8());
-        std::copy(channel_data.begin(), channel_data.end(), mask_pixels.data().begin());
+        std::copy(channel_data.bytes.begin(), channel_data.bytes.end(),
+                  mask_pixels.data().begin());
         decoded_mask = LayerMask{record.mask->bounds, std::move(mask_pixels), record.mask->default_color,
                                  record.mask->disabled};
       }
@@ -567,25 +570,35 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
                                   : channel.id == kChannelTransparency ? 3
                                                                        : -1;
       if (source_is_cmyk) {
-        if (channel.id <= kChannelBlack && channel_data.size() == pixel_count) {
-          cmyk_channels[channel.id] = channel_data;
+        if (channel.id <= kChannelBlack && channel_data.bytes.size() == pixel_count) {
+          cmyk_channels[channel.id] = std::move(channel_data);
         } else if (target_channel == 3) {
-          for (std::size_t i = 0; i < channel_data.size(); ++i) {
-            pixels.data()[i * pixels.format().channels + 3U] = channel_data[i];
+          for (std::size_t i = 0; i < channel_data.bytes.size(); ++i) {
+            pixels.data()[i * pixels.format().channels + 3U] = channel_data.bytes[i];
           }
         }
       } else {
-        for (std::size_t i = 0; i < channel_data.size(); ++i) {
+        for (std::size_t i = 0; i < channel_data.bytes.size(); ++i) {
           if (target_channel >= 0 && target_channel < pixels.format().channels) {
-            pixels.data()[i * pixels.format().channels + static_cast<std::size_t>(target_channel)] = channel_data[i];
+            pixels.data()[i * pixels.format().channels + static_cast<std::size_t>(target_channel)] =
+                channel_data.bytes[i];
           }
         }
       }
     }
     if (source_is_cmyk) {
-      convert_cmyk_planes_to_rgb(pixels, cmyk_channels[0].data(), cmyk_channels[1].data(),
-                                 cmyk_channels[2].data(), cmyk_channels[3].data(), pixel_count,
-                                 cmyk_icc);
+      for (auto& component : cmyk_channels) {
+        if (component.bytes.empty() && pixel_count != 0U) {
+          auto reservation = tracked_live_budget.reserve_size(pixel_count);
+          std::vector<std::uint8_t> zeros(pixel_count, 0);
+          component =
+              TrackedByteBuffer(std::move(reservation), std::move(zeros));
+        }
+      }
+      convert_cmyk_planes_to_rgb(
+          pixels, cmyk_channels[0].bytes.data(), cmyk_channels[1].bytes.data(),
+          cmyk_channels[2].bytes.data(), cmyk_channels[3].bytes.data(), pixel_count,
+          cmyk_icc, tracked_live_budget);
     }
 
     bool text_placeholder_rendered = false;
@@ -748,7 +761,8 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
     layer.set_opacity(static_cast<float>(record.opacity) / 255.0F);
     layer.set_fill_opacity(static_cast<float>(record.fill_opacity.value_or(255U)) / 255.0F);
     layer.set_visible(record.visible);
-    layer.set_blend_if_payload(record.blending_ranges, source_color_mode == kColorModeRgb);
+    layer.set_blend_if_payload(std::move(record.blending_ranges),
+                               source_color_mode == kColorModeRgb);
     if (record.channel_restrictions.has_value() || record.channel_restrictions_malformed) {
       const bool rgb_indices =
           record.channel_restrictions.has_value() &&
@@ -969,7 +983,8 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
                                std::vector<std::string>* notices,
                                std::size_t* damaged_rows,
                                ParseBudgetTracker& budget,
-                               ParseBudgetTracker& decompressed_budget) {
+                               ParseBudgetTracker& decompressed_budget,
+                               ParseLiveBudgetTracker& tracked_live_budget) {
   has_merged_transparency = false;
   const auto layer_info_length = large_document
                                      ? read_section_length_u64(layer_reader, "layer info")
@@ -982,7 +997,7 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
   auto layers = read_layer_info_records(layer_reader, canvas_width, canvas_height, source_color_mode, depth,
                                         global_light_angle, global_light_altitude, large_document, cmyk_icc,
                                         has_merged_transparency, notices, damaged_rows, budget,
-                                        decompressed_budget);
+                                        decompressed_budget, tracked_live_budget);
   if (layer_reader.position() < layer_info_end) {
     layer_reader.skip(layer_info_end - layer_reader.position());
   }
@@ -1075,6 +1090,11 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       options.budget.max_decompressed_bytes,
       options.usage != nullptr ? &options.usage->decompressed_bytes : nullptr,
       ParseBudgetDimension::DecompressedBytes);
+  ParseLiveBudgetTracker tracked_live_budget(
+      options.budget.max_tracked_live_bytes,
+      options.usage != nullptr ? &options.usage->tracked_live_bytes : nullptr,
+      options.usage != nullptr ? &options.usage->tracked_live_bytes_high_water
+                               : nullptr);
   BigEndianReader reader(bytes);
   const auto header = read_header(reader);
   {
@@ -1099,10 +1119,10 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
   const auto channel_resources = parse_composite_channel_resources(image_resources);
 
   Document document(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
-  document.metadata().raw_psd_image_resources = image_resources;
-  if (auto icc_profile = find_image_resource_payload(image_resources, kImageResourceIccProfile);
+  if (auto icc_profile = find_image_resource_payload_view(image_resources, kImageResourceIccProfile);
       header.color_mode == kColorModeRgb && icc_profile.has_value()) {
-    document.color_state().embedded_icc_profile = std::move(*icc_profile);
+    document.color_state().embedded_icc_profile.assign(icc_profile->begin(),
+                                                       icc_profile->end());
   }
   // CMYK sources convert through the file's embedded ICC profile when one is usable,
   // matching Photoshop; otherwise the naive ink mix is the fallback. The CMYK profile is
@@ -1110,7 +1130,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
   // pixels and is stripped from RGB re-exports).
   std::optional<CmykToRgbTransform> cmyk_icc_transform;
   if (is_cmyk_color_mode(header.color_mode)) {
-    if (auto icc_profile = find_image_resource_payload(image_resources, kImageResourceIccProfile);
+    if (auto icc_profile = find_image_resource_payload_view(image_resources, kImageResourceIccProfile);
         icc_profile.has_value()) {
       cmyk_icc_transform = CmykToRgbTransform::from_icc_profile(*icc_profile);
       if (options.notices != nullptr) {
@@ -1128,13 +1148,13 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     }
   }
   const auto* cmyk_icc = cmyk_icc_transform.has_value() ? &*cmyk_icc_transform : nullptr;
-  if (auto resolution = find_image_resource_payload(image_resources, kImageResourceResolutionInfo);
+  if (auto resolution = find_image_resource_payload_view(image_resources, kImageResourceResolutionInfo);
       resolution.has_value()) {
     if (auto print_settings = print_settings_from_resolution_resource(*resolution); print_settings.has_value()) {
       document.print_settings() = *print_settings;
     }
   }
-  if (auto grid_guides = find_image_resource_payload(image_resources, kImageResourceGridAndGuidesInfo);
+  if (auto grid_guides = find_image_resource_payload_view(image_resources, kImageResourceGridAndGuidesInfo);
       grid_guides.has_value()) {
     if (auto parsed_grid_guides = grid_guides_from_resource(*grid_guides); parsed_grid_guides.has_value()) {
       document.grid_settings() = parsed_grid_guides->first;
@@ -1144,14 +1164,15 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
   // Document-wide light direction for effects marked "use global light" (signed degrees).
   auto global_light_angle = kDefaultGlobalLightAngle;
   auto global_light_altitude = kDefaultGlobalLightAltitude;
-  if (auto angle = find_image_resource_payload(image_resources, kImageResourceGlobalLightAngle);
+  if (auto angle = find_image_resource_payload_view(image_resources, kImageResourceGlobalLightAngle);
       angle.has_value() && angle->size() >= 4U) {
     global_light_angle = static_cast<float>(static_cast<std::int32_t>(BigEndianReader(*angle).read_u32()));
   }
-  if (auto altitude = find_image_resource_payload(image_resources, kImageResourceGlobalLightAltitude);
+  if (auto altitude = find_image_resource_payload_view(image_resources, kImageResourceGlobalLightAltitude);
       altitude.has_value() && altitude->size() >= 4U) {
     global_light_altitude = static_cast<float>(static_cast<std::int32_t>(BigEndianReader(*altitude).read_u32()));
   }
+  document.metadata().raw_psd_image_resources = std::move(image_resources);
   const auto layer_mask_length =
       header.large_document
           ? read_section_length_u64(reader, "layer and mask information")
@@ -1171,7 +1192,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     auto guides = std::move(document.guides());
     document = read_flat_composite(reader, header, cmyk_icc, channel_resources,
                                    has_merged_transparency, primary_pixel_budget,
-                                   decompressed_budget, &damaged_rows);
+                                   decompressed_budget, tracked_live_budget,
+                                   &damaged_rows);
     document.metadata() = std::move(metadata);
     document.color_state().embedded_icc_profile = std::move(color_state.embedded_icc_profile);
     document.color_state().ocio_view = std::move(color_state.ocio_view);
@@ -1180,7 +1202,9 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     document.guides() = std::move(guides);
     document.metadata().values["psd.version"] = header.large_document ? "PSB" : "PSD";
     document.metadata().values["psd.color_mode"] = color_mode_name(header.color_mode);
-    if (auto palette = find_image_resource_payload(image_resources, kImageResourcePatchyPalette);
+    if (auto palette = find_image_resource_payload_view(
+            document.metadata().raw_psd_image_resources,
+            kImageResourcePatchyPalette);
         palette.has_value()) {
       apply_patchy_palette_resource(document, *palette);
     }
@@ -1189,12 +1213,13 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
   }
 
   if (layer_mask_length > 0) {
-    auto layer_mask_payload = reader.read_bytes(static_cast<std::size_t>(layer_mask_length));
+    auto layer_mask_payload = reader.read_span(static_cast<std::size_t>(layer_mask_length));
     BigEndianReader layer_reader(layer_mask_payload);
     auto layers = read_layers(layer_reader, document.width(), document.height(), header.color_mode,
                               header.depth, global_light_angle, global_light_altitude, header.large_document,
                               cmyk_icc, has_merged_transparency, options.notices, &damaged_rows,
-                              primary_pixel_budget, decompressed_budget);
+                              primary_pixel_budget, decompressed_budget,
+                              tracked_live_budget);
     const auto add_layer = [&document](const Layer& source) {
       document.add_layer(clone_layer_with_document_ids(document, source));
     };
@@ -1243,7 +1268,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       if (block_length > layer_reader.remaining()) {
         break;
       }
-      auto payload = layer_reader.read_bytes(static_cast<std::size_t>(block_length));
+      const auto payload =
+          layer_reader.read_span(static_cast<std::size_t>(block_length));
       const auto* layer_info_key = header.depth == 16   ? "Lr16"
                                    : header.depth == 32 ? "Lr32"
                                                         : "Layr";
@@ -1258,7 +1284,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
             block_reader, document.width(), document.height(), header.color_mode, header.depth,
             global_light_angle, global_light_altitude, header.large_document, cmyk_icc,
             has_merged_transparency, options.notices, &damaged_rows, primary_pixel_budget,
-            decompressed_budget);
+            decompressed_budget, tracked_live_budget);
         // Always Photoshop's bottom-to-top order: legacy Patchy never wrote these
         // blocks, so the legacy-order heuristic used for the standard section
         // could only misfire here.
@@ -1275,8 +1301,11 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
         link_block.key = key;
         link_block.long_length = wide_length;
         link_block.original_global_index = global_block_index;
-        link_block.original_payload = std::make_shared<const std::vector<std::uint8_t>>(payload);
-        if (auto sources = parse_linked_layer_block(payload); sources.has_value()) {
+        link_block.original_payload =
+            std::make_shared<const std::vector<std::uint8_t>>(payload.begin(),
+                                                              payload.end());
+        if (auto sources = parse_linked_layer_block(*link_block.original_payload);
+            sources.has_value()) {
           link_block.sources = std::move(*sources);
         } else {
           link_block.opaque = true;
@@ -1287,26 +1316,31 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
         // `placed`), not per shared embedded source (`Idnt`). Keep each record's
         // large byte ranges shared across undo snapshots and preserve opaque
         // variants verbatim.
-        auto shared_payload =
-            std::make_shared<const std::vector<std::uint8_t>>(std::move(payload));
+        auto shared_payload = std::make_shared<const std::vector<std::uint8_t>>(
+            payload.begin(), payload.end());
         document.metadata().smart_filter_effects.add_block(parse_filter_effects_block(
             key, std::move(shared_payload), wide_length, global_block_index,
-            decompressed_budget));
+            decompressed_budget, tracked_live_budget));
       } else if (key == "Patt" || key == "Pat2" || key == "Pat3") {
         // Pattern pixel data: decode into the store so pattern overlays / bevel
         // textures can render, AND keep the raw block preserved verbatim (Patchy
         // never rewrites imported pattern blocks). Decode into a local before the
         // payload moves — the argument-evaluation-order rule.
         auto decoded = parse_patterns_block(payload, cmyk_icc,
-                                            decompressed_budget);
+                                            decompressed_budget,
+                                            tracked_live_budget);
         for (auto& resource : decoded) {
           document.metadata().patterns.adopt(resource);
         }
         document.metadata().unknown_psd_resources.push_back(
-            UnknownPsdBlock{key, std::move(payload), wide_length, global_block_index});
+            UnknownPsdBlock{key,
+                            std::vector<std::uint8_t>(payload.begin(), payload.end()),
+                            wide_length, global_block_index});
       } else {
         document.metadata().unknown_psd_resources.push_back(
-            UnknownPsdBlock{key, std::move(payload), wide_length, global_block_index});
+            UnknownPsdBlock{key,
+                            std::vector<std::uint8_t>(payload.begin(), payload.end()),
+                            wide_length, global_block_index});
       }
       ++global_block_index;
       // Global tagged blocks are padded to 4-byte boundaries.
@@ -1323,7 +1357,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     auto guides = std::move(document.guides());
     document = read_flat_composite(reader, header, cmyk_icc, channel_resources,
                                    has_merged_transparency, primary_pixel_budget,
-                                   decompressed_budget, &damaged_rows);
+                                   decompressed_budget, tracked_live_budget,
+                                   &damaged_rows);
     document.metadata() = std::move(metadata);
     document.color_state().embedded_icc_profile = std::move(color_state.embedded_icc_profile);
     document.color_state().ocio_view = std::move(color_state.ocio_view);
@@ -1345,7 +1380,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       try {
         auto flat_composite = read_flat_composite(reader, header, cmyk_icc, channel_resources,
                                                   has_merged_transparency, primary_pixel_budget,
-                                                  decompressed_budget,
+                                                  decompressed_budget, tracked_live_budget,
                                                   &damaged_rows);
         if (!flat_composite.layers().empty() && flat_composite.layers().front().kind() == LayerKind::Pixel) {
           document.metadata().psd_flat_composite =
@@ -1370,7 +1405,9 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       primary_pixel_budget.charge_dimensions(document.width(), document.height(), saved_channel_count);
       auto saved_channels = read_flat_image_channels_from(reader, header, compression,
                                                           first_saved_channel,
-                                                          decompressed_budget, &damaged_rows);
+                                                          decompressed_budget,
+                                                          tracked_live_budget,
+                                                          &damaged_rows);
       add_saved_composite_channels(document, std::move(saved_channels), first_saved_channel, header,
                                    channel_resources);
     }
@@ -1385,15 +1422,20 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
   // pattern fills resolve); saved/work/clipping paths parse from the preserved
   // image resources.
   finalize_vector_layers(document);
-  if (const auto compound = find_image_resource_payload(image_resources, kImageResourcePatchyCompoundVectors)) {
+  if (const auto compound = find_image_resource_payload_view(
+          document.metadata().raw_psd_image_resources,
+          kImageResourcePatchyCompoundVectors)) {
     apply_compound_vector_resource(document, *compound);
   }
   collapse_compound_vector_groups(document);
-  parse_document_path_resources(document, image_resources);
+  parse_document_path_resources(document,
+                                document.metadata().raw_psd_image_resources);
 
   document.metadata().values["psd.version"] = header.large_document ? "PSB" : "PSD";
   document.metadata().values["psd.color_mode"] = color_mode_name(header.color_mode);
-  if (auto palette = find_image_resource_payload(image_resources, kImageResourcePatchyPalette);
+  if (auto palette = find_image_resource_payload_view(
+          document.metadata().raw_psd_image_resources,
+          kImageResourcePatchyPalette);
       palette.has_value()) {
     apply_patchy_palette_resource(document, *palette);
   }

@@ -180,7 +180,8 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
 [[nodiscard]] bool decode_filter_mask(std::span<const std::uint8_t> bytes,
                                       const Rect &bounds,
                                       SmartFilterEffectsRecord &record,
-                                      ParseBudgetTracker* decompressed_budget) {
+                                      ParseBudgetTracker* decompressed_budget,
+                                      ParseLiveBudgetTracker* tracked_live_budget) {
   const auto pixels64 = static_cast<std::uint64_t>(bounds.width) *
                         static_cast<std::uint64_t>(bounds.height);
   if (pixels64 == 0U ||
@@ -195,7 +196,7 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
       return false;
     }
     const auto compression = reader.read_u16();
-    std::vector<std::uint8_t> samples;
+    TrackedByteBuffer samples;
     if (compression == 0U) {
       if (reader.remaining() != expected) {
         return false;
@@ -203,7 +204,13 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
       if (decompressed_budget != nullptr) {
         decompressed_budget->charge_size(expected);
       }
-      samples = reader.read_bytes(expected);
+      auto reservation = tracked_live_budget != nullptr
+                             ? tracked_live_budget->reserve_size(expected)
+                             : ParseLiveBudgetTracker::Reservation{};
+      std::vector<std::uint8_t> storage(expected);
+      const auto source = reader.read_span(expected);
+      std::copy(source.begin(), source.end(), storage.begin());
+      samples = TrackedByteBuffer(std::move(reservation), std::move(storage));
     } else if (compression == 1U) {
       const auto table_bytes = static_cast<std::uint64_t>(bounds.height) * 4ULL;
       if (table_bytes > reader.remaining()) {
@@ -225,27 +232,42 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
       if (decompressed_budget != nullptr) {
         decompressed_budget->charge_size(expected);
       }
+      auto table_reservation = tracked_live_budget != nullptr
+                                   ? tracked_live_budget->reserve_product(
+                                         static_cast<std::size_t>(bounds.height),
+                                         sizeof(std::uint32_t))
+                                   : ParseLiveBudgetTracker::Reservation{};
       std::vector<std::uint32_t> row_lengths(
           static_cast<std::size_t>(bounds.height));
       for (auto &row_length : row_lengths) {
         row_length = reader.read_u32();
       }
-      samples.reserve(expected);
+      auto samples_reservation = tracked_live_budget != nullptr
+                                     ? tracked_live_budget->reserve_size(expected)
+                                     : ParseLiveBudgetTracker::Reservation{};
+      std::vector<std::uint8_t> sample_storage;
+      sample_storage.reserve(expected);
+      samples = TrackedByteBuffer(std::move(samples_reservation),
+                                  std::move(sample_storage));
       for (const auto row_length : row_lengths) {
         if (row_length > reader.remaining()) {
           return false;
         }
-        const auto encoded = reader.read_bytes(row_length);
+        const auto encoded = reader.read_span(row_length);
         std::size_t consumed = 0;
+        auto row_reservation = tracked_live_budget != nullptr
+                                   ? tracked_live_budget->reserve_size(
+                                         static_cast<std::size_t>(bounds.width))
+                                   : ParseLiveBudgetTracker::Reservation{};
         auto row = decode_packbits(encoded,
                                    static_cast<std::size_t>(bounds.width),
                                    &consumed);
         if (consumed != encoded.size()) {
           return false;
         }
-        samples.insert(samples.end(), row.begin(), row.end());
+        samples.bytes.insert(samples.bytes.end(), row.begin(), row.end());
       }
-      if (reader.remaining() != 0U || samples.size() != expected) {
+      if (reader.remaining() != 0U || samples.bytes.size() != expected) {
         return false;
       }
     } else {
@@ -255,10 +277,13 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
     SmartFilterEffectsMask mask;
     mask.bounds = bounds;
     mask.samples =
-        std::make_shared<const std::vector<std::uint8_t>>(std::move(samples));
+        std::make_shared<const std::vector<std::uint8_t>>(std::move(samples.bytes));
+    samples.release_reservation();
     record.mask = std::move(mask);
     record.mask_decoded = true;
     return true;
+  } catch (const ParseBudgetExceeded&) {
+    throw;
   } catch (const std::runtime_error &) {
     return false;
   }
@@ -267,7 +292,8 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
 [[nodiscard]] bool
 parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
                            SmartFilterEffectsRecord &record,
-                           ParseBudgetTracker* decompressed_budget) {
+                           ParseBudgetTracker* decompressed_budget,
+                           ParseLiveBudgetTracker* tracked_live_budget) {
   // A record may end immediately when no filter mask was written. Some versions
   // instead append a zero presence byte; both forms are accepted.
   if (bytes.empty()) {
@@ -301,7 +327,10 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
         record.cache_depth != kSupportedCacheDepth) {
       return false;
     }
-    return decode_filter_mask(mask_body, *bounds, record, decompressed_budget);
+    return decode_filter_mask(mask_body, *bounds, record, decompressed_budget,
+                              tracked_live_budget);
+  } catch (const ParseBudgetExceeded&) {
+    throw;
   } catch (const std::runtime_error &) {
     return false;
   }
@@ -311,7 +340,8 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
     const SmartFilterEffectsBlock &block,
     const std::shared_ptr<const std::vector<std::uint8_t>> &storage,
     std::size_t body_offset, std::size_t body_length,
-    ParseBudgetTracker* decompressed_budget = nullptr) {
+    ParseBudgetTracker* decompressed_budget = nullptr,
+    ParseLiveBudgetTracker* tracked_live_budget = nullptr) {
   SmartFilterEffectsRecord record;
   record.source_block_key = block.key;
   record.source_block_version = block.version;
@@ -352,8 +382,10 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
     const auto mask_supported =
         cache_supported &&
         parse_optional_filter_mask(body.subspan(reader.position()), record,
-                                   decompressed_budget);
+                                   decompressed_budget, tracked_live_budget);
     record.data_supported = cache_supported && mask_supported;
+  } catch (const ParseBudgetExceeded&) {
+    throw;
   } catch (const std::runtime_error &) {
     // The outer u64 record boundary remains useful for byte preservation and
     // clone/rekey even when the bounded contents are malformed.
@@ -564,7 +596,8 @@ namespace {
 SmartFilterEffectsBlock parse_filter_effects_block_impl(
     std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
     bool long_length, std::size_t original_global_index,
-    ParseBudgetTracker* decompressed_budget) {
+    ParseBudgetTracker* decompressed_budget,
+    ParseLiveBudgetTracker* tracked_live_budget) {
   SmartFilterEffectsBlock block;
   block.key = std::move(key);
   block.long_length = long_length;
@@ -611,7 +644,8 @@ SmartFilterEffectsBlock parse_filter_effects_block_impl(
       block.records.push_back(
           parse_filter_effects_record(block, payload, body_offset,
                                       static_cast<std::size_t>(record_length),
-                                      decompressed_budget));
+                                      decompressed_budget,
+                                      tracked_live_budget));
       reader.skip(static_cast<std::size_t>(record_length));
       // Photoshop aligns every length-prefixed FEid/FXid record to four bytes,
       // not only the final block payload. The padding is outside the declared
@@ -659,6 +693,8 @@ SmartFilterEffectsBlock parse_filter_effects_block_impl(
       }
     }
     mark_block_association_uniqueness(block);
+  } catch (const ParseBudgetExceeded&) {
+    throw;
   } catch (const std::runtime_error &) {
     block.opaque = true;
     block.records.clear();
@@ -673,7 +709,7 @@ SmartFilterEffectsBlock parse_filter_effects_block(
     bool long_length, std::size_t original_global_index) {
   return parse_filter_effects_block_impl(
       std::move(key), std::move(payload), long_length, original_global_index,
-      nullptr);
+      nullptr, nullptr);
 }
 
 SmartFilterEffectsBlock parse_filter_effects_block(
@@ -682,7 +718,17 @@ SmartFilterEffectsBlock parse_filter_effects_block(
     ParseBudgetTracker& decompressed_budget) {
   return parse_filter_effects_block_impl(
       std::move(key), std::move(payload), long_length, original_global_index,
-      &decompressed_budget);
+      &decompressed_budget, nullptr);
+}
+
+SmartFilterEffectsBlock parse_filter_effects_block(
+    std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
+    bool long_length, std::size_t original_global_index,
+    ParseBudgetTracker& decompressed_budget,
+    ParseLiveBudgetTracker& tracked_live_budget) {
+  return parse_filter_effects_block_impl(
+      std::move(key), std::move(payload), long_length, original_global_index,
+      &decompressed_budget, &tracked_live_budget);
 }
 
 SmartFilterEffectsBlock parse_filter_effects_block(

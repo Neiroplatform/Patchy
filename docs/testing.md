@@ -49,6 +49,20 @@ real-user masks, irrelevant pattern slots, and Smart Filter cache planes are not
 charged. The guard also excludes converted/output buffers, retained raw blocks, layer
 clones, and render-generated previews; it is not a complete process-memory limit.
 
+`max_tracked_live_bytes` independently caps the conservative logical live set of
+instrumented parser-owned workspace. It covers decoded RAW/ZIP/RLE channel storage,
+RLE count tables and decoded rows, 32-bit ZIP-prediction shuffle rows, CMYK ICC
+conversion scratch, decoded pattern planes plus tile construction, and Smart Filter
+mask decode storage. The current reservation and monotonic high-water are exposed as
+`ParseUsage::tracked_live_bytes` and `tracked_live_bytes_high_water`; current usage is
+zero after every successful read and after exception unwind. Admission occurs before
+the corresponding allocation, and a rejected reservation changes neither counter.
+This is intentionally not RSS: allocator metadata/capacity, third-party codec
+internals, thread stacks, input/MEMFS bytes, primary `PixelBuffer`s, retained document
+state, and committed WebAssembly heap pages stay outside this dimension. Large ICC
+CMYK conversion uses a fixed 16-worker scratch envelope so the exact-fit boundary is
+identical across native and wasm worker topologies.
+
 The `input_budget`, `primary_pixel_budget`, and `psd_decompressed_budget` tests pin
 exact-fit and one-byte-short behavior, aggregate accounting, compression-independent
 source-depth accounting, file/span behavior where applicable, retained-flat and
@@ -56,6 +70,9 @@ recovery-catch exception propagation, and tiny malicious PSB headers that declar
 enormous flat or zero-channel layer buffers. A rejection test must catch
 `ParseBudgetExceeded`, match its dimension and the stable safe-import message, so
 `bad_alloc`, truncation, or an unrelated parser error cannot pass accidentally.
+The tracked-live cases additionally pin RAII move/release semantics, decompressed-first
+admission precedence, zero current usage after failure, RAW/RLE/ZIP-prediction peaks,
+and typed-error escape through pattern and Smart Filter recovery catches.
 `ParseBudget` and `ParseUsage` are aggregate-initializable public structs: add fields
 only at the end and rebuild all consumers when their layout changes.
 
