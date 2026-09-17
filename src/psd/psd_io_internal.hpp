@@ -595,6 +595,15 @@ SaveTrackedByteBuffer serialize_filter_effects_block_tracked(
     const SmartFilterEffectsBlock& block,
     SaveLiveBudgetTracker& tracked_live_budget);
 
+// Save-only owner-coupled Patt serializer. The public codec keeps its
+// vector-returning API; the document writer uses this form so the generated
+// payload remains charged while it is copied into the global layer section.
+SaveTrackedByteBuffer serialize_patterns_block_tracked(
+    std::span<const PatternResource> patterns,
+    SaveLiveBudgetTracker& tracked_live_budget);
+[[nodiscard]] bool pattern_resource_is_serializable(
+    const PatternResource& resource) noexcept;
+
 // Vector shape/path codec: vmsk/vsms path records, SoCo/GdFl/PtFl fill
 // content, vstk stroke style, vogk live-shape origination, and the saved-path
 // image resources (definitions in psd_vector.cpp; encodings recorded in

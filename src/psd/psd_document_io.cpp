@@ -2200,13 +2200,28 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
           covered_ids.insert(covered_ids.end(), ids.begin(), ids.end());
         }
       }
+      // Reservation precedes its resource so the PixelBuffer dies before its
+      // charge is released, including exceptional unwinds and vector teardown.
+      struct GeneratedPatternOwner {
+        SaveLiveBudgetTracker::Reservation reservation;
+        PatternResource resource;
+      };
+      std::vector<GeneratedPatternOwner> generated_patterns;
+      generated_patterns.reserve(referenced_ids.size());
+      // Declared after generated_patterns so these shared PixelBuffer views die
+      // before their generated owners and reservations.
       std::vector<PatternResource> patterns_to_write;
+      patterns_to_write.reserve(referenced_ids.size());
       for (const auto& id : referenced_ids) {
         if (std::find(covered_ids.begin(), covered_ids.end(), id) != covered_ids.end()) {
           continue;
         }
         const auto* resource = document.metadata().patterns.find(id);
         if (resource != nullptr && !pattern_tile_is_unrenderable(resource->tile)) {
+          if (!pattern_resource_is_serializable(*resource)) {
+            throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+                "QObject", "PSD pattern length is invalid"));
+          }
           patterns_to_write.push_back(*resource);
           continue;
         }
@@ -2217,19 +2232,27 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
         // placeholder. It renders as no paint — exactly Patchy's
         // missing-pattern render — and PatternStore::adopt treats it as
         // heal-able if the real pattern is ever re-applied.
-        PatternResource placeholder;
-        placeholder.id = id;
-        placeholder.name = resource != nullptr && !resource->name.empty() ? resource->name : id;
-        placeholder.tile = PixelBuffer(1, 1, PixelFormat::rgba8());
-        placeholder.provenance = PatternProvenance::Authored;
-        patterns_to_write.push_back(std::move(placeholder));
+        if (id.size() > 255U) {
+          throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+              "QObject", "PSD pattern length is invalid"));
+        }
+        GeneratedPatternOwner placeholder{
+            tracked_live_budget.reserve_product(1U, 4U), {}};
+        placeholder.resource.id = id;
+        placeholder.resource.name =
+            resource != nullptr && !resource->name.empty() ? resource->name : id;
+        placeholder.resource.tile = PixelBuffer(1, 1, PixelFormat::rgba8());
+        placeholder.resource.provenance = PatternProvenance::Authored;
+        generated_patterns.push_back(std::move(placeholder));
+        patterns_to_write.push_back(generated_patterns.back().resource);
       }
       if (!patterns_to_write.empty()) {
         std::sort(patterns_to_write.begin(), patterns_to_write.end(),
                   [](const PatternResource& lhs, const PatternResource& rhs) { return lhs.id < rhs.id; });
-        const auto payload = serialize_patterns_block(patterns_to_write);
-        if (!payload.empty()) {
-          emit_global_payload("Patt", payload, false);
+        const auto payload = serialize_patterns_block_tracked(
+            patterns_to_write, tracked_live_budget);
+        if (!payload.bytes.empty()) {
+          emit_global_payload("Patt", payload.bytes, false);
         }
       }
     }

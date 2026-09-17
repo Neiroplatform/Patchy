@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -385,25 +386,29 @@ std::uint32_t next_utf8_codepoint(std::string_view text, std::size_t& cursor) {
 }  // namespace
 
 void write_descriptor_unicode_string(BigEndianWriter& writer, std::string_view utf8) {
-  std::vector<std::uint16_t> code_units;
-  code_units.reserve(utf8.size() + 1U);
+  std::uint64_t code_unit_count = 1U;  // Photoshop includes the trailing NUL.
   std::size_t cursor = 0;
+  while (cursor < utf8.size()) {
+    const auto codepoint = next_utf8_codepoint(utf8, cursor);
+    code_unit_count += codepoint > 0xFFFFU ? 2U : 1U;
+    if (code_unit_count > std::numeric_limits<std::uint32_t>::max()) {
+      throw std::length_error("PSD descriptor Unicode string is too long");
+    }
+  }
+
+  writer.write_u32(static_cast<std::uint32_t>(code_unit_count));
+  cursor = 0;
   while (cursor < utf8.size()) {
     const auto codepoint = next_utf8_codepoint(utf8, cursor);
     if (codepoint > 0xFFFFU) {
       const auto offset = codepoint - 0x10000U;
-      code_units.push_back(static_cast<std::uint16_t>(0xD800U + (offset >> 10U)));
-      code_units.push_back(static_cast<std::uint16_t>(0xDC00U + (offset & 0x3FFU)));
+      writer.write_u16(static_cast<std::uint16_t>(0xD800U + (offset >> 10U)));
+      writer.write_u16(static_cast<std::uint16_t>(0xDC00U + (offset & 0x3FFU)));
     } else {
-      code_units.push_back(static_cast<std::uint16_t>(codepoint));
+      writer.write_u16(static_cast<std::uint16_t>(codepoint));
     }
   }
-  // Photoshop includes a terminating NUL in the code-unit count (the reader strips it).
-  code_units.push_back(0);
-  writer.write_u32(static_cast<std::uint32_t>(code_units.size()));
-  for (const auto unit : code_units) {
-    writer.write_u16(unit);
-  }
+  writer.write_u16(0U);
 }
 
 void write_descriptor_id(BigEndianWriter& writer, std::string_view id, bool long_form) {

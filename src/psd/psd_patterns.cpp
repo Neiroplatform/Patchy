@@ -4,10 +4,13 @@
 #include "psd/psd_binary.hpp"
 #include "psd/psd_descriptor.hpp"
 #include "psd/psd_parse_budget_internal.hpp"
+#include "psd/psd_save_budget_internal.hpp"
 #include "support/translate_noop.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 namespace patchy::psd {
@@ -462,12 +465,12 @@ std::vector<std::string> pattern_ids_in_block(std::span<const std::uint8_t> payl
       reader.skip(8U);  // version + mode
       reader.skip(4U);  // point
       const auto name_units = reader.read_u32();
-      if (static_cast<std::size_t>(name_units) * 2U > reader.remaining()) {
+      if (name_units > reader.remaining() / 2U) {
         break;
       }
       reader.skip(static_cast<std::size_t>(name_units) * 2U);
       const auto id_length = reader.read_u8();
-      const auto id_bytes = reader.read_bytes(id_length);
+      const auto id_bytes = reader.read_span(id_length);
       std::string id(id_bytes.begin(), id_bytes.end());
       while (!id.empty() && id.back() == '\0') {
         id.pop_back();
@@ -487,15 +490,27 @@ std::vector<std::string> pattern_ids_in_block(std::span<const std::uint8_t> payl
   return ids;
 }
 
-std::vector<std::uint8_t> serialize_patterns_block(std::span<const PatternResource> patterns) {
-  BigEndianWriter block;
+bool pattern_resource_is_serializable(const PatternResource& resource) noexcept {
+  const auto& tile = resource.tile;
+  const auto pixel_count =
+      static_cast<std::uint64_t>(std::max<std::int32_t>(0, tile.width())) *
+      static_cast<std::uint64_t>(std::max<std::int32_t>(0, tile.height()));
+  return !tile.empty() && tile.format() == PixelFormat::rgba8() &&
+         !resource.id.empty() && resource.id.size() <= 255U &&
+         tile.width() <= 30000 && tile.height() <= 30000 &&
+         pixel_count <= kMaxDecodedPatternPixels;
+}
+
+SaveTrackedByteBuffer serialize_patterns_block_tracked(
+    std::span<const PatternResource> patterns,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_block(tracked_live_budget);
+  auto& block = tracked_block.writer();
   for (const auto& resource : patterns) {
     const auto& tile = resource.tile;
     const auto pixel_count = static_cast<std::uint64_t>(std::max<std::int32_t>(0, tile.width())) *
                              static_cast<std::uint64_t>(std::max<std::int32_t>(0, tile.height()));
-    if (tile.empty() || tile.format() != PixelFormat::rgba8() || resource.id.empty() ||
-        resource.id.size() > 255U || tile.width() > 30000 || tile.height() > 30000 ||
-        pixel_count > kMaxDecodedPatternPixels) {
+    if (!pattern_resource_is_serializable(resource)) {
       continue;
     }
     const auto width = tile.width();
@@ -515,39 +530,50 @@ std::vector<std::uint8_t> serialize_patterns_block(std::span<const PatternResour
     const auto unwritten_slots = slot_count - written_channels;
     const auto vma_length = 16U + 4U + written_channels * channel_slot_bytes + unwritten_slots * 4U;
 
-    BigEndianWriter pattern;
-    pattern.write_u32(kPatternVersion);
-    pattern.write_u32(kModeRgb);
-    pattern.write_u16(static_cast<std::uint16_t>(height));
-    pattern.write_u16(static_cast<std::uint16_t>(width));
-    write_descriptor_unicode_string(pattern, resource.name);
-    pattern.write_u8(static_cast<std::uint8_t>(resource.id.size()));
-    pattern.write_bytes(
+    // Length-prefix the record in place. This avoids a second per-pattern
+    // writer and the full payload copy it required, while retaining the exact
+    // byte layout of the public serializer.
+    const auto length_offset = block.bytes().size();
+    block.write_u32(0U);
+    const auto pattern_start = block.bytes().size();
+    block.write_u32(kPatternVersion);
+    block.write_u32(kModeRgb);
+    block.write_u16(static_cast<std::uint16_t>(height));
+    block.write_u16(static_cast<std::uint16_t>(width));
+    write_descriptor_unicode_string(block, resource.name);
+    block.write_u8(static_cast<std::uint8_t>(resource.id.size()));
+    block.write_bytes(
         std::span(reinterpret_cast<const std::uint8_t*>(resource.id.data()), resource.id.size()));
-    pattern.write_u32(kVirtualMemoryArrayVersion);
-    pattern.write_u32(static_cast<std::uint32_t>(vma_length));
-    pattern.write_u32(0);
-    pattern.write_u32(0);
-    pattern.write_u32(static_cast<std::uint32_t>(height));
-    pattern.write_u32(static_cast<std::uint32_t>(width));
-    pattern.write_u32(kDeclaredMaxChannels);
+    block.write_u32(kVirtualMemoryArrayVersion);
+    block.write_u32(static_cast<std::uint32_t>(vma_length));
+    block.write_u32(0);
+    block.write_u32(0);
+    block.write_u32(static_cast<std::uint32_t>(height));
+    block.write_u32(static_cast<std::uint32_t>(width));
+    block.write_u32(kDeclaredMaxChannels);
 
-    const auto write_plane = [&pattern, &tile, width, height, pixel_count_size](std::size_t component) {
-      pattern.write_u32(1);  // written
-      pattern.write_u32(static_cast<std::uint32_t>(kChannelHeaderBytes + pixel_count_size));
-      pattern.write_u32(8);  // pixel depth
-      pattern.write_u32(0);
-      pattern.write_u32(0);
-      pattern.write_u32(static_cast<std::uint32_t>(height));
-      pattern.write_u32(static_cast<std::uint32_t>(width));
-      pattern.write_u16(8);  // pixel depth again
-      pattern.write_u8(0);   // raw compression, PS 27.8's own choice for small tiles
-      std::vector<std::uint8_t> plane(pixel_count_size);
+    const auto write_plane = [&block, &tile, width, height,
+                              pixel_count_size](std::size_t component) {
+      block.write_u32(1);  // written
+      block.write_u32(static_cast<std::uint32_t>(kChannelHeaderBytes + pixel_count_size));
+      block.write_u32(8);  // pixel depth
+      block.write_u32(0);
+      block.write_u32(0);
+      block.write_u32(static_cast<std::uint32_t>(height));
+      block.write_u32(static_cast<std::uint32_t>(width));
+      block.write_u16(8);  // pixel depth again
+      block.write_u8(0);   // raw compression, PS 27.8's own choice for small tiles
       const auto data = tile.data();
-      for (std::size_t index = 0; index < pixel_count_size; ++index) {
-        plane[index] = data[index * 4U + component];
+      std::array<std::uint8_t, 4096U> plane_chunk{};
+      for (std::size_t start = 0; start < pixel_count_size;
+           start += plane_chunk.size()) {
+        const auto count =
+            std::min(plane_chunk.size(), pixel_count_size - start);
+        for (std::size_t offset = 0; offset < count; ++offset) {
+          plane_chunk[offset] = data[(start + offset) * 4U + component];
+        }
+        block.write_bytes(std::span(plane_chunk).first(count));
       }
-      pattern.write_bytes(plane);
     };
 
     write_plane(0);
@@ -557,20 +583,34 @@ std::vector<std::uint8_t> serialize_patterns_block(std::span<const PatternResour
       if (has_transparency && slot == kDeclaredMaxChannels + 1U) {
         write_plane(3);
       } else {
-        pattern.write_u32(0);  // unwritten slot
+        block.write_u32(0);  // unwritten slot
       }
     }
 
-    const auto& pattern_bytes = pattern.bytes();
-    block.write_u32(static_cast<std::uint32_t>(pattern_bytes.size()));
-    block.write_bytes(pattern_bytes);
-    const auto consumed = 4U + pattern_bytes.size();
+    const auto pattern_size = block.bytes().size() - pattern_start;
+    if (pattern_size > std::numeric_limits<std::uint32_t>::max()) {
+      throw std::length_error("PSD pattern record is too long");
+    }
+    const auto pattern_size_u32 = static_cast<std::uint32_t>(pattern_size);
+    auto& bytes = block.bytes();
+    bytes[length_offset] = static_cast<std::uint8_t>(pattern_size_u32 >> 24U);
+    bytes[length_offset + 1U] = static_cast<std::uint8_t>(pattern_size_u32 >> 16U);
+    bytes[length_offset + 2U] = static_cast<std::uint8_t>(pattern_size_u32 >> 8U);
+    bytes[length_offset + 3U] = static_cast<std::uint8_t>(pattern_size_u32);
+    const auto consumed = 4U + pattern_size;
     const auto padding = (4U - (consumed % 4U)) % 4U;
     for (std::size_t i = 0; i < padding; ++i) {
       block.write_u8(0);
     }
   }
-  return block.bytes();
+  return std::move(tracked_block).take_buffer();
+}
+
+std::vector<std::uint8_t> serialize_patterns_block(std::span<const PatternResource> patterns) {
+  SaveLiveBudgetTracker tracked_live_budget(
+      std::numeric_limits<std::uint64_t>::max(), nullptr, nullptr);
+  auto payload = serialize_patterns_block_tracked(patterns, tracked_live_budget);
+  return std::move(payload.bytes);
 }
 
 }  // namespace patchy::psd

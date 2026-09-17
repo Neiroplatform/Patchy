@@ -67,7 +67,7 @@ does not reserve a slot. This is not exact post-render channel usage.
 The Photoshop 8000-record format error precedes configurable admission. Other later
 encoder-format errors may be preceded by an earlier finite preflight rejection.
 
-## DP-008A through DP-008B3a tracked live workspace
+## DP-008A through DP-008B3b tracked live workspace
 
 `max_tracked_live_bytes` caps conservative logical reservations for instrumented
 save-owned temporary buffers. `SaveUsage::tracked_live_bytes` is current
@@ -92,7 +92,9 @@ The current implemented slices cover:
   palette, compound-vector, saved/work-path, and clipping-path payloads;
 - the final rebuilt image-resource stream returned to the flat or layered
   document writer;
-- generated and copied document-global Smart Filter `FEid`/`FXid` payloads.
+- generated and copied document-global Smart Filter `FEid`/`FXid` payloads;
+- generated document-global pattern payloads and transparent missing-pattern
+  placeholder pixels.
 
 RAW and RLE candidates count together while both are live. Retained encoded
 channels remain charged until their owners die. Copying `layer_info` into
@@ -125,6 +127,15 @@ per-record body copy. All filter payload owners retain the historical eager
 lifetime and ordering while they overlap the growing global layer section; this
 keeps malformed-input precedence and emitted bytes unchanged while accounting
 the actual peak.
+DP-008B3b writes authored `Patt` records directly into one owner-coupled tracked
+buffer. UTF-16 names use a checked two-pass writer, channel planes stream through
+a fixed stack chunk, and the returned payload stays charged while it is copied
+into the global layer section. Preserved raw `Patt`/`Pat2`/`Pat3` payloads remain
+caller-owned; their copied bytes are already part of the tracked `layer_mask`.
+Generated 1x1 transparent placeholders reserve their four pixel bytes before
+allocation and keep that reservation coupled to the pixel owner through emission.
+Referenced resources that cannot be represented by the pattern codec now fail
+closed instead of leaving a dangling pattern id.
 
 ## Explicit exclusions and remaining DP-008B work
 
@@ -143,7 +154,7 @@ DP-008B remains open for:
 - compound/open-stroke normalization clones and vector-raster scratch;
 - deep compositor group, clipping, style, effect, distance-field, and blur planes;
 - generated layer-record payload producers and nested resource writers;
-- generated Smart Object and pattern serialization payloads.
+- generated Smart Object serialization payloads.
 
 Product callers must not treat DP-008A as a complete save-memory ceiling. Finite
 values and caller wiring remain downstream policy work after DP-008B and
@@ -195,6 +206,13 @@ one-short, zero, staged-overlap, malformed-unwind, and public byte-equivalence
 checks accompany a two-block layered fixture. Its 4096-byte `FEid` and 2048-byte
 `FXid` copies produce a 12556-byte tracked peak and prove exact, one-short, and
 typed pre-copy rejection while both eager owners remain live.
+DP-008B3b pins opaque, transparent, two-record, Unicode, and 4097-pixel chunk
+payloads at 244, 272, 488, 248, and 12532 bytes, with direct exact/N-1/zero,
+staged/concurrent ownership, invalid-skip, and unwind checks. Minimal authored and
+placeholder layered files peak at 1592 and 1652 bytes. A four-block
+`Patt`/`Pat2`/`Pat3` fixture preserves raw order and a valid prefix before a
+malformed tail, deduplicates covered ids, emits one 516-byte generated `Patt`,
+and pins the public tracked peak at 2044 bytes with exact and typed N-1 rejection.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero
