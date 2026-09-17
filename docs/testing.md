@@ -71,6 +71,7 @@ Validate a bundle against the exact executable used to create it:
 python3 scripts/fuzz/validate_psd_campaign.py \
   /tmp/patchy-fuzz-receipt-001.json \
   /tmp/patchy-fuzz-evidence-001 \
+  --expected-patchy-sha "$(git rev-parse HEAD)" \
   --check /tmp/patchy-fuzz-receipt-001.json
 ```
 
@@ -80,8 +81,9 @@ identities, bounded configuration, normalized outcome and derived counters. It
 contains no source bytes, timestamps, machine paths, environment values or
 private locators. Validation is strict: unknown or duplicate fields,
 non-canonical bytes, unsafe paths, non-regular or oversized files, an unbound
-file anywhere in the evidence root, and identity/counter/status mismatch fail
-the check. Keep campaigns on an isolated developer machine. The wrapper
+file anywhere in the evidence root, overlapping evidence roles, an empty seed
+tree, an out-of-band Patchy SHA mismatch, and identity/counter/status mismatch
+fail the check. Keep campaigns on an isolated developer machine. The wrapper
 performs no network, server, deployment or secret access.
 
 ### PSD/PSB parse-budget tests

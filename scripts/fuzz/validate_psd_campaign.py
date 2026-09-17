@@ -223,12 +223,44 @@ def load_receipt(path: Path) -> tuple[dict[str, Any], bytes]:
     return value, raw
 
 
-def validate_campaign(receipt: dict[str, Any], evidence_root: Path) -> None:
+def _validate_role_separation(root: dict[str, Any]) -> None:
+    file_paths = [
+        root["target"]["binary"]["path"],
+        root["dictionary"]["path"],
+        root["log"]["path"],
+    ]
+    if len(set(file_paths)) != len(file_paths):
+        raise CampaignValidationError("file evidence roles must use distinct paths")
+    tree_roots = [root["seed_corpus"]["path"], root["artifacts"]["path"]]
+    if any(
+        left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
+        for index, left in enumerate(tree_roots)
+        for right in tree_roots[index + 1:]
+    ):
+        raise CampaignValidationError("evidence tree roles must be disjoint")
+    if any(path == tree or path.startswith(f"{tree}/") for path in file_paths for tree in tree_roots):
+        raise CampaignValidationError("file and tree evidence roles must be disjoint")
+    bound_paths = [
+        *file_paths,
+        *(f"{root['seed_corpus']['path']}/{entry['path']}" for entry in root["seed_corpus"]["entries"]),
+        *(f"{root['artifacts']['path']}/{entry['path']}" for entry in root["artifacts"]["entries"]),
+    ]
+    if len(set(bound_paths)) != len(bound_paths):
+        raise CampaignValidationError("one evidence file cannot satisfy multiple roles")
+
+
+def validate_campaign(
+    receipt: dict[str, Any], evidence_root: Path, expected_patchy_sha: str
+) -> None:
     root = _closed(receipt, ROOT_KEYS, "receipt")
     if root["receipt_version"] != RECEIPT_VERSION or root["status"] not in {"PASS", "FAIL"}:
         raise CampaignValidationError("receipt version or status is invalid")
     if not isinstance(root["patchy_git_sha"], str) or GIT_SHA_RE.fullmatch(root["patchy_git_sha"]) is None:
         raise CampaignValidationError("patchy_git_sha is invalid")
+    if not isinstance(expected_patchy_sha, str) or GIT_SHA_RE.fullmatch(expected_patchy_sha) is None:
+        raise CampaignValidationError("expected Patchy SHA is invalid")
+    if root["patchy_git_sha"] != expected_patchy_sha:
+        raise CampaignValidationError("patchy_git_sha does not match the expected source")
     if type(root["patchy_dirty"]) is not bool:
         raise CampaignValidationError("patchy_dirty must be boolean")
     target = _closed(root["target"], {"name", "binary"}, "target")
@@ -249,7 +281,9 @@ def validate_campaign(receipt: dict[str, Any], evidence_root: Path) -> None:
     for key, (minimum, maximum) in bounds.items():
         _integer(config[key], minimum, maximum, f"config.{key}")
     _validate_file(root["dictionary"], evidence_root, "dictionary")
-    _validate_tree(root["seed_corpus"], evidence_root, "seed_corpus")
+    seed_count = _validate_tree(root["seed_corpus"], evidence_root, "seed_corpus")
+    if seed_count < 1:
+        raise CampaignValidationError("seed_corpus must not be empty")
     log = _validate_file(root["log"], evidence_root, "log", MAX_LOG_BYTES)
     try:
         log.decode("utf-8")
@@ -258,6 +292,7 @@ def validate_campaign(receipt: dict[str, Any], evidence_root: Path) -> None:
     if b"\0" in log or UNSAFE_LOG_RE.search(log):
         raise CampaignValidationError("log is not public-safe")
     artifact_count = _validate_tree(root["artifacts"], evidence_root, "artifacts")
+    _validate_role_separation(root)
     expected_files = {
         target["binary"]["path"], root["dictionary"]["path"], root["log"]["path"],
         *(f"{root['seed_corpus']['path']}/{entry['path']}" for entry in root["seed_corpus"]["entries"]),
@@ -292,6 +327,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("receipt", type=Path)
     parser.add_argument("evidence_root", type=Path)
+    parser.add_argument("--expected-patchy-sha", required=True)
     parser.add_argument("--check", type=Path)
     return parser.parse_args(argv)
 
@@ -300,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     try:
         receipt, _ = load_receipt(args.receipt)
-        validate_campaign(receipt, args.evidence_root)
+        validate_campaign(receipt, args.evidence_root, args.expected_patchy_sha)
         canonical = canonical_json_bytes(receipt)
         if args.check is not None and _regular_bytes(args.check, MAX_JSON_BYTES, "--check") != canonical:
             raise CampaignValidationError("--check receipt is not canonical and byte-identical")

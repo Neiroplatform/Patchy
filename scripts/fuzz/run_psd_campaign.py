@@ -151,6 +151,24 @@ def run_campaign(executable: Path, seed_source: Path, dictionary: Path, patchy_s
                  evidence_root: Path, receipt_path: Path) -> dict[str, Any]:
     if os.path.lexists(evidence_root) or os.path.lexists(receipt_path):
         raise CampaignValidationError("evidence root and receipt must be new paths")
+    try:
+        evidence_location = evidence_root.resolve(strict=False)
+        receipt_location = receipt_path.resolve(strict=False)
+        source_location = patchy_source.resolve(strict=True)
+    except OSError as error:
+        raise CampaignValidationError("could not resolve campaign output/source locations") from error
+    try:
+        receipt_location.relative_to(evidence_location)
+    except ValueError:
+        pass
+    else:
+        raise CampaignValidationError("receipt must be outside the closed evidence root")
+    for output_location in (evidence_location, receipt_location):
+        try:
+            output_location.relative_to(source_location)
+        except ValueError:
+            continue
+        raise CampaignValidationError("campaign evidence and receipt must be outside the Patchy worktree")
     revision, dirty = _git_identity(patchy_source)
     if dirty:
         raise CampaignValidationError("Patchy source must be clean before an evidence run")
@@ -219,7 +237,7 @@ def run_campaign(executable: Path, seed_source: Path, dictionary: Path, patchy_s
         "result": result,
         "failure_reasons": reasons,
     }
-    validate_campaign(receipt, evidence_root)
+    validate_campaign(receipt, evidence_root, revision)
     receipt_path.write_bytes(canonical_json_bytes(receipt))
     return receipt
 

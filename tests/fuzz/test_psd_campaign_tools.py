@@ -30,6 +30,12 @@ class CampaignToolsTests(unittest.TestCase):
         (self.source / "README").write_text("fixture\n", encoding="utf-8")
         subprocess.run(["git", "-C", self.source, "add", "README"], check=True)
         subprocess.run(["git", "-C", self.source, "commit", "-qm", "fixture"], check=True)
+        self.source_sha = subprocess.run(
+            ["git", "-C", self.source, "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         self.seeds = self.base / "seeds"
         self.seeds.mkdir()
         (self.seeds / "valid.psd").write_bytes(b"8BPS\x00\x01")
@@ -80,7 +86,10 @@ class CampaignToolsTests(unittest.TestCase):
 
     def _validate(self, receipt: Path, evidence: Path, *extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, os.fspath(VALIDATOR), os.fspath(receipt), os.fspath(evidence), *extra],
+            [
+                sys.executable, os.fspath(VALIDATOR), os.fspath(receipt), os.fspath(evidence),
+                "--expected-patchy-sha", self.source_sha, *extra,
+            ],
             capture_output=True, text=True, check=False,
         )
 
@@ -160,6 +169,57 @@ class CampaignToolsTests(unittest.TestCase):
         self.assertEqual(first.returncode, 0, first.stderr)
         second, _, _ = self._run(suffix="reuse")
         self.assertEqual(second.returncode, 2)
+
+    def test_receipt_must_be_outside_evidence_and_both_outputs_outside_source(self) -> None:
+        evidence = self.base / "evidence-nested-receipt"
+        result = subprocess.run(
+            [
+                sys.executable, os.fspath(RUNNER),
+                "--executable", os.fspath(self.executable),
+                "--seed-corpus", os.fspath(self.seeds),
+                "--dictionary", os.fspath(self.dictionary),
+                "--patchy-source", os.fspath(self.source),
+                "--evidence-root", os.fspath(evidence),
+                "--receipt", os.fspath(evidence / "receipt.json"),
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(evidence.exists())
+
+        result = subprocess.run(
+            [
+                sys.executable, os.fspath(RUNNER),
+                "--executable", os.fspath(self.executable),
+                "--seed-corpus", os.fspath(self.seeds),
+                "--dictionary", os.fspath(self.dictionary),
+                "--patchy-source", os.fspath(self.source),
+                "--evidence-root", os.fspath(self.source / "evidence"),
+                "--receipt", os.fspath(self.base / "receipt-in-source.json"),
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse((self.source / "evidence").exists())
+
+    def test_validator_requires_expected_source_and_distinct_roles(self) -> None:
+        _, evidence, receipt = self._run(suffix="bindings")
+        wrong_sha = subprocess.run(
+            [
+                sys.executable, os.fspath(VALIDATOR), os.fspath(receipt), os.fspath(evidence),
+                "--expected-patchy-sha", "0" * 40,
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(wrong_sha.returncode, 2)
+
+        value = json.loads(receipt.read_text(encoding="utf-8"))
+        (evidence / "inputs/psd.dict").unlink()
+        value["dictionary"] = value["target"]["binary"]
+        receipt.write_text(json.dumps(value), encoding="utf-8")
+        collision = self._validate(receipt, evidence)
+        self.assertEqual(collision.returncode, 2)
+        self.assertIn("distinct paths", collision.stderr)
 
     def test_symlink_input_and_private_locator_log_are_rejected(self) -> None:
         link = self.base / "dictionary-link"
