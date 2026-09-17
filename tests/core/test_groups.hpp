@@ -19,6 +19,7 @@ std::vector<patchy::test::TestCase> smart_objects_warp_tests();
 std::vector<patchy::test::TestCase> smart_filter_pixels_tests();
 std::vector<patchy::test::TestCase> smart_filter_descriptors_tests();
 std::vector<patchy::test::TestCase> psd_writer_stability_tests();
+std::vector<patchy::test::TestCase> psd_atomic_save_tests();
 std::vector<patchy::test::TestCase> psd_save_resource_budget_tests();
 std::vector<patchy::test::TestCase> pattern_styles_fixtures_tests();
 std::vector<patchy::test::TestCase> adjustments_curves_tests();
@@ -48,3 +49,6 @@ std::vector<patchy::test::TestCase> pdf_tests();
 std::vector<patchy::test::TestCase> af_format_tests();
 std::vector<patchy::test::TestCase> composite_corpus_tests();
 std::vector<patchy::test::TestCase> translation_marker_tests();
+
+void set_psd_atomic_save_test_executable(const char* executable);
+int run_psd_atomic_save_crash_probe(const char* destination);

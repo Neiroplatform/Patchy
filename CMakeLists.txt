@@ -306,6 +306,8 @@ add_library(patchy_psd
   src/psd/grd_io.cpp
   src/psd/pat_reader.cpp
   src/psd/psd_adjustments.cpp
+  src/psd/psd_atomic_file.cpp
+  src/psd/psd_atomic_file_internal.hpp
   src/psd/psd_binary.cpp
   src/psd/psd_channel_data.cpp
   src/psd/psd_descriptor.cpp
@@ -322,6 +324,11 @@ add_library(patchy_psd
   src/psd/psd_text_write.cpp
   src/psd/psd_vector.cpp
 )
+if(WIN32)
+  target_sources(patchy_psd PRIVATE src/psd/psd_atomic_file_win.cpp)
+else()
+  target_sources(patchy_psd PRIVATE src/psd/psd_atomic_file_posix.cpp)
+endif()
 target_link_libraries(patchy_psd PUBLIC patchy_core patchy_render patchy_color)
 if(WIN32)
   target_link_libraries(patchy_psd PUBLIC dwrite gdi32)
@@ -1532,6 +1539,7 @@ if(PATCHY_BUILD_TESTS)
     tests/core/photo_divide_tests.cpp
     tests/core/pixel_tools_tests.cpp
     tests/core/psd_core_io_tests.cpp
+    tests/core/psd_atomic_save_tests.cpp
     tests/core/psd_parse_budget_tests.cpp
     tests/core/psd_save_resource_budget_tests.cpp
     tests/core/psd_structure_tests.cpp
