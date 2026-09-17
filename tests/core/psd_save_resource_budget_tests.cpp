@@ -1,7 +1,9 @@
 #include "core/document.hpp"
 #include "core/layer.hpp"
+#include "core/layer_metadata.hpp"
 #include "core/smart_object.hpp"
 #include "core/vector_compound.hpp"
+#include "core/vector_live_shapes.hpp"
 #include "psd/psd_io_internal.hpp"
 #include "psd/psd_save_budget_internal.hpp"
 
@@ -12,7 +14,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1802,6 +1806,727 @@ void psd_save_adjustment_payload_reaches_public_live_budget() {
   }
 }
 
+template <typename BuildPayload>
+void check_layer_payload_budget_matches_bytes(
+    std::span<const std::uint8_t> expected, BuildPayload&& build_payload,
+    bool expect_nested_peak = false) {
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  std::uint64_t exact_peak = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        std::numeric_limits<std::uint64_t>::max(), &current, &high_water);
+    const auto payload = build_payload(tracker);
+    CHECK(payload.bytes.size() == expected.size());
+    CHECK(std::equal(payload.bytes.begin(), payload.bytes.end(),
+                     expected.begin(), expected.end()));
+    CHECK(current == payload.bytes.size());
+    CHECK(high_water >= current);
+    if (expect_nested_peak) {
+      CHECK(high_water > current);
+    }
+    exact_peak = high_water;
+  }
+  CHECK(current == 0U);
+
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(exact_peak, &current,
+                                                &high_water);
+    const auto payload = build_payload(tracker);
+    CHECK(payload.bytes.size() == expected.size());
+    CHECK(std::equal(payload.bytes.begin(), payload.bytes.end(),
+                     expected.begin(), expected.end()));
+    CHECK(high_water == exact_peak);
+  }
+  CHECK(current == 0U);
+
+  for (const auto limit :
+       std::array<std::uint64_t, 2>{exact_peak - 1U, 0U}) {
+    current = 0U;
+    high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &current,
+                                                  &high_water);
+      (void)build_payload(tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water <= limit);
+  }
+}
+
+void psd_save_luni_and_lfx2_payloads_own_budget() {
+  const std::string name = "A\xF0\x9F\x99\x82";
+  const auto legacy_luni = patchy::psd::unicode_string_payload(name);
+  CHECK(legacy_luni.size() == 10U);
+  check_layer_payload_budget_matches_bytes(
+      legacy_luni,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::unicode_string_payload_tracked(name, tracker);
+      },
+      true);
+
+  patchy::LayerStyle style;
+  patchy::LayerGradientFill fill;
+  fill.enabled = true;
+  fill.gradient.form = patchy::GradientDefinitionForm::Noise;
+  for (int index = 0; index < 64; ++index) {
+    const auto location = static_cast<float>(63 - index) / 63.0F;
+    fill.gradient.color_stops.push_back(patchy::GradientColorStop{
+        location,
+        patchy::RgbColor{static_cast<std::uint8_t>(index), 40U, 90U}});
+    fill.gradient.alpha_stops.push_back(
+        patchy::GradientAlphaStop{location, index % 2 == 0 ? 0.25F : 1.0F});
+  }
+  style.gradient_fills.push_back(fill);
+  patchy::LayerStroke gradient_stroke;
+  gradient_stroke.enabled = true;
+  gradient_stroke.uses_gradient = true;
+  gradient_stroke.size = 4.0F;
+  // Empty stop arrays deliberately exercise the two-stop normalization path.
+  style.strokes.push_back(gradient_stroke);
+  const auto legacy_lfx2 =
+      patchy::psd::photoshop_lfx2_layer_style_payload(style);
+  check_layer_payload_budget_matches_bytes(
+      legacy_lfx2,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_lfx2_layer_style_payload_tracked(
+            style, tracker);
+      },
+      true);
+}
+
+void psd_save_patched_fill_opacity_owns_budget() {
+  constexpr std::array<std::uint8_t, 4> kOriginal{
+      0xEEU, 0xA1U, 0xB2U, 0xC3U};
+  constexpr std::array<std::uint8_t, 4> kExpected{
+      0x80U, 0xA1U, 0xB2U, 0xC3U};
+  constexpr std::uint64_t kExpectedHash = 0xaa3ab6adc3791f41ULL;
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(4U, &current, &high_water);
+    const auto payload =
+        patchy::psd::patched_fill_opacity_payload_tracked(
+            kOriginal, kExpected[0], tracker);
+    CHECK(std::equal(payload.bytes.begin(), payload.bytes.end(),
+                     kExpected.begin(), kExpected.end()));
+    CHECK(patchy::test::fnv1a_hash_bytes(payload.bytes) == kExpectedHash);
+    CHECK(current == 4U);
+    CHECK(high_water == 4U);
+  }
+  CHECK(current == 0U);
+
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(11U, &current, &high_water);
+    auto enclosing_extra = tracker.reserve(7U);
+    {
+      const auto payload =
+          patchy::psd::patched_fill_opacity_payload_tracked(
+              kOriginal, kExpected[0], tracker);
+      CHECK(current == 11U);
+      CHECK(high_water == 11U);
+    }
+    CHECK(current == 7U);
+  }
+  CHECK(current == 0U);
+
+  for (const auto limit : std::array<std::uint64_t, 2>{3U, 0U}) {
+    current = 0U;
+    high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &current,
+                                                  &high_water);
+      (void)patchy::psd::patched_fill_opacity_payload_tracked(
+          kOriginal, kExpected[0], tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water <= limit);
+  }
+}
+
+void psd_save_vector_and_placed_payloads_own_budget() {
+  patchy::LiveShapeParams live_rect;
+  live_rect.kind = patchy::LiveShapeKind::Rectangle;
+  live_rect.left = 8.0;
+  live_rect.top = 6.0;
+  live_rect.right = 44.0;
+  live_rect.bottom = 30.0;
+  live_rect.index = 0;
+  patchy::populate_live_shape_box_corners(live_rect);
+  patchy::VectorPath path;
+  path.subpaths = patchy::generate_live_shape_subpaths(live_rect);
+  const auto legacy_mask = patchy::psd::vector_mask_block_payload(
+      path, true, false, true, 64, 48);
+  check_layer_payload_budget_matches_bytes(
+      legacy_mask,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_mask_block_payload_tracked(
+            path, true, false, true, 64, 48, tracker);
+      });
+
+  patchy::VectorFill fill;
+  fill.kind = patchy::VectorFillKind::Solid;
+  fill.color = patchy::RgbColor{17, 34, 51};
+  const auto legacy_fill =
+      patchy::psd::vector_fill_block_payload(fill, nullptr);
+  check_layer_payload_budget_matches_bytes(
+      legacy_fill,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_fill_block_payload_tracked(
+            fill, nullptr, tracker);
+      });
+
+  patchy::VectorStroke stroke;
+  stroke.enabled = true;
+  stroke.width = 3.5;
+  stroke.dashes = {2.0, 1.0};
+  stroke.content.kind = patchy::VectorFillKind::Solid;
+  stroke.content.color = patchy::RgbColor{90, 120, 210};
+  const auto legacy_stroke =
+      patchy::psd::vector_stroke_block_payload(stroke, nullptr);
+  check_layer_payload_budget_matches_bytes(
+      legacy_stroke,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_stroke_block_payload_tracked(
+            stroke, nullptr, tracker);
+      });
+
+  const std::array<patchy::LiveShapeParams, 1> origination{live_rect};
+  const auto legacy_origination =
+      patchy::psd::vector_origination_block_payload(origination, nullptr);
+  check_layer_payload_budget_matches_bytes(
+      legacy_origination,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_origination_block_payload_tracked(
+            origination, nullptr, tracker);
+      });
+
+  // Preserved branches must own their raw copy just like generated branches.
+  const patchy::UnknownPsdBlock preserved_fill{
+      patchy::psd::vector_fill_block_key(fill.kind), legacy_fill};
+  const patchy::UnknownPsdBlock preserved_stroke{"vstk", legacy_stroke};
+  const patchy::UnknownPsdBlock preserved_origination{"vogk",
+                                                       legacy_origination};
+  check_layer_payload_budget_matches_bytes(
+      legacy_fill,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_fill_block_payload_tracked(
+            fill, &preserved_fill, tracker);
+      });
+  check_layer_payload_budget_matches_bytes(
+      legacy_stroke,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_stroke_block_payload_tracked(
+            stroke, &preserved_stroke, tracker);
+      });
+  check_layer_payload_budget_matches_bytes(
+      legacy_origination,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_origination_block_payload_tracked(
+            origination, &preserved_origination, tracker);
+      });
+
+  auto patched_fill = fill;
+  patched_fill.color = patchy::RgbColor{70, 80, 90};
+  const auto legacy_patched_fill =
+      patchy::psd::vector_fill_block_payload(patched_fill, &preserved_fill);
+  check_layer_payload_budget_matches_bytes(
+      legacy_patched_fill,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_fill_block_payload_tracked(
+            patched_fill, &preserved_fill, tracker);
+      },
+      true);
+
+  auto patched_stroke = stroke;
+  patched_stroke.width = 7.0;
+  const auto legacy_patched_stroke =
+      patchy::psd::vector_stroke_block_payload(patched_stroke,
+                                                &preserved_stroke);
+  check_layer_payload_budget_matches_bytes(
+      legacy_patched_stroke,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_stroke_block_payload_tracked(
+            patched_stroke, &preserved_stroke, tracker);
+      },
+      true);
+
+  auto patched_origination = origination;
+  patched_origination[0].right += 2.0;
+  const auto legacy_patched_origination =
+      patchy::psd::vector_origination_block_payload(
+          patched_origination, &preserved_origination);
+  check_layer_payload_budget_matches_bytes(
+      legacy_patched_origination,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_origination_block_payload_tracked(
+            patched_origination, &preserved_origination, tracker);
+      });
+
+  patchy::psd::DescriptorObject custom_descriptor;
+  custom_descriptor.class_id = "null";
+  patchy::psd::DescriptorValue custom_raw;
+  custom_raw.type = patchy::psd::DescriptorValue::Type::Raw;
+  custom_raw.raw_value.resize(4096U, 0x5AU);
+  custom_descriptor.key_order.push_back({"Data", false});
+  custom_descriptor.values.emplace("Data", std::move(custom_raw));
+  patchy::psd::BigEndianWriter custom_writer;
+  patchy::psd::write_descriptor(custom_writer, custom_descriptor);
+  patchy::LiveShapeParams custom_shape;
+  custom_shape.kind = patchy::LiveShapeKind::Custom;
+  custom_shape.index = 0;
+  custom_shape.raw_descriptor = std::move(custom_writer).take_bytes();
+  const std::array<patchy::LiveShapeParams, 1> custom_origination{
+      std::move(custom_shape)};
+  const auto legacy_custom_origination =
+      patchy::psd::vector_origination_block_payload(custom_origination,
+                                                     nullptr);
+  check_layer_payload_budget_matches_bytes(
+      legacy_custom_origination,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::vector_origination_block_payload_tracked(
+            custom_origination, nullptr, tracker);
+      },
+      true);
+
+  std::uint64_t coverage_current = 0U;
+  std::uint64_t coverage_peak = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        custom_origination[0].raw_descriptor.size(), &coverage_current,
+        &coverage_peak);
+    CHECK(patchy::psd::origination_covers_path_groups(
+        path, custom_origination, &tracker));
+  }
+  CHECK(coverage_current == 0U);
+  CHECK(coverage_peak == custom_origination[0].raw_descriptor.size());
+  bool coverage_rejected = false;
+  try {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        custom_origination[0].raw_descriptor.size() - 1U,
+        &coverage_current, &coverage_peak);
+    (void)patchy::psd::origination_covers_path_groups(
+        path, custom_origination, &tracker);
+  } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+    coverage_rejected = true;
+  }
+  CHECK(coverage_rejected);
+  CHECK(coverage_current == 0U);
+
+  // Two returned payload owners can be staged at once by the layer writer.
+  std::uint64_t staged_current = 0U;
+  std::uint64_t staged_peak = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        std::numeric_limits<std::uint64_t>::max(), &staged_current,
+        &staged_peak);
+    const auto fill_owner =
+        patchy::psd::vector_fill_block_payload_tracked(fill, nullptr, tracker);
+    const auto mask_owner = patchy::psd::vector_mask_block_payload_tracked(
+        path, false, false, false, 64, 48, tracker);
+    CHECK(staged_current == fill_owner.bytes.size() + mask_owner.bytes.size());
+    CHECK(staged_peak >= staged_current);
+  }
+  CHECK(staged_current == 0U);
+  CHECK(staged_peak > std::max(legacy_fill.size(), legacy_mask.size()));
+  staged_current = 0U;
+  std::uint64_t rejected_peak = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        staged_peak - 1U, &staged_current, &rejected_peak);
+    const auto fill_owner =
+        patchy::psd::vector_fill_block_payload_tracked(fill, nullptr, tracker);
+    bool staged_rejected = false;
+    try {
+      (void)patchy::psd::vector_mask_block_payload_tracked(
+          path, false, false, false, 64, 48, tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      staged_rejected = true;
+    }
+    CHECK(staged_rejected);
+    CHECK(staged_current == fill_owner.bytes.size());
+    CHECK(rejected_peak <= staged_peak - 1U);
+  }
+  CHECK(staged_current == 0U);
+
+  patchy::SmartObjectPlacement placement;
+  placement.uuid = "source-uuid";
+  placement.transform = {1.0, 2.0, 21.0, 2.0, 21.0, 12.0, 1.0, 12.0};
+  placement.width = 20.0;
+  placement.height = 10.0;
+  placement.resolution = 72.0;
+  const auto source = patchy::psd::author_placed_layer_sold_payload(
+      placement, "placed-uuid", nullptr);
+  placement.transform[0] += 5.0;
+  placement.transform[1] += 3.0;
+  const auto legacy_placed = patchy::psd::regenerate_placed_layer_payload(
+      "SoLd", source, placement, nullptr, "placed-uuid", {});
+  CHECK(legacy_placed.has_value());
+  check_layer_payload_budget_matches_bytes(
+      *legacy_placed,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        auto payload = patchy::psd::regenerate_placed_layer_payload_tracked(
+            "SoLd", source, placement, nullptr, "placed-uuid", {}, tracker);
+        CHECK(payload.has_value());
+        return std::move(*payload);
+      });
+
+  const auto legacy_sole = patchy::psd::regenerate_placed_layer_payload(
+      "SoLE", source, placement, nullptr, "placed-uuid", {});
+  CHECK(legacy_sole.has_value());
+  check_layer_payload_budget_matches_bytes(
+      *legacy_sole,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        auto payload = patchy::psd::regenerate_placed_layer_payload_tracked(
+            "SoLE", source, placement, nullptr, "placed-uuid", {}, tracker);
+        CHECK(payload.has_value());
+        return std::move(*payload);
+      });
+
+  patchy::psd::BigEndianWriter plld_writer;
+  for (const char ch : {'p', 'l', 'c', 'L'}) {
+    plld_writer.write_u8(static_cast<std::uint8_t>(ch));
+  }
+  plld_writer.write_u32(3U);
+  const std::string old_uuid = "old-placed-uuid";
+  plld_writer.write_u8(static_cast<std::uint8_t>(old_uuid.size()));
+  for (const char ch : old_uuid) {
+    plld_writer.write_u8(static_cast<std::uint8_t>(ch));
+  }
+  plld_writer.write_u32(1U);
+  plld_writer.write_u32(1U);
+  plld_writer.write_u32(0U);
+  plld_writer.write_u32(1U);
+  for (const auto value :
+       std::array<double, 8>{0.0, 0.0, 20.0, 0.0, 20.0, 10.0, 0.0, 10.0}) {
+    patchy::psd::write_f64(plld_writer, value);
+  }
+  plld_writer.write_u32(0x01020304U);
+  const auto plld_source = std::move(plld_writer).take_bytes();
+  for (const std::string_view key : {"PlLd", "plLd"}) {
+    const auto legacy = patchy::psd::regenerate_placed_layer_payload(
+        key, plld_source, placement, nullptr, "placed-uuid", {});
+    CHECK(legacy.has_value());
+    CHECK(legacy->size() >= 4U);
+    CHECK((*legacy)[legacy->size() - 4U] == 0x01U);
+    CHECK((*legacy)[legacy->size() - 3U] == 0x02U);
+    CHECK((*legacy)[legacy->size() - 2U] == 0x03U);
+    CHECK((*legacy)[legacy->size() - 1U] == 0x04U);
+    check_layer_payload_budget_matches_bytes(
+        *legacy,
+        [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+          auto payload =
+              patchy::psd::regenerate_placed_layer_payload_tracked(
+                  key, plld_source, placement, nullptr, "placed-uuid", {},
+                  tracker);
+          CHECK(payload.has_value());
+          return std::move(*payload);
+        });
+  }
+
+  for (const std::string_view key : {"SoLd", "SoLE", "PlLd", "plLd"}) {
+    std::uint64_t malformed_current = 0U;
+    std::uint64_t malformed_peak = 0U;
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        0U, &malformed_current, &malformed_peak);
+    CHECK(!patchy::psd::regenerate_placed_layer_payload_tracked(
+               key, std::array<std::uint8_t, 3>{1U, 2U, 3U}, placement,
+               nullptr, "placed-uuid", {}, tracker)
+               .has_value());
+    CHECK(malformed_current == 0U);
+    CHECK(malformed_peak == 0U);
+  }
+}
+
+void psd_save_tysh_payload_owns_budget_and_unwinds() {
+  patchy::Layer layer(1U, "Text", patchy::test::solid_rgba(
+                                      80, 32, 0U, 0U, 0U, 0U));
+  layer.set_bounds(patchy::Rect{4, 6, 80, 32});
+  layer.metadata()[patchy::kLayerMetadataText] = "Hi\xF0\x9F\x99\x82";
+  layer.metadata()[patchy::kLayerMetadataTextRuns] =
+      "v1\n0\t4\t24\t0\t0\t#112233\tArial";
+  layer.metadata()[patchy::kLayerMetadataTextParagraphRuns] =
+      "v1\n0\t4\tleft";
+  layer.metadata()[patchy::kLayerMetadataTextFont] = "Arial";
+  layer.metadata()[patchy::kLayerMetadataTextSize] = "24";
+  layer.metadata()[patchy::kLayerMetadataTextColor] = "#112233";
+  layer.metadata()[patchy::kLayerMetadataTextRasterStatus] = "patchy_raster";
+
+  const auto legacy = patchy::psd::photoshop_type_tool_payload_for_layer(
+      layer, layer.bounds());
+  CHECK(legacy.has_value());
+  CHECK((legacy->size() % 2U) == 0U);
+  check_layer_payload_budget_matches_bytes(
+      *legacy,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        auto payload =
+            patchy::psd::photoshop_type_tool_payload_for_layer_tracked(
+                layer, layer.bounds(), tracker);
+        CHECK(payload.has_value());
+        return std::move(*payload);
+      },
+      true);
+
+  // Imported same-length text exercises template extraction, unescape
+  // ownership, old/new UTF-16 owners, and the copied TySh payload together.
+  patchy::Layer templated = layer;
+  templated.metadata()[patchy::kLayerMetadataText] =
+      "Ho\xF0\x9F\x99\x82";
+  templated.metadata()[patchy::kLayerMetadataTextSourceBlock] = "TySh";
+  templated.metadata()[patchy::kLayerMetadataTextRasterStatus] =
+      "psd_raster_preview";
+  templated.unknown_psd_blocks().push_back(
+      patchy::UnknownPsdBlock{"TySh", *legacy});
+  const auto legacy_templated =
+      patchy::psd::photoshop_type_tool_payload_for_layer(
+          templated, templated.bounds());
+  CHECK(legacy_templated.has_value());
+  CHECK(*legacy_templated != *legacy);
+  check_layer_payload_budget_matches_bytes(
+      *legacy_templated,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        auto payload =
+            patchy::psd::photoshop_type_tool_payload_for_layer_tracked(
+                templated, templated.bounds(), tracker);
+        CHECK(payload.has_value());
+        return std::move(*payload);
+      },
+      true);
+
+  // Malformed and no-match templates must fall back to a fresh authored TySh
+  // without leaking a failed candidate's reservation.
+  patchy::Layer malformed = templated;
+  malformed.unknown_psd_blocks().clear();
+  malformed.unknown_psd_blocks().push_back(
+      patchy::UnknownPsdBlock{"TySh", {1U, 2U, 3U}});
+  const auto malformed_fallback =
+      patchy::psd::photoshop_type_tool_payload_for_layer(
+          malformed, malformed.bounds());
+  CHECK(malformed_fallback.has_value());
+  check_layer_payload_budget_matches_bytes(
+      *malformed_fallback,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        auto payload =
+            patchy::psd::photoshop_type_tool_payload_for_layer_tracked(
+                malformed, malformed.bounds(), tracker);
+        CHECK(payload.has_value());
+        return std::move(*payload);
+      },
+      true);
+
+  patchy::Layer no_match = templated;
+  no_match.metadata()[patchy::kLayerMetadataText] = "Longer text";
+  const auto no_match_fallback =
+      patchy::psd::photoshop_type_tool_payload_for_layer(
+          no_match, no_match.bounds());
+  CHECK(no_match_fallback.has_value());
+  check_layer_payload_budget_matches_bytes(
+      *no_match_fallback,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        auto payload =
+            patchy::psd::photoshop_type_tool_payload_for_layer_tracked(
+                no_match, no_match.bounds(), tracker);
+        CHECK(payload.has_value());
+        return std::move(*payload);
+      },
+      true);
+}
+
+patchy::Document make_generated_layer_payload_budget_document() {
+  patchy::Document document(96, 48, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer(
+      "Base", patchy::test::solid_rgb(96, 48, 8U, 12U, 16U));
+  patchy::Layer text_layer(
+      document.allocate_layer_id(), "Text \xF0\x9F\x99\x82",
+      patchy::test::solid_rgba(80, 32, 0U, 0U, 0U, 0U));
+  text_layer.set_bounds(patchy::Rect{4, 6, 80, 32});
+  text_layer.metadata()[patchy::kLayerMetadataText] = "Hi\xF0\x9F\x99\x82";
+  text_layer.metadata()[patchy::kLayerMetadataTextRuns] =
+      "v1\n0\t4\t24\t0\t0\t#112233\tArial";
+  text_layer.metadata()[patchy::kLayerMetadataTextParagraphRuns] =
+      "v1\n0\t4\tleft";
+  text_layer.metadata()[patchy::kLayerMetadataTextFont] = "Arial";
+  text_layer.metadata()[patchy::kLayerMetadataTextSize] = "24";
+  text_layer.metadata()[patchy::kLayerMetadataTextColor] = "#112233";
+  text_layer.metadata()[patchy::kLayerMetadataTextRasterStatus] =
+      "patchy_raster";
+  patchy::LayerColorOverlay overlay;
+  overlay.enabled = true;
+  overlay.color = patchy::RgbColor{90U, 40U, 180U};
+  text_layer.layer_style().color_overlays.push_back(overlay);
+  text_layer.set_fill_opacity(0.5F);
+  text_layer.unknown_psd_blocks().push_back(
+      patchy::UnknownPsdBlock{"iOpa", {0xEEU, 0xA1U, 0xB2U, 0xC3U}});
+  document.add_layer(std::move(text_layer));
+
+  patchy::Layer vector_layer(document.allocate_layer_id(), "Vector",
+                             patchy::PixelBuffer());
+  vector_layer.metadata()[patchy::kLayerMetadataVectorShape] = "1";
+  patchy::VectorShapeContent vector_content;
+  vector_content.fill.kind = patchy::VectorFillKind::Solid;
+  vector_content.fill.color = patchy::RgbColor{17U, 34U, 51U};
+  patchy::PathSubpath subpath;
+  subpath.closed = true;
+  subpath.anchors = {
+      patchy::PathAnchor{12.0, 10.0, 12.0, 10.0, 12.0, 10.0, false},
+      patchy::PathAnchor{60.0, 10.0, 60.0, 10.0, 60.0, 10.0, false},
+      patchy::PathAnchor{36.0, 38.0, 36.0, 38.0, 36.0, 38.0, false}};
+  vector_content.path.subpaths.push_back(std::move(subpath));
+  vector_content.stroke.enabled = true;
+  vector_content.stroke.width = 2.0;
+  vector_content.stroke.content.kind = patchy::VectorFillKind::Solid;
+  vector_content.stroke.content.color = patchy::RgbColor{220U, 180U, 20U};
+  patchy::LiveShapeParams live_shape;
+  live_shape.kind = patchy::LiveShapeKind::Rectangle;
+  live_shape.left = 12.0;
+  live_shape.top = 10.0;
+  live_shape.right = 60.0;
+  live_shape.bottom = 38.0;
+  live_shape.index = 0;
+  patchy::populate_live_shape_box_corners(live_shape);
+  vector_content.origination.push_back(live_shape);
+  vector_layer.set_vector_shape(std::move(vector_content));
+  document.add_layer(std::move(vector_layer));
+
+  patchy::Layer placed_layer(
+      document.allocate_layer_id(), "Placed",
+      patchy::test::solid_rgba(20, 10, 20U, 30U, 40U, 255U));
+  placed_layer.set_bounds(patchy::Rect{20, 16, 20, 10});
+  document.metadata().smart_objects.add_embedded(
+      "source-uuid", "source.psb", "8BPB",
+      std::make_shared<const std::vector<std::uint8_t>>(
+          patchy::test::odd_composite_mini_psb()));
+  patchy::SmartObjectPlacement placement;
+  placement.uuid = "source-uuid";
+  placement.transform = {20.0, 16.0, 40.0, 16.0, 40.0, 26.0, 20.0, 26.0};
+  placement.width = 20.0;
+  placement.height = 10.0;
+  placement.resolution = 72.0;
+  patchy::set_layer_smart_object_metadata(
+      placed_layer, placement, "placed-uuid", "SoLd", "",
+      patchy::kSmartObjectRasterStatusPhotoshop);
+  placed_layer.unknown_psd_blocks().push_back(patchy::UnknownPsdBlock{
+      "SoLd", patchy::psd::author_placed_layer_sold_payload(
+                  placement, "placed-uuid", nullptr)});
+  placement.transform[0] += 1.0;
+  placement.transform[1] += 1.0;
+  patchy::store_smart_object_placement(placed_layer, placement);
+  patchy::mark_layer_smart_object_block_dirty(placed_layer);
+  document.add_layer(std::move(placed_layer));
+
+  patchy::AdjustmentSettings levels;
+  levels.kind = patchy::AdjustmentKind::Levels;
+  levels.levels.red.black_output = 24;
+  patchy::Layer adjustment(document.allocate_layer_id(), "Levels",
+                           patchy::LayerKind::Adjustment);
+  adjustment.set_bounds(
+      patchy::Rect::from_size(document.width(), document.height()));
+  patchy::configure_adjustment_layer(adjustment, levels);
+  document.add_layer(std::move(adjustment));
+  return document;
+}
+
+void psd_save_generated_layer_payloads_reach_public_budget() {
+  const auto document = make_generated_layer_payload_budget_document();
+  struct Expected {
+    bool large_document;
+    std::size_t output_bytes;
+    std::uint64_t output_hash;
+    std::uint64_t exact_peak;
+  };
+  constexpr std::array expected_cases{
+      Expected{false, 11440U, 0xa46a8dbbd3169900ULL, 83164U},
+      Expected{true, 12424U, 0x74b0d895c5bb7ad7ULL, 85452U},
+  };
+  for (const auto& expected : expected_cases) {
+    patchy::psd::SaveUsage measured_usage;
+    patchy::psd::WriteOptions measured_options;
+    measured_options.large_document = expected.large_document;
+    measured_options.usage = &measured_usage;
+    const auto baseline = patchy::psd::DocumentIo::write_layered_rgb8(
+        document, measured_options);
+    CHECK(baseline.size() == expected.output_bytes);
+    CHECK(patchy::test::fnv1a_hash_bytes(baseline) == expected.output_hash);
+    CHECK(measured_usage.tracked_live_bytes == 0U);
+    CHECK(measured_usage.tracked_live_bytes_high_water == expected.exact_peak);
+
+    const auto reopened = patchy::psd::DocumentIo::read(baseline);
+    CHECK(reopened.layers().size() == 5U);
+    const auto* reopened_text =
+        patchy::test::find_layer_named(reopened.layers(),
+                                       "Text \xF0\x9F\x99\x82");
+    const auto* reopened_vector =
+        patchy::test::find_layer_named(reopened.layers(), "Vector");
+    const auto* reopened_placed =
+        patchy::test::find_layer_named(reopened.layers(), "Placed");
+    const auto* reopened_adjustment =
+        patchy::test::find_layer_named(reopened.layers(), "Levels");
+    CHECK(reopened_text != nullptr);
+    CHECK(reopened_text->metadata().contains(patchy::kLayerMetadataText));
+    CHECK(reopened_text->metadata().at(patchy::kLayerMetadataText)
+              .starts_with("Hi"));
+    CHECK(reopened_text->fill_opacity() > 0.49F &&
+          reopened_text->fill_opacity() < 0.51F);
+    CHECK(reopened_vector != nullptr);
+    CHECK(reopened_vector->vector_shape() != nullptr);
+    CHECK(reopened_vector->vector_shape()->stroke.enabled);
+    CHECK(reopened_vector->vector_shape()->origination.size() == 1U);
+    CHECK(reopened_placed != nullptr);
+    CHECK(patchy::smart_object_placement_from_layer(*reopened_placed)
+              .has_value());
+    const auto reopened_placement =
+        patchy::smart_object_placement_from_layer(*reopened_placed);
+    CHECK(reopened_placement->transform[0] == 21.0);
+    CHECK(reopened_placement->transform[1] == 17.0);
+    CHECK(reopened.metadata().smart_objects.find("source-uuid") != nullptr);
+    CHECK(reopened_adjustment != nullptr);
+    CHECK(reopened_adjustment->kind() == patchy::LayerKind::Adjustment);
+
+    patchy::psd::SaveUsage exact_usage;
+    auto exact_options = measured_options;
+    exact_options.budget.max_tracked_live_bytes =
+        expected.exact_peak;
+    exact_options.usage = &exact_usage;
+    CHECK(patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                       exact_options) ==
+          baseline);
+    CHECK(exact_usage.tracked_live_bytes == 0U);
+    CHECK(exact_usage.tracked_live_bytes_high_water == expected.exact_peak);
+
+    for (const auto limit : std::array<std::uint64_t, 2>{
+             expected.exact_peak - 1U, 0U}) {
+      patchy::psd::SaveUsage rejected_usage;
+      auto rejected_options = measured_options;
+      rejected_options.budget.max_tracked_live_bytes = limit;
+      rejected_options.usage = &rejected_usage;
+      bool rejected = false;
+      try {
+        (void)patchy::psd::DocumentIo::write_layered_rgb8(
+            document, rejected_options);
+      } catch (const patchy::psd::SaveBudgetExceeded& error) {
+        rejected = true;
+        CHECK(error.dimension() ==
+              patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+      }
+      CHECK(rejected);
+      CHECK(rejected_usage.tracked_live_bytes == 0U);
+      CHECK(rejected_usage.tracked_live_bytes_high_water <= limit);
+    }
+  }
+}
+
 }  // namespace
 
 std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
@@ -1845,5 +2570,15 @@ std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
        psd_save_adjustment_payload_owners_stage_and_unwind},
       {"psd_save_adjustment_payload_reaches_public_live_budget",
        psd_save_adjustment_payload_reaches_public_live_budget},
+      {"psd_save_luni_and_lfx2_payloads_own_budget",
+       psd_save_luni_and_lfx2_payloads_own_budget},
+      {"psd_save_patched_fill_opacity_owns_budget",
+       psd_save_patched_fill_opacity_owns_budget},
+      {"psd_save_vector_and_placed_payloads_own_budget",
+       psd_save_vector_and_placed_payloads_own_budget},
+      {"psd_save_tysh_payload_owns_budget_and_unwinds",
+       psd_save_tysh_payload_owns_budget_and_unwinds},
+      {"psd_save_generated_layer_payloads_reach_public_budget",
+       psd_save_generated_layer_payloads_reach_public_budget},
   };
 }

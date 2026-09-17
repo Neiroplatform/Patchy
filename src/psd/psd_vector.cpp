@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace patchy::psd {
@@ -498,12 +499,6 @@ std::optional<std::vector<LiveShapeParams>> parse_vector_origination_block(
 
 namespace {
 
-void pad_payload_to_4(std::vector<std::uint8_t>& payload) {
-  while (payload.size() % 4U != 0U) {
-    payload.push_back(0);
-  }
-}
-
 // Appends the 26-byte record stream (selector 6, selector 8, then subpaths).
 void append_path_records(BigEndianWriter& writer, const VectorPath& path, std::int32_t canvas_width,
                          std::int32_t canvas_height) {
@@ -751,17 +746,21 @@ DescriptorObject fill_content_object(const VectorFill& fill) {
   return object;
 }
 
-std::vector<std::uint8_t> descriptor_block_payload(const DescriptorObject& descriptor,
-                                                   std::optional<std::uint32_t> leading_version) {
-  BigEndianWriter writer;
+SaveTrackedByteBuffer descriptor_block_payload_tracked(
+    const DescriptorObject& descriptor,
+    std::optional<std::uint32_t> leading_version,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   if (leading_version.has_value()) {
     writer.write_u32(*leading_version);
   }
   writer.write_u32(16);
   write_descriptor(writer, descriptor);
-  auto payload = std::move(writer.bytes());
-  pad_payload_to_4(payload);
-  return payload;
+  while ((writer.bytes().size() % 4U) != 0U) {
+    writer.write_u8(0U);
+  }
+  return std::move(tracked_writer).take_buffer();
 }
 
 DescriptorObject unit_rect_object(double top, double left, double bottom, double right) {
@@ -821,10 +820,12 @@ const char* vector_fill_block_key(VectorFillKind kind) {
   return "SoCo";
 }
 
-std::vector<std::uint8_t> vector_mask_block_payload(const VectorPath& path, bool disabled, bool inverted,
-                                                    bool unlinked, std::int32_t canvas_width,
-                                                    std::int32_t canvas_height) {
-  BigEndianWriter writer;
+SaveTrackedByteBuffer vector_mask_block_payload_tracked(
+    const VectorPath& path, bool disabled, bool inverted, bool unlinked,
+    std::int32_t canvas_width, std::int32_t canvas_height,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u32(3U);  // version
   std::uint32_t flags = 0;
   if (inverted) {
@@ -838,108 +839,184 @@ std::vector<std::uint8_t> vector_mask_block_payload(const VectorPath& path, bool
   }
   writer.write_u32(flags);
   append_path_records(writer, path, canvas_width, canvas_height);
-  auto payload = std::move(writer).take_bytes();
-  pad_payload_to_4(payload);
-  return payload;
+  while ((writer.bytes().size() % 4U) != 0U) {
+    writer.write_u8(0U);
+  }
+  return std::move(tracked_writer).take_buffer();
 }
 
-std::vector<std::uint8_t> vector_fill_block_payload(const VectorFill& fill,
-                                                    const UnknownPsdBlock* original) {
+std::vector<std::uint8_t> vector_mask_block_payload(
+    const VectorPath& path, bool disabled, bool inverted, bool unlinked,
+    std::int32_t canvas_width, std::int32_t canvas_height) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = vector_mask_block_payload_tracked(
+      path, disabled, inverted, unlinked, canvas_width, canvas_height,
+      tracker);
+  return std::move(payload.bytes);
+}
+
+SaveTrackedByteBuffer vector_fill_block_payload_tracked(
+    const VectorFill& fill, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   // Patch-in-place: parse the original descriptor and overwrite only the
   // modeled keys so unmodeled data and id forms survive byte-exactly.
   if (original != nullptr) {
     // Photoshop stores color doubles the 8-bit model quantizes (213.9995...);
     // when the model still equals the original's parse, keep its exact bytes.
-    if (const auto reparsed =
-            parse_vector_fill_block(original->key, original->payload, CmykColorConverter{});
-        reparsed.has_value() && *reparsed == fill) {
-      return original->payload;
+    bool unchanged = false;
+    {
+      auto parse_bytes =
+          tracked_live_budget.reserve_size(original->payload.size());
+      const auto reparsed = parse_vector_fill_block(
+          original->key, original->payload, CmykColorConverter{});
+      unchanged = reparsed.has_value() && *reparsed == fill;
     }
-    if (auto descriptor = read_block_descriptor(original->payload); descriptor.has_value()) {
+    if (unchanged) {
+      return save_tracked_byte_copy(original->payload, tracked_live_budget);
+    }
+    auto descriptor_raw_bytes =
+        tracked_live_budget.reserve_size(original->payload.size());
+    if (auto descriptor = read_block_descriptor(original->payload);
+        descriptor.has_value()) {
       auto content = fill_content_object(fill);
       for (const auto& entry : content.key_order) {
         auto value = content.values.at(entry.key);
         put_value(*descriptor, entry.key, std::move(value));
       }
-      return descriptor_block_payload(*descriptor, std::nullopt);
+      return descriptor_block_payload_tracked(
+          *descriptor, std::nullopt, tracked_live_budget);
     }
   }
   auto content = fill_content_object(fill);
   content.class_id = "null";  // fill blocks use a null root holding the content keys
-  return descriptor_block_payload(content, std::nullopt);
+  return descriptor_block_payload_tracked(content, std::nullopt,
+                                          tracked_live_budget);
 }
 
-std::vector<std::uint8_t> vector_stroke_block_payload(const VectorStroke& stroke,
-                                                      const UnknownPsdBlock* original) {
+std::vector<std::uint8_t> vector_fill_block_payload(
+    const VectorFill& fill, const UnknownPsdBlock* original) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload =
+      vector_fill_block_payload_tracked(fill, original, tracker);
+  return std::move(payload.bytes);
+}
+
+SaveTrackedByteBuffer vector_stroke_block_payload_tracked(
+    const VectorStroke& stroke, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  const auto patch_descriptor = [&stroke](DescriptorObject& descriptor) {
+    const char* cap = stroke.cap == VectorStrokeCap::Round    ? "strokeStyleRoundCap"
+                      : stroke.cap == VectorStrokeCap::Square ? "strokeStyleSquareCap"
+                                                              : "strokeStyleButtCap";
+    const char* join = stroke.join == VectorStrokeJoin::Round   ? "strokeStyleRoundJoin"
+                       : stroke.join == VectorStrokeJoin::Bevel ? "strokeStyleBevelJoin"
+                                                                : "strokeStyleMiterJoin";
+    const char* alignment = stroke.alignment == VectorStrokeAlignment::Inside    ? "strokeStyleAlignInside"
+                            : stroke.alignment == VectorStrokeAlignment::Outside ? "strokeStyleAlignOutside"
+                                                                                 : "strokeStyleAlignCenter";
+    // The PS 27.8 canonical 16-item order (docs/vector-tools.md).
+    put_value(descriptor, "strokeStyleVersion", make_long_value(2));
+    put_value(descriptor, "strokeEnabled", make_bool_value(stroke.enabled));
+    put_value(descriptor, "fillEnabled", make_bool_value(stroke.fill_enabled));
+    put_value(descriptor, "strokeStyleLineWidth", make_unit_value("#Pxl", stroke.width));
+    put_value(descriptor, "strokeStyleLineDashOffset",
+              make_unit_value("#Pnt", stroke.dash_offset * stroke.width * 72.0 /
+                                          (stroke.resolution > 0.0 ? stroke.resolution : 72.0)));
+    put_value(descriptor, "strokeStyleMiterLimit", make_double_value(stroke.miter_limit));
+    put_value(descriptor, "strokeStyleLineCapType", make_enum_value("strokeStyleLineCapType", cap));
+    put_value(descriptor, "strokeStyleLineJoinType", make_enum_value("strokeStyleLineJoinType", join));
+    put_value(descriptor, "strokeStyleLineAlignment", make_enum_value("strokeStyleLineAlignment", alignment));
+    put_value(descriptor, "strokeStyleScaleLock", make_bool_value(stroke.scale_lock));
+    put_value(descriptor, "strokeStyleStrokeAdjust", make_bool_value(stroke.stroke_adjust));
+    DescriptorValue dash_set;
+    dash_set.type = DescriptorValue::Type::List;
+    for (const auto dash : stroke.dashes) {
+      dash_set.list_value.push_back(make_unit_value("#Nne", dash));
+    }
+    put_value(descriptor, "strokeStyleLineDashSet", std::move(dash_set));
+    put_value(descriptor, "strokeStyleBlendMode",
+              make_enum_value("BlnM", std::string(blend_mode_lfx2_string(stroke.blend_mode))));
+    put_value(descriptor, "strokeStyleOpacity", make_unit_value("#Prc", stroke.opacity * 100.0));
+    put_value(descriptor, "strokeStyleContent", make_object_value(fill_content_object(stroke.content)));
+    put_value(descriptor, "strokeStyleResolution", make_double_value(stroke.resolution));
+  };
+  if (original != nullptr) {
+    bool unchanged = false;
+    {
+      auto parse_bytes =
+          tracked_live_budget.reserve_size(original->payload.size());
+      const auto reparsed = parse_vector_stroke_block(
+          original->payload, CmykColorConverter{});
+      unchanged = reparsed.has_value() && *reparsed == stroke;
+    }
+    if (unchanged) {
+      return save_tracked_byte_copy(original->payload, tracked_live_budget);
+    }
+    auto descriptor_raw_bytes =
+        tracked_live_budget.reserve_size(original->payload.size());
+    if (auto descriptor = read_block_descriptor(original->payload);
+        descriptor.has_value() && descriptor->class_id == "strokeStyle") {
+      // `descriptor` owns any tdta/alis raw_value bytes; keep the conservative
+      // source-sized envelope charged through output emission.
+      patch_descriptor(*descriptor);
+      return descriptor_block_payload_tracked(
+          *descriptor, std::nullopt, tracked_live_budget);
+    }
+  }
   DescriptorObject descriptor;
-  if (original != nullptr) {
-    if (const auto reparsed = parse_vector_stroke_block(original->payload, CmykColorConverter{});
-        reparsed.has_value() && *reparsed == stroke) {
-      return original->payload;
-    }
-    if (auto parsed = read_block_descriptor(original->payload);
-        parsed.has_value() && parsed->class_id == "strokeStyle") {
-      descriptor = std::move(*parsed);
-    }
-  }
-  if (descriptor.class_id.empty()) {
-    descriptor.class_id = "strokeStyle";
-  }
-  const char* cap = stroke.cap == VectorStrokeCap::Round    ? "strokeStyleRoundCap"
-                    : stroke.cap == VectorStrokeCap::Square ? "strokeStyleSquareCap"
-                                                            : "strokeStyleButtCap";
-  const char* join = stroke.join == VectorStrokeJoin::Round   ? "strokeStyleRoundJoin"
-                     : stroke.join == VectorStrokeJoin::Bevel ? "strokeStyleBevelJoin"
-                                                              : "strokeStyleMiterJoin";
-  const char* alignment = stroke.alignment == VectorStrokeAlignment::Inside    ? "strokeStyleAlignInside"
-                          : stroke.alignment == VectorStrokeAlignment::Outside ? "strokeStyleAlignOutside"
-                                                                               : "strokeStyleAlignCenter";
-  // The PS 27.8 canonical 16-item order (docs/vector-tools.md).
-  put_value(descriptor, "strokeStyleVersion", make_long_value(2));
-  put_value(descriptor, "strokeEnabled", make_bool_value(stroke.enabled));
-  put_value(descriptor, "fillEnabled", make_bool_value(stroke.fill_enabled));
-  put_value(descriptor, "strokeStyleLineWidth", make_unit_value("#Pxl", stroke.width));
-  put_value(descriptor, "strokeStyleLineDashOffset",
-            make_unit_value("#Pnt", stroke.dash_offset * stroke.width * 72.0 /
-                                        (stroke.resolution > 0.0 ? stroke.resolution : 72.0)));
-  put_value(descriptor, "strokeStyleMiterLimit", make_double_value(stroke.miter_limit));
-  put_value(descriptor, "strokeStyleLineCapType", make_enum_value("strokeStyleLineCapType", cap));
-  put_value(descriptor, "strokeStyleLineJoinType", make_enum_value("strokeStyleLineJoinType", join));
-  put_value(descriptor, "strokeStyleLineAlignment", make_enum_value("strokeStyleLineAlignment", alignment));
-  put_value(descriptor, "strokeStyleScaleLock", make_bool_value(stroke.scale_lock));
-  put_value(descriptor, "strokeStyleStrokeAdjust", make_bool_value(stroke.stroke_adjust));
-  DescriptorValue dash_set;
-  dash_set.type = DescriptorValue::Type::List;
-  for (const auto dash : stroke.dashes) {
-    dash_set.list_value.push_back(make_unit_value("#Nne", dash));
-  }
-  put_value(descriptor, "strokeStyleLineDashSet", std::move(dash_set));
-  put_value(descriptor, "strokeStyleBlendMode",
-            make_enum_value("BlnM", std::string(blend_mode_lfx2_string(stroke.blend_mode))));
-  put_value(descriptor, "strokeStyleOpacity", make_unit_value("#Prc", stroke.opacity * 100.0));
-  put_value(descriptor, "strokeStyleContent", make_object_value(fill_content_object(stroke.content)));
-  put_value(descriptor, "strokeStyleResolution", make_double_value(stroke.resolution));
-  return descriptor_block_payload(descriptor, std::nullopt);
+  descriptor.class_id = "strokeStyle";
+  patch_descriptor(descriptor);
+  return descriptor_block_payload_tracked(descriptor, std::nullopt,
+                                          tracked_live_budget);
 }
 
-std::vector<std::uint8_t> vector_origination_block_payload(std::span<const LiveShapeParams> origination,
-                                                           const UnknownPsdBlock* original) {
+std::vector<std::uint8_t> vector_stroke_block_payload(
+    const VectorStroke& stroke, const UnknownPsdBlock* original) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload =
+      vector_stroke_block_payload_tracked(stroke, original, tracker);
+  return std::move(payload.bytes);
+}
+
+SaveTrackedByteBuffer vector_origination_block_payload_tracked(
+    std::span<const LiveShapeParams> origination,
+    const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   if (original != nullptr) {
-    if (const auto reparsed = parse_vector_origination_block(original->payload);
-        reparsed.has_value() && std::equal(reparsed->begin(), reparsed->end(),
-                                           origination.begin(), origination.end())) {
-      return original->payload;
+    bool unchanged = false;
+    {
+      auto parse_bytes =
+          tracked_live_budget.reserve_size(original->payload.size());
+      const auto reparsed =
+          parse_vector_origination_block(original->payload);
+      unchanged = reparsed.has_value() &&
+                  std::equal(reparsed->begin(), reparsed->end(),
+                             origination.begin(), origination.end());
+    }
+    if (unchanged) {
+      return save_tracked_byte_copy(original->payload, tracked_live_budget);
     }
   }
+  // Custom entries retain parsed descriptors (including tdta/alis raw_value)
+  // until the enclosing descriptor is emitted. Keep each source-sized raw
+  // envelope charged for the same lifetime.
+  std::vector<SaveLiveBudgetTracker::Reservation> custom_raw_bytes;
+  custom_raw_bytes.reserve(origination.size());
   DescriptorObject root;
   root.class_id = "null";
   DescriptorValue list;
   list.type = DescriptorValue::Type::List;
   for (const auto& params : origination) {
     if (params.kind == LiveShapeKind::Custom && !params.raw_descriptor.empty()) {
+      auto raw_bytes =
+          tracked_live_budget.reserve_size(params.raw_descriptor.size());
       BigEndianReader reader(params.raw_descriptor);
       try {
         list.list_value.push_back(make_object_value(read_descriptor(reader)));
+        custom_raw_bytes.push_back(std::move(raw_bytes));
       } catch (const std::exception&) {
       }
       continue;
@@ -995,15 +1072,26 @@ std::vector<std::uint8_t> vector_origination_block_payload(std::span<const LiveS
     list.list_value.push_back(make_object_value(std::move(entry)));
   }
   put_value(root, "keyDescriptorList", std::move(list));
-  return descriptor_block_payload(root, 1U);
+  return descriptor_block_payload_tracked(root, 1U, tracked_live_budget);
+}
+
+std::vector<std::uint8_t> vector_origination_block_payload(
+    std::span<const LiveShapeParams> origination,
+    const UnknownPsdBlock* original) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = vector_origination_block_payload_tracked(
+      origination, original, tracker);
+  return std::move(payload.bytes);
 }
 
 bool origination_covers_path_groups(const VectorPath& path,
-                                    std::span<const LiveShapeParams> origination) {
+                                    std::span<const LiveShapeParams> origination,
+                                    SaveLiveBudgetTracker* tracked_live_budget) {
   // Mirrors vector_origination_block_payload's per-entry emission: modeled
   // kinds always emit; Custom emits only when its preserved raw descriptor
   // reparses; None never emits.
-  const auto entry_emits = [](const LiveShapeParams& params) {
+  const auto entry_emits = [tracked_live_budget](const LiveShapeParams& params) {
     switch (params.kind) {
       case LiveShapeKind::Rectangle:
       case LiveShapeKind::RoundedRectangle:
@@ -1013,6 +1101,11 @@ bool origination_covers_path_groups(const VectorPath& path,
       case LiveShapeKind::Custom: {
         if (params.raw_descriptor.empty()) {
           return false;
+        }
+        std::optional<SaveLiveBudgetTracker::Reservation> raw_bytes;
+        if (tracked_live_budget != nullptr) {
+          raw_bytes.emplace(tracked_live_budget->reserve_size(
+              params.raw_descriptor.size()));
         }
         BigEndianReader reader(params.raw_descriptor);
         try {

@@ -32,6 +32,7 @@
 #include <fstream>
 #include <future>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -168,9 +169,46 @@ void write_signature(BigEndianWriter& writer, const std::array<char, 4>& signatu
   }
 }
 
+namespace {
+
+std::size_t utf16_code_unit_count(std::string_view text) {
+  std::size_t count = 0U;
+  for (std::size_t index = 0; index < text.size();) {
+    const auto lead = static_cast<unsigned char>(text[index]);
+    std::uint32_t codepoint = 0x3FU;
+    std::size_t consumed = 1U;
+    if (lead < 0x80U) {
+      codepoint = lead;
+    } else if ((lead & 0xE0U) == 0xC0U && index + 1U < text.size()) {
+      codepoint = ((lead & 0x1FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 1U]) & 0x3FU);
+      consumed = 2U;
+    } else if ((lead & 0xF0U) == 0xE0U && index + 2U < text.size()) {
+      codepoint = ((lead & 0x0FU) << 12U) |
+                  ((static_cast<unsigned char>(text[index + 1U]) & 0x3FU)
+                   << 6U) |
+                  (static_cast<unsigned char>(text[index + 2U]) & 0x3FU);
+      consumed = 3U;
+    } else if ((lead & 0xF8U) == 0xF0U && index + 3U < text.size()) {
+      codepoint = ((lead & 0x07U) << 18U) |
+                  ((static_cast<unsigned char>(text[index + 1U]) & 0x3FU)
+                   << 12U) |
+                  ((static_cast<unsigned char>(text[index + 2U]) & 0x3FU)
+                   << 6U) |
+                  (static_cast<unsigned char>(text[index + 3U]) & 0x3FU);
+      consumed = 4U;
+    }
+    count += codepoint <= 0xFFFFU ? 1U : 2U;
+    index += consumed;
+  }
+  return count;
+}
+
+}  // namespace
+
 std::vector<std::uint16_t> utf8_to_utf16(std::string_view text) {
   std::vector<std::uint16_t> units;
-  units.reserve(text.size());
+  units.reserve(utf16_code_unit_count(text));
   for (std::size_t index = 0; index < text.size();) {
     const auto lead = static_cast<unsigned char>(text[index]);
     std::uint32_t codepoint = 0x3FU;
@@ -237,13 +275,24 @@ std::optional<std::string> read_unicode_string_payload(std::span<const std::uint
 }
 
 std::vector<std::uint8_t> unicode_string_payload(std::string_view text) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = unicode_string_payload_tracked(text, tracker);
+  return std::move(payload.bytes);
+}
+
+SaveTrackedByteBuffer unicode_string_payload_tracked(
+    std::string_view text, SaveLiveBudgetTracker& tracked_live_budget) {
+  auto units_reservation = tracked_live_budget.reserve_product(
+      utf16_code_unit_count(text), sizeof(std::uint16_t));
   const auto units = utf8_to_utf16(text);
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u32(checked_u32(units.size(), "unicode string length"));
   for (const auto unit : units) {
     writer.write_u16(unit);
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
 }
 
 std::array<char, 4> blend_mode_key(BlendMode mode) {

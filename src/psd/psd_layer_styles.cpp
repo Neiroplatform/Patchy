@@ -35,6 +35,7 @@
 #include <future>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -1252,23 +1253,75 @@ std::string_view gradient_interpolation_descriptor_value(GradientInterpolationMe
   return "Gcls";
 }
 
-void write_layer_style_gradient_descriptor(BigEndianWriter& writer, const LayerStyleGradient& gradient) {
-  auto color_stops = gradient.color_stops;
-  auto alpha_stops = gradient.alpha_stops;
-  if (color_stops.empty()) {
-    color_stops.push_back(GradientColorStop{0.0F, RgbColor{0, 0, 0}});
-    color_stops.push_back(GradientColorStop{1.0F, RgbColor{255, 255, 255}});
+struct TrackedSortedGradientStops {
+  TrackedSortedGradientStops(const LayerStyleGradient& gradient,
+                             SaveLiveBudgetTracker& tracked_live_budget)
+      : color_reservation(tracked_live_budget.reserve_product(
+            gradient.color_stops.empty() ? 2U : gradient.color_stops.size(),
+            sizeof(GradientColorStop))) {
+    const auto color_count =
+        gradient.color_stops.empty() ? 2U : gradient.color_stops.size();
+    if (!gradient.color_stops.empty()) {
+      color_stops.reserve(color_count);
+      color_stops.insert(color_stops.end(), gradient.color_stops.begin(),
+                         gradient.color_stops.end());
+    }
+
+    alpha_reservation = tracked_live_budget.reserve_product(
+        gradient.alpha_stops.empty() ? 2U : gradient.alpha_stops.size(),
+        sizeof(GradientAlphaStop));
+    const auto alpha_count =
+        gradient.alpha_stops.empty() ? 2U : gradient.alpha_stops.size();
+    if (!gradient.alpha_stops.empty()) {
+      alpha_stops.reserve(alpha_count);
+      alpha_stops.insert(alpha_stops.end(), gradient.alpha_stops.begin(),
+                         gradient.alpha_stops.end());
+    }
+
+    if (color_stops.empty()) {
+      color_stops.reserve(color_count);
+      color_stops.push_back(
+          GradientColorStop{0.0F, RgbColor{0, 0, 0}});
+      color_stops.push_back(
+          GradientColorStop{1.0F, RgbColor{255, 255, 255}});
+    }
+    if (alpha_stops.empty()) {
+      alpha_stops.reserve(alpha_count);
+      alpha_stops.push_back(GradientAlphaStop{0.0F, 1.0F});
+      alpha_stops.push_back(GradientAlphaStop{1.0F, 1.0F});
+    }
+
+    // std::stable_sort may allocate a temporary buffer. Reserve a conservative
+    // logical full-vector envelope before either sort; the two sorts are
+    // sequential, so only the larger stop vector can overlap the owned copies.
+    // Release the envelope immediately after sorting while the normalized stop
+    // copies remain charged through descriptor emission.
+    {
+      auto sort_envelope = tracked_live_budget.reserve(
+          std::max(color_reservation.bytes(), alpha_reservation.bytes()));
+      std::stable_sort(
+          color_stops.begin(), color_stops.end(),
+          [](const GradientColorStop& lhs, const GradientColorStop& rhs) {
+            return lhs.location < rhs.location;
+          });
+      std::stable_sort(
+          alpha_stops.begin(), alpha_stops.end(),
+          [](const GradientAlphaStop& lhs, const GradientAlphaStop& rhs) {
+            return lhs.location < rhs.location;
+          });
+    }
   }
-  if (alpha_stops.empty()) {
-    alpha_stops.push_back(GradientAlphaStop{0.0F, 1.0F});
-    alpha_stops.push_back(GradientAlphaStop{1.0F, 1.0F});
-  }
-  std::stable_sort(
-      color_stops.begin(), color_stops.end(),
-      [](const GradientColorStop& lhs, const GradientColorStop& rhs) { return lhs.location < rhs.location; });
-  std::stable_sort(
-      alpha_stops.begin(), alpha_stops.end(),
-      [](const GradientAlphaStop& lhs, const GradientAlphaStop& rhs) { return lhs.location < rhs.location; });
+
+  SaveLiveBudgetTracker::Reservation color_reservation;
+  std::vector<GradientColorStop> color_stops;
+  SaveLiveBudgetTracker::Reservation alpha_reservation;
+  std::vector<GradientAlphaStop> alpha_stops;
+};
+
+void write_layer_style_gradient_descriptor(
+    BigEndianWriter& writer, const LayerStyleGradient& gradient,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  TrackedSortedGradientStops stops(gradient, tracked_live_budget);
 
   if (gradient.form == GradientDefinitionForm::Noise) {
     write_descriptor_object_header(writer, "", "Grdn", 9);
@@ -1305,24 +1358,28 @@ void write_layer_style_gradient_descriptor(BigEndianWriter& writer, const LayerS
   write_descriptor_double_item(writer, "Intr", gradient.smoothness);
 
   write_descriptor_item_header(writer, "Clrs", {'V', 'l', 'L', 's'});
-  writer.write_u32(checked_u32(color_stops.size(), "gradient color stops"));
-  for (const auto& stop : color_stops) {
+  writer.write_u32(
+      checked_u32(stops.color_stops.size(), "gradient color stops"));
+  for (const auto& stop : stops.color_stops) {
     write_signature(writer, {'O', 'b', 'j', 'c'});
     write_gradient_color_stop(writer, stop);
   }
 
   write_descriptor_item_header(writer, "Trns", {'V', 'l', 'L', 's'});
-  writer.write_u32(checked_u32(alpha_stops.size(), "gradient alpha stops"));
-  for (const auto& stop : alpha_stops) {
+  writer.write_u32(
+      checked_u32(stops.alpha_stops.size(), "gradient alpha stops"));
+  for (const auto& stop : stops.alpha_stops) {
     write_signature(writer, {'O', 'b', 'j', 'c'});
     write_gradient_alpha_stop(writer, stop);
   }
 }
 
 void write_layer_style_gradient_descriptor_item(BigEndianWriter& writer, std::string_view key,
-                                                const LayerStyleGradient& gradient) {
+                                                const LayerStyleGradient& gradient,
+                                                SaveLiveBudgetTracker& tracked_live_budget) {
   write_descriptor_item_header(writer, key, {'O', 'b', 'j', 'c'});
-  write_layer_style_gradient_descriptor(writer, gradient);
+  write_layer_style_gradient_descriptor(writer, gradient,
+                                        tracked_live_budget);
 }
 
 // Photoshop's FrFX gradient shape differs from the otherwise similar GrFl
@@ -1353,27 +1410,15 @@ void write_stroke_gradient_color_stop(BigEndianWriter& writer, const GradientCol
       static_cast<std::int32_t>(std::lround(std::clamp(stop.midpoint, 0.0F, 1.0F) * 100.0F)));
 }
 
-void write_stroke_gradient_descriptor(BigEndianWriter& writer, const LayerStyleGradient& gradient) {
+void write_stroke_gradient_descriptor(
+    BigEndianWriter& writer, const LayerStyleGradient& gradient,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   if (gradient.form == GradientDefinitionForm::Noise) {
-    write_layer_style_gradient_descriptor(writer, gradient);
+    write_layer_style_gradient_descriptor(writer, gradient,
+                                          tracked_live_budget);
     return;
   }
-  auto color_stops = gradient.color_stops;
-  auto alpha_stops = gradient.alpha_stops;
-  if (color_stops.empty()) {
-    color_stops.push_back(GradientColorStop{0.0F, RgbColor{0, 0, 0}});
-    color_stops.push_back(GradientColorStop{1.0F, RgbColor{255, 255, 255}});
-  }
-  if (alpha_stops.empty()) {
-    alpha_stops.push_back(GradientAlphaStop{0.0F, 1.0F});
-    alpha_stops.push_back(GradientAlphaStop{1.0F, 1.0F});
-  }
-  std::stable_sort(
-      color_stops.begin(), color_stops.end(),
-      [](const GradientColorStop& lhs, const GradientColorStop& rhs) { return lhs.location < rhs.location; });
-  std::stable_sort(
-      alpha_stops.begin(), alpha_stops.end(),
-      [](const GradientAlphaStop& lhs, const GradientAlphaStop& rhs) { return lhs.location < rhs.location; });
+  TrackedSortedGradientStops stops(gradient, tracked_live_budget);
 
   write_descriptor_object_header(writer, "Gradient", "Grdn", 5);
   write_descriptor_text_item(writer, "Nm  ",
@@ -1382,24 +1427,27 @@ void write_stroke_gradient_descriptor(BigEndianWriter& writer, const LayerStyleG
   write_descriptor_double_item(writer, "Intr", gradient.smoothness);
 
   write_descriptor_item_header(writer, "Clrs", {'V', 'l', 'L', 's'});
-  writer.write_u32(checked_u32(color_stops.size(), "gradient color stops"));
-  for (const auto& stop : color_stops) {
+  writer.write_u32(
+      checked_u32(stops.color_stops.size(), "gradient color stops"));
+  for (const auto& stop : stops.color_stops) {
     write_signature(writer, {'O', 'b', 'j', 'c'});
     write_stroke_gradient_color_stop(writer, stop);
   }
 
   write_descriptor_item_header(writer, "Trns", {'V', 'l', 'L', 's'});
-  writer.write_u32(checked_u32(alpha_stops.size(), "gradient alpha stops"));
-  for (const auto& stop : alpha_stops) {
+  writer.write_u32(
+      checked_u32(stops.alpha_stops.size(), "gradient alpha stops"));
+  for (const auto& stop : stops.alpha_stops) {
     write_signature(writer, {'O', 'b', 'j', 'c'});
     write_gradient_alpha_stop(writer, stop);
   }
 }
 
 void write_stroke_gradient_descriptor_item(BigEndianWriter& writer, std::string_view key,
-                                           const LayerStyleGradient& gradient) {
+                                           const LayerStyleGradient& gradient,
+                                           SaveLiveBudgetTracker& tracked_live_budget) {
   write_descriptor_item_header(writer, key, {'O', 'b', 'j', 'c'});
-  write_stroke_gradient_descriptor(writer, gradient);
+  write_stroke_gradient_descriptor(writer, gradient, tracked_live_budget);
 }
 
 std::string_view stroke_position_descriptor_value(LayerStrokePosition position) {
@@ -1495,7 +1543,9 @@ void write_color_overlay_descriptor(BigEndianWriter& writer, const LayerColorOve
   write_descriptor_unit_float_item(writer, "Opct", {'#', 'P', 'r', 'c'}, overlay.opacity * 100.0);
 }
 
-void write_gradient_fill_descriptor(BigEndianWriter& writer, const LayerGradientFill& fill) {
+void write_gradient_fill_descriptor(
+    BigEndianWriter& writer, const LayerGradientFill& fill,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   // Field set and order mirror what Photoshop 2026 writes for a gradient
   // overlay. PS silently resets the blend mode of GrFl descriptors that lack
   // this shape (byte-diffed July 2026), so keep the layout exact.
@@ -1505,7 +1555,8 @@ void write_gradient_fill_descriptor(BigEndianWriter& writer, const LayerGradient
   write_descriptor_bool_item(writer, "showInDialog", true);
   write_blend_mode_descriptor_item(writer, "Md  ", fill.blend_mode);
   write_descriptor_unit_float_item(writer, "Opct", {'#', 'P', 'r', 'c'}, fill.opacity * 100.0);
-  write_layer_style_gradient_descriptor_item(writer, "Grad", fill.gradient);
+  write_layer_style_gradient_descriptor_item(writer, "Grad", fill.gradient,
+                                             tracked_live_budget);
   write_descriptor_unit_float_item(writer, "Angl", {'#', 'A', 'n', 'g'}, fill.gradient.angle_degrees);
   write_descriptor_enum_item(writer, "Type", "GrdT", gradient_type_descriptor_value(fill.gradient.type));
   write_descriptor_bool_item(writer, "Rvrs", fill.gradient.reverse);
@@ -1522,7 +1573,8 @@ void write_gradient_fill_descriptor(BigEndianWriter& writer, const LayerGradient
                                    fill.gradient.offset_y_percent);
 }
 
-void write_stroke_descriptor(BigEndianWriter& writer, const LayerStroke& stroke) {
+void write_stroke_descriptor(BigEndianWriter& writer, const LayerStroke& stroke,
+                             SaveLiveBudgetTracker& tracked_live_budget) {
   write_descriptor_object_header(writer, "", "FrFX", stroke.uses_gradient ? 19U : 10U);
   write_descriptor_bool_item(writer, "enab", stroke.enabled);
   write_descriptor_bool_item(writer, "present", true);
@@ -1536,7 +1588,8 @@ void write_stroke_descriptor(BigEndianWriter& writer, const LayerStroke& stroke)
     // Photoshop writes a black Clr placeholder even though PntT selects the
     // following gradient. Omitting it makes the descriptor non-native.
     write_native_rgb_color_descriptor_item(writer, "Clr ", RgbColor{0, 0, 0});
-    write_stroke_gradient_descriptor_item(writer, "Grad", stroke.gradient);
+    write_stroke_gradient_descriptor_item(writer, "Grad", stroke.gradient,
+                                          tracked_live_budget);
     write_descriptor_enum_item(writer, "gradientsInterpolationMethod", "gradientInterpolationMethodType",
         gradient_interpolation_descriptor_value(stroke.gradient.interpolation));
     write_descriptor_unit_float_item(writer, "Angl", {'#', 'A', 'n', 'g'}, stroke.gradient.angle_degrees);
@@ -1760,8 +1813,10 @@ std::string_view blend_mode_lfx2_string(BlendMode mode) {
 // Exposed for the .asl style-preset codec (psd/psd_layer_effects.hpp). The
 // payload after its 8-byte header is exactly the serialized effects descriptor
 // an .asl 'Lefx' object embeds.
-std::vector<std::uint8_t> photoshop_lfx2_layer_style_payload(const LayerStyle& style) {
-  BigEndianWriter payload;
+SaveTrackedByteBuffer photoshop_lfx2_layer_style_payload_tracked(
+    const LayerStyle& style, SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_payload(tracked_live_budget);
+  auto& payload = tracked_payload.writer();
   payload.write_u32(0);   // object effects version
   payload.write_u32(16);  // descriptor version
 
@@ -1792,10 +1847,28 @@ std::vector<std::uint8_t> photoshop_lfx2_layer_style_payload(const LayerStyle& s
   write_layer_effect_item(payload, "ChFX", "chromeFXMulti", style.satins, write_satin_descriptor);
   write_layer_effect_item(payload, "ebbl", "bevelEmbossMulti", style.bevels, write_bevel_emboss_descriptor);
   write_layer_effect_item(payload, "SoFi", "solidFillMulti", style.color_overlays, write_color_overlay_descriptor);
-  write_layer_effect_item(payload, "GrFl", "gradientFillMulti", style.gradient_fills, write_gradient_fill_descriptor);
+  write_layer_effect_item(
+      payload, "GrFl", "gradientFillMulti", style.gradient_fills,
+      [&tracked_live_budget](BigEndianWriter& writer,
+                             const LayerGradientFill& fill) {
+        write_gradient_fill_descriptor(writer, fill, tracked_live_budget);
+      });
   write_layer_effect_item(payload, "patternFill", "patternFillMulti", style.pattern_overlays, write_pattern_descriptor);
-  write_layer_effect_item(payload, "FrFX", "frameFXMulti", style.strokes, write_stroke_descriptor);
-  return payload.bytes();
+  write_layer_effect_item(
+      payload, "FrFX", "frameFXMulti", style.strokes,
+      [&tracked_live_budget](BigEndianWriter& writer,
+                             const LayerStroke& stroke) {
+        write_stroke_descriptor(writer, stroke, tracked_live_budget);
+      });
+  return std::move(tracked_payload).take_buffer();
+}
+
+std::vector<std::uint8_t> photoshop_lfx2_layer_style_payload(
+    const LayerStyle& style) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_lfx2_layer_style_payload_tracked(style, tracker);
+  return std::move(payload.bytes);
 }
 
 }  // namespace patchy::psd

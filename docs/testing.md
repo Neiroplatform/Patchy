@@ -180,6 +180,15 @@ public file is 1070 bytes and peaks at 1680 tracked bytes. Exact/N-1/zero,
 owner lifetime, invalid/compliant allocation-free normalization, typed public
 rejection, byte hashes, and the existing wrapper/pixel semantic tests are
 mandatory.
+S1 is accepted as one per-layer payload iteration: `luni`, `lfx2`, authored and
+template/fallback `TySh`, fresh/preserved/patched/staged vector payloads, patched
+`iOpa`, and dirty `SoLd`/`SoLE`/`PlLd`/`plLd`. The combined base + text/style/
+iOpa + live-vector + matching global Smart Object source/dirty-placed + adjustment
+document is exercised and semantically reopened as PSD and PSB. Fixed canaries
+are 11440 bytes/FNV-1a `a46a8dbbd3169900`/83164 peak for PSD
+and 12424 bytes/FNV-1a `74b0d895c5bb7ad7`/85452 peak for PSB. Exact, N-1, zero,
+byte equality, typed rejection, repeat serialization, and zero-current unwind
+are mandatory; focused filters do not replace the full `patchy_core_tests` gate.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

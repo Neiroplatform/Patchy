@@ -57,6 +57,18 @@
 
 namespace patchy::psd {
 
+SaveTrackedByteBuffer patched_fill_opacity_payload_tracked(
+    std::span<const std::uint8_t> original_payload,
+    std::uint8_t fill_opacity_byte,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  auto payload =
+      save_tracked_byte_copy(original_payload, tracked_live_budget);
+  if (!payload.bytes.empty()) {
+    payload.bytes[0] = fill_opacity_byte;
+  }
+  return payload;
+}
+
 namespace {
 
 // Layer and mask rectangles come straight from the file as four signed edges. Subtracting
@@ -782,8 +794,12 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
   }
   const auto name = encoded_layer_name(encoded);
   write_pascal_string(extra, name, 4);
-  auto unicode_name = unicode_string_payload(name);
-  write_additional_layer_block(extra, {'l', 'u', 'n', 'i'}, unicode_name, large_document);
+  {
+    const auto unicode_name =
+        unicode_string_payload_tracked(name, tracked_live_budget);
+    write_additional_layer_block(extra, {'l', 'u', 'n', 'i'},
+                                 unicode_name.bytes, large_document);
+  }
 
   // Photoshop's Smart Filter open path keys placed layers by their 'lyid' layer
   // id: with an FEid cache present, a smart-object layer without one makes
@@ -817,8 +833,10 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
   if (encoded.layer != nullptr &&
       (!encoded.layer->layer_style().empty() || !encoded.layer->layer_style().satins.empty()) &&
       !layer_preserves_photoshop_layer_style(*encoded.layer)) {
-    const auto payload = photoshop_lfx2_layer_style_payload(encoded.layer->layer_style());
-    write_additional_layer_block(extra, {'l', 'f', 'x', '2'}, payload, large_document);
+    const auto payload = photoshop_lfx2_layer_style_payload_tracked(
+        encoded.layer->layer_style(), tracked_live_budget);
+    write_additional_layer_block(extra, {'l', 'f', 'x', '2'}, payload.bytes,
+                                 large_document);
     generated_style_payload = true;
   }
 
@@ -895,11 +913,17 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
     // Legacy plAD stays read-only via parse_patchy_adjustment.
   }
 
-  const auto generated_text_payload = should_write_generated_text_block(encoded)
-                                          ? photoshop_type_tool_payload_for_layer(*encoded.layer, encoded.bounds)
-                                          : std::optional<std::vector<std::uint8_t>>{};
-  if (generated_text_payload.has_value()) {
-    write_additional_layer_block(extra, {'T', 'y', 'S', 'h'}, *generated_text_payload, large_document);
+  bool generated_text_block = false;
+  if (should_write_generated_text_block(encoded)) {
+    if (const auto generated_text_payload =
+            photoshop_type_tool_payload_for_layer_tracked(
+                *encoded.layer, encoded.bounds, tracked_live_budget);
+        generated_text_payload.has_value()) {
+      write_additional_layer_block(extra, {'T', 'y', 'S', 'h'},
+                                   generated_text_payload->bytes,
+                                   large_document);
+      generated_text_block = true;
+    }
   }
 
   // Vector shape/mask blocks regenerate when edited (dirty) or authored fresh
@@ -915,15 +939,20 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
     if (const auto* content = encoded.layer->vector_shape(); content != nullptr) {
       write_additional_layer_block(
           extra, *block_key_from_string(vector_fill_block_key(content->fill.kind)),
-          vector_fill_block_payload(content->fill,
-                                    find_layer_block(*encoded.layer,
-                                                     vector_fill_block_key(content->fill.kind))),
+          vector_fill_block_payload_tracked(
+              content->fill,
+              find_layer_block(*encoded.layer,
+                               vector_fill_block_key(content->fill.kind)),
+              tracked_live_budget)
+              .bytes,
           large_document);
       if (!content->path.empty()) {
         write_additional_layer_block(
             extra, {'v', 'm', 's', 'k'},
-            vector_mask_block_payload(content->path, content->path_disabled, content->path_inverted,
-                                      false, canvas.width, canvas.height),
+            vector_mask_block_payload_tracked(
+                content->path, content->path_disabled, content->path_inverted,
+                false, canvas.width, canvas.height, tracked_live_budget)
+                .bytes,
             large_document);
       }
       // Photoshop refuses to OPEN a file whose vogk keyDescriptorList covers
@@ -933,15 +962,21 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
       // the shapes open as plain paths, PS's own fallback for path-drawn
       // subpaths; only the live parameters are lost on reopen.
       if (!content->origination.empty() &&
-          origination_covers_path_groups(content->path, content->origination)) {
-        SaveTrackedWriter tracked_vowv(tracked_live_budget);
-        auto& vowv = tracked_vowv.writer();
-        vowv.write_u32(2);
-        write_additional_layer_block(extra, {'v', 'o', 'w', 'v'}, vowv.bytes(), large_document);
+          origination_covers_path_groups(content->path, content->origination,
+                                         &tracked_live_budget)) {
+        {
+          SaveTrackedWriter tracked_vowv(tracked_live_budget);
+          auto& vowv = tracked_vowv.writer();
+          vowv.write_u32(2);
+          write_additional_layer_block(extra, {'v', 'o', 'w', 'v'},
+                                       vowv.bytes(), large_document);
+        }
         write_additional_layer_block(
             extra, {'v', 'o', 'g', 'k'},
-            vector_origination_block_payload(content->origination,
-                                             find_layer_block(*encoded.layer, "vogk")),
+            vector_origination_block_payload_tracked(
+                content->origination,
+                find_layer_block(*encoded.layer, "vogk"), tracked_live_budget)
+                .bytes,
             large_document);
       }
       // PSD paint descriptors always carry a concrete color/gradient/pattern.
@@ -953,14 +988,20 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
       if (stroke.enabled || !stroke.fill_enabled || find_layer_block(*encoded.layer, "vstk") != nullptr) {
         write_additional_layer_block(
             extra, {'v', 's', 't', 'k'},
-            vector_stroke_block_payload(stroke, find_layer_block(*encoded.layer, "vstk")),
+            vector_stroke_block_payload_tracked(
+                stroke, find_layer_block(*encoded.layer, "vstk"),
+                tracked_live_budget)
+                .bytes,
             large_document);
       }
     } else if (const auto* vector_mask = encoded.layer->vector_mask(); vector_mask != nullptr) {
       write_additional_layer_block(
           extra, {'v', 'm', 's', 'k'},
-          vector_mask_block_payload(vector_mask->path, vector_mask->disabled, vector_mask->inverted,
-                                    vector_mask->unlinked, canvas.width, canvas.height),
+          vector_mask_block_payload_tracked(
+              vector_mask->path, vector_mask->disabled,
+              vector_mask->inverted, vector_mask->unlinked, canvas.width,
+              canvas.height, tracked_live_budget)
+              .bytes,
           large_document);
     }
   }
@@ -1015,15 +1056,15 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
     }
 
     for (const auto& block : encoded.layer->unknown_psd_blocks()) {
-      if (should_skip_layer_block(encoded, block, generated_text_payload.has_value(), generated_style_payload,
+      if (should_skip_layer_block(encoded, block, generated_text_block, generated_style_payload,
                                   generated_vector_blocks)) {
         continue;
       }
       if (block.key == "iOpa" && block.payload.size() == 4U) {
         if (!wrote_fill_opacity && fill_opacity_byte != 255U) {
-          auto payload = block.payload;
-          payload[0] = fill_opacity_byte;
-          write_additional_layer_block(extra, {'i', 'O', 'p', 'a'}, payload, large_document,
+          auto payload = patched_fill_opacity_payload_tracked(
+              block.payload, fill_opacity_byte, tracked_live_budget);
+          write_additional_layer_block(extra, {'i', 'O', 'p', 'a'}, payload.bytes, large_document,
                                        block.long_length);
           wrote_fill_opacity = true;
         }
@@ -1056,9 +1097,9 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
         if (!key.has_value()) {
           continue;
         }
-        std::optional<std::vector<std::uint8_t>> regenerated;
+        std::optional<SaveTrackedByteBuffer> regenerated;
         if (placement.has_value()) {
-          regenerated = regenerate_placed_layer_payload(
+          regenerated = regenerate_placed_layer_payload_tracked(
               block.key, block.payload, *placement, warp.has_value() ? &*warp : nullptr,
               smart_object_placed_uuid(*encoded.layer),
               [&] {
@@ -1070,10 +1111,12 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
                               ? SmartFilterDescriptorAction::Replace
                               : SmartFilterDescriptorAction::Preserve;
                 return SmartFilterDescriptorEdit{action, stack};
-              }());
+              }(),
+              tracked_live_budget);
         }
         if (regenerated.has_value()) {
-          write_additional_layer_block(extra, *key, *regenerated, large_document, block.long_length);
+          write_additional_layer_block(extra, *key, regenerated->bytes,
+                                       large_document, block.long_length);
         } else {
           write_additional_layer_block(extra, *key, block.payload, large_document, block.long_length);
         }

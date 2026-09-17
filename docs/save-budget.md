@@ -160,6 +160,27 @@ preserved payload copy is admitted, and writes fresh tails into the same header
 buffer instead of retaining the old redundant header copy. Existing
 vector-returning helpers remain unlimited compatibility wrappers; emitted bytes,
 block order, raw-preservation decisions, and malformed fallbacks are unchanged.
+The S1 per-layer completion extends the same contract to `luni`, generated
+`lfx2`, every generated `TySh` path, vector fill/mask/origination/stroke
+payloads, patched preserved `iOpa`, and dirty `SoLd`/`SoLE`/`PlLd` payloads.
+The internal serializers return move-only tracked buffers while their existing
+vector-returning APIs remain unlimited wrappers. `luni` accounts its exact
+UTF-16 arithmetic scratch before allocation. `lfx2` additionally reserves the
+normalized gradient-stop copies and a conservative stable-sort envelope.
+`TySh` owns template UTF-16 search bytes, the template decode envelope, authored
+EngineData, and the final payload; an odd first candidate is released before
+EngineData is extended and rebuilt. Each layer payload is released immediately
+after it is copied into the tracked `extra` writer, so payloads from later
+families and layers are sequential rather than cumulative. Placed-layer budget
+signals remain outside `std::exception`, while ordinary parse failures still
+fall back to the original caller-owned block. Emitted block order, padding,
+descriptor patching, malformed fallbacks, public APIs, and PSD/PSB bytes remain
+unchanged. Imported vector and `SoLd`/`SoLE` patch paths conservatively reserve
+the original descriptor payload size while the parsed descriptor and generated
+output overlap. This covers unbounded contiguous `tdta`/`alis` `raw_value` bytes;
+custom `vogk` raw descriptors use the same envelope during coverage validation
+and retain it through emission. Descriptor nodes and string storage remain
+excluded as documented below.
 
 ## Explicit exclusions and remaining DP-008B work
 
@@ -173,13 +194,10 @@ overhead, descriptor-tree nodes, and string storage remain explicitly outside th
 logical-byte contract; normalization must use a documented logical envelope for
 those excluded structures rather than claim allocator-exact accounting.
 
-DP-008B remains open for:
+DP-008B remains open after S1 for:
 
 - compound/open-stroke normalization clones and vector-raster scratch;
 - deep compositor group, clipping, style, effect, distance-field, and blur planes;
-- remaining generated layer-record payload producers and nested resource
-  writers: `luni`, `lfx2`, `TySh`, vector blocks, patched `iOpa`, and dirty
-  `SoLd`/`SoLE`/`PlLd` regeneration;
 - remaining normalization/vector-raster workspaces and the final source census.
 
 Product callers must not treat DP-008A as a complete save-memory ceiling. Finite
@@ -261,6 +279,23 @@ tail byte-for-byte. Raw-copy and malformed-fallback fixtures cover `curv`,
 release and non-deduplicated overlap. The public adjustment fixture is 4359
 bytes/FNV-1a `3cfe5cfb993ec789` and pins an 8619-byte tracked peak with exact,
 typed N-1, zero, and unwind-to-zero checks.
+The S1 per-layer completion adds direct exact/N-1/zero/unwind coverage for
+Unicode `luni`; gradient-fill and gradient-stroke `lfx2` including noise,
+empty-stop normalization, and sort scratch; authored, same-length imported-
+template, malformed-template, and no-match `TySh`; generated, preserved, and
+patched vector fill/stroke/origination plus non-empty mask and staged owners;
+dirty `SoLd`/`SoLE` and both `PlLd` spellings; and malformed placed fallback.
+An isolated four-byte patched `iOpa` test proves its owner overlaps the enclosing
+`extra` reservation. The combined public fixture contains base, text/style,
+patched `iOpa`, live vector fill/mask/stroke/origination, a matching global
+Smart Object source plus dirty placed layer, and a native adjustment layer; both
+formats reopen and verify these semantics.
+Its PSD canary is 11440 bytes/FNV-1a `a46a8dbbd3169900` with an 83164-byte
+tracked peak; PSB is 12424 bytes/FNV-1a `74b0d895c5bb7ad7` with an 85452-byte
+peak. Both require exact success, byte-identical repeat serialization, typed
+N-1/zero rejection, and zero current usage after success or unwind. Existing
+text, vector, Smart Object, fill-opacity, and layered-writer canaries remain
+unchanged.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero

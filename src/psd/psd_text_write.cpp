@@ -34,6 +34,7 @@
 #include <future>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -151,6 +152,61 @@ bool serialized_runs_have_photoshop_leading_signals(std::string_view runs_text) 
 
 namespace {
 
+template <typename Visitor>
+void for_each_utf16_unit(std::string_view text, Visitor&& visitor) {
+  for (std::size_t index = 0; index < text.size();) {
+    const auto lead = static_cast<unsigned char>(text[index]);
+    std::uint32_t codepoint = 0x3FU;
+    std::size_t consumed = 1U;
+    if (lead < 0x80U) {
+      codepoint = lead;
+    } else if ((lead & 0xE0U) == 0xC0U && index + 1U < text.size()) {
+      codepoint = ((lead & 0x1FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 1U]) & 0x3FU);
+      consumed = 2U;
+    } else if ((lead & 0xF0U) == 0xE0U && index + 2U < text.size()) {
+      codepoint = ((lead & 0x0FU) << 12U) |
+                  ((static_cast<unsigned char>(text[index + 1U]) & 0x3FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 2U]) & 0x3FU);
+      consumed = 3U;
+    } else if ((lead & 0xF8U) == 0xF0U && index + 3U < text.size()) {
+      codepoint = ((lead & 0x07U) << 18U) |
+                  ((static_cast<unsigned char>(text[index + 1U]) & 0x3FU) << 12U) |
+                  ((static_cast<unsigned char>(text[index + 2U]) & 0x3FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 3U]) & 0x3FU);
+      consumed = 4U;
+    }
+
+    if (codepoint <= 0xFFFFU) {
+      visitor(static_cast<std::uint16_t>(codepoint));
+    } else {
+      codepoint -= 0x10000U;
+      visitor(static_cast<std::uint16_t>(0xD800U + (codepoint >> 10U)));
+      visitor(static_cast<std::uint16_t>(0xDC00U + (codepoint & 0x3FFU)));
+    }
+    index += consumed;
+  }
+}
+
+std::size_t utf16_code_unit_count(std::string_view text) {
+  std::size_t count = 0U;
+  for_each_utf16_unit(text, [&count](std::uint16_t) {
+    if (count == std::numeric_limits<std::size_t>::max()) {
+      throw std::length_error("PSD descriptor Unicode string is too long");
+    }
+    ++count;
+  });
+  return count;
+}
+
+int utf16_code_unit_count_as_int(std::string_view text) {
+  const auto count = utf16_code_unit_count(text);
+  if (count > static_cast<std::size_t>(INT_MAX)) {
+    throw std::length_error("PSD descriptor Unicode string is too long");
+  }
+  return static_cast<int>(count);
+}
+
 std::vector<std::string_view> split_space_fields(std::string_view line) {
   std::vector<std::string_view> fields;
   std::size_t start = 0;
@@ -258,7 +314,7 @@ std::vector<PsdTextStyleRun> parse_patchy_text_runs_metadata(std::string_view ru
                                                              std::string_view plain_text,
                                                              const PsdTextStyleRun& fallback) {
   std::vector<PsdTextStyleRun> runs;
-  const auto text_length = static_cast<int>(utf8_to_utf16(plain_text).size());
+  const auto text_length = utf16_code_unit_count_as_int(plain_text);
   std::size_t line_start = 0;
   while (line_start < runs_text.size()) {
     const auto line_end = runs_text.find('\n', line_start);
@@ -355,7 +411,7 @@ std::vector<PsdTextStyleRun> parse_patchy_text_runs_metadata(std::string_view ru
 
 std::vector<PsdTextParagraphRun> paragraph_runs_from_text_line_breaks(std::string_view text, int justification) {
   std::vector<PsdTextParagraphRun> runs;
-  const auto text_length = static_cast<int>(utf8_to_utf16(text).size());
+  const auto text_length = utf16_code_unit_count_as_int(text);
   if (text_length <= 0) {
     runs.push_back(PsdTextParagraphRun{0, 1, justification});
     return runs;
@@ -368,7 +424,7 @@ std::vector<PsdTextParagraphRun> paragraph_runs_from_text_line_breaks(std::strin
       continue;
     }
     const auto segment = text.substr(segment_start, index + 1U - segment_start);
-    const auto length = static_cast<int>(utf8_to_utf16(segment).size());
+    const auto length = utf16_code_unit_count_as_int(segment);
     if (length > 0) {
       runs.push_back(PsdTextParagraphRun{start_units, length, justification});
       start_units += length;
@@ -377,7 +433,7 @@ std::vector<PsdTextParagraphRun> paragraph_runs_from_text_line_breaks(std::strin
   }
 
   if (segment_start < text.size()) {
-    const auto length = static_cast<int>(utf8_to_utf16(text.substr(segment_start)).size());
+    const auto length = utf16_code_unit_count_as_int(text.substr(segment_start));
     if (length > 0) {
       runs.push_back(PsdTextParagraphRun{start_units, length, justification});
     }
@@ -393,7 +449,7 @@ std::vector<PsdTextStyleRun> split_single_style_run_on_line_breaks(std::vector<P
   if (text.find('\n') == std::string_view::npos || runs.size() != 1U) {
     return runs;
   }
-  const auto text_length = static_cast<int>(utf8_to_utf16(text).size());
+  const auto text_length = utf16_code_unit_count_as_int(text);
   if (text_length <= 0 || runs.front().start != 0 || runs.front().length < text_length) {
     return runs;
   }
@@ -425,7 +481,7 @@ std::vector<PsdTextStyleRun> text_runs_for_layer(const Layer& layer, std::string
 std::vector<PsdTextParagraphRun> parse_patchy_paragraph_runs_metadata(std::string_view runs_text,
                                                                       std::string_view plain_text) {
   std::vector<PsdTextParagraphRun> runs;
-  const auto text_length = static_cast<int>(utf8_to_utf16(plain_text).size());
+  const auto text_length = utf16_code_unit_count_as_int(plain_text);
   std::size_t line_start = 0;
   while (line_start < runs_text.size()) {
     const auto line_end = runs_text.find('\n', line_start);
@@ -482,7 +538,7 @@ std::vector<PsdTextParagraphRun> paragraph_runs_for_layer(const Layer& layer, st
     parsed = parse_patchy_paragraph_runs_metadata({}, text);
   }
   if (text.find('\n') != std::string_view::npos && parsed.size() == 1U) {
-    const auto text_length = static_cast<int>(utf8_to_utf16(text).size());
+    const auto text_length = utf16_code_unit_count_as_int(text);
     const auto& run = parsed.front();
     if (text_length > 0 && run.start == 0 && run.length >= text_length) {
       return paragraph_runs_from_text_line_breaks(text, run.justification);
@@ -890,21 +946,27 @@ std::string engine_escaped_utf16_string(std::string_view text) {
 
   append_byte(0xFEU);
   append_byte(0xFFU);
-  for (const auto unit : utf8_to_utf16(text)) {
+  for_each_utf16_unit(text, [&append_byte](std::uint16_t unit) {
     append_byte(static_cast<std::uint8_t>((unit >> 8U) & 0xFFU));
     append_byte(static_cast<std::uint8_t>(unit & 0xFFU));
-  }
+  });
   escaped.push_back(')');
   return escaped;
 }
 
-std::vector<std::uint8_t> utf16be_text_bytes(std::string_view text) {
+SaveTrackedByteBuffer utf16be_text_bytes_tracked(
+    std::string_view text, SaveLiveBudgetTracker& tracked_live_budget) {
+  const auto unit_count = utf16_code_unit_count(text);
+  auto reservation =
+      tracked_live_budget.reserve_product(unit_count, sizeof(std::uint16_t));
+  const auto byte_count = unit_count * sizeof(std::uint16_t);
   std::vector<std::uint8_t> bytes;
-  for (const auto unit : utf8_to_utf16(text)) {
+  bytes.reserve(byte_count);
+  for_each_utf16_unit(text, [&bytes](std::uint16_t unit) {
     bytes.push_back(static_cast<std::uint8_t>((unit >> 8U) & 0xFFU));
     bytes.push_back(static_cast<std::uint8_t>(unit & 0xFFU));
-  }
-  return bytes;
+  });
+  return SaveTrackedByteBuffer(std::move(reservation), std::move(bytes));
 }
 
 bool replace_all_bytes(std::vector<std::uint8_t>& bytes, std::span<const std::uint8_t> old_value,
@@ -926,8 +988,10 @@ bool replace_all_bytes(std::vector<std::uint8_t>& bytes, std::span<const std::ui
   return replaced;
 }
 
-std::optional<std::vector<std::uint8_t>> photoshop_type_tool_payload_from_template(const Layer& layer,
-                                                                                   std::string_view new_text) {
+std::optional<SaveTrackedByteBuffer>
+photoshop_type_tool_payload_from_template_tracked(
+    const Layer& layer, std::string_view new_text,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   const auto source_block = layer_metadata_value(layer, kLayerMetadataTextSourceBlock);
   if (!source_block.has_value() || (*source_block != "TySh" && *source_block != "tySh")) {
     return std::nullopt;
@@ -936,22 +1000,30 @@ std::optional<std::vector<std::uint8_t>> photoshop_type_tool_payload_from_templa
     if (block.key != "TySh" && block.key != "tySh") {
       continue;
     }
-    const auto old_text = extract_engine_data_text(block.payload);
+    const auto old_text =
+        extract_engine_data_text_tracked(block.payload, tracked_live_budget);
     if (!old_text.has_value()) {
       continue;
     }
     const auto old_engine_text = photoshop_engine_text(*old_text);
     const auto new_engine_text = photoshop_engine_text(new_text);
-    const auto old_units = utf8_to_utf16(old_engine_text);
-    const auto new_units = utf8_to_utf16(new_engine_text);
-    if (old_units.empty() || old_units.size() != new_units.size()) {
+    const auto old_unit_count = utf16_code_unit_count(old_engine_text);
+    const auto new_unit_count = utf16_code_unit_count(new_engine_text);
+    if (old_unit_count == 0U || old_unit_count != new_unit_count) {
       continue;
     }
-    auto payload = block.payload;
-    const auto old_bytes = utf16be_text_bytes(old_engine_text);
-    const auto new_bytes = utf16be_text_bytes(new_engine_text);
-    if (replace_all_bytes(payload, old_bytes, new_bytes)) {
-      return payload;
+    const auto old_bytes = utf16be_text_bytes_tracked(
+        old_engine_text, tracked_live_budget);
+    if (std::search(block.payload.begin(), block.payload.end(),
+                    old_bytes.bytes.begin(), old_bytes.bytes.end()) ==
+        block.payload.end()) {
+      continue;
+    }
+    const auto new_bytes = utf16be_text_bytes_tracked(
+        new_engine_text, tracked_live_budget);
+    auto payload = save_tracked_byte_copy(block.payload, tracked_live_budget);
+    if (replace_all_bytes(payload.bytes, old_bytes.bytes, new_bytes.bytes)) {
+      return std::move(payload);
     }
   }
   return std::nullopt;
@@ -1363,11 +1435,13 @@ std::string engine_rendered_shape(bool boxed_text, const PsdTextBoundsD& box_bou
   return rendered;
 }
 
-std::vector<std::uint8_t> engine_data_for_text(std::string_view text, std::span<const PsdTextStyleRun> runs,
-                                               std::span<const PsdTextParagraphRun> paragraph_runs, bool boxed_text,
-                                               const PsdTextBoundsD& box_bounds, int anti_alias) {
+void write_engine_data_for_text(BigEndianWriter& writer, std::string_view text,
+                                std::span<const PsdTextStyleRun> runs,
+                                std::span<const PsdTextParagraphRun> paragraph_runs,
+                                bool boxed_text, const PsdTextBoundsD& box_bounds,
+                                int anti_alias) {
   const auto engine_text = photoshop_engine_text(text);
-  const auto engine_units = static_cast<int>(utf8_to_utf16(engine_text).size());
+  const auto engine_units = utf16_code_unit_count_as_int(engine_text);
   std::vector<std::string> fonts{"AdobeInvisFont"};
   std::vector<int> font_indices;
   font_indices.reserve(runs.size());
@@ -1461,7 +1535,8 @@ std::vector<std::uint8_t> engine_data_for_text(std::string_view text, std::span<
   engine += "\n/DocumentResources ";
   engine += resources;
   engine += "\n>>";
-  return std::vector<std::uint8_t>(engine.begin(), engine.end());
+  writer.write_bytes(std::span<const std::uint8_t>(
+      reinterpret_cast<const std::uint8_t*>(engine.data()), engine.size()));
 }
 
 void write_text_descriptor(BigEndianWriter& writer, std::string_view text, std::span<const std::uint8_t> engine_data,
@@ -1584,14 +1659,17 @@ PsdTextGeometry text_geometry_for_layer(const Layer& layer, const Rect& text_bou
 
 }  // namespace
 
-std::optional<std::vector<std::uint8_t>> photoshop_type_tool_payload_for_layer(const Layer& layer,
-                                                                               const Rect& bounds) {
+std::optional<SaveTrackedByteBuffer>
+photoshop_type_tool_payload_for_layer_tracked(
+    const Layer& layer, const Rect& bounds,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   const auto text = layer_metadata_value(layer, kLayerMetadataText);
   if (!text.has_value() || text->empty()) {
     return std::nullopt;
   }
   if (should_preserve_imported_text_geometry(layer)) {
-    if (const auto templated_payload = photoshop_type_tool_payload_from_template(layer, *text);
+    if (auto templated_payload = photoshop_type_tool_payload_from_template_tracked(
+            layer, *text, tracked_live_budget);
         templated_payload.has_value()) {
       return templated_payload;
     }
@@ -1617,12 +1695,15 @@ std::optional<std::vector<std::uint8_t>> photoshop_type_tool_payload_for_layer(c
                                                 warp_active ? &*warp : nullptr);
   const auto anti_alias_metadata = layer_metadata_value(layer, kLayerMetadataTextAntiAlias);
   const auto anti_alias = anti_alias_metadata.has_value() ? parse_int_or(*anti_alias_metadata, 3) : 3;
-  const auto engine_data =
-      engine_data_for_text(*text, runs, paragraph_runs, boxed_text, geometry.box_bounds, anti_alias);
+  SaveTrackedWriter tracked_engine_data(tracked_live_budget);
+  auto& engine_data = tracked_engine_data.writer();
+  write_engine_data_for_text(engine_data, *text, runs, paragraph_runs,
+                             boxed_text, geometry.box_bounds, anti_alias);
   const auto descriptor_text = photoshop_engine_text(*text);
 
   const auto build_payload = [&](std::span<const std::uint8_t> engine_bytes) {
-    BigEndianWriter writer;
+    SaveTrackedWriter tracked_payload(tracked_live_budget);
+    auto& writer = tracked_payload.writer();
     writer.write_u16(1);
     for (const auto value : geometry.transform) {
       write_f64(writer, value);
@@ -1645,19 +1726,33 @@ std::optional<std::vector<std::uint8_t>> photoshop_type_tool_payload_for_layer(c
         write_i32(writer, value);
       }
     }
-    return writer.bytes();
+    return std::move(tracked_payload).take_buffer();
   };
-  auto payload = build_payload(engine_data);
-  if ((payload.size() % 2U) != 0U) {
-    // The TySh tail is read end-anchored (last 16 bytes) by Photoshop and by
-    // Patchy's own reader, so the even-length envelope pad must never land
-    // after it. Keep the body itself even instead: engine data tolerates
-    // trailing whitespace, and Photoshop never writes an odd TySh either.
-    auto padded_engine_data = engine_data;
-    padded_engine_data.push_back('\n');
-    payload = build_payload(padded_engine_data);
+  {
+    auto payload = build_payload(engine_data.bytes());
+    if ((payload.bytes.size() % 2U) == 0U) {
+      return std::move(payload);
+    }
   }
-  return payload;
+  // The TySh tail is read end-anchored (last 16 bytes) by Photoshop and by
+  // Patchy's own reader, so the even-length envelope pad must never land after
+  // it. Release the odd candidate before extending EngineData and rebuilding:
+  // engine data tolerates trailing whitespace, and Photoshop never writes an
+  // odd TySh either.
+  engine_data.write_u8('\n');
+  return build_payload(engine_data.bytes());
+}
+
+std::optional<std::vector<std::uint8_t>> photoshop_type_tool_payload_for_layer(
+    const Layer& layer, const Rect& bounds) {
+  SaveLiveBudgetTracker unlimited_tracker(
+      std::numeric_limits<std::uint64_t>::max(), nullptr, nullptr);
+  auto tracked_payload = photoshop_type_tool_payload_for_layer_tracked(
+      layer, bounds, unlimited_tracker);
+  if (!tracked_payload.has_value()) {
+    return std::nullopt;
+  }
+  return std::move(tracked_payload->bytes);
 }
 
 bool should_write_generated_text_block(const EncodedLayer& encoded) {

@@ -396,6 +396,8 @@ void write_pascal_string(BigEndianWriter& writer, const std::string& value, std:
 std::vector<std::uint16_t> utf8_to_utf16(std::string_view text);
 std::optional<std::string> read_unicode_string_payload(std::span<const std::uint8_t> payload);
 std::vector<std::uint8_t> unicode_string_payload(std::string_view text);
+SaveTrackedByteBuffer unicode_string_payload_tracked(
+    std::string_view text, SaveLiveBudgetTracker& tracked_live_budget);
 #ifdef _WIN32
 std::wstring wide_from_utf8(std::string_view text);
 std::string utf8_from_wide(std::wstring_view text);
@@ -596,6 +598,8 @@ LayerStyle parse_lrfx_layer_style(std::span<const std::uint8_t> payload, const C
 void resolve_global_light(LayerStyle& style, float angle_degrees, float altitude_degrees);
 void merge_missing_layer_style_effects(LayerStyle& target, LayerStyle source);
 std::optional<LayerStyle> parse_patchy_layer_style(std::span<const std::uint8_t> payload);
+SaveTrackedByteBuffer photoshop_lfx2_layer_style_payload_tracked(
+    const LayerStyle& style, SaveLiveBudgetTracker& tracked_live_budget);
 
 // Layer-record codec: the per-layer record read (bounds/channels/blend/flags/
 // mask/blending-ranges/name and the tagged-block walk) and the write/encode
@@ -615,6 +619,10 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
 void append_encoded_layers(const Layer& layer, std::vector<EncodedLayer>& encoded_layers,
                            bool large_document,
                            SaveLiveBudgetTracker& tracked_live_budget);
+SaveTrackedByteBuffer patched_fill_opacity_payload_tracked(
+    std::span<const std::uint8_t> original_payload,
+    std::uint8_t fill_opacity_byte,
+    SaveLiveBudgetTracker& tracked_live_budget);
 
 // Save-only owner-coupled FEid/FXid serializer. The public codec keeps its
 // vector-returning API; the document writer uses this form so the generated
@@ -684,6 +692,20 @@ std::vector<std::uint8_t> vector_stroke_block_payload(const VectorStroke& stroke
                                                       const UnknownPsdBlock* original);
 std::vector<std::uint8_t> vector_origination_block_payload(std::span<const LiveShapeParams> origination,
                                                            const UnknownPsdBlock* original);
+SaveTrackedByteBuffer vector_mask_block_payload_tracked(
+    const VectorPath& path, bool disabled, bool inverted, bool unlinked,
+    std::int32_t canvas_width, std::int32_t canvas_height,
+    SaveLiveBudgetTracker& tracked_live_budget);
+SaveTrackedByteBuffer vector_fill_block_payload_tracked(
+    const VectorFill& fill, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget);
+SaveTrackedByteBuffer vector_stroke_block_payload_tracked(
+    const VectorStroke& stroke, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget);
+SaveTrackedByteBuffer vector_origination_block_payload_tracked(
+    std::span<const LiveShapeParams> origination,
+    const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget);
 // True when every subpath group of `path` has an origination entry the vogk
 // serializer will actually emit. Photoshop refuses to OPEN a file whose
 // keyDescriptorList covers only some subpath groups (July 2026 byte
@@ -691,7 +713,8 @@ std::vector<std::uint8_t> vector_origination_block_payload(std::span<const LiveS
 // rejected in every index permutation), so a partial list writes no
 // vogk/vowv at all — the shapes stay plain paths, PS's own fallback.
 [[nodiscard]] bool origination_covers_path_groups(const VectorPath& path,
-                                                  std::span<const LiveShapeParams> origination);
+                                                  std::span<const LiveShapeParams> origination,
+                                                  SaveLiveBudgetTracker* tracked_live_budget = nullptr);
 // The baked "derived from other data" user-mask plane Photoshop stores beside
 // non-default vector-mask density/feather: UNFEATHERED path coverage over the
 // path's pixel hull (+1 px pad), deterministic.
@@ -747,6 +770,9 @@ SaveTrackedByteBuffer image_resources_for_document(
 // renderer, and TySh descriptor-geometry extraction (definitions in
 // psd_text_read.cpp).
 std::optional<std::string> extract_engine_data_text(std::span<const std::uint8_t> payload);
+std::optional<std::string> extract_engine_data_text_tracked(
+    std::span<const std::uint8_t> payload,
+    SaveLiveBudgetTracker& tracked_live_budget);
 std::optional<int> extract_engine_data_font_size(std::span<const std::uint8_t> payload);
 std::optional<RgbColor> extract_engine_data_fill_color(std::span<const std::uint8_t> payload,
                                                        const CmykColorConverter& cmyk);
@@ -795,5 +821,14 @@ std::optional<PixelBuffer> render_regenerated_imported_text_pixels(const LayerRe
                                                                    std::int32_t height);
 std::optional<std::vector<std::uint8_t>> photoshop_type_tool_payload_for_layer(const Layer& layer,
                                                                                const Rect& bounds);
+std::optional<SaveTrackedByteBuffer>
+photoshop_type_tool_payload_for_layer_tracked(
+    const Layer& layer, const Rect& bounds,
+    SaveLiveBudgetTracker& tracked_live_budget);
+std::optional<SaveTrackedByteBuffer> regenerate_placed_layer_payload_tracked(
+    std::string_view key, std::span<const std::uint8_t> original_payload,
+    const SmartObjectPlacement& placement, const SmartObjectWarp* warp,
+    std::string_view placed_uuid, SmartFilterDescriptorEdit smart_filter_edit,
+    SaveLiveBudgetTracker& tracked_live_budget);
 bool should_write_generated_text_block(const EncodedLayer& encoded);
 }  // namespace patchy::psd

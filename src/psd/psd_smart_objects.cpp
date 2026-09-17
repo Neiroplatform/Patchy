@@ -2161,10 +2161,12 @@ std::vector<std::uint8_t> serialize_linked_layer_block(
   return std::move(payload.bytes);
 }
 
-std::optional<std::vector<std::uint8_t>> regenerate_placed_layer_payload(
-    std::string_view key, std::span<const std::uint8_t> original_payload, const SmartObjectPlacement& placement,
-    const SmartObjectWarp* warp, std::string_view placed_uuid,
-    SmartFilterDescriptorEdit smart_filter_edit) {
+std::optional<SaveTrackedByteBuffer> regenerate_placed_layer_payload_tracked(
+    std::string_view key, std::span<const std::uint8_t> original_payload,
+    const SmartObjectPlacement& placement, const SmartObjectWarp* warp,
+    std::string_view placed_uuid,
+    SmartFilterDescriptorEdit smart_filter_edit,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   try {
     if (key == "SoLd" || key == "SoLE") {
       BigEndianReader reader(original_payload);
@@ -2173,6 +2175,11 @@ std::optional<std::vector<std::uint8_t>> regenerate_placed_layer_payload(
       }
       const auto version = reader.read_u32();
       const auto descriptor_version = reader.read_u32();
+      // read_descriptor may materialize unbounded tdta/alis raw_value bytes.
+      // Keep a conservative source-sized envelope alive with the descriptor
+      // through tracked output emission; node/string allocations stay excluded.
+      auto descriptor_raw_bytes =
+          tracked_live_budget.reserve_size(original_payload.size());
       auto descriptor = read_descriptor(reader);
 
       if (auto* identifier = const_cast<DescriptorValue*>(descriptor_value(descriptor, "Idnt"));
@@ -2340,7 +2347,8 @@ std::optional<std::vector<std::uint8_t>> regenerate_placed_layer_payload(
         return std::nullopt;
       }
 
-      BigEndianWriter writer;
+      SaveTrackedWriter tracked_writer(tracked_live_budget);
+      auto& writer = tracked_writer.writer();
       for (const char ch : {'s', 'o', 'L', 'D'}) {
         writer.write_u8(static_cast<std::uint8_t>(ch));
       }
@@ -2350,7 +2358,7 @@ std::optional<std::vector<std::uint8_t>> regenerate_placed_layer_payload(
       while ((writer.bytes().size() % 4U) != 0U) {
         writer.write_u8(0);
       }
-      return writer.bytes();
+      return std::move(tracked_writer).take_buffer();
     }
 
     if (key == "PlLd" || key == "plLd") {
@@ -2370,7 +2378,8 @@ std::optional<std::vector<std::uint8_t>> regenerate_placed_layer_payload(
       const auto tail_start = reader.position();
       (void)original_uuid;
 
-      BigEndianWriter writer;
+      SaveTrackedWriter tracked_writer(tracked_live_budget);
+      auto& writer = tracked_writer.writer();
       for (const char ch : {'p', 'l', 'c', 'L'}) {
         writer.write_u8(static_cast<std::uint8_t>(ch));
       }
@@ -2385,12 +2394,28 @@ std::optional<std::vector<std::uint8_t>> regenerate_placed_layer_payload(
       }
       writer.write_bytes(std::span<const std::uint8_t>(original_payload.data() + tail_start,
                                                        original_payload.size() - tail_start));
-      return writer.bytes();
+      return std::move(tracked_writer).take_buffer();
     }
   } catch (const std::exception&) {
     return std::nullopt;
   }
   return std::nullopt;
+}
+
+std::optional<std::vector<std::uint8_t>> regenerate_placed_layer_payload(
+    std::string_view key, std::span<const std::uint8_t> original_payload,
+    const SmartObjectPlacement& placement, const SmartObjectWarp* warp,
+    std::string_view placed_uuid,
+    SmartFilterDescriptorEdit smart_filter_edit) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = regenerate_placed_layer_payload_tracked(
+      key, original_payload, placement, warp, placed_uuid, smart_filter_edit,
+      tracker);
+  if (!payload.has_value()) {
+    return std::nullopt;
+  }
+  return std::move(payload->bytes);
 }
 
 std::vector<std::uint8_t> author_placed_layer_sold_payload(const SmartObjectPlacement& placement,

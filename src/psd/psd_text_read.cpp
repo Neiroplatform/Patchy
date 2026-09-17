@@ -60,7 +60,8 @@ namespace patchy::psd {
 
 namespace {
 
-std::vector<std::uint8_t> unescape_engine_bytes(std::span<const std::uint8_t> bytes) {
+std::vector<std::uint8_t> unescape_engine_bytes(
+    std::span<const std::uint8_t> bytes) {
   std::vector<std::uint8_t> unescaped;
   unescaped.reserve(bytes.size());
   for (std::size_t index = 0; index < bytes.size(); ++index) {
@@ -112,7 +113,16 @@ std::vector<std::uint8_t> unescape_engine_bytes(std::span<const std::uint8_t> by
   return unescaped;
 }
 
-std::string decode_engine_string(std::span<const std::uint8_t> bytes) {
+std::string decode_engine_string(
+    std::span<const std::uint8_t> bytes,
+    SaveLiveBudgetTracker* tracked_live_budget) {
+  // Keep the reservation coupled to the vector owner rather than to the
+  // helper that constructs it. Declaration order makes the vector die first.
+  std::optional<SaveLiveBudgetTracker::Reservation> unescaped_reservation;
+  if (tracked_live_budget != nullptr) {
+    unescaped_reservation.emplace(
+        tracked_live_budget->reserve_size(bytes.size()));
+  }
   const auto unescaped = unescape_engine_bytes(bytes);
   if (unescaped.size() >= 2 && unescaped[0] == 0xFEU && unescaped[1] == 0xFFU) {
     std::string decoded;
@@ -161,7 +171,9 @@ std::string normalize_photoshop_text(std::string_view text) {
 
 }  // namespace
 
-std::optional<std::string> extract_engine_data_text(std::span<const std::uint8_t> payload) {
+std::optional<std::string> extract_engine_data_text_impl(
+    std::span<const std::uint8_t> payload,
+    SaveLiveBudgetTracker* tracked_live_budget) {
   constexpr std::string_view marker = "/Text";
   const auto begin = reinterpret_cast<const char*>(payload.data());
   const auto end = begin + payload.size();
@@ -194,8 +206,11 @@ std::optional<std::string> extract_engine_data_text(std::span<const std::uint8_t
       }
       if (cursor > text_begin) {
         auto text =
-            decode_engine_string(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(text_begin),
-                                                               static_cast<std::size_t>(cursor - text_begin)));
+            decode_engine_string(
+                std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(text_begin),
+                    static_cast<std::size_t>(cursor - text_begin)),
+                tracked_live_budget);
         text = normalize_photoshop_text(text);
         if (!text.empty()) {
           return text;
@@ -205,6 +220,17 @@ std::optional<std::string> extract_engine_data_text(std::span<const std::uint8_t
     found = std::search(cursor, end, marker.begin(), marker.end());
   }
   return std::nullopt;
+}
+
+std::optional<std::string> extract_engine_data_text(
+    std::span<const std::uint8_t> payload) {
+  return extract_engine_data_text_impl(payload, nullptr);
+}
+
+std::optional<std::string> extract_engine_data_text_tracked(
+    std::span<const std::uint8_t> payload,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  return extract_engine_data_text_impl(payload, &tracked_live_budget);
 }
 
 std::optional<int> extract_engine_data_font_size(std::span<const std::uint8_t> payload) {
@@ -651,7 +677,7 @@ std::vector<std::string> extract_engine_font_names(std::span<const std::uint8_t>
     if (!bytes.has_value()) {
       continue;
     }
-    auto decoded = decode_engine_string(*bytes);
+    auto decoded = decode_engine_string(*bytes, nullptr);
     if (!decoded.empty()) {
       fonts.push_back(std::move(decoded));
     }
