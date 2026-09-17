@@ -684,8 +684,9 @@ void apply_patchy_palette_resource(Document& document,
                                    ParseBudgetTracker& retained_payload_budget);
 std::optional<Document> prepare_compound_vector_psd(const Document& document);
 void apply_compound_vector_resource(Document& document, std::span<const std::uint8_t> payload);
-std::vector<std::uint8_t> image_resources_for_document(const Document& document,
-                                                       std::span<const CompositeChannelInfo> channels);
+SaveTrackedByteBuffer image_resources_for_document(
+    const Document& document, std::span<const CompositeChannelInfo> channels,
+    SaveLiveBudgetTracker& tracked_live_budget);
 
 
 // Engine-data (TySh) text READ codec: engine-data parsing, run serialization

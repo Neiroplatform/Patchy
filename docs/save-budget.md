@@ -67,7 +67,7 @@ does not reserve a slot. This is not exact post-render channel usage.
 The Photoshop 8000-record format error precedes configurable admission. Other later
 encoder-format errors may be preceded by an earlier finite preflight rejection.
 
-## DP-008A and DP-008B1 tracked live workspace
+## DP-008A through DP-008B2a tracked live workspace
 
 `max_tracked_live_bytes` caps conservative logical reservations for instrumented
 save-owned temporary buffers. `SaveUsage::tracked_live_bytes` is current
@@ -86,7 +86,9 @@ The current implemented slices cover:
 - top-level `layer_info` and `layer_mask` writers;
 - the per-record `extra` writer and its nested mask, layer-id, section-divider,
   vector-origination-version, protection, mask-effects, interior-effects, and
-  channel-restriction writers.
+  channel-restriction writers;
+- the final rebuilt image-resource stream returned to the flat or layered
+  document writer.
 
 RAW and RLE candidates count together while both are live. Retained encoded
 channels remain charged until their owners die. Copying `layer_info` into
@@ -97,7 +99,10 @@ dimension because `max_logical_output_bytes` guards it independently.
 The nested writer reservation is acquired before every buffer growth and remains
 live while its bytes are copied into the enclosing record. Returned internal byte
 buffers transfer their reservation with the storage; the public PSD serializer
-ABI is unchanged.
+ABI is unchanged. DP-008B2a applies that same owner-coupled rule to the final
+image-resource stream, so its reservation overlaps the enclosing `layer_mask`
+where those owners are simultaneously live. It does not yet account for the
+parsed or generated payload owners used to build that stream.
 
 ## Explicit exclusions and remaining DP-008B work
 
@@ -116,7 +121,8 @@ DP-008B remains open for:
 - compound/open-stroke normalization clones and vector-raster scratch;
 - deep compositor group, clipping, style, effect, distance-field, and blur planes;
 - generated layer-record payload producers and nested resource writers;
-- rebuilt image-resource streams;
+- the raw image-resource section copy, parsed per-resource payload copies,
+  generated image-resource payloads, and path/clipping resource scratch;
 - generated Smart Object, Smart Filter, and pattern serialization payloads.
 
 Product callers must not treat DP-008A as a complete save-memory ceiling. Finite
@@ -145,6 +151,11 @@ restriction overlaps observable above their enclosing `extra` owner. The shared
 tracked-writer primitive has a direct returned-buffer lifetime test; earlier
 mask-data and vector-origination-version sites are additionally source-audited
 because later mandatory record bytes dominate their local overlap in high-water.
+DP-008B2a pins the minimal rebuilt image-resource stream at 28 bytes/FNV-1a
+`89d7e6821196bcad`, proves that its reservation survives the helper return, and
+checks exact, one-short, zero, overlap, byte-stability, and unwind behavior. Flat
+and layered PSD/PSB high-water canaries include the returned stream while it is
+copied into the final output.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero

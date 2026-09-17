@@ -218,12 +218,15 @@ void write_image_resource(BigEndianWriter& writer, const ImageResource& resource
   }
 }
 
-std::vector<std::uint8_t> write_image_resources(std::span<const ImageResource> resources) {
-  BigEndianWriter writer;
+SaveTrackedByteBuffer write_image_resources(
+    std::span<const ImageResource> resources,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   for (const auto& resource : resources) {
     write_image_resource(writer, resource);
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
 }
 
 std::vector<std::string> parse_legacy_alpha_channel_names(std::span<const std::uint8_t> payload) {
@@ -879,8 +882,9 @@ void apply_compound_vector_resource(Document& document, std::span<const std::uin
   }
 }
 
-std::vector<std::uint8_t> image_resources_for_document(const Document& document,
-                                                       std::span<const CompositeChannelInfo> channels) {
+SaveTrackedByteBuffer image_resources_for_document(
+    const Document& document, std::span<const CompositeChannelInfo> channels,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   auto resources = document.metadata().raw_psd_image_resources;
   auto parsed = read_image_resources(resources);
   if (!parsed.has_value()) {
@@ -972,7 +976,7 @@ std::vector<std::uint8_t> image_resources_for_document(const Document& document,
       return reader.read_u32() == kPatchyCompoundVectorsMagic && reader.read_u16() == 1;
     });
   }
-  return write_image_resources(*parsed);
+  return write_image_resources(*parsed, tracked_live_budget);
 }
 
 }  // namespace patchy::psd

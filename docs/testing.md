@@ -166,6 +166,11 @@ canary, direct tracked-return ownership coverage, and branch fixtures whose late
 nested writers visibly exceed the enclosing `extra` owner. Exact, one-short, zero,
 byte-equality, and unwind checks remain mandatory; source audit covers earlier
 nested writers whose local overlap is hidden by later mandatory record bytes.
+DP-008B2a additionally tracks the final rebuilt image-resource stream with an
+owner-coupled returned buffer. Its direct 28-byte/FNV canary and the existing
+flat/layered PSD/PSB exact-fit cases prove lifetime, overlap, byte stability, and
+typed rejection. Raw-section and parsed/generated resource payloads plus global
+Smart Object, Smart Filter, and pattern payloads remain later DP-008B slices.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

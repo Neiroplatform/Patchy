@@ -551,6 +551,48 @@ void psd_save_layer_record_writer_branches_overlap_the_extra_owner() {
                 patchy::psd::EncodedLayerKind::Pixel, 0U);
 }
 
+void psd_save_image_resource_stream_owns_tracked_reservation() {
+  patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
+  constexpr std::uint64_t kResourceBytes = 28U;
+  constexpr std::uint64_t kHash = 0x89d7e6821196bcadULL;
+
+  const auto run = [&](std::uint64_t limit, std::uint64_t outer_bytes) {
+    std::uint64_t current = 0U;
+    std::uint64_t high_water = 0U;
+    patchy::psd::SaveLiveBudgetTracker tracker(limit, &current, &high_water);
+    auto outer = tracker.reserve(outer_bytes);
+    CHECK(outer.bytes() == outer_bytes);
+    {
+      const auto resources = patchy::psd::image_resources_for_document(
+          document, {}, tracker);
+      CHECK(resources.bytes.size() == kResourceBytes);
+      CHECK(patchy::test::fnv1a_hash_bytes(resources.bytes) == kHash);
+      CHECK(current == outer_bytes + kResourceBytes);
+      CHECK(high_water == outer_bytes + kResourceBytes);
+    }
+    CHECK(current == outer_bytes);
+    return high_water;
+  };
+
+  CHECK(run(kResourceBytes, 0U) == kResourceBytes);
+  CHECK(run(kResourceBytes + 7U, 7U) == kResourceBytes + 7U);
+
+  for (const auto limit : {kResourceBytes - 1U, std::uint64_t{0U}}) {
+    std::uint64_t current = 0U;
+    std::uint64_t high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &current, &high_water);
+      (void)patchy::psd::image_resources_for_document(document, {}, tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water <= limit);
+  }
+}
+
 void psd_save_composite_workspace_census_is_exact() {
   patchy::Document empty(2, 2, patchy::PixelFormat::rgb8());
   std::uint64_t current = 0U;
@@ -2834,6 +2876,8 @@ std::vector<patchy::test::TestCase> psd_writer_stability_tests() {
        psd_save_layer_record_nested_writers_are_tracked},
       {"psd_save_layer_record_writer_branches_overlap_the_extra_owner",
        psd_save_layer_record_writer_branches_overlap_the_extra_owner},
+      {"psd_save_image_resource_stream_owns_tracked_reservation",
+       psd_save_image_resource_stream_owns_tracked_reservation},
       {"psd_save_composite_workspace_census_is_exact",
        psd_save_composite_workspace_census_is_exact},
       {"psd_save_channel_workspace_tracks_raw_rle_and_extra_channels",

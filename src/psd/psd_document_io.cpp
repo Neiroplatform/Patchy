@@ -1952,8 +1952,11 @@ std::vector<std::uint8_t> DocumentIo::write_flat_rgb8(const Document& document, 
                         kColorModeRgb});
 
     writer.write_u32(0);  // Color mode data section.
-    write_length_prefixed_block(
-        writer, image_resources_for_document(document, channel_info));
+    {
+      const auto image_resources = image_resources_for_document(
+          document, channel_info, tracked_live_budget);
+      write_length_prefixed_block(writer, image_resources.bytes);
+    }
     if (options.large_document) {
       writer.write_u64(0);  // Layer and mask information section.
     } else {
@@ -2237,7 +2240,11 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
                               8,
                               kColorModeRgb});
   writer.write_u32(0);
-  write_length_prefixed_block(writer, image_resources_for_document(document, channel_info));
+  {
+    const auto image_resources = image_resources_for_document(
+        document, channel_info, tracked_live_budget);
+    write_length_prefixed_block(writer, image_resources.bytes);
+  }
   if (options.large_document) {
     writer.write_u64(layer_mask.bytes().size());
     writer.write_bytes(layer_mask.bytes());
