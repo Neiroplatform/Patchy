@@ -1043,7 +1043,7 @@ void upsert_document_path_resources(std::vector<ImageResource>& resources, const
     // Only payloads that parse as path records were importable as document
     // paths, so their absence from the document means the user deleted them.
     // Anything unparseable in the id range stays byte-preserved (never guess).
-    return parse_path_resource_records(resource.payload, document.width(), document.height())
+    return parse_path_resource_records(resource.payload.bytes, document.width(), document.height())
         .has_value();
   });
 

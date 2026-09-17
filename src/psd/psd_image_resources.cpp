@@ -70,7 +70,8 @@ void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t 
     if (!replaced) {
       it->signature = {'8', 'B', 'I', 'M'};
       it->name.clear();
-      it->payload = std::move(payload);
+      it->payload = SaveTrackedByteBuffer(
+          SaveLiveBudgetTracker::Reservation{}, std::move(payload));
       replaced = true;
       ++it;
     } else {
@@ -78,7 +79,11 @@ void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t 
     }
   }
   if (!replaced) {
-    resources.push_back(ImageResource{std::array<char, 4>{'8', 'B', 'I', 'M'}, id, {}, std::move(payload)});
+    ImageResource resource;
+    resource.id = id;
+    resource.payload = SaveTrackedByteBuffer(
+        SaveLiveBudgetTracker::Reservation{}, std::move(payload));
+    resources.push_back(std::move(resource));
   }
 }
 
@@ -89,37 +94,6 @@ void remove_image_resource(std::vector<ImageResource>& resources, std::uint16_t 
 }
 
 namespace {
-
-std::optional<std::vector<ImageResource>> read_image_resources(std::span<const std::uint8_t> bytes) {
-  BigEndianReader reader(bytes);
-  std::vector<ImageResource> resources;
-  while (reader.remaining() > 0) {
-    if (reader.remaining() < 12) {
-      return std::nullopt;
-    }
-    ImageResource resource;
-    resource.signature = read_signature(reader);
-    if (resource.signature != std::array<char, 4>{'8', 'B', 'I', 'M'} &&
-        resource.signature != std::array<char, 4>{'8', 'B', '6', '4'}) {
-      return std::nullopt;
-    }
-    resource.id = reader.read_u16();
-    resource.name = read_pascal_string(reader, 2);
-    const auto payload_length = reader.read_u32();
-    if (payload_length > reader.remaining()) {
-      return std::nullopt;
-    }
-    resource.payload = reader.read_bytes(payload_length);
-    if ((payload_length % 2U) != 0) {
-      if (reader.remaining() == 0) {
-        return std::nullopt;
-      }
-      reader.skip(1);
-    }
-    resources.push_back(std::move(resource));
-  }
-  return resources;
-}
 
 template <typename Visitor>
 bool visit_image_resource_payloads(std::span<const std::uint8_t> bytes,
@@ -163,6 +137,33 @@ bool visit_image_resource_payloads(std::span<const std::uint8_t> bytes,
     }
   }
   return true;
+}
+
+std::optional<std::vector<ImageResource>> read_image_resources(
+    std::span<const std::uint8_t> bytes,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  if (!visit_image_resource_payloads(bytes, [](std::uint16_t, auto) {})) {
+    return std::nullopt;
+  }
+
+  BigEndianReader reader(bytes);
+  std::vector<ImageResource> resources;
+  while (reader.remaining() > 0U) {
+    ImageResource resource;
+    resource.signature = read_signature(reader);
+    resource.id = reader.read_u16();
+    resource.name = read_pascal_string(reader, 2);
+    const auto payload_length = reader.read_u32();
+    auto reservation = tracked_live_budget.reserve_size(payload_length);
+    auto payload = reader.read_bytes(payload_length);
+    resource.payload = SaveTrackedByteBuffer(
+        std::move(reservation), std::move(payload));
+    if ((payload_length % 2U) != 0U) {
+      reader.skip(1U);
+    }
+    resources.push_back(std::move(resource));
+  }
+  return resources;
 }
 
 }  // namespace
@@ -211,9 +212,9 @@ void write_image_resource(BigEndianWriter& writer, const ImageResource& resource
   write_signature(writer, resource.signature);
   writer.write_u16(resource.id);
   write_pascal_string(writer, resource.name, 2);
-  writer.write_u32(checked_u32(resource.payload.size(), "image resource payload"));
-  writer.write_bytes(resource.payload);
-  if ((resource.payload.size() % 2U) != 0) {
+  writer.write_u32(checked_u32(resource.payload.bytes.size(), "image resource payload"));
+  writer.write_bytes(resource.payload.bytes);
+  if ((resource.payload.bytes.size() % 2U) != 0) {
     writer.write_u8(0);
   }
 }
@@ -885,8 +886,8 @@ void apply_compound_vector_resource(Document& document, std::span<const std::uin
 SaveTrackedByteBuffer image_resources_for_document(
     const Document& document, std::span<const CompositeChannelInfo> channels,
     SaveLiveBudgetTracker& tracked_live_budget) {
-  auto resources = document.metadata().raw_psd_image_resources;
-  auto parsed = read_image_resources(resources);
+  const auto& resources = document.metadata().raw_psd_image_resources;
+  auto parsed = read_image_resources(resources, tracked_live_budget);
   if (!parsed.has_value()) {
     parsed = std::vector<ImageResource>{};
   }
@@ -971,8 +972,8 @@ SaveTrackedByteBuffer image_resources_for_document(
     // Retain opaque future/foreign payloads. Only our understood v1 data can
     // become stale after its marked shapes were rasterized or removed.
     std::erase_if(*parsed, [](const auto& resource) {
-      if (resource.id != kImageResourcePatchyCompoundVectors || resource.payload.size() < 8) { return false; }
-      BigEndianReader reader(resource.payload);
+      if (resource.id != kImageResourcePatchyCompoundVectors || resource.payload.bytes.size() < 8) { return false; }
+      BigEndianReader reader(resource.payload.bytes);
       return reader.read_u32() == kPatchyCompoundVectorsMagic && reader.read_u16() == 1;
     });
   }

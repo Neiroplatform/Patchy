@@ -282,7 +282,7 @@ struct ImageResource {
   std::array<char, 4> signature{'8', 'B', 'I', 'M'};
   std::uint16_t id{0};
   std::string name;
-  std::vector<std::uint8_t> payload;
+  SaveTrackedByteBuffer payload;
 };
 
 // Metadata for one extra plane in the composite image data. Photoshop stores a

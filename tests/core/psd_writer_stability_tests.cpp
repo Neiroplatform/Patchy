@@ -591,6 +591,65 @@ void psd_save_image_resource_stream_owns_tracked_reservation() {
     CHECK(current == 0U);
     CHECK(high_water <= limit);
   }
+
+  patchy::psd::BigEndianWriter raw;
+  for (const auto byte : std::array<std::uint8_t, 4>{'8', 'B', 'I', 'M'}) { raw.write_u8(byte); }
+  raw.write_u16(patchy::psd::kImageResourceResolutionInfo);
+  raw.write_u16(0U);  // empty Pascal name plus even padding
+  raw.write_u32(3U);
+  for (const auto byte : std::array<std::uint8_t, 3>{0xaaU, 0xbbU, 0xccU}) { raw.write_u8(byte); }
+  raw.write_u8(0U);
+  for (const auto byte : std::array<std::uint8_t, 4>{'8', 'B', '6', '4'}) { raw.write_u8(byte); }
+  raw.write_u16(2001U);
+  raw.write_u16(0U);
+  raw.write_u32(8U);
+  for (std::uint8_t byte = 1U; byte <= 8U; ++byte) { raw.write_u8(byte); }
+  CHECK(raw.bytes().size() == 36U);
+  CHECK(patchy::test::fnv1a_hash_bytes(raw.bytes()) == 0x11c79ace9c23e28bULL);
+  document.metadata().raw_psd_image_resources = raw.bytes();
+
+  std::uint64_t parsed_current = 0U;
+  std::uint64_t parsed_high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(56U, &parsed_current, &parsed_high_water);
+    {
+      const auto resources = patchy::psd::image_resources_for_document(document, {}, tracker);
+      CHECK(resources.bytes.size() == 48U);
+      CHECK(patchy::test::fnv1a_hash_bytes(resources.bytes) == 0xdd749d5efe02bc9dULL);
+      CHECK(parsed_current == 48U);
+      CHECK(parsed_high_water == 56U);
+    }
+    CHECK(parsed_current == 0U);
+  }
+
+  for (const auto [limit, expected_high] :
+       std::array<std::pair<std::uint64_t, std::uint64_t>, 3>{{{55U, 0U}, {10U, 3U}, {0U, 0U}}}) {
+    parsed_current = 0U;
+    parsed_high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &parsed_current, &parsed_high_water);
+      (void)patchy::psd::image_resources_for_document(document, {}, tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(parsed_current == 0U);
+    CHECK(parsed_high_water <= limit);
+    if (expected_high != 0U) { CHECK(parsed_high_water == expected_high); }
+  }
+
+  document.metadata().raw_psd_image_resources.resize(18U);  // valid record plus malformed tail
+  parsed_current = 0U;
+  parsed_high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(kResourceBytes, &parsed_current, &parsed_high_water);
+    const auto resources = patchy::psd::image_resources_for_document(document, {}, tracker);
+    CHECK(resources.bytes.size() == kResourceBytes);
+    CHECK(parsed_current == kResourceBytes);
+    CHECK(parsed_high_water == kResourceBytes);
+  }
+  CHECK(parsed_current == 0U);
 }
 
 void psd_save_composite_workspace_census_is_exact() {
