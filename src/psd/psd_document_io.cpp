@@ -31,6 +31,7 @@
 #include <future>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -145,6 +146,8 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
                              bool has_merged_transparency, ParseBudgetTracker& budget,
                              ParseBudgetTracker& decompressed_budget,
                              ParseLiveBudgetTracker& tracked_live_budget,
+                             ParseBudgetTracker& retained_payload_budget,
+                             bool preserve_original_payloads,
                              std::size_t* damaged_rows = nullptr) {
   const auto format = format_from_header(header);
   const auto compression = reader.read_u16();
@@ -204,7 +207,8 @@ Document read_flat_composite(BigEndianReader& reader, const Header& header,
   }
   if (!saved_channels.empty()) {
     add_saved_composite_channels(document, std::move(saved_channels), first_saved_channel, header,
-                                 channel_resources);
+                                 channel_resources, retained_payload_budget,
+                                 preserve_original_payloads);
   }
 
   return document;
@@ -218,10 +222,12 @@ struct SmartObjectImportCounts {
 };
 
 void finalize_smart_filter_layers(std::vector<Layer>& layers,
-                                  const SmartFilterEffectsStore& store) {
+                                  const SmartFilterEffectsStore& store,
+                                  ParseBudgetTracker& retained_payload_budget) {
   for (auto& layer : layers) {
     if (!std::as_const(layer).children().empty()) {
-      finalize_smart_filter_layers(layer.children(), store);
+      finalize_smart_filter_layers(layer.children(), store,
+                                   retained_payload_budget);
     }
     const auto* imported = std::as_const(layer).smart_filter_stack();
     if (imported == nullptr) {
@@ -248,6 +254,7 @@ void finalize_smart_filter_layers(std::vector<Layer>& layers,
         if (native_mask.bounds.empty() || native_mask.samples->size() != expected) {
           stack.support = SmartFilterStackSupport::Unsupported;
         } else {
+          retained_payload_budget.charge_size(expected);
           PixelBuffer mask_pixels(native_mask.bounds.width, native_mask.bounds.height,
                                   PixelFormat::gray8());
           std::copy(native_mask.samples->begin(), native_mask.samples->end(),
@@ -340,7 +347,7 @@ bool is_section_divider_boundary(std::uint32_t type) noexcept {
   return type == 3U;
 }
 
-void copy_layer_state(Layer& target, const Layer& source) {
+void move_layer_state(Layer& target, Layer& source) {
   target.set_bounds(source.bounds());
   target.set_blend_mode(source.blend_mode());
   target.set_opacity(source.opacity());
@@ -348,27 +355,21 @@ void copy_layer_state(Layer& target, const Layer& source) {
   target.set_visible(source.visible());
   target.set_clipped(source.clipped());
   target.set_lock_flags(source.lock_flags());
-  target.layer_style() = source.layer_style();
-  target.metadata() = source.metadata();
-  target.mask() = source.mask();
-  target.raw_psd_blending_ranges() = source.raw_psd_blending_ranges();
+  target.layer_style() = std::move(source.layer_style());
+  target.metadata() = std::move(source.metadata());
+  target.mask() = std::move(source.mask());
+  target.raw_psd_blending_ranges() =
+      std::move(source.raw_psd_blending_ranges());
   target.set_blend_if_rgb_compatible(source.blend_if_rgb_compatible());
   if (source.channel_restriction_supported()) {
     target.set_restricted_channels(source.restricted_channels());
   } else {
     target.set_channel_restriction_unsupported();
   }
-  target.raw_psd_group_boundary_blending_ranges() = source.raw_psd_group_boundary_blending_ranges();
-  target.unknown_psd_blocks() = source.unknown_psd_blocks();
-  if (const auto* smart_filters = source.smart_filter_stack(); smart_filters != nullptr) {
-    target.set_smart_filter_stack(*smart_filters);
-  }
-  if (const auto* vector_shape = source.vector_shape(); vector_shape != nullptr) {
-    target.set_vector_shape(*vector_shape);
-  }
-  if (const auto* vector_mask = source.vector_mask(); vector_mask != nullptr) {
-    target.set_vector_mask(*vector_mask);
-  }
+  target.raw_psd_group_boundary_blending_ranges() =
+      std::move(source.raw_psd_group_boundary_blending_ranges());
+  target.unknown_psd_blocks() = std::move(source.unknown_psd_blocks());
+  target.move_shared_models_from(source);
 }
 
 std::vector<Layer> build_group_hierarchy(std::vector<DecodedLayer> flat_layers) {
@@ -394,7 +395,8 @@ std::vector<Layer> build_group_hierarchy(std::vector<DecodedLayer> flat_layers) 
         ++dropped_boundaries;
         continue;
       }
-      stack.push_back(GroupFrame{{}, std::as_const(decoded.layer).raw_psd_blending_ranges()});
+      stack.push_back(GroupFrame{
+          {}, std::move(decoded.layer.raw_psd_blending_ranges())});
       continue;
     }
 
@@ -412,7 +414,7 @@ std::vector<Layer> build_group_hierarchy(std::vector<DecodedLayer> flat_layers) 
       }
 
       Layer group(0, decoded.layer.name(), LayerKind::Group);
-      copy_layer_state(group, decoded.layer);
+      move_layer_state(group, decoded.layer);
       group.raw_psd_group_boundary_blending_ranges() = std::move(boundary_blending_ranges);
       set_layer_group_expanded(group, decoded.section_divider_type == 1U);
       group.children() = std::move(children);
@@ -433,17 +435,53 @@ std::vector<Layer> build_group_hierarchy(std::vector<DecodedLayer> flat_layers) 
   return std::move(stack.front().children);
 }
 
-Layer clone_layer_with_document_ids(Document& document, const Layer& source) {
-  Layer cloned = source.kind() == LayerKind::Pixel
-                     ? Layer(document.allocate_layer_id(), source.name(), source.pixels())
-                     : Layer(document.allocate_layer_id(), source.name(), source.kind());
-  copy_layer_state(cloned, source);
-  if (source.kind() == LayerKind::Group) {
-    for (const auto& child : source.children()) {
-      cloned.add_child(clone_layer_with_document_ids(document, child));
+Layer move_layer_with_document_ids(Document& document, Layer source) {
+  auto children = std::move(source.children());
+  source.children().clear();
+  auto moved = std::move(source).move_with_id(document.allocate_layer_id());
+  for (auto& child : children) {
+    moved.add_child(move_layer_with_document_ids(document, std::move(child)));
+  }
+  return moved;
+}
+
+std::size_t live_shape_raw_descriptor_bytes_in_layer(const Layer& layer) {
+  std::size_t total = 0U;
+  if (const auto* shape = layer.vector_shape(); shape != nullptr) {
+    for (const auto& params : shape->origination) {
+      if (params.raw_descriptor.size() >
+          std::numeric_limits<std::size_t>::max() - total) {
+        throw ParseBudgetExceeded(ParseBudgetDimension::TrackedLiveBytes);
+      }
+      total += params.raw_descriptor.size();
     }
   }
-  return cloned;
+  for (const auto& child : layer.children()) {
+    const auto child_bytes = live_shape_raw_descriptor_bytes_in_layer(child);
+    if (child_bytes > std::numeric_limits<std::size_t>::max() - total) {
+      throw ParseBudgetExceeded(ParseBudgetDimension::TrackedLiveBytes);
+    }
+    total += child_bytes;
+  }
+  return total;
+}
+
+std::size_t compound_collapse_descriptor_workspace_bytes(
+    const std::vector<Layer>& layers) {
+  std::size_t total = 0U;
+  for (const auto& layer : layers) {
+    const auto kind = compound_vector_group_kind(layer);
+    const auto bytes =
+        kind == CompoundVectorGroupKind::Content ||
+                kind == CompoundVectorGroupKind::OpenPathStrokes
+            ? live_shape_raw_descriptor_bytes_in_layer(layer)
+            : compound_collapse_descriptor_workspace_bytes(layer.children());
+    if (bytes > std::numeric_limits<std::size_t>::max() - total) {
+      throw ParseBudgetExceeded(ParseBudgetDimension::TrackedLiveBytes);
+    }
+    total += bytes;
+  }
+  return total;
 }
 
 // Decodes a layer-info payload starting at the layer-count i16. This is the body of
@@ -462,7 +500,9 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
                                            ParseLiveBudgetTracker& tracked_live_budget,
                                            ParseBudgetTracker& layer_record_budget,
                                            ParseBudgetTracker& channel_record_budget,
-                                           ParseBudgetTracker& resource_record_budget) {
+                                           ParseBudgetTracker& resource_record_budget,
+                                           ParseBudgetTracker& retained_payload_budget,
+                                           bool preserve_original_payloads) {
   has_merged_transparency = false;
   int unrendered_color_balance_count = 0;
   const auto layer_count_raw = static_cast<std::int16_t>(layer_reader.read_u16());
@@ -483,7 +523,9 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
   for (std::uint16_t i = 0; i < layer_count; ++i) {
     records.push_back(read_layer_record(layer_reader, large_document, cmyk_converter,
                                         channel_record_budget,
-                                        resource_record_budget));
+                                        resource_record_budget, tracked_live_budget,
+                                        retained_payload_budget,
+                                        preserve_original_payloads));
   }
 
   std::vector<DecodedLayer> decoded_layers;
@@ -672,7 +714,9 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
       } else if (block.key == "vogk") {
         // A corrupt origination block is not fatal: the path is the render
         // source of truth and the raw bytes stay preserved.
-        vector_origination = parse_vector_origination_block(block.payload);
+        vector_origination = parse_vector_origination_block(
+            block.payload, &retained_payload_budget,
+            &tracked_live_budget);
       } else if (block.key == "vscg") {
         has_legacy_vscg = true;
         if (block.payload.size() > 8U) {
@@ -888,10 +932,13 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
       }
     }
     for (auto& block : record.additional_blocks) {
-      if (drop_partial_origination_blocks && (block.key == "vogk" || block.key == "vowv")) {
-        continue;
+      if (preserve_original_payloads ||
+          layer_block_required_for_modeled_semantics(block.key, block.payload)) {
+        if (drop_partial_origination_blocks && (block.key == "vogk" || block.key == "vowv")) {
+          continue;
+        }
+        layer.unknown_psd_blocks().push_back(std::move(block));
       }
-      layer.unknown_psd_blocks().push_back(std::move(block));
     }
     if (record.placed.has_value()) {
       set_layer_smart_object_metadata(layer, record.placed->placement, record.placed->placed_uuid,
@@ -999,7 +1046,9 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
                                ParseLiveBudgetTracker& tracked_live_budget,
                                ParseBudgetTracker& layer_record_budget,
                                ParseBudgetTracker& channel_record_budget,
-                               ParseBudgetTracker& resource_record_budget) {
+                               ParseBudgetTracker& resource_record_budget,
+                               ParseBudgetTracker& retained_payload_budget,
+                               bool preserve_original_payloads) {
   has_merged_transparency = false;
   const auto layer_info_length = large_document
                                      ? read_section_length_u64(layer_reader, "layer info")
@@ -1018,7 +1067,9 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
                                         has_merged_transparency, notices, damaged_rows, budget,
                                         decompressed_budget, tracked_live_budget,
                                         layer_record_budget, channel_record_budget,
-                                        resource_record_budget);
+                                        resource_record_budget,
+                                        retained_payload_budget,
+                                        preserve_original_payloads);
   if ((layer_info_length % 2U) != 0 && layer_reader.remaining() > 0) {
     layer_reader.skip(1);
   }
@@ -1136,6 +1187,10 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
       options.budget.max_pattern_records,
       options.usage != nullptr ? &options.usage->pattern_records : nullptr,
       ParseBudgetDimension::PatternRecords);
+  ParseBudgetTracker retained_payload_budget(
+      options.budget.max_retained_payload_bytes,
+      options.usage != nullptr ? &options.usage->retained_payload_bytes : nullptr,
+      ParseBudgetDimension::RetainedPayloadBytes);
   DescriptorNodeBudgetScope descriptor_scope(descriptor_node_budget);
   BigEndianReader reader(bytes);
   const auto header = read_header(reader);
@@ -1158,13 +1213,16 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
   }
 
   skip_length_block(reader, "color mode data");
-  auto image_resources = read_length_block(reader, "image resources");
+  const auto image_resources_length =
+      read_section_length(reader, "image resources");
+  const auto image_resources = reader.read_span(image_resources_length);
   charge_image_resource_records(image_resources, resource_record_budget);
   const auto channel_resources = parse_composite_channel_resources(image_resources);
 
   Document document(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
   if (auto icc_profile = find_image_resource_payload_view(image_resources, kImageResourceIccProfile);
       header.color_mode == kColorModeRgb && icc_profile.has_value()) {
+    retained_payload_budget.charge_size(icc_profile->size());
     document.color_state().embedded_icc_profile.assign(icc_profile->begin(),
                                                        icc_profile->end());
   }
@@ -1216,7 +1274,11 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
       altitude.has_value() && altitude->size() >= 4U) {
     global_light_altitude = static_cast<float>(static_cast<std::int32_t>(BigEndianReader(*altitude).read_u32()));
   }
-  document.metadata().raw_psd_image_resources = std::move(image_resources);
+  if (options.preserve_unknown_blocks) {
+    retained_payload_budget.charge_size(image_resources.size());
+    document.metadata().raw_psd_image_resources.assign(image_resources.begin(),
+                                                       image_resources.end());
+  }
   const auto layer_mask_length =
       header.large_document
           ? read_section_length_u64(reader, "layer and mask information")
@@ -1238,6 +1300,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
     document = read_flat_composite(reader, header, cmyk_icc, channel_resources,
                                    has_merged_transparency, primary_pixel_budget,
                                    decompressed_budget, tracked_live_budget,
+                                   retained_payload_budget,
+                                   options.preserve_unknown_blocks,
                                    &damaged_rows);
     document.metadata() = std::move(metadata);
     document.color_state().embedded_icc_profile = std::move(color_state.embedded_icc_profile);
@@ -1248,10 +1312,10 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
     document.metadata().values["psd.version"] = header.large_document ? "PSB" : "PSD";
     document.metadata().values["psd.color_mode"] = color_mode_name(header.color_mode);
     if (auto palette = find_image_resource_payload_view(
-            document.metadata().raw_psd_image_resources,
-            kImageResourcePatchyPalette);
+            image_resources, kImageResourcePatchyPalette);
         palette.has_value()) {
-      apply_patchy_palette_resource(document, *palette);
+      apply_patchy_palette_resource(document, *palette,
+                                    retained_payload_budget);
     }
     append_damaged_row_notice(damaged_rows, options.notices);
     return document;
@@ -1265,20 +1329,23 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
                               cmyk_icc, has_merged_transparency, options.notices, &damaged_rows,
                               primary_pixel_budget, decompressed_budget,
                               tracked_live_budget, layer_record_budget,
-                              channel_record_budget, resource_record_budget);
-    const auto add_layer = [&document](const Layer& source) {
-      document.add_layer(clone_layer_with_document_ids(document, source));
+                              channel_record_budget, resource_record_budget,
+                              retained_payload_budget,
+                              options.preserve_unknown_blocks);
+    const auto add_layer = [&document](Layer source) {
+      document.add_layer(
+          move_layer_with_document_ids(document, std::move(source)));
     };
 
     // Photoshop stores layer records bottom-to-top. Older Patchy builds wrote
     // them top-to-bottom, which is detectable when a full Background record is last.
     if (records_look_like_legacy_top_to_bottom(layers, document.width(), document.height())) {
       for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
-        add_layer(*it);
+        add_layer(std::move(*it));
       }
     } else {
-      for (const auto& source : layers) {
-        add_layer(source);
+      for (auto& source : layers) {
+        add_layer(std::move(source));
       }
     }
 
@@ -1290,7 +1357,13 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
     if (layer_reader.remaining() >= 4U) {
       const auto global_mask_length = layer_reader.read_u32();
       if (global_mask_length <= layer_reader.remaining()) {
-        document.metadata().raw_psd_global_layer_mask_info = layer_reader.read_bytes(global_mask_length);
+        if (options.preserve_unknown_blocks) {
+          retained_payload_budget.charge(global_mask_length);
+          document.metadata().raw_psd_global_layer_mask_info =
+              layer_reader.read_bytes(global_mask_length);
+        } else {
+          layer_reader.skip(global_mask_length);
+        }
       }
     }
     std::size_t global_block_index = 0;
@@ -1332,12 +1405,13 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
             global_light_angle, global_light_altitude, header.large_document, cmyk_icc,
             has_merged_transparency, options.notices, &damaged_rows, primary_pixel_budget,
             decompressed_budget, tracked_live_budget, layer_record_budget,
-            channel_record_budget, resource_record_budget);
+            channel_record_budget, resource_record_budget,
+            retained_payload_budget, options.preserve_unknown_blocks);
         // Always Photoshop's bottom-to-top order: legacy Patchy never wrote these
         // blocks, so the legacy-order heuristic used for the standard section
         // could only misfire here.
-        for (const auto& source : deep_layers) {
-          add_layer(source);
+        for (auto& source : deep_layers) {
+          add_layer(std::move(source));
         }
       } else if ((key == "Mt16" && header.depth == 16) || (key == "Mt32" && header.depth == 32)) {
         // Deep merged-transparency planes have no place in the converted 8-bit
@@ -1349,26 +1423,43 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
         link_block.key = key;
         link_block.long_length = wide_length;
         link_block.original_global_index = global_block_index;
-        link_block.original_payload =
-            std::make_shared<const std::vector<std::uint8_t>>(payload.begin(),
-                                                              payload.end());
-        if (auto sources = parse_linked_layer_block(*link_block.original_payload);
+        if (options.preserve_unknown_blocks) {
+          retained_payload_budget.charge_size(payload.size());
+          link_block.original_payload =
+              std::make_shared<const std::vector<std::uint8_t>>(
+                  payload.begin(), payload.end());
+        }
+        if (auto sources = parse_linked_layer_block(
+                payload, retained_payload_budget,
+                options.preserve_unknown_blocks);
             sources.has_value()) {
           link_block.sources = std::move(*sources);
-        } else {
+        } else if (options.preserve_unknown_blocks) {
           link_block.opaque = true;
         }
-        document.metadata().smart_objects.blocks.push_back(std::move(link_block));
+        if (options.preserve_unknown_blocks || !link_block.sources.empty()) {
+          document.metadata().smart_objects.blocks.push_back(std::move(link_block));
+        }
       } else if (key == "FEid" || key == "FXid") {
         // Native Smart Filter caches are per placed-layer INSTANCE (SoLd
         // `placed`), not per shared embedded source (`Idnt`). Keep each record's
         // large byte ranges shared across undo snapshots and preserve opaque
         // variants verbatim.
-        auto shared_payload = std::make_shared<const std::vector<std::uint8_t>>(
-            payload.begin(), payload.end());
-        document.metadata().smart_filter_effects.add_block(parse_filter_effects_block(
+        // Parsed Smart Filter records use ranges into this shared storage for
+        // semantics and future edits, so the owner is retained even when
+        // generic unknown preservation is disabled. Opaque blocks are dropped
+        // in that mode below.
+        retained_payload_budget.charge_size(payload.size());
+        auto shared_payload =
+            std::make_shared<const std::vector<std::uint8_t>>(payload.begin(),
+                                                              payload.end());
+        auto parsed = parse_filter_effects_block(
             key, std::move(shared_payload), wide_length, global_block_index,
-            decompressed_budget, tracked_live_budget));
+            decompressed_budget, tracked_live_budget,
+            retained_payload_budget);
+        if (!parsed.opaque || options.preserve_unknown_blocks) {
+          document.metadata().smart_filter_effects.add_block(std::move(parsed));
+        }
       } else if (key == "Patt" || key == "Pat2" || key == "Pat3") {
         // Pattern pixel data: decode into the store so pattern overlays / bevel
         // textures can render, AND keep the raw block preserved verbatim (Patchy
@@ -1377,15 +1468,20 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
         auto decoded = parse_patterns_block(payload, cmyk_icc,
                                             decompressed_budget,
                                             tracked_live_budget,
-                                            pattern_record_budget);
+                                            pattern_record_budget,
+                                            retained_payload_budget);
         for (auto& resource : decoded) {
           document.metadata().patterns.adopt(resource);
         }
-        document.metadata().unknown_psd_resources.push_back(
-            UnknownPsdBlock{key,
-                            std::vector<std::uint8_t>(payload.begin(), payload.end()),
-                            wide_length, global_block_index});
-      } else {
+        if (options.preserve_unknown_blocks) {
+          retained_payload_budget.charge_size(payload.size());
+          document.metadata().unknown_psd_resources.push_back(
+              UnknownPsdBlock{key,
+                              std::vector<std::uint8_t>(payload.begin(), payload.end()),
+                              wide_length, global_block_index});
+        }
+      } else if (options.preserve_unknown_blocks) {
+        retained_payload_budget.charge_size(payload.size());
         document.metadata().unknown_psd_resources.push_back(
             UnknownPsdBlock{key,
                             std::vector<std::uint8_t>(payload.begin(), payload.end()),
@@ -1407,6 +1503,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
     document = read_flat_composite(reader, header, cmyk_icc, channel_resources,
                                    has_merged_transparency, primary_pixel_budget,
                                    decompressed_budget, tracked_live_budget,
+                                   retained_payload_budget,
+                                   options.preserve_unknown_blocks,
                                    &damaged_rows);
     document.metadata() = std::move(metadata);
     document.color_state().embedded_icc_profile = std::move(color_state.embedded_icc_profile);
@@ -1430,6 +1528,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
         auto flat_composite = read_flat_composite(reader, header, cmyk_icc, channel_resources,
                                                   has_merged_transparency, primary_pixel_budget,
                                                   decompressed_budget, tracked_live_budget,
+                                                  retained_payload_budget,
+                                                  options.preserve_unknown_blocks,
                                                   &damaged_rows);
         if (!flat_composite.layers().empty() && flat_composite.layers().front().kind() == LayerKind::Pixel) {
           document.metadata().psd_flat_composite =
@@ -1458,12 +1558,15 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
                                                           tracked_live_budget,
                                                           &damaged_rows);
       add_saved_composite_channels(document, std::move(saved_channels), first_saved_channel, header,
-                                   channel_resources);
+                                   channel_resources, retained_payload_budget,
+                                   options.preserve_unknown_blocks);
     }
   }
 
   append_damaged_row_notice(damaged_rows, options.notices);
-  finalize_smart_filter_layers(document.layers(), document.metadata().smart_filter_effects);
+  finalize_smart_filter_layers(document.layers(),
+                               document.metadata().smart_filter_effects,
+                               retained_payload_budget);
   SmartObjectImportCounts smart_object_counts;
   finalize_smart_object_layers(document.layers(), document.metadata().smart_objects, smart_object_counts);
   append_smart_object_notices(smart_object_counts, options.notices);
@@ -1472,21 +1575,26 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes,
   // image resources.
   finalize_vector_layers(document);
   if (const auto compound = find_image_resource_payload_view(
-          document.metadata().raw_psd_image_resources,
+          image_resources,
           kImageResourcePatchyCompoundVectors)) {
     apply_compound_vector_resource(document, *compound);
   }
+  auto compound_descriptor_workspace = tracked_live_budget.reserve_size(
+      compound_collapse_descriptor_workspace_bytes(document.layers()));
   collapse_compound_vector_groups(document);
-  parse_document_path_resources(document,
-                                document.metadata().raw_psd_image_resources);
+  compound_descriptor_workspace.release();
+  parse_document_path_resources(document, image_resources,
+                                retained_payload_budget,
+                                options.preserve_unknown_blocks);
 
   document.metadata().values["psd.version"] = header.large_document ? "PSB" : "PSD";
   document.metadata().values["psd.color_mode"] = color_mode_name(header.color_mode);
   if (auto palette = find_image_resource_payload_view(
-          document.metadata().raw_psd_image_resources,
+          image_resources,
           kImageResourcePatchyPalette);
       palette.has_value()) {
-    apply_patchy_palette_resource(document, *palette);
+    apply_patchy_palette_resource(document, *palette,
+                                  retained_payload_budget);
   }
   return document;
 } catch (const DescriptorNodeBudgetSignal&) {

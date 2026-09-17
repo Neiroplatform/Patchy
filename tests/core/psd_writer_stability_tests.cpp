@@ -1270,6 +1270,14 @@ void psd_compound_vectors_use_plugin_resource_and_read_legacy_markers() {
     const auto before_pixels = Compositor{}.flatten_rgb8(document);
     const auto after_pixels = Compositor{}.flatten_rgb8(reread);
     CHECK(std::equal(before_pixels.data().begin(), before_pixels.data().end(), after_pixels.data().begin(), after_pixels.data().end()));
+    psd::ReadOptions lossy_options;
+    lossy_options.preserve_unknown_blocks = false;
+    const auto lossy = psd::DocumentIo::read(bytes, lossy_options);
+    CHECK(lossy.layers().size() == 1 && layer_is_compound_vector(lossy.layers()[0]));
+    CHECK(lossy.layers()[0].vector_shape()->parts.size() == 2);
+    const auto lossy_pixels = Compositor{}.flatten_rgb8(lossy);
+    CHECK(std::equal(before_pixels.data().begin(), before_pixels.data().end(),
+                     lossy_pixels.data().begin(), lossy_pixels.data().end()));
     auto prepared_native = psd::prepare_compound_vector_psd(document);
     CHECK(prepared_native.has_value());
     auto native = std::move(*prepared_native);

@@ -181,7 +181,8 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
                                       const Rect &bounds,
                                       SmartFilterEffectsRecord &record,
                                       ParseBudgetTracker* decompressed_budget,
-                                      ParseLiveBudgetTracker* tracked_live_budget) {
+                                      ParseLiveBudgetTracker* tracked_live_budget,
+                                      ParseBudgetTracker* retained_payload_budget) {
   const auto pixels64 = static_cast<std::uint64_t>(bounds.width) *
                         static_cast<std::uint64_t>(bounds.height);
   if (pixels64 == 0U ||
@@ -276,6 +277,9 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
 
     SmartFilterEffectsMask mask;
     mask.bounds = bounds;
+    if (retained_payload_budget != nullptr) {
+      retained_payload_budget->charge_size(expected);
+    }
     mask.samples =
         std::make_shared<const std::vector<std::uint8_t>>(std::move(samples.bytes));
     samples.release_reservation();
@@ -293,7 +297,8 @@ encode_filter_mask_tail(const SmartFilterMask &mask) {
 parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
                            SmartFilterEffectsRecord &record,
                            ParseBudgetTracker* decompressed_budget,
-                           ParseLiveBudgetTracker* tracked_live_budget) {
+                           ParseLiveBudgetTracker* tracked_live_budget,
+                           ParseBudgetTracker* retained_payload_budget) {
   // A record may end immediately when no filter mask was written. Some versions
   // instead append a zero presence byte; both forms are accepted.
   if (bytes.empty()) {
@@ -328,7 +333,7 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
       return false;
     }
     return decode_filter_mask(mask_body, *bounds, record, decompressed_budget,
-                              tracked_live_budget);
+                              tracked_live_budget, retained_payload_budget);
   } catch (const ParseBudgetExceeded&) {
     throw;
   } catch (const std::runtime_error &) {
@@ -341,7 +346,8 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
     const std::shared_ptr<const std::vector<std::uint8_t>> &storage,
     std::size_t body_offset, std::size_t body_length,
     ParseBudgetTracker* decompressed_budget = nullptr,
-    ParseLiveBudgetTracker* tracked_live_budget = nullptr) {
+    ParseLiveBudgetTracker* tracked_live_budget = nullptr,
+    ParseBudgetTracker* retained_payload_budget = nullptr) {
   SmartFilterEffectsRecord record;
   record.source_block_key = block.key;
   record.source_block_version = block.version;
@@ -382,7 +388,8 @@ parse_optional_filter_mask(std::span<const std::uint8_t> bytes,
     const auto mask_supported =
         cache_supported &&
         parse_optional_filter_mask(body.subspan(reader.position()), record,
-                                   decompressed_budget, tracked_live_budget);
+                                   decompressed_budget, tracked_live_budget,
+                                   retained_payload_budget);
     record.data_supported = cache_supported && mask_supported;
   } catch (const ParseBudgetExceeded&) {
     throw;
@@ -597,7 +604,8 @@ SmartFilterEffectsBlock parse_filter_effects_block_impl(
     std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
     bool long_length, std::size_t original_global_index,
     ParseBudgetTracker* decompressed_budget,
-    ParseLiveBudgetTracker* tracked_live_budget) {
+    ParseLiveBudgetTracker* tracked_live_budget,
+    ParseBudgetTracker* retained_payload_budget) {
   SmartFilterEffectsBlock block;
   block.key = std::move(key);
   block.long_length = long_length;
@@ -645,7 +653,8 @@ SmartFilterEffectsBlock parse_filter_effects_block_impl(
           parse_filter_effects_record(block, payload, body_offset,
                                       static_cast<std::size_t>(record_length),
                                       decompressed_budget,
-                                      tracked_live_budget));
+                                      tracked_live_budget,
+                                      retained_payload_budget));
       reader.skip(static_cast<std::size_t>(record_length));
       // Photoshop aligns every length-prefixed FEid/FXid record to four bytes,
       // not only the final block payload. The padding is outside the declared
@@ -709,7 +718,7 @@ SmartFilterEffectsBlock parse_filter_effects_block(
     bool long_length, std::size_t original_global_index) {
   return parse_filter_effects_block_impl(
       std::move(key), std::move(payload), long_length, original_global_index,
-      nullptr, nullptr);
+      nullptr, nullptr, nullptr);
 }
 
 SmartFilterEffectsBlock parse_filter_effects_block(
@@ -718,7 +727,7 @@ SmartFilterEffectsBlock parse_filter_effects_block(
     ParseBudgetTracker& decompressed_budget) {
   return parse_filter_effects_block_impl(
       std::move(key), std::move(payload), long_length, original_global_index,
-      &decompressed_budget, nullptr);
+      &decompressed_budget, nullptr, nullptr);
 }
 
 SmartFilterEffectsBlock parse_filter_effects_block(
@@ -728,7 +737,18 @@ SmartFilterEffectsBlock parse_filter_effects_block(
     ParseLiveBudgetTracker& tracked_live_budget) {
   return parse_filter_effects_block_impl(
       std::move(key), std::move(payload), long_length, original_global_index,
-      &decompressed_budget, &tracked_live_budget);
+      &decompressed_budget, &tracked_live_budget, nullptr);
+}
+
+SmartFilterEffectsBlock parse_filter_effects_block(
+    std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
+    bool long_length, std::size_t original_global_index,
+    ParseBudgetTracker& decompressed_budget,
+    ParseLiveBudgetTracker& tracked_live_budget,
+    ParseBudgetTracker& retained_payload_budget) {
+  return parse_filter_effects_block_impl(
+      std::move(key), std::move(payload), long_length, original_global_index,
+      &decompressed_budget, &tracked_live_budget, &retained_payload_budget);
 }
 
 SmartFilterEffectsBlock parse_filter_effects_block(

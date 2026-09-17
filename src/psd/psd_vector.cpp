@@ -336,7 +336,9 @@ std::optional<VectorStroke> parse_vector_stroke_block(std::span<const std::uint8
 }
 
 std::optional<std::vector<LiveShapeParams>> parse_vector_origination_block(
-    std::span<const std::uint8_t> payload) {
+    std::span<const std::uint8_t> payload,
+    ParseBudgetTracker* retained_payload_budget,
+    ParseLiveBudgetTracker* tracked_live_budget) {
   const auto descriptor = read_block_descriptor(payload);
   if (!descriptor.has_value()) {
     return std::nullopt;
@@ -410,8 +412,26 @@ std::optional<std::vector<LiveShapeParams>> parse_vector_origination_block(
     }
     if (params.kind == LiveShapeKind::Custom) {
       // Unmodeled origination: keep the entry's exact descriptor bytes for
-      // verbatim regeneration while the group is untouched.
-      BigEndianWriter writer;
+      // verbatim regeneration while the group is untouched. Charge every
+      // output fragment before its backing vector grows, so a finite retained
+      // budget rejects before allocating bytes it cannot admit.
+      struct DescriptorWriteBudgets {
+        ParseBudgetTracker* retained{nullptr};
+        ParseLiveBudgetTracker::Reservation live_reservation;
+      } budgets{
+          retained_payload_budget,
+          tracked_live_budget != nullptr
+              ? tracked_live_budget->reserve(0U)
+              : ParseLiveBudgetTracker::Reservation{}};
+      BigEndianWriter writer(
+          [](void* context, std::size_t count) {
+            auto& budgets = *static_cast<DescriptorWriteBudgets*>(context);
+            budgets.live_reservation.grow_size(count);
+            if (budgets.retained != nullptr) {
+              budgets.retained->charge_size(count);
+            }
+          },
+          &budgets);
       write_descriptor(writer, entry);
       params.raw_descriptor = std::move(writer.bytes());
     }
@@ -1211,13 +1231,16 @@ void finalize_vector_layers(Document& document) {
   process(process, document.layers());
 }
 
-void parse_document_path_resources(Document& document, std::span<const std::uint8_t> image_resources) {
+void parse_document_path_resources(
+    Document& document, std::span<const std::uint8_t> image_resources,
+    ParseBudgetTracker& retained_payload_budget,
+    bool preserve_original_payloads) {
   BigEndianReader reader(image_resources);
   std::string clipping_path_name;
   struct PendingPath {
     std::uint16_t id{0};
     std::string name;
-    std::vector<std::uint8_t> payload;
+    std::span<const std::uint8_t> payload;
   };
   std::vector<PendingPath> pending;
   while (reader.remaining() >= 12U) {
@@ -1231,13 +1254,13 @@ void parse_document_path_resources(Document& document, std::span<const std::uint
     if (length > reader.remaining()) {
       break;
     }
-    auto payload = reader.read_bytes(length);
+    const auto payload = reader.read_span(length);
     if ((length % 2U) != 0U && reader.remaining() > 0U) {
       reader.skip(1);
     }
     if ((id >= kPsdSavedPathResourceFirst && id <= kPsdSavedPathResourceLast) ||
         id == kPsdWorkPathResourceId) {
-      pending.push_back(PendingPath{id, name, std::move(payload)});
+      pending.push_back(PendingPath{id, name, payload});
     } else if (id == kPsdClippingPathNameResourceId && !payload.empty()) {
       const auto name_length = std::min<std::size_t>(payload[0], payload.size() - 1U);
       clipping_path_name.assign(reinterpret_cast<const char*>(payload.data()) + 1, name_length);
@@ -1251,8 +1274,13 @@ void parse_document_path_resources(Document& document, std::span<const std::uint
     const bool is_work = entry.id == kPsdWorkPathResourceId;
     DocumentPath path(document.allocate_path_id(), is_work ? std::string("Work Path") : entry.name,
                       is_work ? DocumentPathKind::Work : DocumentPathKind::Saved, std::move(*parsed));
-    path.set_resource_source(entry.id,
-                             std::make_shared<const std::vector<std::uint8_t>>(std::move(entry.payload)));
+    if (preserve_original_payloads) {
+      retained_payload_budget.charge_size(entry.payload.size());
+      path.set_resource_source(
+          entry.id,
+          std::make_shared<const std::vector<std::uint8_t>>(
+              entry.payload.begin(), entry.payload.end()));
+    }
     if (!is_work && !clipping_path_name.empty() && entry.name == clipping_path_name) {
       path.set_clipping_path(true);
     }

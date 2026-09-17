@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace patchy {
 
@@ -377,6 +378,18 @@ Layer Layer::clone_with_id(LayerId id) const {
   auto cloned = *this;
   cloned.id_ = id;
   return cloned;
+}
+
+Layer Layer::move_with_id(LayerId id) && noexcept {
+  Layer moved = std::move(*this);
+  moved.id_ = id;
+  return moved;
+}
+
+void Layer::move_shared_models_from(Layer& source) noexcept {
+  smart_filter_stack_ = std::move(source.smart_filter_stack_);
+  vector_shape_ = std::move(source.vector_shape_);
+  vector_mask_ = std::move(source.vector_mask_);
 }
 
 std::optional<std::uint32_t>

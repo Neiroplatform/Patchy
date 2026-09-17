@@ -43,6 +43,25 @@ constexpr std::uint16_t kCompressionRle = 1;
 constexpr std::uint16_t kCompressionZip = 2;
 constexpr std::uint16_t kCompressionZipPrediction = 3;
 constexpr std::uint16_t kChannelRed = 0;
+
+inline bool layer_block_required_for_modeled_semantics(
+    std::string_view key, std::span<const std::uint8_t> payload) noexcept {
+  if (key == "fxrp") {
+    return payload.size() == 16U;
+  }
+  if (key == "lyid") {
+    return payload.size() == 4U &&
+           std::any_of(payload.begin(), payload.end(),
+                       [](std::uint8_t byte) { return byte != 0U; });
+  }
+  if (key == "pvcl" || key == "pvfi") {
+    constexpr std::array<std::uint8_t, 8> kCompoundPayload{
+        'P', 'V', 'C', 'L', 0U, 0U, 0U, 1U};
+    return std::equal(payload.begin(), payload.end(),
+                      kCompoundPayload.begin(), kCompoundPayload.end());
+  }
+  return false;
+}
 constexpr std::uint16_t kChannelGreen = 1;
 constexpr std::uint16_t kChannelBlue = 2;
 constexpr std::uint16_t kChannelBlack = 3;
@@ -179,6 +198,10 @@ struct LayerRecord {
   std::uint32_t section_divider_type{0};
   std::optional<LayerMaskInfo> mask;
   std::vector<UnknownPsdBlock> additional_blocks;
+  // When preservation is disabled, tagged payloads are parser workspace rather
+  // than returned-document state. Keep their reservations alive until the
+  // LayerRecord has supplied every modeled semantic value.
+  std::vector<ParseLiveBudgetTracker::Reservation> additional_block_live_reservations;
   // Smart-object placement parsed from 'SoLd'/'SoLE' (authoritative) or 'PlLd'.
   std::optional<PlacedLayerInfo> placed;
   std::string placed_source_block;
@@ -263,7 +286,10 @@ struct ParsedCompositeChannelResources {
   std::vector<std::string> legacy_names;
   std::vector<std::string> unicode_names;
   std::vector<std::uint32_t> identifiers;
-  std::vector<std::vector<std::uint8_t>> display_records;
+  // Views into the caller-owned image-resources section. Saved channels copy
+  // only the records they actually retain, avoiding an input-controlled
+  // temporary vector-of-vectors.
+  std::vector<std::span<const std::uint8_t>> display_records;
 };
 
 // PsdTextStyleRun / PsdTextParagraphRun and the runs/html serializers moved to
@@ -512,7 +538,10 @@ std::optional<LayerStyle> parse_patchy_layer_style(std::span<const std::uint8_t>
 LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
                               const CmykColorConverter& cmyk,
                               ParseBudgetTracker& channel_record_budget,
-                              ParseBudgetTracker& resource_record_budget);
+                              ParseBudgetTracker& resource_record_budget,
+                              ParseLiveBudgetTracker& tracked_live_budget,
+                              ParseBudgetTracker& retained_payload_budget,
+                              bool preserve_unknown_blocks);
 // synthesized_photoshop_layer_id: nonzero writes a fresh 'lyid' block for a
 // smart-object layer that has none preserved (see write_layer_record).
 void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bool strip_smart_object_blocks,
@@ -547,7 +576,9 @@ std::optional<VectorStroke> parse_vector_stroke_block(std::span<const std::uint8
                                                       const CmykColorConverter& cmyk,
                                                       bool* content_present = nullptr);
 std::optional<std::vector<LiveShapeParams>> parse_vector_origination_block(
-    std::span<const std::uint8_t> payload);
+    std::span<const std::uint8_t> payload,
+    ParseBudgetTracker* retained_payload_budget = nullptr,
+    ParseLiveBudgetTracker* tracked_live_budget = nullptr);
 [[nodiscard]] bool is_vector_content_block_key(std::string_view key) noexcept;
 // Write side: payloads regenerate patch-in-place from preserved originals
 // where possible, otherwise the PS 27.8-captured canonical shapes; all padded
@@ -583,7 +614,10 @@ void upsert_document_path_resources(std::vector<ImageResource>& resources, const
 // derived plane.
 void finalize_vector_layers(Document& document);
 // Parses saved/work/clipping path resources into document.paths().
-void parse_document_path_resources(Document& document, std::span<const std::uint8_t> image_resources);
+void parse_document_path_resources(Document& document,
+                                   std::span<const std::uint8_t> image_resources,
+                                   ParseBudgetTracker& retained_payload_budget,
+                                   bool preserve_original_payloads);
 
 // Image-resources (8BIM) section codec (definitions in psd_image_resources.cpp).
 void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t id,
@@ -601,11 +635,15 @@ std::uint16_t composite_color_channel_count(std::uint16_t color_mode) noexcept;
 void add_saved_composite_channels(Document& document,
                                   std::vector<TrackedByteBuffer> channel_planes,
                                   std::uint16_t first_saved_channel, const Header& header,
-                                  const ParsedCompositeChannelResources& resources);
+                                  const ParsedCompositeChannelResources& resources,
+                                  ParseBudgetTracker& retained_payload_budget,
+                                  bool preserve_original_payloads);
 std::optional<DocumentPrintSettings> print_settings_from_resolution_resource(std::span<const std::uint8_t> payload);
 std::optional<std::pair<DocumentGridSettings, std::vector<DocumentGuide>>>
 grid_guides_from_resource(std::span<const std::uint8_t> payload);
-void apply_patchy_palette_resource(Document& document, std::span<const std::uint8_t> payload);
+void apply_patchy_palette_resource(Document& document,
+                                   std::span<const std::uint8_t> payload,
+                                   ParseBudgetTracker& retained_payload_budget);
 std::optional<Document> prepare_compound_vector_psd(const Document& document);
 void apply_compound_vector_resource(Document& document, std::span<const std::uint8_t> payload);
 std::vector<std::uint8_t> image_resources_for_document(const Document& document,

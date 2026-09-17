@@ -52,8 +52,10 @@ clones, and render-generated previews; it is not a complete process-memory limit
 `max_tracked_live_bytes` independently caps the conservative logical live set of
 instrumented parser-owned workspace. It covers decoded RAW/ZIP/RLE channel storage,
 RLE count tables and decoded rows, 32-bit ZIP-prediction shuffle rows, CMYK ICC
-conversion scratch, decoded pattern planes plus tile construction, and Smart Filter
-mask decode storage. The current reservation and monotonic high-water are exposed as
+conversion scratch, decoded pattern planes plus tile construction, Smart Filter mask
+decode storage, live-shape descriptor normalization, and raw-descriptor overlap while
+compound vector groups collapse into their final modeled layer. The current reservation and
+monotonic high-water are exposed as
 `ParseUsage::tracked_live_bytes` and `tracked_live_bytes_high_water`; current usage is
 zero after every successful read and after exception unwind. Admission occurs before
 the corresponding allocation, and a rejected reservation changes neither counter.
@@ -99,6 +101,36 @@ patterns inside skipped payloads. Finite production values and caller wiring bel
 downstream `DP-010`, after corpus and native/WASM calibration. Until then, product
 behavior remains source-compatible and unlimited.
 
+`max_retained_payload_bytes` is the independent cumulative guard for source-derived
+byte/sample payloads promoted into distinct persistent owners reachable from the
+returned `Document`. `ParseUsage::retained_payload_bytes` is monotonic admission, not
+a late walk of the final object graph: once a charge succeeds it remains visible if a
+later semantic parse, allocation, deduplication, or recovery path fails. Shared aliases
+count once, but physically separate copies count separately. The current owner census
+is the preserved image-resource section; RGB ICC copy; saved-channel raw display
+records; saved/work path source payloads; global layer mask; layer Blend If and tagged
+payloads; preserved global tagged payloads; Smart Object outer, element, and embedded
+file owners; Smart Filter block storage, decoded masks, and per-layer mask copies;
+decoded RGBA pattern tiles; decoded Patchy palette color arrays; and live-shape raw
+descriptors. Input bytes, primary pixels, decompression/workspace planes, strings and
+container overhead, third-party allocations, undo/history, save buffers, RSS, and
+committed WebAssembly heap pages are outside this dimension. Live-shape descriptor
+serialization charges each output fragment before the persistent backing vector grows.
+
+`ReadOptions::preserve_unknown_blocks=false` is now an explicit lossy/lower-retention
+mode. It suppresses preservation-only image resources, layer/global unknown blocks,
+global-mask bytes, path source bytes, Smart Object outer/element wrappers, and saved
+channel display-record bytes while retaining modeled semantics and embedded Smart
+Object files. Known Smart Filter record storage is still retained because its record
+ranges are required for safe edits and serialization; the 16-byte layer-effects
+reference point (`fxrp`) is also retained because linked pattern effects read it at
+render time. Photoshop layer ids (`lyid`) and Patchy's `pvcl`/`pvfi` markers remain
+until compound-vector groups are collapsed into the modeled layer. Opaque Smart Filter
+blocks are dropped.
+`prefer_flat_composite` charges only owners reached before that early return.
+The returned object is render/inspection state, not authoritative byte-preserving save
+state. The default remains `true`, preserving the historical byte-identical behavior.
+
 The `input_budget`, `primary_pixel_budget`, and `psd_decompressed_budget` tests pin
 exact-fit and one-byte-short behavior, aggregate accounting, compression-independent
 source-depth accounting, file/span behavior where applicable, retained-flat and
@@ -109,6 +141,13 @@ enormous flat or zero-channel layer buffers. A rejection test must catch
 The tracked-live cases additionally pin RAII move/release semantics, decompressed-first
 admission precedence, zero current usage after failure, RAW/RLE/ZIP-prediction peaks,
 and typed-error escape through pattern and Smart Filter recovery catches.
+The retained-payload cases additionally pin exact `N`/`N-1` boundaries for raw owners,
+lossy mode plus `fxrp`/compound-marker semantic retention, saved-channel display
+records, document-path source bytes, many-small-owner aggregation, folder-state
+move transfer, pattern raw-plus-decoded ownership and duplicate-id monotonic admission,
+the three distinct embedded Smart Object copies, external-link metadata without a
+fictional file-byte charge, Patchy palette arrays, and Smart Filter shared raw storage,
+decoded mask samples, and the separate per-layer mask copy.
 `ParseBudget` and `ParseUsage` are aggregate-initializable public structs: add fields
 only at the end. Appending fields preserves prior source aggregate positions, and
 appending enum values preserves earlier numeric values, but the public struct layouts

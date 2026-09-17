@@ -80,16 +80,25 @@ std::vector<std::uint8_t>& BigEndianWriter::bytes() noexcept {
   return bytes_;
 }
 
+void BigEndianWriter::before_write(std::size_t count) const {
+  if (before_write_ != nullptr) {
+    before_write_(before_write_context_, count);
+  }
+}
+
 void BigEndianWriter::write_u8(std::uint8_t value) {
+  before_write(1U);
   bytes_.push_back(value);
 }
 
 void BigEndianWriter::write_u16(std::uint16_t value) {
+  before_write(2U);
   bytes_.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
   bytes_.push_back(static_cast<std::uint8_t>(value & 0xFFU));
 }
 
 void BigEndianWriter::write_u32(std::uint32_t value) {
+  before_write(4U);
   bytes_.push_back(static_cast<std::uint8_t>((value >> 24U) & 0xFFU));
   bytes_.push_back(static_cast<std::uint8_t>((value >> 16U) & 0xFFU));
   bytes_.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
@@ -97,11 +106,19 @@ void BigEndianWriter::write_u32(std::uint32_t value) {
 }
 
 void BigEndianWriter::write_u64(std::uint64_t value) {
-  write_u32(static_cast<std::uint32_t>((value >> 32U) & 0xFFFFFFFFULL));
-  write_u32(static_cast<std::uint32_t>(value & 0xFFFFFFFFULL));
+  before_write(8U);
+  bytes_.push_back(static_cast<std::uint8_t>((value >> 56U) & 0xFFU));
+  bytes_.push_back(static_cast<std::uint8_t>((value >> 48U) & 0xFFU));
+  bytes_.push_back(static_cast<std::uint8_t>((value >> 40U) & 0xFFU));
+  bytes_.push_back(static_cast<std::uint8_t>((value >> 32U) & 0xFFU));
+  bytes_.push_back(static_cast<std::uint8_t>((value >> 24U) & 0xFFU));
+  bytes_.push_back(static_cast<std::uint8_t>((value >> 16U) & 0xFFU));
+  bytes_.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
+  bytes_.push_back(static_cast<std::uint8_t>(value & 0xFFU));
 }
 
 void BigEndianWriter::write_bytes(std::span<const std::uint8_t> bytes) {
+  before_write(bytes.size());
   bytes_.insert(bytes_.end(), bytes.begin(), bytes.end());
 }
 

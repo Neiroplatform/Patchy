@@ -1,5 +1,6 @@
 #include "core/document.hpp"
 #include "core/pattern_resource.hpp"
+#include "core/smart_object.hpp"
 #include "color/color_management.hpp"
 #include "formats/miniz/miniz.h"
 #include "psd/psd_binary.hpp"
@@ -8,7 +9,9 @@
 #include "psd/psd_filter_effects.hpp"
 #include "psd/psd_patterns.hpp"
 #include "psd/psd_parse_budget_internal.hpp"
+#include "psd/psd_smart_objects.hpp"
 #include "psd/psd_io_internal.hpp"
+#include "core_test_support.hpp"
 #include "psd_test_support.hpp"
 #include "test_groups.hpp"
 #include "test_harness.hpp"
@@ -17,6 +20,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -294,7 +298,9 @@ std::vector<std::uint8_t> structural_records_psd(
     std::span<const std::uint8_t> layer_block_payload = {},
     const char (&layer_block_key)[5] = "zzzz",
     std::span<const std::uint8_t> global_block_payload = {},
-    const char (&global_block_key)[5] = "zzzy") {
+    const char (&global_block_key)[5] = "zzzy",
+    std::span<const std::uint8_t> global_mask_payload = {},
+    std::size_t layer_block_repeat = 1U) {
   patchy::psd::BigEndianWriter image_resources;
   write_ascii4(image_resources, "8BIM");
   image_resources.write_u16(0x7fffU);
@@ -305,7 +311,9 @@ std::vector<std::uint8_t> structural_records_psd(
   extra.write_u32(0U);
   extra.write_u32(0U);
   write_pascal_padded(extra, "Structural", 4U);
-  write_tagged_block(extra, layer_block_key, layer_block_payload);
+  for (std::size_t index = 0; index < layer_block_repeat; ++index) {
+    write_tagged_block(extra, layer_block_key, layer_block_payload);
+  }
 
   patchy::psd::BigEndianWriter layer_info;
   layer_info.write_u16(1U);
@@ -337,7 +345,8 @@ std::vector<std::uint8_t> structural_records_psd(
   patchy::psd::BigEndianWriter layer_mask;
   layer_mask.write_u32(static_cast<std::uint32_t>(layer_info.bytes().size()));
   layer_mask.write_bytes(layer_info.bytes());
-  layer_mask.write_u32(0U);
+  layer_mask.write_u32(static_cast<std::uint32_t>(global_mask_payload.size()));
+  layer_mask.write_bytes(global_mask_payload);
   write_tagged_block(layer_mask, global_block_key, global_block_payload);
 
   patchy::psd::BigEndianWriter writer;
@@ -469,6 +478,26 @@ void expect_tracked_live_rejection(
   CHECK(usage.tracked_live_bytes_high_water == expected_high_water);
 }
 
+void expect_retained_payload_rejection(
+    std::span<const std::uint8_t> bytes, std::uint64_t limit,
+    std::uint64_t accepted_before_failure,
+    patchy::psd::ReadOptions options = {}) {
+  patchy::psd::ParseUsage usage;
+  options.budget.max_retained_payload_bytes = limit;
+  options.usage = &usage;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::RetainedPayloadBytes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
+  }
+  CHECK(usage.input_bytes == bytes.size());
+  CHECK(usage.retained_payload_bytes == accepted_before_failure);
+}
+
 void psd_decompressed_budget_api_defaults_and_usage_reset() {
   CHECK(patchy::psd::ParseBudget{}.max_decompressed_bytes ==
         std::numeric_limits<std::uint64_t>::max());
@@ -526,6 +555,7 @@ void psd_structural_budget_api_defaults_enum_and_usage_reset() {
   CHECK(defaults.max_resource_records == unlimited);
   CHECK(defaults.max_descriptor_nodes == unlimited);
   CHECK(defaults.max_pattern_records == unlimited);
+  CHECK(defaults.max_retained_payload_bytes == unlimited);
 
   const patchy::psd::ParseBudget positional{11U, 22U, 33U, 44U};
   CHECK(positional.max_primary_pixel_bytes == 11U);
@@ -537,6 +567,7 @@ void psd_structural_budget_api_defaults_enum_and_usage_reset() {
   CHECK(positional.max_resource_records == unlimited);
   CHECK(positional.max_descriptor_nodes == unlimited);
   CHECK(positional.max_pattern_records == unlimited);
+  CHECK(positional.max_retained_payload_bytes == unlimited);
 
   const patchy::psd::ParseUsage positional_usage{1U, 2U, 3U, 4U, 5U};
   CHECK(positional_usage.layer_records == 0U);
@@ -544,6 +575,7 @@ void psd_structural_budget_api_defaults_enum_and_usage_reset() {
   CHECK(positional_usage.resource_records == 0U);
   CHECK(positional_usage.descriptor_nodes == 0U);
   CHECK(positional_usage.pattern_records == 0U);
+  CHECK(positional_usage.retained_payload_bytes == 0U);
 
   using DimensionType =
       std::underlying_type_t<patchy::psd::ParseBudgetDimension>;
@@ -557,6 +589,8 @@ void psd_structural_budget_api_defaults_enum_and_usage_reset() {
             patchy::psd::ParseBudgetDimension::DescriptorNodes) == 7U);
   CHECK(static_cast<DimensionType>(
             patchy::psd::ParseBudgetDimension::PatternRecords) == 8U);
+  CHECK(static_cast<DimensionType>(
+            patchy::psd::ParseBudgetDimension::RetainedPayloadBytes) == 9U);
 
   const auto valid = flat_psd(8U, 0U);
   patchy::psd::ParseUsage usage;
@@ -565,6 +599,7 @@ void psd_structural_budget_api_defaults_enum_and_usage_reset() {
   usage.resource_records = 53U;
   usage.descriptor_nodes = 54U;
   usage.pattern_records = 55U;
+  usage.retained_payload_bytes = 56U;
   patchy::psd::ReadOptions options;
   options.usage = &usage;
   CHECK(patchy::psd::DocumentIo::read(valid, options).width() == 2);
@@ -573,12 +608,14 @@ void psd_structural_budget_api_defaults_enum_and_usage_reset() {
   CHECK(usage.resource_records == 0U);
   CHECK(usage.descriptor_nodes == 0U);
   CHECK(usage.pattern_records == 0U);
+  CHECK(usage.retained_payload_bytes == 0U);
 
   usage.layer_records = 61U;
   usage.channel_records = 62U;
   usage.resource_records = 63U;
   usage.descriptor_nodes = 64U;
   usage.pattern_records = 65U;
+  usage.retained_payload_bytes = 66U;
   const std::array<std::uint8_t, 4> malformed{'8', 'B', 'P', 'S'};
   bool malformed_rejected = false;
   try {
@@ -594,6 +631,7 @@ void psd_structural_budget_api_defaults_enum_and_usage_reset() {
   CHECK(usage.resource_records == 0U);
   CHECK(usage.descriptor_nodes == 0U);
   CHECK(usage.pattern_records == 0U);
+  CHECK(usage.retained_payload_bytes == 0U);
 }
 
 void psd_structural_budget_layers_channels_and_resources_are_exact() {
@@ -826,6 +864,576 @@ void psd_structural_budget_patterns_aggregate_and_validate_before_charge() {
   CHECK(usage.pattern_records == 1U);
 }
 
+void psd_retained_payload_budget_raw_owners_and_lossy_mode_are_exact() {
+  const std::array<std::uint8_t, 3> layer_payload{1U, 2U, 3U};
+  const std::array<std::uint8_t, 5> global_payload{4U, 5U, 6U, 7U, 8U};
+  const std::array<std::uint8_t, 4> global_mask{9U, 10U, 11U, 12U};
+  const auto bytes = structural_records_psd(
+      layer_payload, "zzzz", global_payload, "zzzy", global_mask);
+  constexpr std::uint64_t kImageResources = 12U;
+  constexpr std::uint64_t kExact =
+      kImageResources + layer_payload.size() + global_payload.size() +
+      global_mask.size();
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_retained_payload_bytes = kExact;
+  const auto preserved = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == kExact);
+  CHECK(preserved.metadata().raw_psd_image_resources.size() ==
+        kImageResources);
+  CHECK(preserved.metadata().raw_psd_global_layer_mask_info.size() ==
+        global_mask.size());
+  CHECK(preserved.layers().front().unknown_psd_blocks().size() == 1U);
+  CHECK(preserved.metadata().unknown_psd_resources.size() == 1U);
+
+  expect_retained_payload_rejection(bytes, kExact - 1U,
+                                    kExact - global_payload.size());
+
+  options.preserve_unknown_blocks = false;
+  options.budget.max_retained_payload_bytes = 0U;
+  const auto lossy = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == 0U);
+  CHECK(lossy.metadata().raw_psd_image_resources.empty());
+  CHECK(lossy.metadata().raw_psd_global_layer_mask_info.empty());
+  CHECK(lossy.layers().front().unknown_psd_blocks().empty());
+  CHECK(lossy.metadata().unknown_psd_resources.empty());
+  CHECK(lossy.layers().front().pixels().data().size() ==
+        preserved.layers().front().pixels().data().size());
+  CHECK(std::equal(lossy.layers().front().pixels().data().begin(),
+                   lossy.layers().front().pixels().data().end(),
+                   preserved.layers().front().pixels().data().begin()));
+
+  options.prefer_flat_composite = true;
+  options.preserve_unknown_blocks = true;
+  options.budget.max_retained_payload_bytes = kImageResources;
+  const auto flat = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(flat.width() == 1);
+  CHECK(usage.retained_payload_bytes == kImageResources);
+  expect_retained_payload_rejection(bytes, kImageResources - 1U, 0U,
+                                    options);
+}
+
+void psd_retained_payload_budget_patterns_count_raw_and_decoded_owners() {
+  const std::array<patchy::PatternResource, 2> patterns{
+      budget_pattern("11111111-1111-1111-1111-111111111111", 10U),
+      budget_pattern("22222222-2222-2222-2222-222222222222", 20U)};
+  const auto payload = patchy::psd::serialize_patterns_block(patterns);
+  const auto bytes = structural_records_psd({}, "zzzz", payload, "Patt");
+  constexpr std::uint64_t kImageResources = 12U;
+  constexpr std::uint64_t kTiles = 2U * 4U;
+  const auto exact = kImageResources + kTiles + payload.size();
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_retained_payload_bytes = exact;
+  const auto preserved = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == exact);
+  CHECK(preserved.metadata().patterns.patterns.size() == 2U);
+  CHECK(preserved.metadata().unknown_psd_resources.size() == 1U);
+  expect_retained_payload_rejection(bytes, exact - 1U,
+                                    kImageResources + kTiles);
+
+  options.preserve_unknown_blocks = false;
+  options.budget.max_retained_payload_bytes = kTiles;
+  const auto lossy = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == kTiles);
+  CHECK(lossy.metadata().patterns.patterns.size() == 2U);
+  CHECK(lossy.metadata().unknown_psd_resources.empty());
+  expect_retained_payload_rejection(bytes, kTiles - 1U, 4U, options);
+
+  const std::array<patchy::PatternResource, 2> duplicate_patterns{
+      budget_pattern("33333333-3333-3333-3333-333333333333", 30U),
+      budget_pattern("33333333-3333-3333-3333-333333333333", 40U)};
+  const auto duplicate_payload =
+      patchy::psd::serialize_patterns_block(duplicate_patterns);
+  const auto duplicate_bytes =
+      structural_records_psd({}, "zzzz", duplicate_payload, "Patt");
+  const auto duplicate_exact =
+      kImageResources + kTiles + duplicate_payload.size();
+  options.preserve_unknown_blocks = true;
+  options.budget.max_retained_payload_bytes = duplicate_exact;
+  const auto deduplicated =
+      patchy::psd::DocumentIo::read(duplicate_bytes, options);
+  CHECK(deduplicated.metadata().patterns.patterns.size() == 1U);
+  CHECK(usage.retained_payload_bytes == duplicate_exact);
+  expect_retained_payload_rejection(
+      duplicate_bytes, duplicate_exact - 1U,
+      kImageResources + kTiles, options);
+}
+
+void psd_retained_payload_budget_saved_channel_display_is_exact() {
+  patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Layer", rgb_pixels(1, 1));
+  patchy::PixelBuffer samples(1, 1, patchy::PixelFormat::gray8());
+  samples.data()[0] = 127U;
+  patchy::DocumentChannel channel(
+      document.allocate_channel_id(), "Alpha", patchy::DocumentChannelKind::Alpha,
+      std::move(samples));
+  patchy::psd::BigEndianWriter display;
+  display.write_u16(0U);      // RGB color space.
+  display.write_u16(257U);    // red = 1
+  display.write_u16(514U);    // green = 2
+  display.write_u16(771U);    // blue = 3
+  display.write_u16(0U);
+  display.write_u16(50U);     // opacity percent
+  display.write_u8(0U);       // masked areas
+  const auto display_record = display.bytes();
+  channel.set_raw_photoshop_display_info(display_record);
+  document.add_channel(std::move(channel));
+  const auto bytes = patchy::psd::DocumentIo::write_layered_rgb8(document);
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  const auto measured = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(measured.channels().size() == 1U);
+  CHECK(measured.channels().front().raw_photoshop_display_info() ==
+        display_record);
+  const auto exact = usage.retained_payload_bytes;
+  CHECK(exact >= display_record.size());
+
+  options.budget.max_retained_payload_bytes = exact;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options)
+            .channels()
+            .front()
+            .raw_photoshop_display_info() == display_record);
+  CHECK(usage.retained_payload_bytes == exact);
+  expect_retained_payload_rejection(
+      bytes, exact - 1U, exact - display_record.size(), options);
+
+  options.preserve_unknown_blocks = false;
+  const auto lossy = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(lossy.channels().size() == 1U);
+  CHECK(lossy.channels().front().raw_photoshop_display_info().empty());
+}
+
+void psd_retained_payload_budget_document_path_source_is_exact() {
+  patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Layer", rgb_pixels(1, 1));
+  document.add_path(patchy::DocumentPath(
+      document.allocate_path_id(), "Budget Path",
+      patchy::DocumentPathKind::Saved, patchy::VectorPath{}));
+  const auto bytes = patchy::psd::DocumentIo::write_layered_rgb8(document);
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  const auto measured = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(measured.paths().size() == 1U);
+  CHECK(measured.paths().front().raw_payload() != nullptr);
+  const auto path_bytes = measured.paths().front().raw_payload()->size();
+  CHECK(path_bytes > 0U);
+  const auto exact = usage.retained_payload_bytes;
+
+  options.budget.max_retained_payload_bytes = exact;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options)
+            .paths()
+            .front()
+            .raw_payload() != nullptr);
+  CHECK(usage.retained_payload_bytes == exact);
+  expect_retained_payload_rejection(bytes, exact - 1U,
+                                    exact - path_bytes, options);
+
+  options.preserve_unknown_blocks = false;
+  const auto lossy = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(lossy.paths().size() == 1U);
+  CHECK(lossy.paths().front().raw_payload() == nullptr);
+}
+
+void psd_retained_payload_budget_lossy_keeps_effects_reference_point() {
+  patchy::psd::BigEndianWriter payload;
+  patchy::psd::write_f64(payload, 12.5);
+  patchy::psd::write_f64(payload, -3.25);
+  const auto bytes = structural_records_psd(payload.bytes(), "fxrp");
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.preserve_unknown_blocks = false;
+  options.budget.max_retained_payload_bytes = payload.bytes().size();
+  options.usage = &usage;
+  const auto read = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == payload.bytes().size());
+  CHECK(read.layers().front().unknown_psd_blocks().size() == 1U);
+  CHECK(read.layers().front().unknown_psd_blocks().front().key == "fxrp");
+  const auto point =
+      patchy::layer_effects_reference_point(read.layers().front());
+  CHECK(point[0] == 12.5);
+  CHECK(point[1] == -3.25);
+  expect_retained_payload_rejection(bytes, payload.bytes().size() - 1U,
+                                    0U, options);
+
+  const std::array<std::uint8_t, 8> compound_payload{
+      'P', 'V', 'C', 'L', 0U, 0U, 0U, 1U};
+  for (const auto& compound_bytes : {
+           structural_records_psd(compound_payload, "pvcl"),
+           structural_records_psd(compound_payload, "pvfi")}) {
+    options.budget.max_retained_payload_bytes = compound_payload.size();
+    const auto compound =
+        patchy::psd::DocumentIo::read(compound_bytes, options);
+    CHECK(usage.retained_payload_bytes == compound_payload.size());
+    CHECK(compound.layers().front().unknown_psd_blocks().size() == 1U);
+    expect_retained_payload_rejection(
+        compound_bytes, compound_payload.size() - 1U, 0U, options);
+  }
+
+  const std::array<std::uint8_t, 4> layer_id{0U, 0U, 0U, 7U};
+  const auto layer_id_bytes = structural_records_psd(layer_id, "lyid");
+  options.budget.max_retained_payload_bytes = layer_id.size();
+  const auto identified =
+      patchy::psd::DocumentIo::read(layer_id_bytes, options);
+  CHECK(usage.retained_payload_bytes == layer_id.size());
+  CHECK(patchy::photoshop_layer_id(identified.layers().front()) == 7U);
+  expect_retained_payload_rejection(layer_id_bytes, layer_id.size() - 1U,
+                                    0U, options);
+
+  const std::array<std::uint8_t, 2> short_payload{1U, 2U};
+  const std::array<std::uint8_t, 8> wrong_compound{
+      'N', 'O', 'T', '!', 0U, 0U, 0U, 1U};
+  const std::array<std::uint8_t, 4> zero_layer_id{};
+  for (const auto& malformed_bytes : {
+           structural_records_psd(short_payload, "fxrp"),
+           structural_records_psd(wrong_compound, "pvcl"),
+           structural_records_psd(wrong_compound, "pvfi"),
+           structural_records_psd(zero_layer_id, "lyid")}) {
+    options.budget.max_retained_payload_bytes = 0U;
+    const auto malformed =
+        patchy::psd::DocumentIo::read(malformed_bytes, options);
+    CHECK(usage.retained_payload_bytes == 0U);
+    CHECK(malformed.layers().front().unknown_psd_blocks().empty());
+  }
+}
+
+void psd_retained_payload_folder_state_transfer_keeps_shared_owners() {
+  patchy::Layer source(0U, "Folder source", patchy::LayerKind::Pixel);
+  auto stack = patchy::test::test_gaussian_smart_filter_stack(1.0);
+  stack.mask.pixels =
+      patchy::PixelBuffer(2, 1, patchy::PixelFormat::gray8());
+  source.set_smart_filter_stack(std::move(stack));
+  patchy::VectorShapeContent shape;
+  shape.origination.push_back(patchy::LiveShapeParams{});
+  source.set_vector_shape(std::move(shape));
+  patchy::LayerVectorMask mask;
+  mask.cache = patchy::PixelBuffer(2, 1, patchy::PixelFormat::gray8());
+  source.set_vector_mask(std::move(mask));
+
+  const auto* stack_owner = source.smart_filter_stack();
+  const auto* shape_owner = source.vector_shape();
+  const auto* mask_owner = source.vector_mask();
+  patchy::Layer folder(0U, "Folder", patchy::LayerKind::Group);
+  folder.move_shared_models_from(source);
+  CHECK(folder.smart_filter_stack() == stack_owner);
+  CHECK(folder.vector_shape() == shape_owner);
+  CHECK(folder.vector_mask() == mask_owner);
+  CHECK(source.smart_filter_stack() == nullptr);
+  CHECK(source.vector_shape() == nullptr);
+  CHECK(source.vector_mask() == nullptr);
+}
+
+void psd_retained_payload_live_shape_descriptor_is_admitted_before_growth() {
+  patchy::psd::DescriptorObject entry;
+  entry.class_id = "null";
+  patchy::psd::DescriptorValue type;
+  type.type = patchy::psd::DescriptorValue::Type::Integer;
+  type.integer_value = 0;
+  entry.values.emplace("keyOriginType", std::move(type));
+  entry.key_order.push_back({"keyOriginType", true});
+  for (int index = 0; index < 12; ++index) {
+    const auto key = "customField" + std::to_string(index);
+    patchy::psd::DescriptorValue value;
+    value.type = patchy::psd::DescriptorValue::Type::String;
+    value.string_value = "descriptor-value-" + std::to_string(index);
+    entry.values.emplace(key, std::move(value));
+    entry.key_order.push_back({key, true});
+  }
+  patchy::psd::BigEndianWriter raw_writer;
+  patchy::psd::write_descriptor(raw_writer, entry);
+  patchy::LiveShapeParams custom;
+  custom.kind = patchy::LiveShapeKind::Custom;
+  custom.raw_descriptor = raw_writer.bytes();
+  const std::array<patchy::LiveShapeParams, 1> source{custom};
+  const auto payload =
+      patchy::psd::vector_origination_block_payload(source, nullptr);
+
+  const auto parse_with_limits = [&](std::uint64_t retained_limit,
+                                     std::uint64_t live_limit,
+                                     std::uint64_t& retained_usage,
+                                     std::uint64_t& live_current,
+                                     std::uint64_t& live_high) {
+    patchy::psd::ParseBudgetTracker retained(
+        retained_limit, &retained_usage,
+        patchy::psd::ParseBudgetDimension::RetainedPayloadBytes);
+    patchy::psd::ParseLiveBudgetTracker live(
+        live_limit, &live_current, &live_high);
+    return patchy::psd::parse_vector_origination_block(
+        payload, &retained, &live);
+  };
+
+  std::uint64_t retained_usage = 0U;
+  std::uint64_t live_current = 0U;
+  std::uint64_t live_high = 0U;
+  const auto exact = custom.raw_descriptor.size();
+  const auto parsed = parse_with_limits(
+      exact, exact, retained_usage, live_current, live_high);
+  CHECK(parsed.has_value() && parsed->size() == 1U);
+  CHECK(parsed->front().raw_descriptor == custom.raw_descriptor);
+  CHECK(retained_usage == exact);
+  CHECK(live_current == 0U);
+  CHECK(live_high == exact);
+
+  retained_usage = live_current = live_high = 0U;
+  try {
+    (void)parse_with_limits(exact - 1U, exact, retained_usage,
+                            live_current, live_high);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::RetainedPayloadBytes);
+  }
+  CHECK(retained_usage <= exact - 1U);
+  CHECK(live_current == 0U);
+
+  retained_usage = live_current = live_high = 0U;
+  try {
+    (void)parse_with_limits(exact, exact - 1U, retained_usage,
+                            live_current, live_high);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(live_current == 0U);
+  CHECK(live_high <= exact - 1U);
+}
+
+void psd_retained_payload_budget_many_small_owners_are_aggregate() {
+  constexpr std::size_t kOwnerCount = 64U;
+  const std::array<std::uint8_t, 2> payload{0x5aU, 0xa5U};
+  const auto bytes = structural_records_psd(
+      payload, "zzzz", {}, "zzzy", {}, kOwnerCount);
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  const auto read = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(read.layers().front().unknown_psd_blocks().size() == kOwnerCount);
+  const auto exact = usage.retained_payload_bytes;
+  CHECK(exact >= kOwnerCount);
+
+  options.budget.max_retained_payload_bytes = exact;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options)
+            .layers()
+            .front()
+            .unknown_psd_blocks()
+            .size() == kOwnerCount);
+  CHECK(usage.retained_payload_bytes == exact);
+  expect_retained_payload_rejection(bytes, exact - 1U, exact - 2U,
+                                    options);
+
+  options.preserve_unknown_blocks = false;
+  options.budget.max_retained_payload_bytes = 0U;
+  const auto lossy = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == 0U);
+  CHECK(lossy.layers().front().unknown_psd_blocks().empty());
+}
+
+void psd_retained_payload_budget_palette_counts_distinct_color_arrays() {
+  patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Layer", rgb_pixels(1, 1));
+  const std::vector<patchy::RgbColor> colors{
+      {1U, 2U, 3U}, {4U, 5U, 6U}, {7U, 8U, 9U}};
+  const std::vector<std::string> names{"One", "Two", "Three"};
+  document.indexed_palette() =
+      patchy::DocumentIndexedPalette{colors, 2U, names};
+  patchy::DocumentPaletteEditing editing;
+  editing.palette.colors = colors;
+  editing.palette.names = names;
+  editing.alpha_threshold = 91U;
+  document.palette_editing() = std::move(editing);
+  const auto bytes = patchy::psd::DocumentIo::write_layered_rgb8(document);
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  const auto measured = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(measured.indexed_palette().has_value());
+  CHECK(measured.palette_editing().has_value());
+  const auto color_bytes = colors.size() * sizeof(patchy::RgbColor);
+  std::uint64_t exact = measured.metadata().raw_psd_image_resources.size() +
+                        2U * color_bytes;
+  for (const auto& layer : measured.layers()) {
+    exact += layer.raw_psd_blending_ranges().size();
+    for (const auto& block : layer.unknown_psd_blocks()) {
+      exact += block.payload.size();
+    }
+  }
+  CHECK(usage.retained_payload_bytes == exact);
+
+  options.budget.max_retained_payload_bytes = exact;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options)
+            .palette_editing()
+            .has_value());
+  expect_retained_payload_rejection(bytes, exact - 1U,
+                                    exact - color_bytes, options);
+
+  options.preserve_unknown_blocks = false;
+  options.budget.max_retained_payload_bytes = 2U * color_bytes;
+  const auto lossy = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == 2U * color_bytes);
+  CHECK(lossy.metadata().raw_psd_image_resources.empty());
+  CHECK(lossy.indexed_palette().has_value());
+  CHECK(lossy.palette_editing().has_value());
+}
+
+void psd_retained_payload_budget_smart_object_distinct_owners_are_exact() {
+  constexpr std::size_t kEmbeddedBytes = 7U;
+  patchy::SmartObjectSource source;
+  source.kind = patchy::SmartObjectSourceKind::Embedded;
+  source.uuid = "01234567-89ab-cdef-8123-456789abcdef";
+  source.filename = "Budget.bin";
+  source.filetype = "    ";
+  source.file_bytes = std::make_shared<const std::vector<std::uint8_t>>(
+      std::vector<std::uint8_t>{1U, 2U, 3U, 4U, 5U, 6U, 7U});
+  patchy::SmartObjectLinkBlock block;
+  block.key = "lnk2";
+  block.sources.push_back(std::move(source));
+  const auto payload = patchy::psd::serialize_linked_layer_block(block);
+  CHECK(!payload.empty());
+  const auto bytes = structural_records_psd({}, "zzzz", payload, "lnk2");
+  constexpr std::uint64_t kImageResources = 12U;
+  const auto exact = kImageResources + 2U * payload.size() + kEmbeddedBytes;
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_retained_payload_bytes = exact;
+  const auto preserved = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == exact);
+  CHECK(preserved.metadata().smart_objects.blocks.size() == 1U);
+  const auto& preserved_block =
+      preserved.metadata().smart_objects.blocks.front();
+  CHECK(preserved_block.original_payload != nullptr);
+  CHECK(preserved_block.sources.size() == 1U);
+  CHECK(preserved_block.sources.front().original_element_bytes != nullptr);
+  CHECK(preserved_block.sources.front().file_bytes->size() == kEmbeddedBytes);
+  expect_retained_payload_rejection(bytes, exact - 1U,
+                                    kImageResources + payload.size() +
+                                        kEmbeddedBytes);
+
+  options.preserve_unknown_blocks = false;
+  options.budget.max_retained_payload_bytes = kEmbeddedBytes;
+  const auto lossy = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(usage.retained_payload_bytes == kEmbeddedBytes);
+  CHECK(lossy.metadata().smart_objects.blocks.size() == 1U);
+  const auto& lossy_block = lossy.metadata().smart_objects.blocks.front();
+  CHECK(lossy_block.original_payload == nullptr);
+  CHECK(lossy_block.sources.front().original_element_bytes == nullptr);
+  CHECK(lossy_block.sources.front().file_bytes->size() == kEmbeddedBytes);
+  expect_retained_payload_rejection(bytes, kEmbeddedBytes - 1U, 0U,
+                                    options);
+
+  patchy::SmartObjectSource external;
+  external.kind = patchy::SmartObjectSourceKind::ExternalFile;
+  external.uuid = "fedcba98-7654-3210-8fed-cba987654321";
+  external.filename = "External.psb";
+  external.filetype = "8BPS";
+  external.external_full_path = "file:///tmp/External.psb";
+  external.external_original_path = "/tmp/External.psb";
+  external.external_rel_path = "External.psb";
+  external.external_file_size = std::numeric_limits<std::uint64_t>::max();
+  patchy::SmartObjectLinkBlock external_block;
+  external_block.key = "lnk2";
+  external_block.sources.push_back(std::move(external));
+  const auto external_payload =
+      patchy::psd::serialize_linked_layer_block(external_block);
+  CHECK(!external_payload.empty());
+  const auto external_bytes =
+      structural_records_psd({}, "zzzz", external_payload, "lnk2");
+  const auto external_exact =
+      kImageResources + 2U * external_payload.size();
+  options.preserve_unknown_blocks = true;
+  options.budget.max_retained_payload_bytes = external_exact;
+  const auto external_read =
+      patchy::psd::DocumentIo::read(external_bytes, options);
+  CHECK(usage.retained_payload_bytes == external_exact);
+  CHECK(external_read.metadata().smart_objects.blocks.size() == 1U);
+  const auto& external_source =
+      external_read.metadata().smart_objects.blocks.front().sources.front();
+  CHECK(external_source.kind == patchy::SmartObjectSourceKind::ExternalFile);
+  CHECK(external_source.file_bytes == nullptr);
+  CHECK(external_source.external_file_size ==
+        std::numeric_limits<std::uint64_t>::max());
+  expect_retained_payload_rejection(
+      external_bytes, external_exact - 1U,
+      kImageResources + external_payload.size(), options);
+
+  options.preserve_unknown_blocks = false;
+  options.budget.max_retained_payload_bytes = 0U;
+  const auto external_lossy =
+      patchy::psd::DocumentIo::read(external_bytes, options);
+  CHECK(usage.retained_payload_bytes == 0U);
+  CHECK(external_lossy.metadata().smart_objects.blocks.size() == 1U);
+  CHECK(external_lossy.metadata().smart_objects.blocks.front()
+            .sources.front()
+            .external_file_size ==
+        std::numeric_limits<std::uint64_t>::max());
+}
+
+void psd_retained_payload_budget_smart_filter_mask_copy_is_exact() {
+  patchy::Document document(2, 1, patchy::PixelFormat::rgb8());
+  auto source = rgb_pixels(2, 1);
+  auto& layer = document.add_pixel_layer("Layer", source);
+
+  const std::string placed_uuid =
+      "01234567-89ab-cdef-8123-456789abcdef";
+  patchy::SmartObjectPlacement placement;
+  placement.uuid = "11111111-2222-3333-8444-555555555555";
+  placement.transform = {0.0, 0.0, 2.0, 0.0, 2.0, 1.0, 0.0, 1.0};
+  placement.width = 2.0;
+  placement.height = 1.0;
+  placement.resolution = 72.0;
+  auto stack = patchy::test::test_gaussian_smart_filter_stack(1.0);
+  layer.unknown_psd_blocks().push_back(patchy::UnknownPsdBlock{
+      "SoLd", patchy::psd::author_placed_layer_sold_payload(
+                  placement, placed_uuid, &stack)});
+  patchy::set_layer_smart_object_metadata(
+      layer, placement, placed_uuid, "SoLd", "",
+      patchy::kSmartObjectRasterStatusPhotoshop);
+  layer.set_smart_filter_stack(stack);
+  document.metadata().smart_objects.add_embedded(
+      placement.uuid, "source.raw", "    ",
+      std::make_shared<const std::vector<std::uint8_t>>(
+          std::vector<std::uint8_t>{0U}));
+
+  patchy::SmartFilterMask mask;
+  mask.bounds = patchy::Rect{0, 0, 2, 1};
+  mask.pixels = patchy::PixelBuffer(2, 1, patchy::PixelFormat::gray8());
+  mask.pixels.pixel(0, 0)[0] = 0U;
+  mask.pixels.pixel(1, 0)[0] = 255U;
+  const auto authored = patchy::psd::author_filter_effects_record(
+      placed_uuid, mask.bounds, source, mask.bounds, mask);
+  CHECK(authored.has_value());
+  CHECK(document.metadata().smart_filter_effects.upsert_authored(*authored));
+
+  const auto bytes = patchy::psd::DocumentIo::write_layered_rgb8(document);
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  const auto measured = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(measured.layers().front().smart_filter_stack() != nullptr);
+  CHECK(measured.layers().front().smart_filter_stack()->mask.pixels.data().size() ==
+        2U);
+  const auto exact = usage.retained_payload_bytes;
+  CHECK(exact >= 4U);
+
+  options.budget.max_retained_payload_bytes = exact;
+  const auto exact_read = patchy::psd::DocumentIo::read(bytes, options);
+  CHECK(exact_read.layers().front().smart_filter_stack() != nullptr);
+  CHECK(usage.retained_payload_bytes == exact);
+  expect_retained_payload_rejection(bytes, exact - 1U, exact - 2U, options);
+}
+
 void psd_tracked_live_budget_raii_is_exact_and_move_safe() {
   std::uint64_t current = 99U;
   std::uint64_t high_water = 99U;
@@ -857,6 +1465,28 @@ void psd_tracked_live_budget_raii_is_exact_and_move_safe() {
     CHECK(rejected);
     CHECK(current == 4U);
     CHECK(high_water == 7U);
+  }
+  CHECK(current == 0U);
+  CHECK(high_water == 7U);
+
+  {
+    auto growing = tracker.reserve(0U);
+    growing.grow_size(6U);
+    CHECK(current == 6U);
+    CHECK(high_water == 7U);
+    bool growth_rejected = false;
+    try {
+      growing.grow_size(5U);
+    } catch (const patchy::psd::ParseBudgetExceeded& error) {
+      growth_rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::ParseBudgetDimension::TrackedLiveBytes);
+    }
+    CHECK(growth_rejected);
+    CHECK(current == 6U);
+    auto moved = std::move(growing);
+    moved.grow_size(1U);
+    CHECK(current == 7U);
   }
   CHECK(current == 0U);
   CHECK(high_water == 7U);
@@ -1302,6 +1932,28 @@ std::vector<patchy::test::TestCase> psd_parse_budget_tests() {
        psd_structural_budget_prefer_flat_deep_headers_are_exact},
       {"psd_structural_budget_patterns_aggregate_and_validate_before_charge",
        psd_structural_budget_patterns_aggregate_and_validate_before_charge},
+      {"psd_retained_payload_budget_raw_owners_and_lossy_mode_are_exact",
+       psd_retained_payload_budget_raw_owners_and_lossy_mode_are_exact},
+      {"psd_retained_payload_budget_patterns_count_raw_and_decoded_owners",
+       psd_retained_payload_budget_patterns_count_raw_and_decoded_owners},
+      {"psd_retained_payload_budget_saved_channel_display_is_exact",
+       psd_retained_payload_budget_saved_channel_display_is_exact},
+      {"psd_retained_payload_budget_document_path_source_is_exact",
+       psd_retained_payload_budget_document_path_source_is_exact},
+      {"psd_retained_payload_budget_lossy_keeps_effects_reference_point",
+       psd_retained_payload_budget_lossy_keeps_effects_reference_point},
+      {"psd_retained_payload_folder_state_transfer_keeps_shared_owners",
+       psd_retained_payload_folder_state_transfer_keeps_shared_owners},
+      {"psd_retained_payload_live_shape_descriptor_is_admitted_before_growth",
+       psd_retained_payload_live_shape_descriptor_is_admitted_before_growth},
+      {"psd_retained_payload_budget_many_small_owners_are_aggregate",
+       psd_retained_payload_budget_many_small_owners_are_aggregate},
+      {"psd_retained_payload_budget_palette_counts_distinct_color_arrays",
+       psd_retained_payload_budget_palette_counts_distinct_color_arrays},
+      {"psd_retained_payload_budget_smart_object_distinct_owners_are_exact",
+       psd_retained_payload_budget_smart_object_distinct_owners_are_exact},
+      {"psd_retained_payload_budget_smart_filter_mask_copy_is_exact",
+       psd_retained_payload_budget_smart_filter_mask_copy_is_exact},
       {"psd_tracked_live_budget_raii_is_exact_and_move_safe",
        psd_tracked_live_budget_raii_is_exact_and_move_safe},
       {"psd_tracked_live_budget_flat_raw_precedence_and_unwind",

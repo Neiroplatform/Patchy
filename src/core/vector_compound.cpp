@@ -36,6 +36,28 @@ void copy_properties(const Layer& from, Layer& to) {
   if (from.vector_mask()) { to.set_vector_mask(*from.vector_mask()); }
 }
 
+void move_properties(Layer& from, Layer& to) {
+  to.set_visible(from.visible());
+  to.set_clipped(from.clipped());
+  to.set_opacity(from.opacity());
+  to.set_fill_opacity(from.fill_opacity());
+  to.set_blend_mode(from.blend_mode());
+  to.set_lock_flags(from.lock_flags());
+  to.set_bounds(from.bounds());
+  to.raw_psd_blending_ranges() = std::move(from.raw_psd_blending_ranges());
+  to.set_blend_if_rgb_compatible(from.blend_if_rgb_compatible());
+  if (from.channel_restriction_supported()) {
+    to.set_restricted_channels(from.restricted_channels());
+  } else {
+    to.set_channel_restriction_unsupported();
+  }
+  to.metadata() = std::move(from.metadata());
+  to.unknown_psd_blocks() = std::move(from.unknown_psd_blocks());
+  to.layer_style() = std::move(from.layer_style());
+  to.mask() = std::move(from.mask());
+  to.move_shared_models_from(from);
+}
+
 bool needs_open_path_strokes(const Layer& layer) {
   const auto* shape = layer.vector_shape();
   return layer_is_vector_shape(layer) && vector_lock_reason(layer).empty() && shape->parts.empty() &&
@@ -410,7 +432,7 @@ void collapse_compound_vector_groups(Document& document) {
           layer_contains_descendant(view, *document.active_layer_id());
       const auto merged_id = view.id();
       Layer merged(view.id(), view.name(), LayerKind::Pixel);
-      copy_properties(view, merged);
+      move_properties(layer, merged);
       merged.metadata().erase(kOpenPathStrokesMetadata);
       merged.set_fill_opacity(fill_opacity);
       std::erase_if(merged.unknown_psd_blocks(), [](const auto& block) {

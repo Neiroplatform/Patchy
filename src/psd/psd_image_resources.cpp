@@ -287,7 +287,7 @@ std::vector<std::uint32_t> parse_alpha_identifiers(std::span<const std::uint8_t>
   return identifiers;
 }
 
-std::vector<std::vector<std::uint8_t>> parse_display_info_records(
+std::vector<std::span<const std::uint8_t>> parse_display_info_records(
     std::span<const std::uint8_t> payload, bool floating_point_resource) {
   std::size_t offset = 0;
   const auto record_size = floating_point_resource ? 13U : 14U;
@@ -300,11 +300,10 @@ std::vector<std::vector<std::uint8_t>> parse_display_info_records(
   if ((payload.size() - offset) % record_size != 0U) {
     return {};
   }
-  std::vector<std::vector<std::uint8_t>> records;
+  std::vector<std::span<const std::uint8_t>> records;
   records.reserve((payload.size() - offset) / record_size);
   while (offset < payload.size()) {
-    records.emplace_back(payload.begin() + static_cast<std::ptrdiff_t>(offset),
-                         payload.begin() + static_cast<std::ptrdiff_t>(offset + record_size));
+    records.push_back(payload.subspan(offset, record_size));
     offset += record_size;
   }
   return records;
@@ -615,7 +614,9 @@ std::uint16_t composite_color_channel_count(std::uint16_t color_mode) noexcept {
 void add_saved_composite_channels(Document& document,
                                   std::vector<TrackedByteBuffer> channel_planes,
                                   std::uint16_t first_saved_channel, const Header& header,
-                                  const ParsedCompositeChannelResources& resources) {
+                                  const ParsedCompositeChannelResources& resources,
+                                  ParseBudgetTracker& retained_payload_budget,
+                                  bool preserve_original_payloads) {
   const auto color_channels = composite_color_channel_count(header.color_mode);
   if (first_saved_channel < color_channels || first_saved_channel > header.channels) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Invalid PSD saved channel layout"));
@@ -655,8 +656,13 @@ void add_saved_composite_channels(Document& document,
     DocumentChannelDisplayInfo display_info;
     std::vector<std::uint8_t> raw_display_info;
     if (display_index < resources.display_records.size()) {
-      raw_display_info = resources.display_records[display_index];
-      display_info = display_info_from_photoshop_record(raw_display_info);
+      const auto& source_display_info = resources.display_records[display_index];
+      display_info = display_info_from_photoshop_record(source_display_info);
+      if (preserve_original_payloads) {
+        retained_payload_budget.charge_size(source_display_info.size());
+        raw_display_info.assign(source_display_info.begin(),
+                                source_display_info.end());
+      }
     }
     const auto kind = display_info.color_indicates == DocumentChannelColorIndicates::SpotColor
                           ? DocumentChannelKind::Spot
@@ -744,7 +750,9 @@ grid_guides_from_resource(std::span<const std::uint8_t> payload) {
 }
 
 // Malformed payloads are ignored: the file still opens as a plain RGB document.
-void apply_patchy_palette_resource(Document& document, std::span<const std::uint8_t> payload) {
+void apply_patchy_palette_resource(
+    Document& document, std::span<const std::uint8_t> payload,
+    ParseBudgetTracker& retained_payload_budget) {
   if (payload.size() < 12U) {
     return;
   }
@@ -760,6 +768,12 @@ void apply_patchy_palette_resource(Document& document, std::span<const std::uint
   const auto count = static_cast<std::uint16_t>((payload[10] << 8U) | payload[11]);
   if (count == 0 || count > 256 || payload.size() < 12U + static_cast<std::size_t>(count) * 3U) {
     return;
+  }
+  const auto retained_color_bytes =
+      static_cast<std::size_t>(count) * sizeof(RgbColor);
+  retained_payload_budget.charge_size(retained_color_bytes);
+  if ((flags & 1U) != 0U) {
+    retained_payload_budget.charge_size(retained_color_bytes);
   }
   std::vector<RgbColor> colors;
   colors.reserve(count);
@@ -782,13 +796,16 @@ void apply_patchy_palette_resource(Document& document, std::span<const std::uint
       offset += size;
     }
   }
-  document.indexed_palette() = DocumentIndexedPalette{colors, depth, names};
   if ((flags & 1U) != 0U) {
+    document.indexed_palette() = DocumentIndexedPalette{colors, depth, names};
     DocumentPaletteEditing editing;
     editing.palette.colors = std::move(colors);
     editing.palette.names = std::move(names);
     editing.alpha_threshold = alpha_threshold;
     document.palette_editing() = std::move(editing);
+  } else {
+    document.indexed_palette() = DocumentIndexedPalette{
+        std::move(colors), depth, std::move(names)};
   }
 }
 

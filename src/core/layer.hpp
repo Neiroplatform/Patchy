@@ -567,6 +567,12 @@ public:
   // use this instead of content_revision, which also changes for style edits.
   [[nodiscard]] std::uint64_t pixel_revision() const noexcept;
   [[nodiscard]] Layer clone_with_id(LayerId id) const;
+  // Import plumbing: transfer an already-built layer into a Document without
+  // duplicating preserved payload vectors merely to replace reserved id 0.
+  [[nodiscard]] Layer move_with_id(LayerId id) && noexcept;
+  // Folder-record import plumbing: transfer immutable modeled owners without
+  // cloning their potentially large pixel/vector payloads.
+  void move_shared_models_from(Layer& source) noexcept;
 
   void set_name(std::string name);
   void set_visible(bool visible) noexcept;

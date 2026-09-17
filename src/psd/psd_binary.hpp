@@ -33,6 +33,12 @@ private:
 
 class BigEndianWriter {
 public:
+  using BeforeWrite = void (*)(void*, std::size_t);
+
+  BigEndianWriter() = default;
+  BigEndianWriter(BeforeWrite before_write, void* context) noexcept
+      : before_write_(before_write), before_write_context_(context) {}
+
   [[nodiscard]] const std::vector<std::uint8_t>& bytes() const noexcept;
   [[nodiscard]] std::vector<std::uint8_t>& bytes() noexcept;
 
@@ -43,7 +49,11 @@ public:
   void write_bytes(std::span<const std::uint8_t> bytes);
 
 private:
+  void before_write(std::size_t count) const;
+
   std::vector<std::uint8_t> bytes_;
+  BeforeWrite before_write_{nullptr};
+  void* before_write_context_{nullptr};
 };
 
 struct Header {

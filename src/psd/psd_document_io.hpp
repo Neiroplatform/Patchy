@@ -39,6 +39,10 @@ struct ParseBudget {
   std::uint64_t max_descriptor_nodes{std::numeric_limits<std::uint64_t>::max()};
   // Complete records admitted from document-global Patt/Pat2/Pat3 blocks.
   std::uint64_t max_pattern_records{std::numeric_limits<std::uint64_t>::max()};
+  // Source-derived byte/sample payloads promoted into distinct persistent
+  // owners reachable from the returned Document. Shared aliases count once;
+  // input, primary pixels, transient workspace and container overhead do not.
+  std::uint64_t max_retained_payload_bytes{std::numeric_limits<std::uint64_t>::max()};
 };
 
 struct ParseUsage {
@@ -54,6 +58,7 @@ struct ParseUsage {
   std::uint64_t resource_records{0};
   std::uint64_t descriptor_nodes{0};
   std::uint64_t pattern_records{0};
+  std::uint64_t retained_payload_bytes{0};
 };
 
 enum class ParseBudgetDimension : std::uint8_t {
@@ -66,6 +71,7 @@ enum class ParseBudgetDimension : std::uint8_t {
   ResourceRecords = 6,
   DescriptorNodes = 7,
   PatternRecords = 8,
+  RetainedPayloadBytes = 9,
 };
 
 class ParseBudgetExceeded final : public std::length_error {
@@ -81,6 +87,14 @@ private:
 };
 
 struct ReadOptions {
+  // False is a deliberately lossy, lower-retention read: semantic models remain,
+  // but preservation-only image resources, tagged blocks, path source bytes,
+  // Smart Object wrappers and saved-channel display records are not promoted.
+  // Known Smart Filter record storage, the layer-effects reference point
+  // ('fxrp'), Photoshop layer ids ('lyid'), and Patchy compound-vector markers
+  // remain because modeled editing/rendering depends on them.
+  // A Document read this way is render/inspection state, not authoritative
+  // byte-preserving save state.
   bool preserve_unknown_blocks{true};
   bool prefer_flat_composite{false};
   bool retain_flat_composite{false};

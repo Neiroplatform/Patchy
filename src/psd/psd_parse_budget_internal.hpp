@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -16,6 +17,7 @@ namespace patchy {
 class CmykToRgbTransform;
 struct PatternResource;
 struct SmartFilterEffectsBlock;
+struct SmartObjectSource;
 }  // namespace patchy
 
 namespace patchy::psd {
@@ -147,6 +149,20 @@ public:
 
     ~Reservation() { release(); }
 
+    void grow_size(std::size_t bytes) {
+      if (tracker_ == nullptr) {
+        return;
+      }
+      if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+        if (bytes > std::numeric_limits<std::uint64_t>::max()) {
+          tracker_->reject();
+        }
+      }
+      const auto increment = static_cast<std::uint64_t>(bytes);
+      tracker_->grow(increment);
+      bytes_ += increment;
+    }
+
     void release() noexcept {
       if (tracker_ != nullptr) {
         tracker_->release(bytes_);
@@ -207,6 +223,15 @@ public:
   }
 
 private:
+  void grow(std::uint64_t bytes) {
+    if (bytes > limit_ - current_) {
+      reject();
+    }
+    current_ += bytes;
+    high_water_ = std::max(high_water_, current_);
+    publish();
+  }
+
   void release(std::uint64_t bytes) noexcept {
     current_ -= bytes;
     publish();
@@ -283,12 +308,20 @@ void charge_active_descriptor_nodes(std::uint64_t count);
     std::span<const std::uint8_t> payload, const CmykToRgbTransform* cmyk_icc,
     ParseBudgetTracker& decompressed_budget,
     ParseLiveBudgetTracker& tracked_live_budget,
-    ParseBudgetTracker& pattern_record_budget);
+    ParseBudgetTracker& pattern_record_budget,
+    ParseBudgetTracker& retained_payload_budget);
 
 [[nodiscard]] SmartFilterEffectsBlock parse_filter_effects_block(
     std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,
     bool long_length, std::size_t original_global_index,
     ParseBudgetTracker& decompressed_budget,
-    ParseLiveBudgetTracker& tracked_live_budget);
+    ParseLiveBudgetTracker& tracked_live_budget,
+    ParseBudgetTracker& retained_payload_budget);
+
+[[nodiscard]] std::optional<std::vector<SmartObjectSource>>
+parse_linked_layer_block(
+    std::span<const std::uint8_t> payload,
+    ParseBudgetTracker& retained_payload_budget,
+    bool preserve_original_payloads);
 
 }  // namespace patchy::psd

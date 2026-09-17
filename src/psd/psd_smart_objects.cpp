@@ -1501,7 +1501,10 @@ struct ParsedElement {
   SmartObjectSource source;
 };
 
-std::optional<ParsedElement> parse_link_element(BigEndianReader& reader, std::span<const std::uint8_t> payload) {
+std::optional<ParsedElement> parse_link_element(
+    BigEndianReader& reader, std::span<const std::uint8_t> payload,
+    ParseBudgetTracker* retained_payload_budget,
+    bool preserve_original_payloads) {
   const auto element_length = reader.read_u64();
   const auto element_start = reader.position();
   if (element_length > reader.remaining()) {
@@ -1540,6 +1543,9 @@ std::optional<ParsedElement> parse_link_element(BigEndianReader& reader, std::sp
     }
     const auto data_start = reader.position();
     reader.skip(static_cast<std::size_t>(datasize));
+    if (retained_payload_budget != nullptr) {
+      retained_payload_budget->charge(static_cast<std::uint64_t>(datasize));
+    }
     parsed.source.file_bytes = std::make_shared<const std::vector<std::uint8_t>>(
         payload.begin() + static_cast<std::ptrdiff_t>(data_start),
         payload.begin() + static_cast<std::ptrdiff_t>(data_start + static_cast<std::size_t>(datasize)));
@@ -1587,6 +1593,8 @@ std::optional<ParsedElement> parse_link_element(BigEndianReader& reader, std::sp
     if (version >= 7 && reader.position() < element_end) {
       parsed.source.asset_lock_state = reader.read_u8();
     }
+  } catch (const ParseBudgetExceeded&) {
+    throw;
   } catch (const std::exception&) {
     // Unmodeled trailer variant: the verbatim skip below keeps the element intact.
   }
@@ -1599,9 +1607,16 @@ std::optional<ParsedElement> parse_link_element(BigEndianReader& reader, std::sp
   reader.skip(std::min<std::size_t>(static_cast<std::size_t>(padding), reader.remaining()));
 
   const auto span_end = reader.position();
-  parsed.source.original_element_bytes = std::make_shared<const std::vector<std::uint8_t>>(
-      payload.begin() + static_cast<std::ptrdiff_t>(element_start - 8U),
-      payload.begin() + static_cast<std::ptrdiff_t>(span_end));
+  if (preserve_original_payloads) {
+    const auto span_start = element_start - 8U;
+    if (retained_payload_budget != nullptr) {
+      retained_payload_budget->charge_size(span_end - span_start);
+    }
+    parsed.source.original_element_bytes =
+        std::make_shared<const std::vector<std::uint8_t>>(
+            payload.begin() + static_cast<std::ptrdiff_t>(span_start),
+            payload.begin() + static_cast<std::ptrdiff_t>(span_end));
+  }
   return parsed;
 }
 
@@ -1796,12 +1811,18 @@ std::optional<PlacedLayerInfo> parse_placed_layer_block(std::string_view key,
   return std::nullopt;
 }
 
-std::optional<std::vector<SmartObjectSource>> parse_linked_layer_block(std::span<const std::uint8_t> payload) {
+namespace {
+
+std::optional<std::vector<SmartObjectSource>> parse_linked_layer_block_impl(
+    std::span<const std::uint8_t> payload,
+    ParseBudgetTracker* retained_payload_budget,
+    bool preserve_original_payloads) {
   try {
     BigEndianReader reader(payload);
     std::vector<SmartObjectSource> sources;
     while (reader.remaining() >= 8U) {
-      auto parsed = parse_link_element(reader, payload);
+      auto parsed = parse_link_element(reader, payload, retained_payload_budget,
+                                       preserve_original_payloads);
       if (!parsed.has_value()) {
         return std::nullopt;
       }
@@ -1811,9 +1832,26 @@ std::optional<std::vector<SmartObjectSource>> parse_linked_layer_block(std::span
       return std::nullopt;
     }
     return sources;
+  } catch (const ParseBudgetExceeded&) {
+    throw;
   } catch (const std::exception&) {
     return std::nullopt;
   }
+}
+
+}  // namespace
+
+std::optional<std::vector<SmartObjectSource>> parse_linked_layer_block(
+    std::span<const std::uint8_t> payload) {
+  return parse_linked_layer_block_impl(payload, nullptr, true);
+}
+
+std::optional<std::vector<SmartObjectSource>> parse_linked_layer_block(
+    std::span<const std::uint8_t> payload,
+    ParseBudgetTracker& retained_payload_budget,
+    bool preserve_original_payloads) {
+  return parse_linked_layer_block_impl(payload, &retained_payload_budget,
+                                       preserve_original_payloads);
 }
 
 std::vector<std::uint8_t> serialize_linked_layer_block(const SmartObjectLinkBlock& block) {

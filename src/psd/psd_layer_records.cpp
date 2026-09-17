@@ -361,7 +361,10 @@ EncodedLayer encode_group(const Layer& layer, bool large_document) {
 LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
                               const CmykColorConverter& cmyk,
                               ParseBudgetTracker& channel_record_budget,
-                              ParseBudgetTracker& resource_record_budget) {
+                              ParseBudgetTracker& resource_record_budget,
+                              ParseLiveBudgetTracker& tracked_live_budget,
+                              ParseBudgetTracker& retained_payload_budget,
+                              bool preserve_unknown_blocks) {
   LayerRecord record;
   bool saw_lfx2_block = false;
   std::optional<std::size_t> lrfx_block_index;
@@ -447,6 +450,7 @@ LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
     if (extra_reader.position() > extra_end || blending_ranges_length > extra_end - extra_reader.position()) {
       throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD layer blending ranges exceed the layer record"));
     }
+    retained_payload_budget.charge_size(blending_ranges_length);
     record.blending_ranges = extra_reader.read_bytes(blending_ranges_length);
     if (extra_reader.position() < extra_end) {
       record.name = read_pascal_string(extra_reader, 4);
@@ -475,7 +479,18 @@ LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
         break;
       }
       resource_record_budget.charge(1U);
-      auto payload = extra_reader.read_bytes(static_cast<std::size_t>(block_length));
+      const auto payload_span =
+          extra_reader.read_span(static_cast<std::size_t>(block_length));
+      const bool retain_semantic_payload =
+          layer_block_required_for_modeled_semantics(key, payload_span);
+      if (preserve_unknown_blocks || retain_semantic_payload) {
+        retained_payload_budget.charge(block_length);
+      } else {
+        record.additional_block_live_reservations.push_back(
+            tracked_live_budget.reserve(block_length));
+      }
+      auto payload =
+          std::vector<std::uint8_t>(payload_span.begin(), payload_span.end());
       record.additional_blocks.push_back(
           UnknownPsdBlock{key, std::move(payload), wide_length});
       if (key == "iOpa" &&
