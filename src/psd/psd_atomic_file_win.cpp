@@ -181,6 +181,11 @@ void replace_destination(const std::filesystem::path& temporary,
     const auto backup = unused_backup_path(destination);
     call_stage_hook(control, AtomicWriteStage::ReplacementBackupSelected,
                     backup);
+    if (path_exists(backup)) {
+      // ReplaceFileW may reuse an occupied backup path. Fail closed rather
+      // than overwrite a file that this save did not create.
+      throw_write_error();
+    }
     if (ReplaceFileW(destination.c_str(), temporary.c_str(), backup.c_str(), 0U,
                      nullptr, nullptr) != FALSE) {
       DeleteFileW(backup.c_str());
