@@ -107,8 +107,38 @@ struct ReadOptions {
   ParseUsage* usage{nullptr};
 };
 
+struct SaveBudget {
+  // Exact bytes admitted to the final PSD/PSB byte stream. Intermediate
+  // serialization buffers are workspace and are deliberately not counted.
+  std::uint64_t max_logical_output_bytes{std::numeric_limits<std::uint64_t>::max()};
+};
+
+struct SaveUsage {
+  std::uint64_t logical_output_bytes{0};
+};
+
+enum class SaveBudgetDimension : std::uint8_t {
+  LogicalOutputBytes = 0,
+};
+
+class SaveBudgetExceeded final : public std::length_error {
+public:
+  explicit SaveBudgetExceeded(SaveBudgetDimension dimension);
+
+  [[nodiscard]] SaveBudgetDimension dimension() const noexcept {
+    return dimension_;
+  }
+
+private:
+  SaveBudgetDimension dimension_;
+};
+
 struct WriteOptions {
   bool large_document{false};
+  SaveBudget budget{};
+  // Optional observation hook. Reset at the start of every public write and
+  // updated only after a final-output charge succeeds.
+  SaveUsage* usage{nullptr};
 };
 
 class DocumentIo {

@@ -59,6 +59,13 @@ ParseBudgetExceeded::ParseBudgetExceeded(ParseBudgetDimension dimension)
           "QObject", "This PSD/PSB document is too large to import safely.")),
       dimension_(dimension) {}
 
+SaveBudgetExceeded::SaveBudgetExceeded(SaveBudgetDimension dimension)
+    // DP-010 owns translated product policy and UI copy. This engine-level
+    // diagnostic deliberately stays out of the translation catalog until a
+    // finite product caller can surface a dimension-specific message.
+    : std::length_error("PSD/PSB save budget exceeded"),
+      dimension_(dimension) {}
+
 namespace {
 
 void reset_parse_usage(ParseUsage* usage) {
@@ -66,6 +73,50 @@ void reset_parse_usage(ParseUsage* usage) {
     *usage = {};
   }
 }
+
+void reset_save_usage(SaveUsage* usage) {
+  if (usage != nullptr) {
+    *usage = {};
+  }
+}
+
+class SaveOutputBudgetTracker {
+public:
+  explicit SaveOutputBudgetTracker(const WriteOptions& options)
+      : remaining_(options.budget.max_logical_output_bytes),
+        usage_(options.usage != nullptr ? &options.usage->logical_output_bytes
+                                       : nullptr) {}
+
+  static void before_write(void* context, std::size_t bytes) {
+    static_cast<SaveOutputBudgetTracker*>(context)->charge_size(bytes);
+  }
+
+private:
+  void charge_size(std::size_t bytes) {
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+      if (bytes > std::numeric_limits<std::uint64_t>::max()) {
+        reject();
+      }
+    }
+    const auto bytes_u64 = static_cast<std::uint64_t>(bytes);
+    if (bytes_u64 > remaining_ ||
+        (usage_ != nullptr &&
+         bytes_u64 > std::numeric_limits<std::uint64_t>::max() - *usage_)) {
+      reject();
+    }
+    remaining_ -= bytes_u64;
+    if (usage_ != nullptr) {
+      *usage_ += bytes_u64;
+    }
+  }
+
+  [[noreturn]] static void reject() {
+    throw SaveBudgetExceeded(SaveBudgetDimension::LogicalOutputBytes);
+  }
+
+  std::uint64_t remaining_;
+  std::uint64_t* usage_;
+};
 
 std::vector<std::uint8_t> read_file_bytes_with_budget(const std::filesystem::path& path,
                                                       const ParseBudget& budget) {
@@ -1608,6 +1659,7 @@ Document DocumentIo::read_file(const std::filesystem::path& path, ReadOptions op
 }
 
 std::vector<std::uint8_t> DocumentIo::write_flat_rgb8(const Document& document, WriteOptions options) {
+  reset_save_usage(options.usage);
   check_write_dimensions(document, options.large_document);
 
   auto composite = document_alpha_composite(document);
@@ -1631,7 +1683,8 @@ std::vector<std::uint8_t> DocumentIo::write_flat_rgb8(const Document& document, 
   append_document_channels_for_write(document, extra_channels, channel_info);
   check_composite_channel_limit(extra_channels.size());
 
-  BigEndianWriter writer;
+  SaveOutputBudgetTracker output_budget(options);
+  BigEndianWriter writer(&SaveOutputBudgetTracker::before_write, &output_budget);
   write_header(writer, Header{options.large_document,
                               static_cast<std::uint16_t>(3U + extra_channels.size()),
                               static_cast<std::uint32_t>(composite->rgb.height()),
@@ -1662,17 +1715,20 @@ void DocumentIo::write_flat_rgb8_file(const Document& document, const std::files
   write_file_bytes(path, bytes);
 }
 
-std::vector<std::uint8_t> DocumentIo::write_layered_rgb8(const Document& document, WriteOptions options) {
+namespace {
+
+std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
+                                                  WriteOptions options) {
   check_write_dimensions(document, options.large_document);
   if (auto prepared = prepare_compound_vector_psd(document)) {
-    return write_layered_rgb8(*prepared, options);
+    return write_layered_rgb8_impl(*prepared, options);
   }
   if (document.layers().empty()) {
     // The signed record count carries merged transparency. Supply one empty
     // record in the file without inventing a layer in the live document.
     auto writable = document;
     writable.add_layer(Layer(writable.allocate_layer_id(), "Layer", PixelBuffer(1, 1, PixelFormat::rgba8())));
-    return write_layered_rgb8(writable, options);
+    return write_layered_rgb8_impl(writable, options);
   }
   std::size_t record_count = 0;
   const auto count_records = [&](auto&& self, const std::vector<Layer>& layers) -> void {
@@ -1902,7 +1958,8 @@ std::vector<std::uint8_t> DocumentIo::write_layered_rgb8(const Document& documen
     }
   }
 
-  BigEndianWriter writer;
+  SaveOutputBudgetTracker output_budget(options);
+  BigEndianWriter writer(&SaveOutputBudgetTracker::before_write, &output_budget);
   write_header(writer, Header{options.large_document,
                               static_cast<std::uint16_t>(3U + extra_channels.size()),
                               static_cast<std::uint32_t>(document.height()),
@@ -1924,6 +1981,14 @@ std::vector<std::uint8_t> DocumentIo::write_layered_rgb8(const Document& documen
     write_rgb8_image_data(writer, composite.rgb, options.large_document);
   }
   return writer.bytes();
+}
+
+}  // namespace
+
+std::vector<std::uint8_t> DocumentIo::write_layered_rgb8(const Document& document,
+                                                          WriteOptions options) {
+  reset_save_usage(options.usage);
+  return write_layered_rgb8_impl(document, options);
 }
 
 void DocumentIo::write_layered_rgb8_file(const Document& document, const std::filesystem::path& path,

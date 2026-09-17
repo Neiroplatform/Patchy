@@ -148,6 +148,131 @@ void psd_layered_writer_bytes_are_stable() {
   CHECK(hash == kExpected);
 }
 
+void psd_save_budget_bounds_logical_output_and_preserves_destinations() {
+  patchy::Document document(7, 5, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Base", solid_rgb(7, 5, 30, 60, 90));
+  patchy::Layer top(document.allocate_layer_id(), "Top",
+                    solid_rgba(3, 2, 200, 80, 20, 160));
+  top.set_bounds(patchy::Rect{2, 1, 3, 2});
+  document.add_layer(std::move(top));
+
+  const auto check_writer = [&](bool layered, bool large_document) {
+    patchy::psd::WriteOptions baseline_options;
+    baseline_options.large_document = large_document;
+    const auto baseline = layered
+                              ? patchy::psd::DocumentIo::write_layered_rgb8(
+                                    document, baseline_options)
+                              : patchy::psd::DocumentIo::write_flat_rgb8(
+                                    document, baseline_options);
+
+    patchy::psd::SaveUsage usage;
+    usage.logical_output_bytes = 999U;
+    auto exact_options = baseline_options;
+    exact_options.budget.max_logical_output_bytes = baseline.size();
+    exact_options.usage = &usage;
+    const auto exact = layered
+                           ? patchy::psd::DocumentIo::write_layered_rgb8(
+                                 document, exact_options)
+                           : patchy::psd::DocumentIo::write_flat_rgb8(
+                                 document, exact_options);
+    CHECK(exact == baseline);
+    CHECK(usage.logical_output_bytes == baseline.size());
+
+    auto rejected_options = exact_options;
+    rejected_options.budget.max_logical_output_bytes = baseline.size() - 1U;
+    usage.logical_output_bytes = 999U;
+    bool rejected = false;
+    try {
+      if (layered) {
+        (void)patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                          rejected_options);
+      } else {
+        (void)patchy::psd::DocumentIo::write_flat_rgb8(document,
+                                                       rejected_options);
+      }
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::LogicalOutputBytes);
+      CHECK(std::string(error.what()) == "PSD/PSB save budget exceeded");
+    }
+    CHECK(rejected);
+    CHECK(usage.logical_output_bytes > 0U);
+    CHECK(usage.logical_output_bytes <= baseline.size() - 1U);
+
+    std::filesystem::create_directories("test-artifacts");
+    const auto path = std::filesystem::path("test-artifacts") /
+                      (std::string("save-budget-") +
+                       (layered ? "layered-" : "flat-") +
+                       (large_document ? "psb.bin" : "psd.bin"));
+    const std::vector<std::uint8_t> sentinel{9, 8, 7, 6, 5, 4};
+    {
+      std::ofstream file(path, std::ios::binary | std::ios::trunc);
+      file.write(reinterpret_cast<const char*>(sentinel.data()),
+                 static_cast<std::streamsize>(sentinel.size()));
+    }
+    rejected = false;
+    try {
+      if (layered) {
+        patchy::psd::DocumentIo::write_layered_rgb8_file(
+            document, path, rejected_options);
+      } else {
+        patchy::psd::DocumentIo::write_flat_rgb8_file(
+            document, path, rejected_options);
+      }
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::LogicalOutputBytes);
+    }
+    CHECK(rejected);
+    std::ifstream file(path, std::ios::binary);
+    const std::vector<std::uint8_t> after{
+        std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    CHECK(after == sentinel);
+    file.close();
+    std::filesystem::remove(path);
+
+    auto zero_options = baseline_options;
+    patchy::psd::SaveUsage zero_usage;
+    zero_usage.logical_output_bytes = 999U;
+    zero_options.budget.max_logical_output_bytes = 0U;
+    zero_options.usage = &zero_usage;
+    const auto absent_path = path.string() + ".absent";
+    std::filesystem::remove(absent_path);
+    rejected = false;
+    try {
+      if (layered) {
+        patchy::psd::DocumentIo::write_layered_rgb8_file(
+            document, absent_path, zero_options);
+      } else {
+        patchy::psd::DocumentIo::write_flat_rgb8_file(
+            document, absent_path, zero_options);
+      }
+    } catch (const patchy::psd::SaveBudgetExceeded&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(zero_usage.logical_output_bytes == 0U);
+    CHECK(!std::filesystem::exists(absent_path));
+  };
+
+  for (const bool large_document : {false, true}) {
+    check_writer(false, large_document);
+    check_writer(true, large_document);
+  }
+
+  patchy::Document empty(7, 5, patchy::PixelFormat::rgb8());
+  const auto empty_bytes = patchy::psd::DocumentIo::write_layered_rgb8(empty);
+  patchy::psd::SaveUsage empty_usage;
+  patchy::psd::WriteOptions empty_options;
+  empty_options.budget.max_logical_output_bytes = empty_bytes.size();
+  empty_options.usage = &empty_usage;
+  CHECK(patchy::psd::DocumentIo::write_layered_rgb8(empty, empty_options) ==
+        empty_bytes);
+  CHECK(empty_usage.logical_output_bytes == empty_bytes.size());
+}
+
 void psd_layered_write_keeps_merged_transparency_in_composite() {
   // Regression for the July 2026 "smart object turns transparent parts black" bug: the
   // layered writer matted the merged composite onto black and dropped its alpha, so any
@@ -1401,6 +1526,8 @@ std::vector<patchy::test::TestCase> psd_writer_stability_tests() {
       {"psb_write_accepts_over_30k_dimension_psd_rejects",
        psb_write_accepts_over_30k_dimension_psd_rejects},
       {"psd_layered_writer_bytes_are_stable", psd_layered_writer_bytes_are_stable},
+      {"psd_save_budget_bounds_logical_output_and_preserves_destinations",
+       psd_save_budget_bounds_logical_output_and_preserves_destinations},
       {"psd_compound_vectors_use_plugin_resource_and_read_legacy_markers", psd_compound_vectors_use_plugin_resource_and_read_legacy_markers},
       {"psd_compound_vectors_repair_little_everywhere_if_available", psd_compound_vectors_repair_little_everywhere_if_available},
       {"psd_layer_tagged_blocks_declare_even_lengths", psd_layer_tagged_blocks_declare_even_lengths},

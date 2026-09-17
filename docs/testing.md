@@ -153,6 +153,28 @@ only at the end. Appending fields preserves prior source aggregate positions, an
 appending enum values preserves earlier numeric values, but the public struct layouts
 change: clean-rebuild every ABI consumer rather than mixing old and new objects.
 
+### PSD/PSB save-budget tests
+
+`psd::WriteOptions::budget.max_logical_output_bytes` is opt-in and guards
+final PSD/PSB bytes. It defaults to unlimited. The matching
+`SaveUsage::logical_output_bytes` resets at each public write and records successful
+final-writer admissions. Intermediate serialization, compression, and composite
+buffers are excluded; their live high-water belongs to the save-workspace budget.
+
+The writer charges before each final vector growth. An exact `N`-byte limit succeeds
+with usage `N`; `N-1` throws `SaveBudgetExceeded` with dimension
+`LogicalOutputBytes`. On a rejected write, usage is the admitted prefix and is never
+greater than the limit. The file APIs serialize completely before opening the
+destination, so a budget rejection leaves an existing file byte-identical and does
+not create an absent path. This is not an atomic-save guarantee; short-write,
+disk-full, flush, close, and replacement safety remain separate.
+
+`SaveBudget`, `SaveUsage`, and their fields and enum values are append-only public
+contracts. Appending them after `WriteOptions::large_document` preserves source
+initialization such as `WriteOptions{true}` but changes its by-value ABI: clean-rebuild
+every consumer. The error text is internal; finite limits, translated UI copy, and
+caller wiring belong to the product-policy slice.
+
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 
 Tests save PNG artifacts through `save_widget_artifact(...)` into `test-artifacts/` beside the binary. Inspect them directly when verifying rendering. Renaming an artifact also requires updating the contact-sheet list in `tests/ui/readme_screenshot_tests_classic.cpp` (the readme_screenshot_tests group is split into part files behind an order-preserving aggregator); stale files in long-lived build directories can otherwise hide the mismatch.
