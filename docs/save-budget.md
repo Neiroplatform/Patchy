@@ -285,6 +285,12 @@ empty-stop normalization, and sort scratch; authored, same-length imported-
 template, malformed-template, and no-match `TySh`; generated, preserved, and
 patched vector fill/stroke/origination plus non-empty mask and staged owners;
 dirty `SoLd`/`SoLE` and both `PlLd` spellings; and malformed placed fallback.
+The authored `TySh` case has an internal branch trace that proves its odd first
+candidate is released and rebuilt with EngineData padding. A single staged
+layer-record regression writes two text layers through one tracker, proves the
+first record returns current usage to zero before the second begins, then proves
+two copies of the same source span are charged concurrently and release
+independently rather than being pointer-deduplicated.
 An isolated four-byte patched `iOpa` test proves its owner overlaps the enclosing
 `extra` reservation. The combined public fixture contains base, text/style,
 patched `iOpa`, live vector fill/mask/stroke/origination, a matching global
@@ -295,7 +301,11 @@ tracked peak; PSB is 12424 bytes/FNV-1a `74b0d895c5bb7ad7` with an 85452-byte
 peak. Both require exact success, byte-identical repeat serialization, typed
 N-1/zero rejection, and zero current usage after success or unwind. Existing
 text, vector, Smart Object, fill-opacity, and layered-writer canaries remain
-unchanged.
+unchanged. The integration test also materializes those exact bytes as
+`test-artifacts/s1-generated-layer-payloads.psd` and `.psb` for the external
+Photoshop gate. They are published through verified temporary files only after
+both formats pass every assertion; the `.manifest` file is written last and is
+the acceptance marker. These files are test evidence, not checked-in fixtures.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero

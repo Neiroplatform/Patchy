@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <span>
@@ -23,6 +25,41 @@
 #include <vector>
 
 namespace {
+
+void write_s1_psd_artifact_atomic(const std::filesystem::path& path,
+                                  std::span<const std::uint8_t> bytes) {
+  CHECK(bytes.size() <=
+        static_cast<std::size_t>(
+            std::numeric_limits<std::streamsize>::max()));
+  std::filesystem::create_directories(path.parent_path());
+  auto temporary = path;
+  temporary += ".tmp";
+  std::filesystem::remove(temporary);
+  {
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    CHECK(output.good());
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    output.flush();
+    CHECK(output.good());
+    output.close();
+    CHECK(!output.fail());
+  }
+  CHECK(std::filesystem::file_size(temporary) == bytes.size());
+  std::vector<std::uint8_t> stored(bytes.size());
+  {
+    std::ifstream input(temporary, std::ios::binary);
+    CHECK(input.good());
+    input.read(reinterpret_cast<char*>(stored.data()),
+               static_cast<std::streamsize>(stored.size()));
+    CHECK(input.gcount() == static_cast<std::streamsize>(stored.size()));
+    CHECK(input.good());
+  }
+  CHECK(stored.size() == bytes.size());
+  CHECK(std::equal(stored.begin(), stored.end(), bytes.begin(), bytes.end()));
+  std::filesystem::remove(path);
+  std::filesystem::rename(temporary, path);
+}
 
 patchy::SmartFilterEffectsBlock make_filter_effects_block(
     std::string placed_uuid = "x") {
@@ -2268,6 +2305,22 @@ void psd_save_tysh_payload_owns_budget_and_unwinds() {
       layer, layer.bounds());
   CHECK(legacy.has_value());
   CHECK((legacy->size() % 2U) == 0U);
+  {
+    std::uint64_t current = 0U;
+    std::uint64_t high_water = 0U;
+    patchy::psd::TypeToolPayloadTrace trace;
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        std::numeric_limits<std::uint64_t>::max(), &current, &high_water);
+    const auto traced =
+        patchy::psd::photoshop_type_tool_payload_for_layer_tracked(
+            layer, layer.bounds(), tracker, &trace);
+    CHECK(traced.has_value());
+    CHECK(traced->bytes == *legacy);
+    CHECK(trace.odd_rebuild_performed);
+    CHECK((trace.odd_candidate_bytes % 2U) == 1U);
+    CHECK(trace.current_after_odd_candidate_release ==
+          trace.engine_bytes_before_first_candidate);
+  }
   check_layer_payload_budget_matches_bytes(
       *legacy,
       [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
@@ -2342,6 +2395,97 @@ void psd_save_tysh_payload_owns_budget_and_unwinds() {
         return std::move(*payload);
       },
       true);
+}
+
+void psd_save_staged_layer_records_release_and_aliases_count() {
+  const auto make_text_layer = [](std::uint32_t id, std::string name,
+                                  std::string text) {
+    patchy::Layer layer(id, std::move(name), patchy::test::solid_rgba(
+                                                80, 32, 0U, 0U, 0U, 0U));
+    layer.set_bounds(patchy::Rect{4, 6, 80, 32});
+    layer.metadata()[patchy::kLayerMetadataText] = std::move(text);
+    layer.metadata()[patchy::kLayerMetadataTextRuns] =
+        "v1\n0\t4\t24\t0\t0\t#112233\tArial";
+    layer.metadata()[patchy::kLayerMetadataTextParagraphRuns] =
+        "v1\n0\t4\tleft";
+    layer.metadata()[patchy::kLayerMetadataTextFont] = "Arial";
+    layer.metadata()[patchy::kLayerMetadataTextSize] = "24";
+    layer.metadata()[patchy::kLayerMetadataTextColor] = "#112233";
+    layer.metadata()[patchy::kLayerMetadataTextRasterStatus] =
+        "patchy_raster";
+    return layer;
+  };
+  auto first = make_text_layer(1U, "First \xF0\x9F\x99\x82",
+                               "Hi\xF0\x9F\x99\x82");
+  auto second = make_text_layer(2U, "Second \xF0\x9F\x99\x82",
+                                "Ho\xF0\x9F\x99\x82");
+
+  const auto write_record = [](const patchy::Layer& layer,
+                               patchy::psd::SaveLiveBudgetTracker& tracker) {
+    patchy::psd::EncodedLayer encoded;
+    encoded.layer = &layer;
+    encoded.kind = patchy::psd::EncodedLayerKind::Pixel;
+    encoded.bounds = layer.bounds();
+    encoded.blending_ranges = &layer.raw_psd_blending_ranges();
+    patchy::psd::BigEndianWriter writer;
+    patchy::psd::write_layer_record(
+        writer, encoded, false, false, 0U, patchy::Rect{0, 0, 96, 48},
+        tracker);
+    return std::move(writer).take_bytes();
+  };
+  const auto measure_record_peak = [&](const patchy::Layer& layer) {
+    std::uint64_t current = 0U;
+    std::uint64_t high_water = 0U;
+    {
+      patchy::psd::SaveLiveBudgetTracker tracker(
+          std::numeric_limits<std::uint64_t>::max(), &current, &high_water);
+      CHECK(!write_record(layer, tracker).empty());
+      CHECK(current == 0U);
+    }
+    CHECK(current == 0U);
+    return high_water;
+  };
+  const auto first_peak = measure_record_peak(first);
+  const auto second_peak = measure_record_peak(second);
+  CHECK(first_peak > 0U);
+  CHECK(second_peak > 0U);
+
+  std::uint64_t staged_current = 0U;
+  std::uint64_t staged_peak = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        std::numeric_limits<std::uint64_t>::max(), &staged_current,
+        &staged_peak);
+    CHECK(!write_record(first, tracker).empty());
+    CHECK(staged_current == 0U);
+    CHECK(staged_peak == first_peak);
+    CHECK(!write_record(second, tracker).empty());
+    CHECK(staged_current == 0U);
+    CHECK(staged_peak == std::max(first_peak, second_peak));
+  }
+  CHECK(staged_current == 0U);
+
+  // The same source span represents two real owners. Pointer identity must not
+  // deduplicate concurrent reservations, and each owner releases independently.
+  std::vector<std::uint8_t> shared_source(257U, 0x5AU);
+  std::uint64_t alias_current = 0U;
+  std::uint64_t alias_peak = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        2U * shared_source.size(), &alias_current, &alias_peak);
+    const auto first_owner = patchy::psd::save_tracked_byte_copy(
+        shared_source, tracker);
+    CHECK(alias_current == shared_source.size());
+    {
+      const auto second_owner = patchy::psd::save_tracked_byte_copy(
+          shared_source, tracker);
+      CHECK(first_owner.bytes.data() != second_owner.bytes.data());
+      CHECK(alias_current == 2U * shared_source.size());
+      CHECK(alias_peak == 2U * shared_source.size());
+    }
+    CHECK(alias_current == shared_source.size());
+  }
+  CHECK(alias_current == 0U);
 }
 
 patchy::Document make_generated_layer_payload_budget_document() {
@@ -2450,7 +2594,16 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
       Expected{false, 11440U, 0xa46a8dbbd3169900ULL, 83164U},
       Expected{true, 12424U, 0x74b0d895c5bb7ad7ULL, 85452U},
   };
-  for (const auto& expected : expected_cases) {
+  const auto artifact_directory = std::filesystem::path("test-artifacts");
+  const auto artifact_manifest =
+      artifact_directory / "s1-generated-layer-payloads.manifest";
+  std::filesystem::create_directories(artifact_directory);
+  // The manifest is the publication marker. Invalidate an older pair before
+  // running any acceptance assertion so a failed run cannot look successful.
+  std::filesystem::remove(artifact_manifest);
+  std::array<std::vector<std::uint8_t>, 2> accepted_artifacts;
+  for (std::size_t index = 0U; index < expected_cases.size(); ++index) {
+    const auto& expected = expected_cases[index];
     patchy::psd::SaveUsage measured_usage;
     patchy::psd::WriteOptions measured_options;
     measured_options.large_document = expected.large_document;
@@ -2461,6 +2614,7 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
     CHECK(patchy::test::fnv1a_hash_bytes(baseline) == expected.output_hash);
     CHECK(measured_usage.tracked_live_bytes == 0U);
     CHECK(measured_usage.tracked_live_bytes_high_water == expected.exact_peak);
+    accepted_artifacts[index] = baseline;
 
     const auto reopened = patchy::psd::DocumentIo::read(baseline);
     CHECK(reopened.layers().size() == 5U);
@@ -2525,6 +2679,21 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
       CHECK(rejected_usage.tracked_live_bytes_high_water <= limit);
     }
   }
+  write_s1_psd_artifact_atomic(
+      artifact_directory / "s1-generated-layer-payloads.psd",
+      accepted_artifacts[0]);
+  write_s1_psd_artifact_atomic(
+      artifact_directory / "s1-generated-layer-payloads.psb",
+      accepted_artifacts[1]);
+  constexpr std::string_view manifest =
+      "version=1\n"
+      "psd size=11440 fnv1a=a46a8dbbd3169900\n"
+      "psb size=12424 fnv1a=74b0d895c5bb7ad7\n";
+  write_s1_psd_artifact_atomic(
+      artifact_manifest,
+      std::span<const std::uint8_t>(
+          reinterpret_cast<const std::uint8_t*>(manifest.data()),
+          manifest.size()));
 }
 
 }  // namespace
@@ -2578,6 +2747,8 @@ std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
        psd_save_vector_and_placed_payloads_own_budget},
       {"psd_save_tysh_payload_owns_budget_and_unwinds",
        psd_save_tysh_payload_owns_budget_and_unwinds},
+      {"psd_save_staged_layer_records_release_and_aliases_count",
+       psd_save_staged_layer_records_release_and_aliases_count},
       {"psd_save_generated_layer_payloads_reach_public_budget",
        psd_save_generated_layer_payloads_reach_public_budget},
   };

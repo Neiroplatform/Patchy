@@ -134,6 +134,10 @@ public:
     return reserve_size(count * element_size);
   }
 
+  [[nodiscard]] std::uint64_t current_bytes() const noexcept {
+    return current_;
+  }
+
   [[noreturn]] void reject() const { throw SaveLiveBudgetSignal{}; }
 
 private:

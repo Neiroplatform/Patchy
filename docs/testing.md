@@ -188,7 +188,13 @@ document is exercised and semantically reopened as PSD and PSB. Fixed canaries
 are 11440 bytes/FNV-1a `a46a8dbbd3169900`/83164 peak for PSD
 and 12424 bytes/FNV-1a `74b0d895c5bb7ad7`/85452 peak for PSB. Exact, N-1, zero,
 byte equality, typed rejection, repeat serialization, and zero-current unwind
-are mandatory; focused filters do not replace the full `patchy_core_tests` gate.
+are mandatory. The TySh test records that the odd-first-candidate rebuild branch
+ran, and the staged layer-record test proves sequential inter-layer release plus
+concurrent same-source ownership without pointer deduplication. The combined test
+materializes the canary bytes under `test-artifacts/` for a later warning-enabled
+Photoshop lab. The two files are close/read-back verified and their `.manifest`
+publication marker appears only after the entire PSD+PSB test succeeds. Focused
+filters do not replace the full `patchy_core_tests` gate.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

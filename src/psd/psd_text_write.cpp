@@ -1662,7 +1662,11 @@ PsdTextGeometry text_geometry_for_layer(const Layer& layer, const Rect& text_bou
 std::optional<SaveTrackedByteBuffer>
 photoshop_type_tool_payload_for_layer_tracked(
     const Layer& layer, const Rect& bounds,
-    SaveLiveBudgetTracker& tracked_live_budget) {
+    SaveLiveBudgetTracker& tracked_live_budget,
+    TypeToolPayloadTrace* trace) {
+  if (trace != nullptr) {
+    *trace = {};
+  }
   const auto text = layer_metadata_value(layer, kLayerMetadataText);
   if (!text.has_value() || text->empty()) {
     return std::nullopt;
@@ -1728,10 +1732,17 @@ photoshop_type_tool_payload_for_layer_tracked(
     }
     return std::move(tracked_payload).take_buffer();
   };
+  if (trace != nullptr) {
+    trace->engine_bytes_before_first_candidate =
+        tracked_live_budget.current_bytes();
+  }
   {
     auto payload = build_payload(engine_data.bytes());
     if ((payload.bytes.size() % 2U) == 0U) {
       return std::move(payload);
+    }
+    if (trace != nullptr) {
+      trace->odd_candidate_bytes = payload.bytes.size();
     }
   }
   // The TySh tail is read end-anchored (last 16 bytes) by Photoshop and by
@@ -1739,6 +1750,11 @@ photoshop_type_tool_payload_for_layer_tracked(
   // it. Release the odd candidate before extending EngineData and rebuilding:
   // engine data tolerates trailing whitespace, and Photoshop never writes an
   // odd TySh either.
+  if (trace != nullptr) {
+    trace->odd_rebuild_performed = true;
+    trace->current_after_odd_candidate_release =
+        tracked_live_budget.current_bytes();
+  }
   engine_data.write_u8('\n');
   return build_payload(engine_data.bytes());
 }

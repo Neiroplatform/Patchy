@@ -821,10 +821,17 @@ std::optional<PixelBuffer> render_regenerated_imported_text_pixels(const LayerRe
                                                                    std::int32_t height);
 std::optional<std::vector<std::uint8_t>> photoshop_type_tool_payload_for_layer(const Layer& layer,
                                                                                const Rect& bounds);
+struct TypeToolPayloadTrace {
+  bool odd_rebuild_performed{false};
+  std::uint64_t engine_bytes_before_first_candidate{0U};
+  std::uint64_t odd_candidate_bytes{0U};
+  std::uint64_t current_after_odd_candidate_release{0U};
+};
 std::optional<SaveTrackedByteBuffer>
 photoshop_type_tool_payload_for_layer_tracked(
     const Layer& layer, const Rect& bounds,
-    SaveLiveBudgetTracker& tracked_live_budget);
+    SaveLiveBudgetTracker& tracked_live_budget,
+    TypeToolPayloadTrace* trace = nullptr);
 std::optional<SaveTrackedByteBuffer> regenerate_placed_layer_payload_tracked(
     std::string_view key, std::span<const std::uint8_t> original_payload,
     const SmartObjectPlacement& placement, const SmartObjectWarp* warp,
