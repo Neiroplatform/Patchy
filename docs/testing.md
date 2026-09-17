@@ -155,59 +155,11 @@ change: clean-rebuild every ABI consumer rather than mixing old and new objects.
 
 ### PSD/PSB save-budget tests
 
-All `psd::WriteOptions::budget` dimensions are opt-in and default to unlimited.
-`max_logical_output_bytes` guards exact final PSD/PSB bytes. Allocation-free
-preflight additionally guards exact canvas pixels, logical source `PixelBuffer`
-bytes, physical layer records in the effective normalized save graph, and a
-conservative reservation of physical channel-record slots. `SaveUsage` resets at
-each public write. Preflight fields update only after their dimension is admitted,
-in canvas/source/layer/channel order; final output updates incrementally.
-
-Source bytes count each logical buffer occurrence in the caller's layer tree:
-layer pixels, raster-mask pixels, Smart Filter mask pixels, vector fill/stroke
-caches, vector-mask caches, and saved document-channel pixels. Shared allocation
-identity is not deduplicated. The preserved flat-composite cache, pattern tiles,
-Smart Object payloads, and generated normalization/compositor/encoding/
-serialization buffers are excluded. Those generated live buffers belong to the
-save-workspace budget.
-
-Layer records include both records for every effective folder, the synthetic
-empty-document pixel record, and records introduced by compound-vector and
-multi-open-stroke normalization. The preflight simulates that graph without
-cloning the document or rasterizing. Channel records include the RGB composite,
-one possible merged-alpha slot, saved document channels, and effective per-layer
-channels. The merged alpha and derived vector-mask planes are data-dependent, so
-this dimension is deliberately a conservative reservation: admitted usage may
-exceed emitted records by one merged-alpha slot and by one slot per qualifying
-non-empty derived vector mask whose paths cancel to empty coverage. An empty path
-does not reserve a slot. It must not be described as exact post-render channel
-usage.
-
-The writer charges before each final vector growth. An exact `N`-byte limit succeeds
-with usage `N`; `N-1` throws `SaveBudgetExceeded` with dimension
-`LogicalOutputBytes`. On a rejected write, usage is the admitted prefix and is never
-greater than the limit. The file APIs serialize completely before opening the
-destination, so a budget rejection leaves an existing file byte-identical and does
-not create an absent path. This is not an atomic-save guarantee; short-write,
-disk-full, flush, close, and replacement safety remain separate.
-
-Preflight exact/N-1 tests cover flat/layered PSD and PSB, mixed RGB/RGBA/mask/
-group/adjustment/saved-channel input, empty-document recursion, compound-vector
-and open-stroke normalization, fixed admission order, usage reset, and rejection
-before an otherwise unsupported encoder path. File-wrapper rejection preserves an
-existing destination. Runtime allocator proof of zero heap allocations is not
-claimed; the implementation is source-audited to use scalar counters and recursive
-read-only traversal only, with no clone, raster, compositor, or container build.
-The existing Photoshop 8000-record format error precedes configurable budget
-admission. Other later encoder-format errors may be preceded by an earlier finite
-preflight rejection.
-
-`SaveBudget`, `SaveUsage`, and their fields and enum values are append-only public
-contracts. Appending them after `WriteOptions::large_document` preserves source
-initialization such as `WriteOptions{true}` but changes its by-value ABI: clean-rebuild
-every consumer. Code using structured bindings over these aggregates is not source
-compatible with appended fields. The error text is internal; finite limits,
-translated UI copy, and caller wiring belong to the product-policy slice.
+The complete output, preflight, tracked-live, test, exclusion, ABI, and rollout
+contract lives in [save-budget.md](save-budget.md). Read it before changing any
+PSD/PSB write path or its tests. All dimensions remain opt-in and default to
+unlimited; the current DP-008A tracked-live slice is explicitly incomplete until
+the DP-008B deep renderer, normalization, and serializer coverage lands.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

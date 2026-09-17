@@ -205,7 +205,8 @@ const UnknownPsdBlock* find_layer_block(const Layer& layer, std::string_view key
   return nullptr;
 }
 
-EncodedLayer encode_layer(const Layer& layer, bool large_document) {
+EncodedLayer encode_layer(const Layer& layer, bool large_document,
+                          SaveLiveBudgetTracker& tracked_live_budget) {
   if (layer.kind() != LayerKind::Pixel) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Layered PSD export currently supports pixel and group layers only"));
   }
@@ -220,14 +221,17 @@ EncodedLayer encode_layer(const Layer& layer, bool large_document) {
     encoded.blending_ranges = &layer.raw_psd_blending_ranges();
     for (const auto channel_id :
          {kChannelTransparency, kChannelRed, kChannelGreen, kChannelBlue}) {
-      encoded.channels.push_back(EncodedChannel{channel_id, 0, 0, kCompressionRaw, {}});
+      encoded.channels.push_back(EncodedChannel{
+          tracked_live_budget.reserve(0U), channel_id, 0, 0,
+          kCompressionRaw, {}});
     }
     if (layer.mask().has_value() && !layer.mask()->pixels.empty() &&
         layer.mask()->pixels.format() == PixelFormat::gray8()) {
       const auto& mask_pixels = layer.mask()->pixels;
       encoded.channels.push_back(encode_channel(kChannelUserMask, mask_pixels.width(),
                                                 mask_pixels.height(), mask_pixels.data(),
-                                                large_document));
+                                                large_document,
+                                                tracked_live_budget));
     }
     return encoded;
   }
@@ -276,21 +280,26 @@ EncodedLayer encode_layer(const Layer& layer, bool large_document) {
       const auto& mask_pixels =
           layer.mask().has_value() ? layer.mask()->pixels : derived_plane.pixels;
       encoded.channels.push_back(encode_channel(channel_id, mask_pixels.width(), mask_pixels.height(),
-                                                mask_pixels.data(), large_document));
+                                                mask_pixels.data(), large_document,
+                                                tracked_live_budget));
     } else {
+      auto channel_reservation = tracked_live_budget.reserve_size(pixel_count);
       std::vector<std::uint8_t> channel;
       channel.resize(pixel_count);
       const auto source_channel = channel_id == kChannelTransparency ? 3 : channel_index;
       for (std::size_t i = 0; i < pixel_count; ++i) {
         channel[i] = pixels.data()[i * pixels.format().channels + source_channel];
       }
-      encoded.channels.push_back(encode_channel(channel_id, pixels.width(), pixels.height(), channel, large_document));
+      encoded.channels.push_back(encode_channel(
+          channel_id, pixels.width(), pixels.height(), channel, large_document,
+          tracked_live_budget));
     }
   }
   return encoded;
 }
 
-EncodedLayer encode_adjustment_layer(const Layer& layer, bool large_document) {
+EncodedLayer encode_adjustment_layer(const Layer& layer, bool large_document,
+                                     SaveLiveBudgetTracker& tracked_live_budget) {
   if (layer.kind() != LayerKind::Adjustment || !adjustment_settings_from_layer(layer).has_value()) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Adjustment layer is missing Patchy adjustment settings"));
   }
@@ -309,12 +318,14 @@ EncodedLayer encode_adjustment_layer(const Layer& layer, bool large_document) {
       throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Layer mask bounds do not match mask pixels"));
     }
     encoded.channels.push_back(encode_channel(kChannelUserMask, mask.pixels.width(), mask.pixels.height(),
-                                              mask.pixels.data(), large_document));
+                                              mask.pixels.data(), large_document,
+                                              tracked_live_budget));
   } else if (const auto* mask = layer.vector_mask(); mask && (mask->density != 255 || mask->feather > 0.0)) {
     const auto plane = vector_mask_derived_plane(*mask);
     if (!plane.bounds.empty()) {
       encoded.channels.push_back(encode_channel(kChannelUserMask, plane.pixels.width(), plane.pixels.height(),
-                                                plane.pixels.data(), large_document));
+                                                plane.pixels.data(), large_document,
+                                                tracked_live_budget));
     }
   }
   return encoded;
@@ -327,7 +338,8 @@ EncodedLayer encode_group_boundary(const Layer& layer) {
   return encoded;
 }
 
-EncodedLayer encode_group(const Layer& layer, bool large_document) {
+EncodedLayer encode_group(const Layer& layer, bool large_document,
+                          SaveLiveBudgetTracker& tracked_live_budget) {
   EncodedLayer encoded;
   encoded.layer = &layer;
   encoded.kind = EncodedLayerKind::Group;
@@ -345,12 +357,14 @@ EncodedLayer encode_group(const Layer& layer, bool large_document) {
       throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Layer mask bounds do not match mask pixels"));
     }
     encoded.channels.push_back(encode_channel(kChannelUserMask, mask.pixels.width(), mask.pixels.height(),
-                                              mask.pixels.data(), large_document));
+                                              mask.pixels.data(), large_document,
+                                              tracked_live_budget));
   } else if (const auto* mask = layer.vector_mask(); mask && (mask->density != 255 || mask->feather > 0.0)) {
     const auto plane = vector_mask_derived_plane(*mask);
     if (!plane.bounds.empty()) {
       encoded.channels.push_back(encode_channel(kChannelUserMask, plane.pixels.width(), plane.pixels.height(),
-                                                plane.pixels.data(), large_document));
+                                                plane.pixels.data(), large_document,
+                                                tracked_live_budget));
     }
   }
   return encoded;
@@ -1042,23 +1056,29 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
   write_length_prefixed_block(writer, extra.bytes());
 }
 
-void append_encoded_layers(const Layer& layer, std::vector<EncodedLayer>& encoded_layers, bool large_document) {
+void append_encoded_layers(const Layer& layer, std::vector<EncodedLayer>& encoded_layers,
+                           bool large_document,
+                           SaveLiveBudgetTracker& tracked_live_budget) {
   if (layer.kind() == LayerKind::Pixel) {
-    encoded_layers.push_back(encode_layer(layer, large_document));
+    encoded_layers.push_back(
+        encode_layer(layer, large_document, tracked_live_budget));
     return;
   }
 
   if (layer.kind() == LayerKind::Adjustment) {
-    encoded_layers.push_back(encode_adjustment_layer(layer, large_document));
+    encoded_layers.push_back(
+        encode_adjustment_layer(layer, large_document, tracked_live_budget));
     return;
   }
 
   if (layer.kind() == LayerKind::Group) {
     encoded_layers.push_back(encode_group_boundary(layer));
     for (const auto& child : layer.children()) {
-      append_encoded_layers(child, encoded_layers, large_document);
+      append_encoded_layers(child, encoded_layers, large_document,
+                            tracked_live_budget);
     }
-    encoded_layers.push_back(encode_group(layer, large_document));
+    encoded_layers.push_back(
+        encode_group(layer, large_document, tracked_live_budget));
     return;
   }
 

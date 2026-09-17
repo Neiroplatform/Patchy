@@ -40,6 +40,7 @@
 #include "psd/psd_filter_effects.hpp"
 #include "psd/psd_layer_effects.hpp"
 #include "psd/psd_patterns.hpp"
+#include "psd/psd_save_budget_internal.hpp"
 #include "psd/psd_smart_objects.hpp"
 #include "core/text_warp.hpp"
 #include "core/warp_mesh.hpp"
@@ -272,6 +273,444 @@ void psd_save_budget_bounds_logical_output_and_preserves_destinations() {
   CHECK(patchy::psd::DocumentIo::write_layered_rgb8(empty, empty_options) ==
         empty_bytes);
   CHECK(empty_usage.logical_output_bytes == empty_bytes.size());
+  CHECK(empty_usage.tracked_live_bytes == 0U);
+  const auto empty_workspace = empty_usage.tracked_live_bytes_high_water;
+  CHECK(empty_workspace > 0U);
+  empty_options.budget.max_tracked_live_bytes = empty_workspace;
+  CHECK(patchy::psd::DocumentIo::write_layered_rgb8(empty, empty_options) ==
+        empty_bytes);
+  empty_options.budget.max_tracked_live_bytes = empty_workspace - 1U;
+  bool empty_workspace_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(empty, empty_options);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    empty_workspace_rejected = true;
+    CHECK(error.dimension() ==
+          patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(empty_workspace_rejected);
+  CHECK(empty_usage.tracked_live_bytes == 0U);
+}
+
+void psd_save_live_budget_tracker_is_overlap_and_unwind_safe() {
+  std::uint64_t current = 999U;
+  std::uint64_t high_water = 999U;
+  current = 0U;
+  high_water = 0U;
+  patchy::psd::SaveLiveBudgetTracker tracker(10U, &current, &high_water);
+  {
+    auto outer = tracker.reserve(4U);
+    CHECK(current == 4U);
+    CHECK(high_water == 4U);
+    {
+      auto inner = tracker.reserve_size(3U);
+      CHECK(current == 7U);
+      CHECK(high_water == 7U);
+      inner.resize_size(2U);
+      CHECK(current == 6U);
+      CHECK(high_water == 7U);
+      inner.grow_size(1U);
+      CHECK(current == 7U);
+      CHECK(high_water == 7U);
+      auto moved = std::move(inner);
+      inner.release();
+      CHECK(current == 7U);
+      moved.release();
+      moved.release();
+      CHECK(current == 4U);
+    }
+    {
+      auto sequential = tracker.reserve(6U);
+      CHECK(current == 10U);
+      CHECK(high_water == 10U);
+    }
+    CHECK(current == 4U);
+    bool rejected = false;
+    try {
+      (void)tracker.reserve(7U);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 4U);
+    CHECK(high_water == 10U);
+  }
+  CHECK(current == 0U);
+  CHECK(high_water == 10U);
+
+  bool overflow_rejected = false;
+  try {
+    (void)tracker.reserve_product(std::numeric_limits<std::size_t>::max(), 2U);
+  } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+    overflow_rejected = true;
+  }
+  CHECK(overflow_rejected);
+  CHECK(current == 0U);
+  CHECK(high_water == 10U);
+}
+
+void psd_save_composite_workspace_census_is_exact() {
+  patchy::Document empty(2, 2, patchy::PixelFormat::rgb8());
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(36U, &current, &high_water);
+    {
+      auto composite =
+          patchy::psd::merged_flatten_composite(empty, tracker);
+      CHECK(composite.rgb.data().size() == 12U);
+      CHECK(current == 16U);
+      CHECK(high_water == 36U);
+    }
+    CHECK(current == 0U);
+    CHECK(high_water == 36U);
+  }
+  current = 0U;
+  high_water = 0U;
+  bool rejected = false;
+  try {
+    patchy::psd::SaveLiveBudgetTracker tracker(35U, &current, &high_water);
+    (void)patchy::psd::merged_flatten_composite(empty, tracker);
+  } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+    rejected = true;
+  }
+  CHECK(rejected);
+  CHECK(current == 0U);
+  CHECK(high_water == 16U);
+
+  patchy::Document masked(2, 2, patchy::PixelFormat::rgb8());
+  auto& layer = masked.add_pixel_layer("Masked", solid_rgb(2, 2, 4, 5, 6));
+  patchy::LayerMask mask;
+  mask.bounds = patchy::Rect{0, 0, 2, 2};
+  mask.pixels = patchy::PixelBuffer(2, 2, patchy::PixelFormat::gray8());
+  layer.set_mask(std::move(mask));
+  patchy::set_layer_mask_is_document_alpha(layer, true);
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(16U, &current, &high_water);
+    {
+      auto composite = patchy::psd::document_alpha_composite(masked, tracker);
+      CHECK(composite.has_value());
+      CHECK(current == 16U);
+      CHECK(high_water == 16U);
+    }
+    CHECK(current == 0U);
+  }
+
+  // Cross the compositor's automatic 4M-pixel parallel threshold. Save uses
+  // the explicit sequential policy, so the same 9P envelope remains exact and
+  // independent of worker topology.
+  constexpr std::uint64_t kLargePixels = 4'000'000U;
+  patchy::Document large(2000, 2000, patchy::PixelFormat::rgb8());
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(kLargePixels * 9U, &current,
+                                                &high_water);
+    {
+      auto composite = patchy::psd::merged_flatten_composite(large, tracker);
+      CHECK(current == kLargePixels * 4U);
+      CHECK(high_water == kLargePixels * 9U);
+    }
+    CHECK(current == 0U);
+  }
+}
+
+void psd_save_channel_workspace_tracks_raw_rle_and_extra_channels() {
+  const auto check_channel = [](std::vector<std::uint8_t> raw,
+                                bool large_document,
+                                std::uint16_t expected_compression) {
+    std::uint64_t current = 0U;
+    std::uint64_t high_water = 0U;
+    std::uint64_t measured = 0U;
+    {
+      patchy::psd::SaveLiveBudgetTracker tracker(
+          std::numeric_limits<std::uint64_t>::max(), &current, &high_water);
+      {
+        auto encoded = patchy::psd::encode_channel(
+            0U, static_cast<std::int32_t>(raw.size()), 1, raw,
+            large_document, tracker);
+        CHECK(encoded.compression == expected_compression);
+        CHECK(current == encoded.data.size());
+        measured = high_water;
+      }
+      CHECK(current == 0U);
+    }
+    const std::uint64_t expected_peak =
+        expected_compression == 1U ? (large_document ? 39U : 37U)
+                                   : (large_document ? 54U : 52U);
+    CHECK(measured == expected_peak);
+
+    current = 0U;
+    high_water = 0U;
+    {
+      patchy::psd::SaveLiveBudgetTracker tracker(measured, &current,
+                                                  &high_water);
+      auto encoded = patchy::psd::encode_channel(
+          0U, static_cast<std::int32_t>(raw.size()), 1, raw,
+          large_document, tracker);
+      CHECK(encoded.compression == expected_compression);
+    }
+    CHECK(current == 0U);
+    CHECK(high_water == measured);
+
+    current = 0U;
+    high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(measured - 1U, &current,
+                                                  &high_water);
+      (void)patchy::psd::encode_channel(
+          0U, static_cast<std::int32_t>(raw.size()), 1, raw,
+          large_document, tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water <= measured - 1U);
+  };
+
+  std::vector<std::uint8_t> solid(16U, 0U);
+  std::vector<std::uint8_t> noisy(16U);
+  std::iota(noisy.begin(), noisy.end(), 0U);
+  for (const bool large_document : {false, true}) {
+    check_channel(solid, large_document, 1U);
+    check_channel(noisy, large_document, 0U);
+  }
+
+  const auto composite_compression = [](std::span<const std::uint8_t> bytes) {
+    patchy::psd::BigEndianReader reader(bytes);
+    const auto header = patchy::psd::read_header(reader);
+    reader.skip(reader.read_u32());
+    reader.skip(reader.read_u32());
+    const auto layer_mask_length =
+        header.large_document ? reader.read_u64() : reader.read_u32();
+    reader.skip(static_cast<std::size_t>(layer_mask_length));
+    return reader.read_u16();
+  };
+
+  patchy::Document document(16, 2, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Solid", solid_rgb(16, 2, 20, 20, 20));
+  document.add_channel(patchy::DocumentChannel(
+      document.allocate_channel_id(), "Saved Alpha",
+      patchy::DocumentChannelKind::Alpha,
+      patchy::PixelBuffer(16, 2, patchy::PixelFormat::gray8())));
+  for (const bool large_document : {false, true}) {
+    for (const bool layered : {false, true}) {
+      patchy::psd::SaveUsage usage;
+      patchy::psd::WriteOptions options;
+      options.large_document = large_document;
+      options.usage = &usage;
+      const auto baseline =
+          layered ? patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                                 options)
+                  : patchy::psd::DocumentIo::write_flat_rgb8(document,
+                                                              options);
+      CHECK(composite_compression(baseline) == 1U);
+      const auto measured = usage.tracked_live_bytes_high_water;
+      const std::uint64_t expected_peak =
+          layered ? (large_document ? 821U : 757U) : 473U;
+      CHECK(measured == expected_peak);
+      options.budget.max_tracked_live_bytes = measured;
+      CHECK((layered ? patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                                   options)
+                     : patchy::psd::DocumentIo::write_flat_rgb8(document,
+                                                                options)) ==
+            baseline);
+      CHECK(usage.tracked_live_bytes == 0U);
+      CHECK(usage.tracked_live_bytes_high_water == measured);
+      options.budget.max_tracked_live_bytes = measured - 1U;
+      bool rejected = false;
+      try {
+        (void)(layered
+                   ? patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                                  options)
+                   : patchy::psd::DocumentIo::write_flat_rgb8(document,
+                                                               options));
+      } catch (const patchy::psd::SaveBudgetExceeded& error) {
+        rejected = true;
+        CHECK(error.dimension() ==
+              patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+      }
+      CHECK(rejected);
+      CHECK(usage.tracked_live_bytes == 0U);
+    }
+  }
+}
+
+void psd_save_tracked_live_workspace_boundaries_are_deterministic() {
+  patchy::Document document(4, 3, patchy::PixelFormat::rgb8());
+  auto& base = document.add_pixel_layer("Base", solid_rgb(4, 3, 20, 40, 60));
+  base.set_bounds(patchy::Rect{0, 0, 4, 3});
+  patchy::Layer top(document.allocate_layer_id(), "Top",
+                    solid_rgba(2, 2, 180, 80, 20, 160));
+  top.set_bounds(patchy::Rect{1, 1, 2, 2});
+  document.add_layer(std::move(top));
+
+  const auto write = [&](bool layered, patchy::psd::WriteOptions options) {
+    return layered ? patchy::psd::DocumentIo::write_layered_rgb8(document, options)
+                   : patchy::psd::DocumentIo::write_flat_rgb8(document, options);
+  };
+
+  for (const bool large_document : {false, true}) {
+    for (const bool layered : {false, true}) {
+      patchy::psd::SaveUsage measured_usage;
+      patchy::psd::WriteOptions measured_options;
+      measured_options.large_document = large_document;
+      measured_options.usage = &measured_usage;
+      const auto baseline = write(layered, measured_options);
+      const auto measured = measured_usage.tracked_live_bytes_high_water;
+      const std::uint64_t expected =
+          layered ? (large_document ? 867U : 789U)
+                  : (large_document ? 243U : 225U);
+      CHECK(measured == expected);
+      CHECK(measured > 0U);
+      CHECK(measured_usage.tracked_live_bytes == 0U);
+
+      patchy::psd::SaveUsage exact_usage{999U, 999U, 999U, 999U, 999U,
+                                         999U, 999U};
+      auto exact_options = measured_options;
+      exact_options.budget.max_tracked_live_bytes = measured;
+      exact_options.usage = &exact_usage;
+      CHECK(write(layered, exact_options) == baseline);
+      CHECK(exact_usage.tracked_live_bytes == 0U);
+      CHECK(exact_usage.tracked_live_bytes_high_water == measured);
+
+      patchy::psd::SaveUsage rejected_usage;
+      auto rejected_options = exact_options;
+      rejected_options.budget.max_tracked_live_bytes = measured - 1U;
+      rejected_options.usage = &rejected_usage;
+      bool rejected = false;
+      try {
+        (void)write(layered, rejected_options);
+      } catch (const patchy::psd::SaveBudgetExceeded& error) {
+        rejected = true;
+        CHECK(error.dimension() ==
+              patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+      }
+      CHECK(rejected);
+      CHECK(rejected_usage.tracked_live_bytes == 0U);
+      CHECK(rejected_usage.tracked_live_bytes_high_water <= measured - 1U);
+
+      patchy::psd::SaveUsage zero_usage;
+      auto zero_options = measured_options;
+      zero_options.budget.max_tracked_live_bytes = 0U;
+      zero_options.usage = &zero_usage;
+      rejected = false;
+      try {
+        (void)write(layered, zero_options);
+      } catch (const patchy::psd::SaveBudgetExceeded& error) {
+        rejected = true;
+        CHECK(error.dimension() ==
+              patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+      }
+      CHECK(rejected);
+      CHECK(zero_usage.tracked_live_bytes == 0U);
+      CHECK(zero_usage.tracked_live_bytes_high_water == 0U);
+
+      patchy::psd::SaveUsage output_usage;
+      auto output_options = exact_options;
+      output_options.budget.max_logical_output_bytes = 0U;
+      output_options.usage = &output_usage;
+      rejected = false;
+      try {
+        (void)write(layered, output_options);
+      } catch (const patchy::psd::SaveBudgetExceeded& error) {
+        rejected = true;
+        CHECK(error.dimension() ==
+              patchy::psd::SaveBudgetDimension::LogicalOutputBytes);
+      }
+      CHECK(rejected);
+      CHECK(output_usage.tracked_live_bytes == 0U);
+      CHECK(output_usage.tracked_live_bytes_high_water > 0U);
+      CHECK(output_usage.tracked_live_bytes_high_water <= measured);
+    }
+  }
+
+  patchy::psd::SaveUsage precedence_usage;
+  patchy::psd::WriteOptions precedence;
+  precedence.budget.max_canvas_pixels = 0U;
+  precedence.budget.max_tracked_live_bytes = 0U;
+  precedence.usage = &precedence_usage;
+  bool rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(document, precedence);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    rejected = true;
+    CHECK(error.dimension() == patchy::psd::SaveBudgetDimension::CanvasPixels);
+  }
+  CHECK(rejected);
+  CHECK(precedence_usage.tracked_live_bytes == 0U);
+  CHECK(precedence_usage.tracked_live_bytes_high_water == 0U);
+
+  patchy::psd::SaveUsage file_usage;
+  patchy::psd::WriteOptions file_options;
+  file_options.large_document = true;
+  file_options.usage = &file_usage;
+  (void)patchy::psd::DocumentIo::write_layered_rgb8(document, file_options);
+  file_options.budget.max_tracked_live_bytes =
+      file_usage.tracked_live_bytes_high_water - 1U;
+  std::filesystem::create_directories("test-artifacts");
+  const auto path = std::filesystem::path("test-artifacts") /
+                    "save-workspace-layered-psb.bin";
+  const std::vector<std::uint8_t> sentinel{7, 1, 7, 1};
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file.write(reinterpret_cast<const char*>(sentinel.data()),
+               static_cast<std::streamsize>(sentinel.size()));
+  }
+  rejected = false;
+  try {
+    patchy::psd::DocumentIo::write_layered_rgb8_file(document, path,
+                                                      file_options);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    rejected = true;
+    CHECK(error.dimension() ==
+          patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(rejected);
+  std::ifstream file(path, std::ios::binary);
+  const std::vector<std::uint8_t> after{
+      std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+  CHECK(after == sentinel);
+  file.close();
+  std::filesystem::remove(path);
+
+  const auto absent = path.string() + ".absent";
+  std::filesystem::remove(absent);
+  file_options.budget.max_tracked_live_bytes = 0U;
+  rejected = false;
+  try {
+    patchy::psd::DocumentIo::write_layered_rgb8_file(document, absent,
+                                                      file_options);
+  } catch (const patchy::psd::SaveBudgetExceeded&) {
+    rejected = true;
+  }
+  CHECK(rejected);
+  CHECK(!std::filesystem::exists(absent));
+}
+
+void psd_save_workspace_unwinds_after_encoder_error() {
+  patchy::Document document(2, 2, patchy::PixelFormat::rgb8());
+  document.add_layer(patchy::Layer(document.allocate_layer_id(), "Unsupported",
+                                   patchy::LayerKind::Text));
+  patchy::psd::SaveUsage usage;
+  patchy::psd::WriteOptions options;
+  options.usage = &usage;
+  bool rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(document, options);
+  } catch (const patchy::psd::SaveBudgetExceeded&) {
+    CHECK(false);
+  } catch (const std::runtime_error& error) {
+    rejected = std::string(error.what()).find("supports pixel, adjustment") !=
+               std::string::npos;
+  }
+  CHECK(rejected);
+  CHECK(usage.tracked_live_bytes == 0U);
+  CHECK(usage.tracked_live_bytes_high_water > 0U);
 }
 
 void psd_save_preflight_budgets_source_and_normalized_structure() {
@@ -286,12 +725,16 @@ void psd_save_preflight_budgets_source_and_normalized_structure() {
         std::numeric_limits<std::uint64_t>::max());
   CHECK(default_budget.max_channel_records ==
         std::numeric_limits<std::uint64_t>::max());
+  CHECK(default_budget.max_tracked_live_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
   const patchy::psd::SaveUsage default_usage;
   CHECK(default_usage.logical_output_bytes == 0U);
   CHECK(default_usage.canvas_pixels == 0U);
   CHECK(default_usage.source_pixel_bytes == 0U);
   CHECK(default_usage.layer_records == 0U);
   CHECK(default_usage.channel_records == 0U);
+  CHECK(default_usage.tracked_live_bytes == 0U);
+  CHECK(default_usage.tracked_live_bytes_high_water == 0U);
   CHECK(static_cast<std::uint8_t>(
             patchy::psd::SaveBudgetDimension::LogicalOutputBytes) == 0U);
   CHECK(static_cast<std::uint8_t>(
@@ -302,6 +745,8 @@ void psd_save_preflight_budgets_source_and_normalized_structure() {
             patchy::psd::SaveBudgetDimension::LayerRecords) == 3U);
   CHECK(static_cast<std::uint8_t>(
             patchy::psd::SaveBudgetDimension::ChannelRecords) == 4U);
+  CHECK(static_cast<std::uint8_t>(
+            patchy::psd::SaveBudgetDimension::TrackedLiveBytes) == 5U);
   const patchy::psd::WriteOptions aggregate_compatible{true};
   CHECK(aggregate_compatible.large_document);
   CHECK(aggregate_compatible.budget.max_canvas_pixels ==
@@ -394,6 +839,7 @@ void psd_save_preflight_budgets_source_and_normalized_structure() {
             rejected.budget.max_channel_records = limit;
             break;
           case patchy::psd::SaveBudgetDimension::LogicalOutputBytes:
+          case patchy::psd::SaveBudgetDimension::TrackedLiveBytes:
             CHECK(false);
             return;
         }
@@ -628,11 +1074,31 @@ void psd_save_preflight_budgets_source_and_normalized_structure() {
     stroke_options.budget.max_layer_records = 4U;
     stroke_options.budget.max_channel_records = 12U;
     stroke_options.usage = &stroke_usage;
-    (void)patchy::psd::DocumentIo::write_layered_rgb8(strokes,
-                                                       stroke_options);
+    const auto stroke_bytes = patchy::psd::DocumentIo::write_layered_rgb8(
+        strokes, stroke_options);
     CHECK(stroke_usage.layer_records == 4U);
     CHECK(stroke_usage.channel_records == 12U);
     CHECK(stroke_usage.source_pixel_bytes == 0U);
+    CHECK(stroke_usage.tracked_live_bytes == 0U);
+    const auto stroke_workspace = stroke_usage.tracked_live_bytes_high_water;
+    CHECK(stroke_workspace > 0U);
+    auto stroke_workspace_options = stroke_options;
+    stroke_workspace_options.budget.max_tracked_live_bytes = stroke_workspace;
+    CHECK(patchy::psd::DocumentIo::write_layered_rgb8(
+              strokes, stroke_workspace_options) == stroke_bytes);
+    stroke_workspace_options.budget.max_tracked_live_bytes =
+        stroke_workspace - 1U;
+    bool stroke_workspace_rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(
+          strokes, stroke_workspace_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      stroke_workspace_rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+    }
+    CHECK(stroke_workspace_rejected);
+    CHECK(stroke_usage.tracked_live_bytes == 0U);
     stroke_options.budget.max_channel_records = 11U;
     bool stroke_rejected = false;
     try {
@@ -699,11 +1165,33 @@ void psd_save_preflight_budgets_source_and_normalized_structure() {
     compound_options.budget.max_layer_records = 14U;
     compound_options.budget.max_channel_records = 21U;
     compound_options.usage = &compound_usage;
-    (void)patchy::psd::DocumentIo::write_layered_rgb8(compound,
-                                                       compound_options);
+    const auto compound_bytes = patchy::psd::DocumentIo::write_layered_rgb8(
+        compound, compound_options);
     CHECK(compound_usage.layer_records == 14U);
     CHECK(compound_usage.channel_records == 21U);
     CHECK(compound_usage.source_pixel_bytes == 1U);
+    CHECK(compound_usage.tracked_live_bytes == 0U);
+    const auto compound_workspace =
+        compound_usage.tracked_live_bytes_high_water;
+    CHECK(compound_workspace > 0U);
+    auto compound_workspace_options = compound_options;
+    compound_workspace_options.budget.max_tracked_live_bytes =
+        compound_workspace;
+    CHECK(patchy::psd::DocumentIo::write_layered_rgb8(
+              compound, compound_workspace_options) == compound_bytes);
+    compound_workspace_options.budget.max_tracked_live_bytes =
+        compound_workspace - 1U;
+    bool compound_workspace_rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(
+          compound, compound_workspace_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      compound_workspace_rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+    }
+    CHECK(compound_workspace_rejected);
+    CHECK(compound_usage.tracked_live_bytes == 0U);
 
     auto compound_rejected_options = compound_options;
     compound_rejected_options.budget.max_layer_records = 13U;
@@ -827,9 +1315,11 @@ void psd_save_preflight_budgets_source_and_normalized_structure() {
   too_many_records.add_layer(patchy::Layer(
       too_many_records.allocate_layer_id(), "One too many",
       patchy::PixelBuffer()));
-  patchy::psd::SaveUsage format_usage{999U, 999U, 999U, 999U, 999U};
+  patchy::psd::SaveUsage format_usage{999U, 999U, 999U, 999U,
+                                      999U, 999U, 999U};
   patchy::psd::WriteOptions format_precedence;
   format_precedence.budget.max_layer_records = 0U;
+  format_precedence.budget.max_tracked_live_bytes = 0U;
   format_precedence.usage = &format_usage;
   bool format_rejected = false;
   try {
@@ -847,6 +1337,8 @@ void psd_save_preflight_budgets_source_and_normalized_structure() {
   CHECK(format_usage.source_pixel_bytes == 0U);
   CHECK(format_usage.layer_records == 0U);
   CHECK(format_usage.channel_records == 0U);
+  CHECK(format_usage.tracked_live_bytes == 0U);
+  CHECK(format_usage.tracked_live_bytes_high_water == 0U);
 
   // File wrappers serialize fully before opening the destination, so a new
   // preflight rejection keeps existing bytes intact.
@@ -2134,6 +2626,16 @@ std::vector<patchy::test::TestCase> psd_writer_stability_tests() {
       {"psd_layered_writer_bytes_are_stable", psd_layered_writer_bytes_are_stable},
       {"psd_save_budget_bounds_logical_output_and_preserves_destinations",
        psd_save_budget_bounds_logical_output_and_preserves_destinations},
+      {"psd_save_live_budget_tracker_is_overlap_and_unwind_safe",
+       psd_save_live_budget_tracker_is_overlap_and_unwind_safe},
+      {"psd_save_composite_workspace_census_is_exact",
+       psd_save_composite_workspace_census_is_exact},
+      {"psd_save_channel_workspace_tracks_raw_rle_and_extra_channels",
+       psd_save_channel_workspace_tracks_raw_rle_and_extra_channels},
+      {"psd_save_tracked_live_workspace_boundaries_are_deterministic",
+       psd_save_tracked_live_workspace_boundaries_are_deterministic},
+      {"psd_save_workspace_unwinds_after_encoder_error",
+       psd_save_workspace_unwinds_after_encoder_error},
       {"psd_save_preflight_budgets_source_and_normalized_structure",
        psd_save_preflight_budgets_source_and_normalized_structure},
       {"psd_compound_vectors_use_plugin_resource_and_read_legacy_markers", psd_compound_vectors_use_plugin_resource_and_read_legacy_markers},

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace patchy::psd {
@@ -41,6 +42,9 @@ public:
 
   [[nodiscard]] const std::vector<std::uint8_t>& bytes() const noexcept;
   [[nodiscard]] std::vector<std::uint8_t>& bytes() noexcept;
+  [[nodiscard]] std::vector<std::uint8_t> take_bytes() && noexcept {
+    return std::move(bytes_);
+  }
 
   void write_u8(std::uint8_t value);
   void write_u16(std::uint16_t value);

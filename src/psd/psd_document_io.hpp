@@ -124,6 +124,9 @@ struct SaveBudget {
   // merged-alpha slot and possible derived vector-mask planes because their
   // actual emission is data-dependent and only known after rasterization.
   std::uint64_t max_channel_records{std::numeric_limits<std::uint64_t>::max()};
+  // Conservative logical reservations for instrumented save-owned temporary
+  // buffers. This is not an RSS, allocator-capacity, or committed-WASM-heap cap.
+  std::uint64_t max_tracked_live_bytes{std::numeric_limits<std::uint64_t>::max()};
 };
 
 struct SaveUsage {
@@ -132,6 +135,10 @@ struct SaveUsage {
   std::uint64_t source_pixel_bytes{0};
   std::uint64_t layer_records{0};
   std::uint64_t channel_records{0};
+  // Current successfully reserved save workspace and its monotonic high-water.
+  // A completed or unwound public write always leaves tracked_live_bytes at zero.
+  std::uint64_t tracked_live_bytes{0};
+  std::uint64_t tracked_live_bytes_high_water{0};
 };
 
 enum class SaveBudgetDimension : std::uint8_t {
@@ -140,6 +147,7 @@ enum class SaveBudgetDimension : std::uint8_t {
   SourcePixelBytes = 2,
   LayerRecords = 3,
   ChannelRecords = 4,
+  TrackedLiveBytes = 5,
 };
 
 class SaveBudgetExceeded final : public std::length_error {

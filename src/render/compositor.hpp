@@ -7,6 +7,11 @@
 
 namespace patchy {
 
+enum class CompositorExecutionPolicy {
+  Automatic,
+  Sequential,
+};
+
 class Compositor {
 public:
   // merged_alpha (optional) receives the flatten's accumulated per-pixel coverage,
@@ -14,6 +19,9 @@ public:
   // colors are straight (unmatted), with uncovered pixels left at the cleared black.
   [[nodiscard]] PixelBuffer flatten_rgb8(const Document& document,
                                          std::vector<std::uint8_t>* merged_alpha = nullptr) const;
+  [[nodiscard]] PixelBuffer flatten_rgb8_with_policy(
+      const Document& document, std::vector<std::uint8_t>* merged_alpha,
+      CompositorExecutionPolicy execution) const;
 };
 
 }  // namespace patchy

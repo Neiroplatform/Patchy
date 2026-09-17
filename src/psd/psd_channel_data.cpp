@@ -114,21 +114,41 @@ void make_packbits_row_even(std::vector<std::uint8_t>& row) {
 
 // RLE row byte counts are u16 in PSD and u32 in PSB (wide_rle_counts).
 // even_rows applies the merged-composite constraint documented above.
-std::vector<std::uint8_t> encode_packbits_rows(std::span<const std::uint8_t> planar_channels,
-                                               std::int32_t width, std::int32_t height,
-                                               std::uint16_t channel_count, bool wide_rle_counts,
-                                               bool even_rows = false) {
+SaveTrackedByteBuffer encode_packbits_rows(
+    std::span<const std::uint8_t> planar_channels, std::int32_t width,
+    std::int32_t height, std::uint16_t channel_count, bool wide_rle_counts,
+    SaveLiveBudgetTracker& tracked_live_budget, bool even_rows = false) {
   if (width < 0 || height < 0) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD channel dimensions cannot be negative"));
   }
   const auto row_width = static_cast<std::size_t>(width);
-  const auto row_count = static_cast<std::size_t>(height) * static_cast<std::size_t>(channel_count);
-  const auto channel_pixels = row_width * static_cast<std::size_t>(height);
-  const auto expected_size = channel_pixels * static_cast<std::size_t>(channel_count);
+  const auto height_size = static_cast<std::size_t>(height);
+  const auto channels_size = static_cast<std::size_t>(channel_count);
+  if (height_size != 0U &&
+      row_width > std::numeric_limits<std::size_t>::max() / height_size) {
+    tracked_live_budget.reject();
+  }
+  const auto channel_pixels = row_width * height_size;
+  if (channels_size != 0U &&
+      height_size > std::numeric_limits<std::size_t>::max() / channels_size) {
+    tracked_live_budget.reject();
+  }
+  const auto row_count = height_size * channels_size;
+  if (channels_size != 0U &&
+      channel_pixels >
+          std::numeric_limits<std::size_t>::max() / channels_size) {
+    tracked_live_budget.reject();
+  }
+  const auto expected_size = channel_pixels * channels_size;
   if (planar_channels.size() != expected_size) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD channel data length does not match its dimensions"));
   }
 
+  // PackBits emits at most one control byte per input byte plus the input
+  // bytes. Reserve a deliberately conservative extra byte per row before any
+  // row encoder can allocate.
+  auto rows_reservation = tracked_live_budget.reserve_product(expected_size, 2U);
+  auto row_overhead = tracked_live_budget.reserve_size(row_count);
   std::vector<std::vector<std::uint8_t>> rows;
   rows.reserve(row_count);
   const auto max_row_bytes = wide_rle_counts ? 0xFFFFFFFFULL : 0xFFFFULL;
@@ -147,6 +167,21 @@ std::vector<std::uint8_t> encode_packbits_rows(std::span<const std::uint8_t> pla
     }
   }
 
+  const auto count_width = wide_rle_counts ? 4U : 2U;
+  std::size_t encoded_size = 0U;
+  for (const auto& row : rows) {
+    if (row.size() > std::numeric_limits<std::size_t>::max() - encoded_size) {
+      tracked_live_budget.reject();
+    }
+    encoded_size += row.size();
+  }
+  if (row_count > std::numeric_limits<std::size_t>::max() / count_width ||
+      row_count * count_width >
+          std::numeric_limits<std::size_t>::max() - encoded_size) {
+    tracked_live_budget.reject();
+  }
+  const auto result_size = row_count * count_width + encoded_size;
+  auto result_reservation = tracked_live_budget.reserve_size(result_size);
   BigEndianWriter writer;
   for (const auto& row : rows) {
     if (wide_rle_counts) {
@@ -158,15 +193,24 @@ std::vector<std::uint8_t> encode_packbits_rows(std::span<const std::uint8_t> pla
   for (const auto& row : rows) {
     writer.write_bytes(row);
   }
-  return writer.bytes();
+  return SaveTrackedByteBuffer(std::move(result_reservation),
+                               std::move(writer).take_bytes());
 }
 
-std::vector<std::uint8_t> planar_rgb8_data(const PixelBuffer& pixels) {
+SaveTrackedByteBuffer planar_rgb8_data(
+    const PixelBuffer& pixels, SaveLiveBudgetTracker& tracked_live_budget) {
   if (pixels.format() != PixelFormat::rgb8()) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite export requires RGB8 pixels"));
   }
 
-  const auto channel_pixels = static_cast<std::size_t>(pixels.width()) * static_cast<std::size_t>(pixels.height());
+  const auto width = static_cast<std::size_t>(pixels.width());
+  const auto height = static_cast<std::size_t>(pixels.height());
+  if (height != 0U &&
+      width > std::numeric_limits<std::size_t>::max() / height) {
+    tracked_live_budget.reject();
+  }
+  const auto channel_pixels = width * height;
+  auto reservation = tracked_live_budget.reserve_product(channel_pixels, 3U);
   std::vector<std::uint8_t> planar(channel_pixels * 3U);
   for (std::uint16_t channel = 0; channel < 3; ++channel) {
     const auto channel_offset = static_cast<std::size_t>(channel) * channel_pixels;
@@ -174,7 +218,7 @@ std::vector<std::uint8_t> planar_rgb8_data(const PixelBuffer& pixels) {
       planar[channel_offset + i] = pixels.data()[i * 3U + channel];
     }
   }
-  return planar;
+  return SaveTrackedByteBuffer(std::move(reservation), std::move(planar));
 }
 
 // A flat export whose single pixel layer carries an enabled imported-alpha mask
@@ -302,36 +346,45 @@ void write_rgb_from_cmyk(PixelBuffer& pixels, std::size_t pixel_index, std::uint
 
 }  // namespace
 
-EncodedChannel encode_channel(std::uint16_t id, std::int32_t width, std::int32_t height,
-                              std::span<const std::uint8_t> raw_data, bool wide_rle_counts) {
-  auto rle_data = encode_packbits_rows(raw_data, width, height, 1, wide_rle_counts);
-  if (rle_data.size() < raw_data.size()) {
-    return EncodedChannel{id, width, height, kCompressionRle, std::move(rle_data)};
+EncodedChannel encode_channel(
+    std::uint16_t id, std::int32_t width, std::int32_t height,
+    std::span<const std::uint8_t> raw_data, bool wide_rle_counts,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  auto rle_data = encode_packbits_rows(raw_data, width, height, 1,
+                                       wide_rle_counts, tracked_live_budget);
+  if (rle_data.bytes.size() < raw_data.size()) {
+    return EncodedChannel{rle_data.take_reservation(), id, width, height,
+                          kCompressionRle, std::move(rle_data.bytes)};
   }
 
-  return EncodedChannel{id, width, height, kCompressionRaw,
-                        std::vector<std::uint8_t>(raw_data.begin(), raw_data.end())};
+  auto raw_reservation = tracked_live_budget.reserve_size(raw_data.size());
+  std::vector<std::uint8_t> raw(raw_data.begin(), raw_data.end());
+  return EncodedChannel{std::move(raw_reservation), id, width, height,
+                        kCompressionRaw, std::move(raw)};
 }
 
-void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels, bool wide_rle_counts) {
-  const auto raw_data = planar_rgb8_data(pixels);
-  const auto rle_data =
-      encode_packbits_rows(raw_data, pixels.width(), pixels.height(), 3, wide_rle_counts,
-                           /*even_rows=*/true);
-  if (rle_data.size() < raw_data.size()) {
+void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels,
+                           bool wide_rle_counts,
+                           SaveLiveBudgetTracker& tracked_live_budget) {
+  const auto raw_data = planar_rgb8_data(pixels, tracked_live_budget);
+  const auto rle_data = encode_packbits_rows(
+      raw_data.bytes, pixels.width(), pixels.height(), 3, wide_rle_counts,
+      tracked_live_budget, /*even_rows=*/true);
+  if (rle_data.bytes.size() < raw_data.bytes.size()) {
     writer.write_u16(kCompressionRle);
-    writer.write_bytes(rle_data);
+    writer.write_bytes(rle_data.bytes);
     return;
   }
 
   writer.write_u16(kCompressionRaw);
-  writer.write_bytes(raw_data);
+  writer.write_bytes(raw_data.bytes);
 }
 
 // Builds the composite RGB (with the layer's original colors, NOT the masked flatten) and
 // the canvas-sized alpha plane sampled from the layer mask, honoring its bounds and
 // default color. Returns nullopt when the document is not eligible (see eligibility above).
-[[nodiscard]] std::optional<DocumentAlphaComposite> document_alpha_composite(const Document& document) {
+[[nodiscard]] std::optional<DocumentAlphaComposite> document_alpha_composite(
+    const Document& document, SaveLiveBudgetTracker& tracked_live_budget) {
   const Layer* layer = document_alpha_mask_layer(document);
   if (layer == nullptr) {
     return std::nullopt;
@@ -339,10 +392,18 @@ void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels, b
 
   const auto width = document.width();
   const auto height = document.height();
-  const auto channel_pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+  const auto width_size = static_cast<std::size_t>(width);
+  const auto height_size = static_cast<std::size_t>(height);
+  if (height_size != 0U &&
+      width_size > std::numeric_limits<std::size_t>::max() / height_size) {
+    tracked_live_budget.reject();
+  }
+  const auto channel_pixels = width_size * height_size;
 
   // RGB comes straight from the layer's own (unmasked) pixels so the colors beneath the
   // mask are preserved. pixel()[0..2] is the RGB triple for both rgb8 and rgba8 sources.
+  auto rgb_reservation = tracked_live_budget.reserve_product(channel_pixels, 3U);
+  auto alpha_reservation = tracked_live_budget.reserve_size(channel_pixels);
   PixelBuffer rgb(width, height, PixelFormat::rgb8());
   const PixelBuffer& source = layer->pixels();
   for (std::int32_t y = 0; y < height; ++y) {
@@ -371,7 +432,9 @@ void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels, b
             static_cast<std::size_t>(doc_x)] = mask.pixels.pixel(mx, my)[0];
     }
   }
-  return DocumentAlphaComposite{std::move(rgb), std::move(alpha), "Alpha 1"};
+  return DocumentAlphaComposite{std::move(rgb_reservation),
+                                std::move(alpha_reservation), std::move(rgb),
+                                std::move(alpha), "Alpha 1"};
 }
 
 // A document whose merged flatten has any transparent pixel writes its composite the
@@ -382,16 +445,36 @@ void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels, b
 // A fully opaque flatten returns an empty channel_name: those saves keep the
 // historical 3-channel bytes bit for bit (requesting the alpha plane does not change
 // the compositor's RGB output).
-[[nodiscard]] DocumentAlphaComposite merged_flatten_composite(const Document& document) {
+[[nodiscard]] DocumentAlphaComposite merged_flatten_composite(
+    const Document& document, SaveLiveBudgetTracker& tracked_live_budget) {
+  const auto width = static_cast<std::size_t>(document.width());
+  const auto height = static_cast<std::size_t>(document.height());
+  if (height != 0U &&
+      width > std::numeric_limits<std::size_t>::max() / height) {
+    tracked_live_budget.reject();
+  }
+  const auto pixels = width * height;
+  auto rgb_reservation = tracked_live_budget.reserve_product(pixels, 3U);
+  auto alpha_reservation = tracked_live_budget.reserve_size(pixels);
+  // The sequential compositor's target float alpha plus returned alpha
+  // quantization plane overlap the retained RGB/alpha result. Deeper render
+  // scratch remains a separately documented follow-up.
+  auto compositor_scratch = tracked_live_budget.reserve_product(pixels, 5U);
   std::vector<std::uint8_t> alpha;
-  auto rgb = Compositor{}.flatten_rgb8(document, &alpha);
+  auto rgb = Compositor{}.flatten_rgb8_with_policy(
+      document, &alpha, CompositorExecutionPolicy::Sequential);
+  compositor_scratch.release();
   const auto transparent =
       std::any_of(alpha.begin(), alpha.end(), [](std::uint8_t coverage) { return coverage != 255; });
   if (!transparent) {
     alpha.clear();
-    return DocumentAlphaComposite{std::move(rgb), std::move(alpha), std::string_view{}};
+    return DocumentAlphaComposite{std::move(rgb_reservation),
+                                  std::move(alpha_reservation), std::move(rgb),
+                                  std::move(alpha), std::string_view{}};
   }
-  return DocumentAlphaComposite{std::move(rgb), std::move(alpha), "Transparency"};
+  return DocumentAlphaComposite{std::move(rgb_reservation),
+                                std::move(alpha_reservation), std::move(rgb),
+                                std::move(alpha), "Transparency"};
 }
 
 // Writes RGB followed by any number of full-canvas grayscale planes. The merged
@@ -400,12 +483,17 @@ void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels, b
 // channels does not require another full planar copy of every channel.
 void write_rgb8_image_data_with_extra_channels(
     BigEndianWriter& writer, const PixelBuffer& pixels,
-    std::span<const std::span<const std::uint8_t>> extra_channels, bool wide_rle_counts) {
+    std::span<const std::span<const std::uint8_t>> extra_channels,
+    bool wide_rle_counts, SaveLiveBudgetTracker& tracked_live_budget) {
   if (pixels.format() != PixelFormat::rgb8()) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD composite export requires RGB8 pixels"));
   }
   const auto width = static_cast<std::size_t>(pixels.width());
   const auto height = static_cast<std::size_t>(pixels.height());
+  if (height != 0U && width >
+                          std::numeric_limits<std::size_t>::max() / height) {
+    tracked_live_budget.reject();
+  }
   const auto channel_pixels = width * height;
   for (const auto channel : extra_channels) {
     if (channel.size() != channel_pixels) {
@@ -414,12 +502,37 @@ void write_rgb8_image_data_with_extra_channels(
   }
 
   const auto channel_count = 3U + extra_channels.size();
+  if (height != 0U && channel_count >
+                          std::numeric_limits<std::size_t>::max() / height) {
+    tracked_live_budget.reject();
+  }
+  const auto row_count = height * channel_count;
+  if (channel_count != 0U &&
+      channel_pixels >
+          std::numeric_limits<std::size_t>::max() / channel_count) {
+    tracked_live_budget.reject();
+  }
+  const auto raw_size = channel_pixels * channel_count;
+  auto row_lengths_reservation =
+      tracked_live_budget.reserve_product(row_count, sizeof(std::uint32_t));
   std::vector<std::uint32_t> row_lengths;
-  row_lengths.reserve(height * channel_count);
+  row_lengths.reserve(row_count);
+  if (raw_size >
+      (std::numeric_limits<std::size_t>::max() - row_count) / 2U) {
+    tracked_live_budget.reject();
+  }
+  auto encoded_rows_reservation =
+      tracked_live_budget.reserve_size(raw_size * 2U + row_count);
   std::vector<std::uint8_t> encoded_rows;
+  auto rgb_row_reservation = tracked_live_budget.reserve_size(width);
   std::vector<std::uint8_t> rgb_row(width);
   const auto max_row_bytes = wide_rle_counts ? 0xFFFFFFFFULL : 0xFFFFULL;
   const auto append_encoded_row = [&](std::span<const std::uint8_t> row) {
+    if (row.size() >
+        (std::numeric_limits<std::size_t>::max() - 1U) / 2U) {
+      tracked_live_budget.reject();
+    }
+    auto row_reservation = tracked_live_budget.reserve_size(row.size() * 2U + 1U);
     auto encoded = encode_packbits_row(row);
     make_packbits_row_even(encoded);
     if (encoded.size() > max_row_bytes) {
@@ -445,8 +558,13 @@ void write_rgb8_image_data_with_extra_channels(
   }
 
   const auto count_width = wide_rle_counts ? 4U : 2U;
+  if (row_lengths.size() >
+          std::numeric_limits<std::size_t>::max() / count_width ||
+      row_lengths.size() * count_width >
+          std::numeric_limits<std::size_t>::max() - encoded_rows.size()) {
+    tracked_live_budget.reject();
+  }
   const auto rle_size = row_lengths.size() * count_width + encoded_rows.size();
-  const auto raw_size = channel_pixels * channel_count;
   if (rle_size < raw_size) {
     writer.write_u16(kCompressionRle);
     for (const auto length : row_lengths) {

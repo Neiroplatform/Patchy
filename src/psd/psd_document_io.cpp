@@ -16,6 +16,7 @@
 #include "psd/psd_filter_effects.hpp"
 #include "psd/psd_layer_effects.hpp"
 #include "psd/psd_patterns.hpp"
+#include "psd/psd_save_budget_internal.hpp"
 #include "psd/psd_smart_objects.hpp"
 #include "render/compositor.hpp"
 #include "support/string_utils.hpp"
@@ -1910,52 +1911,67 @@ std::vector<std::uint8_t> DocumentIo::write_flat_rgb8(const Document& document, 
   reset_save_usage(options.usage);
   check_write_dimensions(document, options.large_document);
   preflight_save(document, options, false);
+  SaveLiveBudgetTracker tracked_live_budget(
+      options.budget.max_tracked_live_bytes,
+      options.usage != nullptr ? &options.usage->tracked_live_bytes : nullptr,
+      options.usage != nullptr
+          ? &options.usage->tracked_live_bytes_high_water
+          : nullptr);
 
-  auto composite = document_alpha_composite(document);
-  if (!composite.has_value()) {
-    composite = merged_flatten_composite(document);
-    // A flat file has no layer section to carry the spec's negative-layer-count
-    // "merged transparency" flag, so its alpha exports under the saved-channel
-    // convention instead; the flat reader imports "Alpha 1" as a DocumentChannel.
-    if (!composite->channel_name.empty()) {
-      composite->channel_name = "Alpha 1";
+  try {
+    auto composite = document_alpha_composite(document, tracked_live_budget);
+    if (!composite.has_value()) {
+      composite = merged_flatten_composite(document, tracked_live_budget);
+      // A flat file has no layer section to carry the spec's negative-layer-count
+      // "merged transparency" flag, so its alpha exports under the saved-channel
+      // convention instead; the flat reader imports "Alpha 1" as a DocumentChannel.
+      if (!composite->channel_name.empty()) {
+        composite->channel_name = "Alpha 1";
+      }
     }
-  }
 
-  std::vector<std::span<const std::uint8_t>> extra_channels;
-  std::vector<CompositeChannelInfo> channel_info;
-  if (!composite->channel_name.empty()) {
-    extra_channels.emplace_back(composite->alpha);
-    channel_info.push_back(CompositeChannelInfo{composite->channel_name, false, true, std::nullopt,
-                                                DocumentChannelDisplayInfo{}, {}});
-  }
-  append_document_channels_for_write(document, extra_channels, channel_info);
-  check_composite_channel_limit(extra_channels.size());
+    std::vector<std::span<const std::uint8_t>> extra_channels;
+    std::vector<CompositeChannelInfo> channel_info;
+    if (!composite->channel_name.empty()) {
+      extra_channels.emplace_back(composite->alpha);
+      channel_info.push_back(CompositeChannelInfo{
+          composite->channel_name, false, true, std::nullopt,
+          DocumentChannelDisplayInfo{}, {}});
+    }
+    append_document_channels_for_write(document, extra_channels, channel_info);
+    check_composite_channel_limit(extra_channels.size());
 
-  SaveOutputBudgetTracker output_budget(options);
-  BigEndianWriter writer(&SaveOutputBudgetTracker::before_write, &output_budget);
-  write_header(writer, Header{options.large_document,
-                              static_cast<std::uint16_t>(3U + extra_channels.size()),
-                              static_cast<std::uint32_t>(composite->rgb.height()),
-                              static_cast<std::uint32_t>(composite->rgb.width()),
-                              8,
-                              kColorModeRgb});
+    SaveOutputBudgetTracker output_budget(options);
+    BigEndianWriter writer(&SaveOutputBudgetTracker::before_write,
+                           &output_budget);
+    write_header(writer,
+                 Header{options.large_document,
+                        static_cast<std::uint16_t>(3U + extra_channels.size()),
+                        static_cast<std::uint32_t>(composite->rgb.height()),
+                        static_cast<std::uint32_t>(composite->rgb.width()), 8,
+                        kColorModeRgb});
 
-  writer.write_u32(0);  // Color mode data section.
-  write_length_prefixed_block(writer, image_resources_for_document(document, channel_info));
-  if (options.large_document) {
-    writer.write_u64(0);  // Layer and mask information section.
-  } else {
-    writer.write_u32(0);  // Layer and mask information section.
-  }
-  if (!extra_channels.empty()) {
-    write_rgb8_image_data_with_extra_channels(writer, composite->rgb, extra_channels,
-                                              options.large_document);
-  } else {
-    write_rgb8_image_data(writer, composite->rgb, options.large_document);
-  }
+    writer.write_u32(0);  // Color mode data section.
+    write_length_prefixed_block(
+        writer, image_resources_for_document(document, channel_info));
+    if (options.large_document) {
+      writer.write_u64(0);  // Layer and mask information section.
+    } else {
+      writer.write_u32(0);  // Layer and mask information section.
+    }
+    if (!extra_channels.empty()) {
+      write_rgb8_image_data_with_extra_channels(
+          writer, composite->rgb, extra_channels, options.large_document,
+          tracked_live_budget);
+    } else {
+      write_rgb8_image_data(writer, composite->rgb, options.large_document,
+                            tracked_live_budget);
+    }
 
-  return writer.bytes();
+    return std::move(writer).take_bytes();
+  } catch (const SaveLiveBudgetSignal&) {
+    throw SaveBudgetExceeded(SaveBudgetDimension::TrackedLiveBytes);
+  }
 }
 
 void DocumentIo::write_flat_rgb8_file(const Document& document, const std::filesystem::path& path,
@@ -1967,17 +1983,18 @@ void DocumentIo::write_flat_rgb8_file(const Document& document, const std::files
 namespace {
 
 std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
-                                                  WriteOptions options) {
+                                                  WriteOptions options,
+                                                  SaveLiveBudgetTracker& tracked_live_budget) {
   check_write_dimensions(document, options.large_document);
   if (auto prepared = prepare_compound_vector_psd(document)) {
-    return write_layered_rgb8_impl(*prepared, options);
+    return write_layered_rgb8_impl(*prepared, options, tracked_live_budget);
   }
   if (document.layers().empty()) {
     // The signed record count carries merged transparency. Supply one empty
     // record in the file without inventing a layer in the live document.
     auto writable = document;
     writable.add_layer(Layer(writable.allocate_layer_id(), "Layer", PixelBuffer(1, 1, PixelFormat::rgba8())));
-    return write_layered_rgb8_impl(writable, options);
+    return write_layered_rgb8_impl(writable, options, tracked_live_budget);
   }
   std::size_t record_count = 0;
   const auto count_records = [&](auto&& self, const std::vector<Layer>& layers) -> void {
@@ -1993,7 +2010,7 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
   };
   count_records(count_records, document.layers());
 
-  auto composite = merged_flatten_composite(document);
+  auto composite = merged_flatten_composite(document, tracked_live_budget);
 
   const bool merged_transparency_channel = composite.channel_name == "Transparency";
   std::vector<std::span<const std::uint8_t>> extra_channels;
@@ -2016,10 +2033,12 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
   // Photoshop stores layer records in stack order from bottom to top. Patchy's
   // document model uses the same order, so write it directly instead of reversing.
   for (const auto& layer : document.layers()) {
-    append_encoded_layers(layer, encoded_layers, options.large_document);
+    append_encoded_layers(layer, encoded_layers, options.large_document,
+                          tracked_live_budget);
   }
 
-  BigEndianWriter layer_info;
+  SaveTrackedWriter tracked_layer_info(tracked_live_budget);
+  auto& layer_info = tracked_layer_info.writer();
   // A NEGATIVE layer count is the spec's "first alpha channel contains the merged
   // transparency" flag: without it Photoshop surfaces the composite's 4th channel as
   // a phantom saved channel named "Transparency" in the Channels panel (PS's own
@@ -2061,7 +2080,8 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
     layer_info.write_u8(0);
   }
 
-  BigEndianWriter layer_mask;
+  SaveTrackedWriter tracked_layer_mask(tracked_live_budget);
+  auto& layer_mask = tracked_layer_mask.writer();
   if (options.large_document) {
     layer_mask.write_u64(layer_info.bytes().size());
     layer_mask.write_bytes(layer_info.bytes());
@@ -2225,11 +2245,13 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
   }
   if (!extra_channels.empty()) {
     write_rgb8_image_data_with_extra_channels(writer, composite.rgb, extra_channels,
-                                              options.large_document);
+                                              options.large_document,
+                                              tracked_live_budget);
   } else {
-    write_rgb8_image_data(writer, composite.rgb, options.large_document);
+    write_rgb8_image_data(writer, composite.rgb, options.large_document,
+                          tracked_live_budget);
   }
-  return writer.bytes();
+  return std::move(writer).take_bytes();
 }
 
 }  // namespace
@@ -2239,7 +2261,17 @@ std::vector<std::uint8_t> DocumentIo::write_layered_rgb8(const Document& documen
   reset_save_usage(options.usage);
   check_write_dimensions(document, options.large_document);
   preflight_save(document, options, true);
-  return write_layered_rgb8_impl(document, options);
+  SaveLiveBudgetTracker tracked_live_budget(
+      options.budget.max_tracked_live_bytes,
+      options.usage != nullptr ? &options.usage->tracked_live_bytes : nullptr,
+      options.usage != nullptr
+          ? &options.usage->tracked_live_bytes_high_water
+          : nullptr);
+  try {
+    return write_layered_rgb8_impl(document, options, tracked_live_budget);
+  } catch (const SaveLiveBudgetSignal&) {
+    throw SaveBudgetExceeded(SaveBudgetDimension::TrackedLiveBytes);
+  }
 }
 
 void DocumentIo::write_layered_rgb8_file(const Document& document, const std::filesystem::path& path,

@@ -17,6 +17,7 @@
 #include "psd/psd_descriptor.hpp"
 #include "psd/psd_document_io.hpp"
 #include "psd/psd_parse_budget_internal.hpp"
+#include "psd/psd_save_budget_internal.hpp"
 #include "psd/psd_smart_objects.hpp"
 #include "psd/psd_text_runs.hpp"
 
@@ -248,11 +249,25 @@ enum class EncodedLayerKind {
 };
 
 struct EncodedChannel {
+  SaveLiveBudgetTracker::Reservation reservation;
   std::uint16_t id{0};
   std::int32_t width{0};
   std::int32_t height{0};
   std::uint16_t compression{kCompressionRaw};
   std::vector<std::uint8_t> data;
+
+  EncodedChannel() = default;
+  EncodedChannel(SaveLiveBudgetTracker::Reservation live_reservation,
+                 std::uint16_t channel_id, std::int32_t channel_width,
+                 std::int32_t channel_height, std::uint16_t channel_compression,
+                 std::vector<std::uint8_t> channel_data)
+      : reservation(std::move(live_reservation)), id(channel_id),
+        width(channel_width), height(channel_height),
+        compression(channel_compression), data(std::move(channel_data)) {}
+  EncodedChannel(const EncodedChannel&) = delete;
+  EncodedChannel& operator=(const EncodedChannel&) = delete;
+  EncodedChannel(EncodedChannel&&) noexcept = default;
+  EncodedChannel& operator=(EncodedChannel&&) noexcept = default;
 };
 
 struct EncodedLayer {
@@ -315,9 +330,24 @@ struct PsdTextEngineDefaults {
 };
 
 struct DocumentAlphaComposite {
+  SaveLiveBudgetTracker::Reservation rgb_reservation;
+  SaveLiveBudgetTracker::Reservation alpha_reservation;
   PixelBuffer rgb;                  // canvas-sized RGB8 (unmasked, original colors)
   std::vector<std::uint8_t> alpha;  // canvas-sized grayscale, row-major
   std::string_view channel_name;    // 1006 label: "Alpha 1" (saved channel) or "Transparency"
+
+  DocumentAlphaComposite(SaveLiveBudgetTracker::Reservation rgb_live,
+                         SaveLiveBudgetTracker::Reservation alpha_live,
+                         PixelBuffer rgb_pixels,
+                         std::vector<std::uint8_t> alpha_pixels,
+                         std::string_view name)
+      : rgb_reservation(std::move(rgb_live)),
+        alpha_reservation(std::move(alpha_live)), rgb(std::move(rgb_pixels)),
+        alpha(std::move(alpha_pixels)), channel_name(name) {}
+  DocumentAlphaComposite(const DocumentAlphaComposite&) = delete;
+  DocumentAlphaComposite& operator=(const DocumentAlphaComposite&) = delete;
+  DocumentAlphaComposite(DocumentAlphaComposite&&) noexcept = default;
+  DocumentAlphaComposite& operator=(DocumentAlphaComposite&&) noexcept = default;
 };
 
 // Naive CMYK ink mix used when no usable ICC profile is present (definition in
@@ -401,13 +431,19 @@ void write_descriptor_text_item(BigEndianWriter& writer, std::string_view key, s
 
 // Channel/composite image-data codec helpers (definitions in psd_channel_data.cpp).
 EncodedChannel encode_channel(std::uint16_t id, std::int32_t width, std::int32_t height,
-                              std::span<const std::uint8_t> raw_data, bool wide_rle_counts);
-void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels, bool wide_rle_counts);
-[[nodiscard]] std::optional<DocumentAlphaComposite> document_alpha_composite(const Document& document);
-[[nodiscard]] DocumentAlphaComposite merged_flatten_composite(const Document& document);
+                              std::span<const std::uint8_t> raw_data, bool wide_rle_counts,
+                              SaveLiveBudgetTracker& tracked_live_budget);
+void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels,
+                           bool wide_rle_counts,
+                           SaveLiveBudgetTracker& tracked_live_budget);
+[[nodiscard]] std::optional<DocumentAlphaComposite> document_alpha_composite(
+    const Document& document, SaveLiveBudgetTracker& tracked_live_budget);
+[[nodiscard]] DocumentAlphaComposite merged_flatten_composite(
+    const Document& document, SaveLiveBudgetTracker& tracked_live_budget);
 void write_rgb8_image_data_with_extra_channels(
     BigEndianWriter& writer, const PixelBuffer& pixels,
-    std::span<const std::span<const std::uint8_t>> extra_channels, bool wide_rle_counts);
+    std::span<const std::span<const std::uint8_t>> extra_channels, bool wide_rle_counts,
+    SaveLiveBudgetTracker& tracked_live_budget);
 // Rebuilds an embedded PSD/PSB whose merged-composite RLE rows include odd byte
 // counts, splitting one literal per odd row (identical decode). Photoshop's
 // smart-object embed parser rejects odd composite rows outright; see the
@@ -547,7 +583,9 @@ LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
 void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bool strip_smart_object_blocks,
                         bool large_document, std::uint32_t synthesized_photoshop_layer_id,
                         Rect canvas);
-void append_encoded_layers(const Layer& layer, std::vector<EncodedLayer>& encoded_layers, bool large_document);
+void append_encoded_layers(const Layer& layer, std::vector<EncodedLayer>& encoded_layers,
+                           bool large_document,
+                           SaveLiveBudgetTracker& tracked_live_budget);
 
 // Vector shape/path codec: vmsk/vsms path records, SoCo/GdFl/PtFl fill
 // content, vstk stroke style, vogk live-shape origination, and the saved-path

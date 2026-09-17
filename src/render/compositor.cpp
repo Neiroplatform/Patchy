@@ -241,7 +241,16 @@ private:
 
 }  // namespace
 
-PixelBuffer Compositor::flatten_rgb8(const Document& document, std::vector<std::uint8_t>* merged_alpha) const {
+PixelBuffer Compositor::flatten_rgb8(
+    const Document& document,
+    std::vector<std::uint8_t>* merged_alpha) const {
+  return flatten_rgb8_with_policy(document, merged_alpha,
+                                  CompositorExecutionPolicy::Automatic);
+}
+
+PixelBuffer Compositor::flatten_rgb8_with_policy(
+    const Document& document, std::vector<std::uint8_t>* merged_alpha,
+    CompositorExecutionPolicy execution) const {
   PixelBuffer output(document.width(), document.height(), PixelFormat::rgb8());
   output.clear(0);
   const auto canvas = Rect::from_size(document.width(), document.height());
@@ -265,7 +274,9 @@ PixelBuffer Compositor::flatten_rgb8(const Document& document, std::vector<std::
   const auto strips = max_blocking_fanout_workers(
       std::clamp(std::min(document.height() / 128, hardware_threads), 1, 16));
   const bool parallel =
-      strips >= 2 && area >= 4'000'000 && !environment_variable_is_set("PATCHY_RENDER_SINGLE_THREADED");
+      execution == CompositorExecutionPolicy::Automatic && strips >= 2 &&
+      area >= 4'000'000 &&
+      !environment_variable_is_set("PATCHY_RENDER_SINGLE_THREADED");
   if (parallel) {
     struct StripResult {
       PixelBuffer pixels;
