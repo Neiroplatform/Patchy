@@ -1,5 +1,6 @@
 #include "core/document.hpp"
 #include "core/layer.hpp"
+#include "core/smart_object.hpp"
 #include "core/vector_compound.hpp"
 #include "psd/psd_io_internal.hpp"
 #include "psd/psd_save_budget_internal.hpp"
@@ -8,10 +9,12 @@
 #include "psd_test_support.hpp"
 #include "test_harness.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -41,6 +44,121 @@ patchy::PatternResource make_one_pixel_pattern(
   pattern.tile = patchy::PixelBuffer(1, 1, patchy::PixelFormat::rgba8());
   std::copy(rgba.begin(), rgba.end(), pattern.tile.data().begin());
   return pattern;
+}
+
+patchy::SmartObjectLinkBlock make_budget_authored_link_block() {
+  patchy::SmartObjectLinkBlock block;
+  patchy::SmartObjectSource source;
+  source.uuid = "11111111-2222-3333-4444-555555555555";
+  source.filename = "inner.psb";
+  source.filetype = "8BPB";
+  source.file_bytes = std::make_shared<const std::vector<std::uint8_t>>(
+      patchy::test::odd_composite_mini_psb());
+  source.dirty = true;
+  block.sources.push_back(std::move(source));
+  return block;
+}
+
+patchy::SmartObjectLinkBlock make_budget_external_link_block() {
+  patchy::SmartObjectLinkBlock block;
+  patchy::SmartObjectSource source;
+  source.kind = patchy::SmartObjectSourceKind::ExternalFile;
+  source.uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  source.filename = "linked.psb";
+  source.filetype = "8BPB";
+  source.external_full_path = "file:///tmp/linked.psb";
+  source.external_original_path = "/tmp/linked.psb";
+  source.external_rel_path = "linked.psb";
+  source.external_mod_year = 2026;
+  source.external_mod_month = 9;
+  source.external_mod_day = 17;
+  source.external_file_size = 123U;
+  source.dirty = true;
+  block.sources.push_back(std::move(source));
+  return block;
+}
+
+std::vector<std::uint8_t> make_budget_foreign_embedded_element(
+    std::span<const std::uint8_t> embedded,
+    bool with_name_reference = false) {
+  patchy::psd::BigEndianWriter body;
+  for (const char ch : {'l', 'i', 'F', 'D'}) {
+    body.write_u8(static_cast<std::uint8_t>(ch));
+  }
+  body.write_u32(7U);
+  body.write_u8(36U);
+  for (const char ch :
+       std::string_view("22222222-3333-4444-5555-666666666666")) {
+    body.write_u8(static_cast<std::uint8_t>(ch));
+  }
+  body.write_u32(6U);
+  for (const char ch : std::string_view("in.psb")) {
+    body.write_u16(static_cast<std::uint16_t>(ch));
+  }
+  for (const char ch : std::string_view("8BPB8BIM")) {
+    body.write_u8(static_cast<std::uint8_t>(ch));
+  }
+  body.write_u64(embedded.size());
+  body.write_u8(with_name_reference ? 1U : 0U);
+  if (with_name_reference) {
+    patchy::psd::DescriptorObject descriptor;
+    descriptor.class_id = "null";
+    patchy::psd::DescriptorValue reference;
+    reference.type = patchy::psd::DescriptorValue::Type::Reference;
+    patchy::psd::DescriptorReferenceItem item;
+    item.form = "name";
+    item.class_id = "null";
+    item.name_value = "name-reference-sentinel";
+    reference.reference_items.push_back(std::move(item));
+    descriptor.key_order.push_back(
+        patchy::psd::DescriptorObject::KeyEntry{"Ref ", false});
+    descriptor.values.emplace("Ref ", std::move(reference));
+    body.write_u32(16U);
+    patchy::psd::write_descriptor(body, descriptor);
+  }
+  body.write_bytes(embedded);
+  body.write_u32(0U);
+  patchy::psd::write_f64(body, 0.0);
+  body.write_u8(0U);
+  for (int i = 0; i < 5; ++i) {
+    body.write_u8(0xABU);
+  }
+
+  patchy::psd::BigEndianWriter element;
+  element.write_u64(body.bytes().size());
+  element.write_bytes(body.bytes());
+  const auto padding = (4U - (body.bytes().size() % 4U)) % 4U;
+  for (std::size_t i = 0U; i < padding; ++i) {
+    element.write_u8(0U);
+  }
+  return std::move(element).take_bytes();
+}
+
+std::vector<std::uint8_t> make_psd_with_max_odd_row_count() {
+  patchy::psd::BigEndianWriter writer;
+  for (const char ch : {'8', 'B', 'P', 'S'}) {
+    writer.write_u8(static_cast<std::uint8_t>(ch));
+  }
+  writer.write_u16(1U);
+  for (int i = 0; i < 6; ++i) {
+    writer.write_u8(0U);
+  }
+  writer.write_u16(1U);
+  writer.write_u32(1U);
+  writer.write_u32(1U);
+  writer.write_u16(8U);
+  writer.write_u16(3U);
+  writer.write_u32(0U);
+  writer.write_u32(0U);
+  writer.write_u32(0U);
+  writer.write_u16(1U);
+  writer.write_u16(0xFFFFU);
+  writer.write_u8(1U);
+  writer.write_u8(0U);
+  for (std::size_t i = 2U; i < 0xFFFFU; ++i) {
+    writer.write_u8(0U);
+  }
+  return std::move(writer).take_bytes();
 }
 
 void psd_save_generated_path_and_clipping_resources_own_budget() {
@@ -965,6 +1083,350 @@ void psd_save_pattern_global_copy_and_placeholder_reach_public_budget() {
   }
 }
 
+void psd_save_link_normalization_is_tracked_and_byte_stable() {
+  const auto odd_psb = patchy::test::odd_composite_mini_psb();
+  CHECK(odd_psb.size() == 71U);
+
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  std::vector<std::uint8_t> normalized_bytes;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(74U, &current, &high_water);
+    auto normalized = patchy::psd::even_composite_rows_normalized_tracked(
+        odd_psb, tracker);
+    CHECK(normalized.has_value());
+    CHECK(normalized->bytes.size() == 74U);
+    CHECK(patchy::test::fnv1a_hash_bytes(normalized->bytes) ==
+          0x6fef8cec82673920ULL);
+    CHECK(current == 74U);
+    CHECK(high_water == 74U);
+    normalized_bytes = normalized->bytes;
+  }
+  CHECK(current == 0U);
+
+  // Preserve the old defined rewrite for a foreign row whose positive literal
+  // over-declares its physical bytes: the split touches only the flag and the
+  // first literal byte.
+  auto truncated_literal = odd_psb;
+  truncated_literal[56] = 5U;
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(74U, &current, &high_water);
+    CHECK(patchy::psd::even_composite_rows_normalized_tracked(
+              truncated_literal, tracker)
+              .has_value());
+  }
+  CHECK(current == 0U);
+
+  for (const auto limit : std::array<std::uint64_t, 2>{73U, 0U}) {
+    current = 0U;
+    high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &current, &high_water);
+      (void)patchy::psd::even_composite_rows_normalized_tracked(odd_psb,
+                                                                tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water <= limit);
+  }
+
+  const auto odd_psd = patchy::test::odd_composite_mini_psd();
+  CHECK(odd_psd.size() == 61U);
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(64U, &current, &high_water);
+    const auto normalized =
+        patchy::psd::even_composite_rows_normalized_tracked(odd_psd,
+                                                            tracker);
+    CHECK(normalized.has_value());
+    CHECK(normalized->bytes.size() == 64U);
+    CHECK(patchy::test::fnv1a_hash_bytes(normalized->bytes) ==
+          0xf3cf2b65da3eda5dULL);
+    CHECK(current == 64U);
+    CHECK(high_water == 64U);
+  }
+  CHECK(current == 0U);
+
+  // Validation completes before allocating: compliant and malformed inputs do
+  // not consume even a zero-byte tracker.
+  for (const auto& bytes :
+       std::array<std::vector<std::uint8_t>, 2>{
+           normalized_bytes, std::vector<std::uint8_t>{'n', 'o', 'p', 'e'}}) {
+    current = 0U;
+    high_water = 0U;
+    patchy::psd::SaveLiveBudgetTracker tracker(0U, &current, &high_water);
+    CHECK(!patchy::psd::even_composite_rows_normalized_tracked(bytes, tracker)
+               .has_value());
+    CHECK(current == 0U);
+    CHECK(high_water == 0U);
+  }
+
+  auto hostile = odd_psb;
+  hostile[12] = 0xFFU;
+  hostile[13] = 0xFFU;
+  hostile[14] = 0xFFU;
+  hostile[15] = 0xFFU;
+  hostile[16] = 0xFFU;
+  hostile[17] = 0xFFU;
+  auto truncated_table = odd_psb;
+  truncated_table.resize(48U);
+  auto unsplittable = odd_psb;
+  std::fill(unsplittable.begin() + 56, unsplittable.begin() + 61,
+            0x80U);
+  auto trailing = odd_psb;
+  trailing.push_back(0U);
+  auto max_psd_row = make_psd_with_max_odd_row_count();
+  for (const auto& malformed :
+       std::array<std::vector<std::uint8_t>, 5>{
+           hostile, truncated_table, unsplittable, trailing, max_psd_row}) {
+    current = 0U;
+    high_water = 0U;
+    patchy::psd::SaveLiveBudgetTracker tracker(0U, &current, &high_water);
+    CHECK(!patchy::psd::even_composite_rows_normalized_tracked(malformed,
+                                                               tracker)
+               .has_value());
+    CHECK(current == 0U);
+    CHECK(high_water == 0U);
+  }
+}
+
+void psd_save_link_payload_owners_overlap_without_byte_drift() {
+  patchy::SmartObjectLinkBlock raw;
+  raw.opaque = true;
+  raw.original_payload = std::make_shared<const std::vector<std::uint8_t>>(
+      std::vector<std::uint8_t>{9U, 8U, 7U, 6U, 5U, 4U, 3U});
+
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(7U, &current, &high_water);
+    const auto payload = patchy::psd::serialize_linked_layer_block_tracked(
+        raw, tracker);
+    CHECK(payload.bytes == *raw.original_payload);
+    CHECK(patchy::test::fnv1a_hash_bytes(payload.bytes) ==
+          0x496ef57bd256f9d5ULL);
+    CHECK(current == 7U);
+    CHECK(high_water == 7U);
+  }
+  CHECK(current == 0U);
+  for (const auto limit : std::array<std::uint64_t, 2>{6U, 0U}) {
+    current = 0U;
+    high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &current, &high_water);
+      (void)patchy::psd::serialize_linked_layer_block_tracked(raw, tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water == 0U);
+  }
+
+  const auto authored = make_budget_authored_link_block();
+  constexpr std::uint64_t kAuthoredPayloadBytes = 184U;
+  constexpr std::uint64_t kAuthoredPeak = 258U;  // normalized PSB + link payload
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(kAuthoredPeak, &current,
+                                               &high_water);
+    const auto payload = patchy::psd::serialize_linked_layer_block_tracked(
+        authored, tracker);
+    CHECK(payload.bytes.size() == kAuthoredPayloadBytes);
+    CHECK(patchy::test::fnv1a_hash_bytes(payload.bytes) ==
+          0x9d12c9f317164adaULL);
+    CHECK(payload.bytes ==
+          patchy::psd::serialize_linked_layer_block(authored));
+    CHECK(current == kAuthoredPayloadBytes);
+    CHECK(high_water == kAuthoredPeak);
+  }
+  CHECK(current == 0U);
+
+  for (const auto limit :
+       std::array<std::uint64_t, 2>{kAuthoredPeak - 1U, 0U}) {
+    current = 0U;
+    high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &current, &high_water);
+      (void)patchy::psd::serialize_linked_layer_block_tracked(authored,
+                                                              tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water <= limit);
+  }
+
+  auto aliased = make_budget_authored_link_block();
+  aliased.sources.push_back(aliased.sources.front());
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(516U, &current, &high_water);
+    const auto payload = patchy::psd::serialize_linked_layer_block_tracked(
+        aliased, tracker);
+    CHECK(payload.bytes.size() == 368U);
+    CHECK(current == 368U);
+    CHECK(high_water == 516U);
+  }
+  CHECK(current == 0U);
+
+  current = 0U;
+  high_water = 0U;
+  bool alias_rejected = false;
+  try {
+    patchy::psd::SaveLiveBudgetTracker tracker(515U, &current, &high_water);
+    (void)patchy::psd::serialize_linked_layer_block_tracked(aliased, tracker);
+  } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+    alias_rejected = true;
+  }
+  CHECK(alias_rejected);
+  CHECK(current == 0U);
+  CHECK(high_water <= 515U);
+
+  const auto odd_psb = patchy::test::odd_composite_mini_psb();
+  patchy::SmartObjectLinkBlock wrapped;
+  patchy::SmartObjectSource wrapped_source;
+  wrapped_source.uuid = "11111111-2222-3333-4444-555555555555";
+  wrapped_source.filename = "inner.psb";
+  wrapped_source.filetype = "8BPB";
+  wrapped_source.file_bytes =
+      std::make_shared<const std::vector<std::uint8_t>>(odd_psb);
+  wrapped_source.original_element_bytes =
+      std::make_shared<const std::vector<std::uint8_t>>(
+          make_budget_foreign_embedded_element(odd_psb));
+  wrapped.sources.push_back(std::move(wrapped_source));
+  wrapped.original_payload = wrapped.sources.front().original_element_bytes;
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(254U, &current, &high_water);
+    const auto payload = patchy::psd::serialize_linked_layer_block_tracked(
+        wrapped, tracker);
+    CHECK(payload.bytes.size() == 180U);
+    CHECK(patchy::test::fnv1a_hash_bytes(payload.bytes) ==
+          0x3fb7e13c29962473ULL);
+    CHECK(std::search_n(payload.bytes.begin(), payload.bytes.end(), 5U,
+                        0xABU) != payload.bytes.end());
+    CHECK(current == 180U);
+    CHECK(high_water == 254U);
+  }
+  CHECK(current == 0U);
+  current = 0U;
+  high_water = 0U;
+  bool wrapped_rejected = false;
+  try {
+    patchy::psd::SaveLiveBudgetTracker tracker(253U, &current, &high_water);
+    (void)patchy::psd::serialize_linked_layer_block_tracked(wrapped, tracker);
+  } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+    wrapped_rejected = true;
+  }
+  CHECK(wrapped_rejected);
+  CHECK(current == 0U);
+  CHECK(high_water <= 253U);
+
+  patchy::SmartObjectLinkBlock named_reference_wrapper;
+  auto named_source = wrapped.sources.front();
+  named_source.original_element_bytes =
+      std::make_shared<const std::vector<std::uint8_t>>(
+          make_budget_foreign_embedded_element(
+              odd_psb, /*with_name_reference=*/true));
+  named_reference_wrapper.sources.push_back(std::move(named_source));
+  named_reference_wrapper.original_payload =
+      named_reference_wrapper.sources.front().original_element_bytes;
+  const auto named_payload = patchy::psd::serialize_linked_layer_block(
+      named_reference_wrapper);
+  CHECK(std::search_n(named_payload.begin(), named_payload.end(), 5U,
+                      0xABU) != named_payload.end());
+  const auto named_parsed =
+      patchy::psd::parse_linked_layer_block(named_payload);
+  CHECK(named_parsed.has_value());
+  CHECK(named_parsed->size() == 1U);
+  CHECK(named_parsed->front().file_bytes != nullptr);
+  CHECK(named_parsed->front().file_bytes->size() == 74U);
+  patchy::SmartObjectLinkBlock named_round_trip;
+  named_round_trip.sources = *named_parsed;
+  named_round_trip.original_payload =
+      std::make_shared<const std::vector<std::uint8_t>>(named_payload);
+  CHECK(patchy::psd::serialize_linked_layer_block(named_round_trip) ==
+        named_payload);
+
+  const auto external = make_budget_external_link_block();
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(496U, &current, &high_water);
+    const auto payload = patchy::psd::serialize_linked_layer_block_tracked(
+        external, tracker);
+    CHECK(payload.bytes.size() == 496U);
+    CHECK(patchy::test::fnv1a_hash_bytes(payload.bytes) ==
+          0x7713bac86f810fc4ULL);
+    CHECK(current == 496U);
+    CHECK(high_water == 496U);
+  }
+  CHECK(current == 0U);
+}
+
+void psd_save_link_globals_reach_the_public_live_budget() {
+  patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
+  document.metadata().smart_objects.blocks.push_back(
+      make_budget_authored_link_block());
+  document.metadata().smart_objects.blocks.push_back(
+      make_budget_external_link_block());
+  document.metadata().smart_filter_effects.blocks.push_back(
+      make_filter_effects_block());
+
+  patchy::psd::SaveUsage measured_usage;
+  patchy::psd::WriteOptions measured_options;
+  measured_options.usage = &measured_usage;
+  const auto baseline = patchy::psd::DocumentIo::write_layered_rgb8(
+      document, measured_options);
+  CHECK(baseline.size() == 1070U);
+  CHECK(patchy::test::fnv1a_hash_bytes(baseline) ==
+        0x9a03676658d006f7ULL);
+  CHECK(measured_usage.tracked_live_bytes == 0U);
+  CHECK(measured_usage.tracked_live_bytes_high_water == 1680U);
+
+  patchy::psd::SaveUsage exact_usage;
+  auto exact_options = measured_options;
+  exact_options.budget.max_tracked_live_bytes = 1680U;
+  exact_options.usage = &exact_usage;
+  CHECK(patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                     exact_options) ==
+        baseline);
+  CHECK(exact_usage.tracked_live_bytes == 0U);
+  CHECK(exact_usage.tracked_live_bytes_high_water == 1680U);
+
+  for (const auto limit : std::array<std::uint64_t, 2>{1679U, 0U}) {
+    patchy::psd::SaveUsage rejected_usage;
+    auto rejected_options = measured_options;
+    rejected_options.budget.max_tracked_live_bytes = limit;
+    rejected_options.usage = &rejected_usage;
+    bool rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(
+          document, rejected_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+    }
+    CHECK(rejected);
+    CHECK(rejected_usage.tracked_live_bytes == 0U);
+    CHECK(rejected_usage.tracked_live_bytes_high_water <= limit);
+  }
+}
+
 }  // namespace
 
 std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
@@ -992,5 +1454,11 @@ std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
        psd_save_pattern_raw_coverage_and_malformed_prefix_are_stable},
       {"psd_save_pattern_global_copy_and_placeholder_reach_public_budget",
        psd_save_pattern_global_copy_and_placeholder_reach_public_budget},
+      {"psd_save_link_normalization_is_tracked_and_byte_stable",
+       psd_save_link_normalization_is_tracked_and_byte_stable},
+      {"psd_save_link_payload_owners_overlap_without_byte_drift",
+       psd_save_link_payload_owners_overlap_without_byte_drift},
+      {"psd_save_link_globals_reach_the_public_live_budget",
+       psd_save_link_globals_reach_the_public_live_budget},
   };
 }

@@ -171,7 +171,15 @@ unwind checks apply. DP-008B3a tracks global FEid/FXid payloads and pins a
 plane scratch; direct opaque/alpha/multi/Unicode/chunk cases, invalid and unwind
 paths, placeholders, and raw Patt/Pat2/Pat3 malformed-prefix dedupe are pinned.
 Public peaks are 1592 authored, 1652 placeholder, and 2044 multi-block bytes.
-Smart Object payloads remain.
+DP-008B3c tracks copied/generated `lnk*` payloads and embedded PSD/PSB
+normalization. It pins the 64/74-byte normalized mini-PSD/PSB, 184-byte authored
+`liFD`, 496-byte external `liFE`, and unchanged seven-byte raw block. The
+authored direct peak is 258 bytes, a shared embedded owner counted twice peaks
+at 516, and the foreign-wrapper rebuild peaks at 254. The two-link plus `FEid`
+public file is 1070 bytes and peaks at 1680 tracked bytes. Exact/N-1/zero,
+owner lifetime, invalid/compliant allocation-free normalization, typed public
+rejection, byte hashes, and the existing wrapper/pixel semantic tests are
+mandatory.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

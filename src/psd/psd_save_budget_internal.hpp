@@ -221,6 +221,17 @@ public:
 
   [[nodiscard]] BigEndianWriter& writer() noexcept { return writer_; }
   [[nodiscard]] const BigEndianWriter& writer() const noexcept { return writer_; }
+  // Rewinds a failed optional sub-write. BigEndianWriter charges before vector
+  // growth, so a std::allocation failure can leave the reservation ahead of
+  // unchanged storage; shrinking both restores the enclosing writer before a
+  // compatibility fallback is attempted.
+  void rollback_to(std::size_t size) noexcept {
+    if (size > writer_.bytes().size()) {
+      return;
+    }
+    writer_.bytes().resize(size);
+    reservation_.resize_size(size);
+  }
   [[nodiscard]] SaveTrackedByteBuffer take_buffer() && {
     return SaveTrackedByteBuffer(std::move(reservation_),
                                  std::move(writer_).take_bytes());

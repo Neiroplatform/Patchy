@@ -2116,9 +2116,11 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
   {
     const auto& store = document.metadata().smart_objects;
     const auto& filter_store = document.metadata().smart_filter_effects;
-    std::vector<std::vector<std::uint8_t>> link_payloads(store.blocks.size());
+    std::vector<SaveTrackedByteBuffer> link_payloads;
+    link_payloads.reserve(store.blocks.size());
     for (std::size_t i = 0; i < store.blocks.size(); ++i) {
-      link_payloads[i] = serialize_linked_layer_block(store.blocks[i]);
+      link_payloads.push_back(serialize_linked_layer_block_tracked(
+          store.blocks[i], tracked_live_budget));
     }
     std::vector<SaveTrackedByteBuffer> filter_payloads;
     filter_payloads.reserve(filter_store.blocks.size());
@@ -2161,7 +2163,9 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
         }
         case GlobalEmissionKind::Link: {
           const auto& block = store.blocks[emission.item_index];
-          emit_global_payload(block.key, link_payloads[emission.item_index], block.long_length);
+          emit_global_payload(block.key,
+                              link_payloads[emission.item_index].bytes,
+                              block.long_length);
           break;
         }
         case GlobalEmissionKind::Filter: {

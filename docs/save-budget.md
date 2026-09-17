@@ -67,7 +67,7 @@ does not reserve a slot. This is not exact post-render channel usage.
 The Photoshop 8000-record format error precedes configurable admission. Other later
 encoder-format errors may be preceded by an earlier finite preflight rejection.
 
-## DP-008A through DP-008B3b tracked live workspace
+## DP-008A through DP-008B3c tracked live workspace
 
 `max_tracked_live_bytes` caps conservative logical reservations for instrumented
 save-owned temporary buffers. `SaveUsage::tracked_live_bytes` is current
@@ -94,7 +94,9 @@ The current implemented slices cover:
   document writer;
 - generated and copied document-global Smart Filter `FEid`/`FXid` payloads;
 - generated document-global pattern payloads and transparent missing-pattern
-  placeholder pixels.
+  placeholder pixels;
+- copied, generated, and surgically rebuilt document-global Smart Object
+  `lnk*`/`Lnk*` payloads, including normalized embedded PSD/PSB bytes.
 
 RAW and RLE candidates count together while both are live. Retained encoded
 channels remain charged until their owners die. Copying `layer_info` into
@@ -136,6 +138,16 @@ Generated 1x1 transparent placeholders reserve their four pixel bytes before
 allocation and keep that reservation coupled to the pixel owner through emission.
 Referenced resources that cannot be represented by the pattern codec now fail
 closed instead of leaving a dangling pattern id.
+DP-008B3c streams fresh embedded/external link elements and surgical wrapper
+rebuilds directly into one owner-coupled block payload. It validates embedded
+PSD/PSB composite normalization without allocating row tables or row copies,
+then writes the normalized file into one tracked buffer. Every normalized
+embedded-file occurrence stays charged until the containing link block is
+complete, and every completed link block stays charged through the historical
+eager link-before-filter build and stable global emission. Caller-owned source
+files, original element wrappers, and preserved original block payloads remain
+document state; any save-owned copy is charged before allocation. The public
+vector-returning codec and emitted bytes remain unchanged.
 
 ## Explicit exclusions and remaining DP-008B work
 
@@ -154,7 +166,7 @@ DP-008B remains open for:
 - compound/open-stroke normalization clones and vector-raster scratch;
 - deep compositor group, clipping, style, effect, distance-field, and blur planes;
 - generated layer-record payload producers and nested resource writers;
-- generated Smart Object serialization payloads.
+- remaining normalization/vector-raster workspaces and the final source census.
 
 Product callers must not treat DP-008A as a complete save-memory ceiling. Finite
 values and caller wiring remain downstream policy work after DP-008B and
@@ -213,6 +225,19 @@ placeholder layered files peak at 1592 and 1652 bytes. A four-block
 `Patt`/`Pat2`/`Pat3` fixture preserves raw order and a valid prefix before a
 malformed tail, deduplicates covered ids, emits one 516-byte generated `Patt`,
 and pins the public tracked peak at 2044 bytes with exact and typed N-1 rejection.
+DP-008B3c pins odd embedded PSD and PSB normalization at 64 and 74 bytes
+(FNV-1a `f3cf2b65da3eda5d` and `6fef8cec82673920`), the 184-byte authored `liFD` payload at
+`9d12c9f317164ada`, the 496-byte external `liFE` payload at
+`7713bac86f810fc4`, and the unchanged seven-byte original block at
+`496ef57bd256f9d5`. The authored block peaks at 258 bytes while its 74-byte
+normalized owner overlaps the growing final payload; two source occurrences
+sharing that same embedded owner peak at 516, proving no pointer-identity
+deduplication. A foreign-wrapper rebuild peaks at 254 and retains its trailer.
+A two-link plus `FEid`
+public fixture is 1070 bytes/FNV-1a `9a03676658d006f7` and pins the complete
+eager owner/global-copy peak at 1680 bytes. Direct and public exact/N-1/zero,
+owner-release, typed unwind, allocation-free invalid/already-compliant
+normalization, and Smart Object semantic wrapper tests cover the slice.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero

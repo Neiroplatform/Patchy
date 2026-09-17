@@ -452,6 +452,10 @@ void write_rgb8_image_data_with_extra_channels(
 // bytes are not an 8-bit RLE-composite PSD/PSB or are already compliant.
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> even_composite_rows_normalized(
     std::span<const std::uint8_t> file_bytes);
+[[nodiscard]] std::optional<SaveTrackedByteBuffer>
+even_composite_rows_normalized_tracked(
+    std::span<const std::uint8_t> file_bytes,
+    SaveLiveBudgetTracker& tracked_live_budget);
 // How a channel's samples decode into Patchy's 8-bit pipeline. 16-bit samples are
 // full-range big-endian u16 (value/257, rounded); 32-bit samples are big-endian
 // linear-light floats: color channels sRGB-encode, alpha/mask/saved channels scale
@@ -593,6 +597,14 @@ void append_encoded_layers(const Layer& layer, std::vector<EncodedLayer>& encode
 // payload remains charged while it is copied into the global layer section.
 SaveTrackedByteBuffer serialize_filter_effects_block_tracked(
     const SmartFilterEffectsBlock& block,
+    SaveLiveBudgetTracker& tracked_live_budget);
+
+// Save-only owner-coupled lnk*/Lnk* serializer. Embedded PSD/PSB
+// normalization buffers and the completed link payload share the document
+// writer's live-byte tracker, and the returned reservation remains live until
+// the global block has been copied into the layer-and-mask section.
+SaveTrackedByteBuffer serialize_linked_layer_block_tracked(
+    const SmartObjectLinkBlock& block,
     SaveLiveBudgetTracker& tracked_live_budget);
 
 // Save-only owner-coupled Patt serializer. The public codec keeps its

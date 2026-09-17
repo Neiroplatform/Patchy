@@ -946,11 +946,68 @@ std::vector<TrackedByteBuffer> read_flat_image_channels_from(
   throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Unsupported PSD composite compression"));
 }
 
-std::optional<std::vector<std::uint8_t>> even_composite_rows_normalized(
-    std::span<const std::uint8_t> file_bytes) {
+namespace {
+
+struct EvenCompositeNormalizationPlan {
+  std::size_t composite_offset{0U};
+  std::size_t count_table_offset{0U};
+  std::size_t data_offset{0U};
+  std::size_t row_count{0U};
+  std::size_t odd_rows{0U};
+  std::size_t normalized_size{0U};
+  std::size_t count_width{0U};
+  bool wide_counts{false};
+};
+
+[[nodiscard]] std::uint32_t read_row_count_at(
+    std::span<const std::uint8_t> bytes, std::size_t offset,
+    bool wide_counts) noexcept {
+  if (wide_counts) {
+    return (static_cast<std::uint32_t>(bytes[offset]) << 24U) |
+           (static_cast<std::uint32_t>(bytes[offset + 1U]) << 16U) |
+           (static_cast<std::uint32_t>(bytes[offset + 2U]) << 8U) |
+           static_cast<std::uint32_t>(bytes[offset + 3U]);
+  }
+  return (static_cast<std::uint32_t>(bytes[offset]) << 8U) |
+         static_cast<std::uint32_t>(bytes[offset + 1U]);
+}
+
+// Returns the first literal packet that can be split by the byte-identical
+// PackBits rewrite. Preserve the historical malformed-row behavior: a positive
+// literal is splittable as soon as the flag and first byte physically exist,
+// even when its declared packet length exceeds the row.
+[[nodiscard]] std::optional<std::size_t> splittable_literal_offset(
+    std::span<const std::uint8_t> row) noexcept {
+  std::size_t offset = 0U;
+  while (offset < row.size()) {
+    const auto flag = static_cast<std::int8_t>(row[offset]);
+    std::size_t packet_size = 0U;
+    if (flag >= 1) {
+      return row.size() - offset >= 2U
+                 ? std::optional<std::size_t>(offset)
+                 : std::nullopt;
+    }
+    if (flag == 0) {
+      packet_size = static_cast<std::size_t>(flag) + 2U;
+    } else if (flag == -128) {
+      packet_size = 1U;
+    } else {
+      packet_size = 2U;
+    }
+    if (packet_size > row.size() - offset) {
+      return std::nullopt;
+    }
+    offset += packet_size;
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<EvenCompositeNormalizationPlan>
+plan_even_composite_rows(std::span<const std::uint8_t> file_bytes) {
   try {
     BigEndianReader reader(file_bytes);
-    if (key_string(read_signature(reader)) != "8BPS") {
+    if (reader.read_u8() != '8' || reader.read_u8() != 'B' ||
+        reader.read_u8() != 'P' || reader.read_u8() != 'S') {
       return std::nullopt;
     }
     const auto version = reader.read_u16();
@@ -978,55 +1035,133 @@ std::optional<std::vector<std::uint8_t>> even_composite_rows_normalized(
     if (reader.read_u16() != kCompressionRle) {
       return std::nullopt;
     }
-    const auto row_count = static_cast<std::size_t>(height) * channels;
-    std::vector<std::uint32_t> row_lengths(row_count);
-    for (auto& length : row_lengths) {
-      length = version == 2 ? reader.read_u32() : reader.read_u16();
+    const auto height_size = static_cast<std::size_t>(height);
+    const auto channels_size = static_cast<std::size_t>(channels);
+    if (channels_size != 0U &&
+        height_size >
+            std::numeric_limits<std::size_t>::max() / channels_size) {
+      return std::nullopt;
     }
+    const auto row_count = height_size * channels_size;
+    const bool wide_counts = version == 2;
+    const auto count_width = wide_counts ? 4U : 2U;
+    if (row_count > reader.remaining() / count_width) {
+      return std::nullopt;
+    }
+    const auto count_table_offset = reader.position();
+    const auto data_offset = count_table_offset + row_count * count_width;
     std::size_t odd_rows = 0;
     std::size_t data_size = 0;
-    for (const auto length : row_lengths) {
+    for (std::size_t row = 0U; row < row_count; ++row) {
+      const auto length = read_row_count_at(
+          file_bytes, count_table_offset + row * count_width, wide_counts);
       odd_rows += length & 1U;
-      data_size += length;
+      if (static_cast<std::size_t>(length) >
+          file_bytes.size() - data_offset - data_size) {
+        return std::nullopt;
+      }
+      data_size += static_cast<std::size_t>(length);
     }
     // The composite is the file's final section; anything else fails closed.
-    if (odd_rows == 0 || data_size != reader.remaining()) {
+    if (odd_rows == 0 || data_size != file_bytes.size() - data_offset) {
       return std::nullopt;
     }
 
-    std::vector<std::vector<std::uint8_t>> rows;
-    rows.reserve(row_count);
-    for (const auto length : row_lengths) {
-      const auto start = reader.position();
-      reader.skip(length);
-      std::vector<std::uint8_t> row(file_bytes.begin() + static_cast<std::ptrdiff_t>(start),
-                                    file_bytes.begin() + static_cast<std::ptrdiff_t>(start + length));
-      make_packbits_row_even(row);
-      if ((row.size() % 2U) != 0U || (version == 1 && row.size() > 0xFFFFULL)) {
-        return std::nullopt;  // no splittable literal or u16 count overflow
+    std::size_t row_offset = data_offset;
+    for (std::size_t row = 0U; row < row_count; ++row) {
+      const auto length = read_row_count_at(
+          file_bytes, count_table_offset + row * count_width, wide_counts);
+      const auto row_bytes = file_bytes.subspan(row_offset, length);
+      if ((length & 1U) != 0U) {
+        if (length == std::numeric_limits<std::uint32_t>::max() ||
+            (!wide_counts && length == std::numeric_limits<std::uint16_t>::max()) ||
+            !splittable_literal_offset(row_bytes).has_value()) {
+          return std::nullopt;
+        }
       }
-      rows.push_back(std::move(row));
+      row_offset += length;
     }
 
-    std::vector<std::uint8_t> normalized(file_bytes.begin(),
-                                         file_bytes.begin() + static_cast<std::ptrdiff_t>(composite_offset));
-    BigEndianWriter writer;
-    writer.write_u16(kCompressionRle);
-    for (const auto& row : rows) {
-      if (version == 2) {
-        writer.write_u32(static_cast<std::uint32_t>(row.size()));
-      } else {
-        writer.write_u16(static_cast<std::uint16_t>(row.size()));
-      }
+    if (odd_rows > std::numeric_limits<std::size_t>::max() - file_bytes.size()) {
+      return std::nullopt;
     }
-    for (const auto& row : rows) {
-      writer.write_bytes(row);
-    }
-    normalized.insert(normalized.end(), writer.bytes().begin(), writer.bytes().end());
-    return normalized;
+    return EvenCompositeNormalizationPlan{
+        composite_offset, count_table_offset, data_offset, row_count, odd_rows,
+        file_bytes.size() + odd_rows, count_width, wide_counts};
   } catch (const std::exception&) {
     return std::nullopt;
   }
+}
+
+void write_evenized_row(BigEndianWriter& writer,
+                        std::span<const std::uint8_t> row) {
+  if ((row.size() % 2U) == 0U) {
+    writer.write_bytes(row);
+    return;
+  }
+  const auto split = *splittable_literal_offset(row);
+  writer.write_bytes(row.first(split));
+  const auto flag = row[split];
+  writer.write_u8(0U);
+  writer.write_u8(row[split + 1U]);
+  writer.write_u8(static_cast<std::uint8_t>(flag - 1U));
+  writer.write_bytes(row.subspan(split + 2U));
+}
+
+}  // namespace
+
+std::optional<SaveTrackedByteBuffer>
+even_composite_rows_normalized_tracked(
+    std::span<const std::uint8_t> file_bytes,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  try {
+    const auto plan = plan_even_composite_rows(file_bytes);
+    if (!plan.has_value()) {
+      return std::nullopt;
+    }
+
+    SaveTrackedWriter tracked_writer(tracked_live_budget);
+    auto& writer = tracked_writer.writer();
+    writer.write_bytes(file_bytes.first(plan->composite_offset));
+    writer.write_u16(kCompressionRle);
+    for (std::size_t row = 0U; row < plan->row_count; ++row) {
+      auto length = read_row_count_at(
+          file_bytes, plan->count_table_offset + row * plan->count_width,
+          plan->wide_counts);
+      length += length & 1U;
+      if (plan->wide_counts) {
+        writer.write_u32(length);
+      } else {
+        writer.write_u16(static_cast<std::uint16_t>(length));
+      }
+    }
+    std::size_t row_offset = plan->data_offset;
+    for (std::size_t row = 0U; row < plan->row_count; ++row) {
+      const auto length = read_row_count_at(
+          file_bytes, plan->count_table_offset + row * plan->count_width,
+          plan->wide_counts);
+      write_evenized_row(writer, file_bytes.subspan(row_offset, length));
+      row_offset += length;
+    }
+    if (writer.bytes().size() != plan->normalized_size) {
+      return std::nullopt;
+    }
+    return std::move(tracked_writer).take_buffer();
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::vector<std::uint8_t>> even_composite_rows_normalized(
+    std::span<const std::uint8_t> file_bytes) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto normalized =
+      even_composite_rows_normalized_tracked(file_bytes, tracker);
+  if (!normalized.has_value()) {
+    return std::nullopt;
+  }
+  return std::move(normalized->bytes);
 }
 
 }  // namespace patchy::psd

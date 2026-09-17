@@ -1641,39 +1641,6 @@ void psd_composite_rle_rows_are_even_for_photoshop_embeds() {
   }
 }
 
-// A minimal PSB (v2, 3 channels, one 4-pixel row) whose composite rows are the
-// odd five-byte literal [3, a, b, c, d] — the shape Patchy wrote before the
-// even-row rule and the shape Photoshop rejects as an embed.
-std::vector<std::uint8_t> odd_composite_mini_psb() {
-  patchy::psd::BigEndianWriter writer;
-  for (const char ch : {'8', 'B', 'P', 'S'}) {
-    writer.write_u8(static_cast<std::uint8_t>(ch));
-  }
-  writer.write_u16(2);  // PSB
-  for (int i = 0; i < 6; ++i) {
-    writer.write_u8(0);
-  }
-  writer.write_u16(3);   // channels
-  writer.write_u32(1);   // height
-  writer.write_u32(4);   // width
-  writer.write_u16(8);   // depth
-  writer.write_u16(3);   // RGB
-  writer.write_u32(0);   // color mode data
-  writer.write_u32(0);   // image resources
-  writer.write_u64(0);   // layer and mask section
-  writer.write_u16(1);   // RLE composite
-  for (int channel = 0; channel < 3; ++channel) {
-    writer.write_u32(5);
-  }
-  for (int channel = 0; channel < 3; ++channel) {
-    writer.write_u8(3);  // literal of four bytes
-    for (int i = 0; i < 4; ++i) {
-      writer.write_u8(static_cast<std::uint8_t>(50 * channel + i));
-    }
-  }
-  return writer.bytes();
-}
-
 // Saving a document whose stored embed still has odd composite rows rewrites
 // the embedded bytes (the repair path for files saved before the even-row
 // rule); the decoded pixels stay identical.
@@ -1681,7 +1648,7 @@ void psd_smart_object_embed_odd_composite_normalized_on_save() {
   patchy::Document document(4, 2, patchy::PixelFormat::rgb8());
   auto& layer = document.add_pixel_layer("Smart", solid_rgb(4, 2, 10, 20, 30));
   layer.unknown_psd_blocks().push_back(patchy::UnknownPsdBlock{"SoLd", {5, 6, 7, 8}});
-  const auto odd_psb = odd_composite_mini_psb();
+  const auto odd_psb = patchy::test::odd_composite_mini_psb();
   document.metadata().smart_objects.add_embedded(
       "11111111-2222-3333-4444-555555555555", "inner.psb", "8BPB",
       std::make_shared<const std::vector<std::uint8_t>>(odd_psb));
@@ -1720,7 +1687,8 @@ void psd_smart_object_embed_odd_composite_normalized_on_save() {
 // preserved ones untouched.
 void psd_smart_object_layers_get_layer_ids_on_save() {
   patchy::Document document(4, 2, patchy::PixelFormat::rgb8());
-  const auto embed = std::make_shared<const std::vector<std::uint8_t>>(odd_composite_mini_psb());
+  const auto embed = std::make_shared<const std::vector<std::uint8_t>>(
+      patchy::test::odd_composite_mini_psb());
   auto& first = document.add_pixel_layer("First", solid_rgb(4, 2, 10, 20, 30));
   first.unknown_psd_blocks().push_back(patchy::UnknownPsdBlock{"SoLd", {5, 6, 7, 8}});
   first.metadata()[patchy::kLayerMetadataSmartObject] = "aaaa";
@@ -1772,7 +1740,7 @@ void psd_local_smart_filter_file_repairs_on_resave_if_available() {
 // rebuild: only the embedded bytes and the length fields change, the wrapper
 // (version, uuid, name, unmodeled trailer bytes) stays verbatim.
 void psd_smart_object_clean_element_normalization_keeps_wrapper() {
-  const auto odd_psb = odd_composite_mini_psb();
+  const auto odd_psb = patchy::test::odd_composite_mini_psb();
   patchy::psd::BigEndianWriter body;
   for (const char ch : {'l', 'i', 'F', 'D'}) {
     body.write_u8(static_cast<std::uint8_t>(ch));

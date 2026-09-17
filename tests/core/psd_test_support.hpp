@@ -126,6 +126,12 @@ void write_test_layer_block(patchy::psd::BigEndianWriter& writer, const char (&k
 std::optional<std::vector<std::uint8_t>> test_image_resource_payload(std::span<const std::uint8_t> resources,
                                                                      std::uint16_t id);
 
+// Minimal PSD/PSB, three channels and one four-pixel row, with three odd
+// five-byte PackBits literals in the merged composite. Shared by Smart Object
+// compatibility and save-live-budget tests.
+std::vector<std::uint8_t> odd_composite_mini_psb();
+std::vector<std::uint8_t> odd_composite_mini_psd();
+
 std::filesystem::path arrows_fixture_path();
 
 bool layer_has_psd_block(const patchy::Layer& layer, const std::string& key);

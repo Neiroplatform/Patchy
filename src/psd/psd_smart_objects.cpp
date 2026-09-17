@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 namespace patchy::psd {
@@ -1620,52 +1621,251 @@ std::optional<ParsedElement> parse_link_element(
   return parsed;
 }
 
-// Serializes a fresh version-7 'liFD' element (length prefix through 4-byte padding).
-// file_bytes_override substitutes the embedded payload (composite normalization).
-std::vector<std::uint8_t> serialize_embedded_element(const SmartObjectSource& source,
-                                                     const std::vector<std::uint8_t>* file_bytes_override = nullptr) {
+void patch_u64(BigEndianWriter& writer, std::size_t offset,
+               std::uint64_t value) {
+  auto& bytes = writer.bytes();
+  for (std::size_t i = 0U; i < 8U; ++i) {
+    bytes[offset + i] = static_cast<std::uint8_t>(
+        (value >> (56U - static_cast<unsigned>(i) * 8U)) & 0xFFU);
+  }
+}
+
+void finish_link_element(BigEndianWriter& writer, std::size_t length_offset,
+                         std::size_t body_start) {
+  const auto body_length = writer.bytes().size() - body_start;
+  patch_u64(writer, length_offset, static_cast<std::uint64_t>(body_length));
+  const auto padding = (4U - (body_length % 4U)) % 4U;
+  for (std::size_t i = 0U; i < padding; ++i) {
+    writer.write_u8(0U);
+  }
+}
+
+// Serializes a fresh version-7 'liFD' element directly into the owning link
+// payload. file_bytes_override substitutes the embedded payload (composite
+// normalization) without creating body or element byte temporaries.
+void write_embedded_element(
+    BigEndianWriter& writer, const SmartObjectSource& source,
+    const std::vector<std::uint8_t>* file_bytes_override = nullptr) {
   const std::vector<std::uint8_t>* file_bytes =
       file_bytes_override != nullptr ? file_bytes_override : source.file_bytes.get();
-  BigEndianWriter body;
+  const auto length_offset = writer.bytes().size();
+  writer.write_u64(0U);
+  const auto body_start = writer.bytes().size();
   for (const char ch : {'l', 'i', 'F', 'D'}) {
-    body.write_u8(static_cast<std::uint8_t>(ch));
+    writer.write_u8(static_cast<std::uint8_t>(ch));
   }
-  body.write_u32(7);  // version
-  write_pascal_string(body, source.uuid);
-  write_descriptor_unicode_string(body, source.filename);
-  const auto write_ostype = [&body](std::string_view type) {
+  writer.write_u32(7);  // version
+  write_pascal_string(writer, source.uuid);
+  write_descriptor_unicode_string(writer, source.filename);
+  const auto write_ostype = [&writer](std::string_view type) {
     for (std::size_t i = 0; i < 4U; ++i) {
-      body.write_u8(static_cast<std::uint8_t>(i < type.size() ? type[i] : ' '));
+      writer.write_u8(
+          static_cast<std::uint8_t>(i < type.size() ? type[i] : ' '));
     }
   };
   write_ostype(source.filetype);
   write_ostype(source.creator);
   const auto data_size = file_bytes != nullptr ? file_bytes->size() : 0U;
-  body.write_u64(data_size);
-  body.write_u8(0);  // no file-open descriptor
+  writer.write_u64(data_size);
+  writer.write_u8(0);  // no file-open descriptor
   if (file_bytes != nullptr) {
-    body.write_bytes(*file_bytes);
+    writer.write_bytes(*file_bytes);
   }
-  body.write_u32(0);      // child document id: empty unicode string
-  write_f64(body, 0.0);  // asset mod time
-  body.write_u8(0);       // asset locked state
-
-  BigEndianWriter element;
-  element.write_u64(body.bytes().size());
-  element.write_bytes(body.bytes());
-  const auto padding = (4U - (body.bytes().size() % 4U)) % 4U;
-  for (std::size_t i = 0; i < padding; ++i) {
-    element.write_u8(0);
-  }
-  return element.bytes();
+  writer.write_u32(0);        // child document id: empty unicode string
+  write_f64(writer, 0.0);     // asset mod time
+  writer.write_u8(0);         // asset locked state
+  finish_link_element(writer, length_offset, body_start);
 }
 
 // Rebuilds a verbatim link element around replacement embedded-file bytes,
 // keeping every wrapper byte (version, descriptors, trailers) intact so
 // Photoshop-authored version-8 elements survive composite normalization.
-// Returns nullopt when the element does not parse as an embedded 'liFD'.
-std::optional<std::vector<std::uint8_t>> rebuild_embedded_element(
-    std::span<const std::uint8_t> element_bytes, std::span<const std::uint8_t> new_data) {
+// Planning completes before any output bytes are written. Returns nullopt when
+// the element does not parse as an embedded 'liFD'.
+struct EmbeddedElementRebuildPlan {
+  std::size_t body_start{0U};
+  std::size_t body_end{0U};
+  std::size_t datasize_position{0U};
+  std::size_t data_position{0U};
+  std::size_t suffix_start{0U};
+  std::uint64_t new_body_length{0U};
+};
+
+using DescriptorTypeKey = std::array<char, 4>;
+
+[[nodiscard]] DescriptorTypeKey read_descriptor_type_unallocated(
+    BigEndianReader& reader) {
+  return {static_cast<char>(reader.read_u8()),
+          static_cast<char>(reader.read_u8()),
+          static_cast<char>(reader.read_u8()),
+          static_cast<char>(reader.read_u8())};
+}
+
+[[nodiscard]] bool descriptor_type_is(const DescriptorTypeKey& type,
+                                      const char (&expected)[5]) noexcept {
+  return type[0] == expected[0] && type[1] == expected[1] &&
+         type[2] == expected[2] && type[3] == expected[3];
+}
+
+[[nodiscard]] bool skip_descriptor_unicode_string_unallocated(
+    BigEndianReader& reader) {
+  const auto count = reader.read_u32();
+  if (count > reader.remaining() / 2U) {
+    return false;
+  }
+  reader.skip(static_cast<std::size_t>(count) * 2U);
+  return true;
+}
+
+[[nodiscard]] bool skip_descriptor_id_unallocated(BigEndianReader& reader) {
+  const auto length = reader.read_u32();
+  const auto bytes = length == 0U ? 4U : static_cast<std::size_t>(length);
+  if (bytes > reader.remaining()) {
+    return false;
+  }
+  reader.skip(bytes);
+  return true;
+}
+
+[[nodiscard]] bool skip_descriptor_unallocated(BigEndianReader& reader,
+                                               std::size_t depth);
+
+[[nodiscard]] bool skip_descriptor_value_unallocated(
+    BigEndianReader& reader, const DescriptorTypeKey& type,
+    std::size_t depth) {
+  if (depth > 64U) {
+    return false;
+  }
+  if (descriptor_type_is(type, "bool")) {
+    reader.skip(1U);
+    return true;
+  }
+  if (descriptor_type_is(type, "long")) {
+    reader.skip(4U);
+    return true;
+  }
+  if (descriptor_type_is(type, "comp") ||
+      descriptor_type_is(type, "doub")) {
+    reader.skip(8U);
+    return true;
+  }
+  if (descriptor_type_is(type, "UntF")) {
+    reader.skip(12U);
+    return true;
+  }
+  if (descriptor_type_is(type, "TEXT")) {
+    return skip_descriptor_unicode_string_unallocated(reader);
+  }
+  if (descriptor_type_is(type, "enum")) {
+    return skip_descriptor_id_unallocated(reader) &&
+           skip_descriptor_id_unallocated(reader);
+  }
+  if (descriptor_type_is(type, "Objc") ||
+      descriptor_type_is(type, "GlbO")) {
+    return skip_descriptor_unallocated(reader, depth);
+  }
+  if (descriptor_type_is(type, "VlLs")) {
+    const auto count = reader.read_u32();
+    if (count > reader.remaining() / 4U) {
+      return false;
+    }
+    for (std::uint32_t i = 0U; i < count; ++i) {
+      if (!skip_descriptor_value_unallocated(
+              reader, read_descriptor_type_unallocated(reader), depth + 1U)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (descriptor_type_is(type, "tdta") ||
+      descriptor_type_is(type, "alis")) {
+    const auto length = reader.read_u32();
+    if (length > reader.remaining()) {
+      return false;
+    }
+    reader.skip(length);
+    return true;
+  }
+  if (descriptor_type_is(type, "type") ||
+      descriptor_type_is(type, "GlbC")) {
+    return skip_descriptor_unicode_string_unallocated(reader) &&
+           skip_descriptor_id_unallocated(reader);
+  }
+  if (descriptor_type_is(type, "UnFl")) {
+    reader.skip(4U);
+    const auto count = reader.read_u32();
+    if (count > reader.remaining() / 8U) {
+      return false;
+    }
+    reader.skip(static_cast<std::size_t>(count) * 8U);
+    return true;
+  }
+  if (descriptor_type_is(type, "ObAr")) {
+    (void)reader.read_u32();
+    return reader.remaining() >= 13U &&
+           skip_descriptor_unallocated(reader, depth);
+  }
+  if (descriptor_type_is(type, "obj ")) {
+    const auto count = reader.read_u32();
+    if (count > reader.remaining() / 4U) {
+      return false;
+    }
+    for (std::uint32_t i = 0U; i < count; ++i) {
+      const auto form = read_descriptor_type_unallocated(reader);
+      if (!skip_descriptor_unicode_string_unallocated(reader) ||
+          !skip_descriptor_id_unallocated(reader)) {
+        return false;
+      }
+      if (descriptor_type_is(form, "prop")) {
+        if (!skip_descriptor_id_unallocated(reader)) {
+          return false;
+        }
+      } else if (descriptor_type_is(form, "Enmr")) {
+        if (!skip_descriptor_id_unallocated(reader) ||
+            !skip_descriptor_id_unallocated(reader)) {
+          return false;
+        }
+      } else if (descriptor_type_is(form, "rele") ||
+                 descriptor_type_is(form, "Idnt") ||
+                 descriptor_type_is(form, "indx")) {
+        reader.skip(4U);
+      } else if (descriptor_type_is(form, "name")) {
+        if (!skip_descriptor_unicode_string_unallocated(reader)) {
+          return false;
+        }
+      } else if (!descriptor_type_is(form, "Clss")) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+[[nodiscard]] bool skip_descriptor_unallocated(BigEndianReader& reader,
+                                               std::size_t depth) {
+  if (depth > 64U ||
+      !skip_descriptor_unicode_string_unallocated(reader) ||
+      !skip_descriptor_id_unallocated(reader)) {
+    return false;
+  }
+  const auto count = reader.read_u32();
+  if (count > reader.remaining() / 8U) {
+    return false;
+  }
+  for (std::uint32_t i = 0U; i < count; ++i) {
+    if (!skip_descriptor_id_unallocated(reader) ||
+        !skip_descriptor_value_unallocated(
+            reader, read_descriptor_type_unallocated(reader), depth + 1U)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<EmbeddedElementRebuildPlan> plan_embedded_element_rebuild(
+    std::span<const std::uint8_t> element_bytes,
+    std::span<const std::uint8_t> new_data) {
   try {
     BigEndianReader reader(element_bytes);
     const auto element_length = reader.read_u64();
@@ -1674,50 +1874,89 @@ std::optional<std::vector<std::uint8_t>> rebuild_embedded_element(
       return std::nullopt;
     }
     const auto body_end = body_start + static_cast<std::size_t>(element_length);
-    if (key_string(read_signature(reader)) != "liFD") {
+    if (!descriptor_type_is(read_descriptor_type_unallocated(reader),
+                            "liFD")) {
       return std::nullopt;
     }
     (void)reader.read_u32();  // version
-    (void)read_pascal_string(reader);
-    (void)read_descriptor_unicode_string(reader);
-    (void)read_signature(reader);  // file type
-    (void)read_signature(reader);  // creator
+    reader.skip(reader.read_u8());  // Pascal uuid
+    if (!skip_descriptor_unicode_string_unallocated(reader)) {
+      return std::nullopt;
+    }
+    reader.skip(8U);  // file type and creator
     const auto datasize_position = reader.position();
     const auto datasize = reader.read_u64();
     if (reader.read_u8() != 0) {
       (void)reader.read_u32();  // descriptor version
-      (void)read_descriptor(reader);
+      if (!skip_descriptor_unallocated(reader, 0U)) {
+        return std::nullopt;
+      }
     }
     const auto data_position = reader.position();
     if (data_position > body_end || datasize > body_end - data_position) {
       return std::nullopt;
     }
     const auto suffix_start = data_position + static_cast<std::size_t>(datasize);
-
-    BigEndianWriter element;
-    element.write_u64(element_length - datasize + new_data.size());
-    element.write_bytes(element_bytes.subspan(body_start, datasize_position - body_start));
-    element.write_u64(new_data.size());
-    element.write_bytes(
-        element_bytes.subspan(datasize_position + 8U, data_position - (datasize_position + 8U)));
-    element.write_bytes(new_data);
-    element.write_bytes(element_bytes.subspan(suffix_start, body_end - suffix_start));
-    const auto body_length = element.bytes().size() - 8U;
-    const auto padding = (4U - (body_length % 4U)) % 4U;
-    for (std::size_t i = 0; i < padding; ++i) {
-      element.write_u8(0);
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+      if (new_data.size() > std::numeric_limits<std::uint64_t>::max()) {
+        return std::nullopt;
+      }
     }
-    return element.bytes();
+    const auto retained_length = element_length - datasize;
+    const auto replacement_length = static_cast<std::uint64_t>(new_data.size());
+    if (replacement_length >
+        std::numeric_limits<std::uint64_t>::max() - retained_length) {
+      return std::nullopt;
+    }
+    const auto new_body_length = retained_length + replacement_length;
+    if (new_body_length > std::numeric_limits<std::size_t>::max()) {
+      return std::nullopt;
+    }
+    const auto body_size = static_cast<std::size_t>(new_body_length);
+    const auto padding = (4U - (body_size % 4U)) % 4U;
+    if (body_size > std::numeric_limits<std::size_t>::max() - 8U ||
+        padding > std::numeric_limits<std::size_t>::max() - 8U - body_size) {
+      return std::nullopt;
+    }
+    return EmbeddedElementRebuildPlan{body_start, body_end,
+                                      datasize_position, data_position,
+                                      suffix_start, new_body_length};
   } catch (const std::exception&) {
     return std::nullopt;
   }
+}
+
+bool write_rebuilt_embedded_element(
+    BigEndianWriter& writer, std::span<const std::uint8_t> element_bytes,
+    std::span<const std::uint8_t> new_data) {
+  const auto plan = plan_embedded_element_rebuild(element_bytes, new_data);
+  if (!plan.has_value()) {
+    return false;
+  }
+  writer.write_u64(plan->new_body_length);
+  writer.write_bytes(element_bytes.subspan(
+      plan->body_start, plan->datasize_position - plan->body_start));
+  writer.write_u64(new_data.size());
+  writer.write_bytes(element_bytes.subspan(
+      plan->datasize_position + 8U,
+      plan->data_position - (plan->datasize_position + 8U)));
+  writer.write_bytes(new_data);
+  writer.write_bytes(element_bytes.subspan(
+      plan->suffix_start, plan->body_end - plan->suffix_start));
+  const auto body_size = static_cast<std::size_t>(plan->new_body_length);
+  const auto padding = (4U - (body_size % 4U)) % 4U;
+  for (std::size_t i = 0U; i < padding; ++i) {
+    writer.write_u8(0U);
+  }
+  return true;
 }
 
 // Serializes a fresh version-7 'liFE' (linked external file) element mirroring
 // Photoshop's own layout byte-for-byte in shape (pinned from the 10cm-table-tent
 // capture; see docs/smart-objects.md): NUL-padded creator, open descriptor {null; compInfo},
 // ExternalFileLink descriptor, date struct, file size, then the versioned tail.
-std::vector<std::uint8_t> serialize_external_element(const SmartObjectSource& source) {
+void write_external_element(BigEndianWriter& writer,
+                            const SmartObjectSource& source) {
   const auto text = [](std::string value) {
     DescriptorValue result;
     result.type = DescriptorValue::Type::String;
@@ -1735,23 +1974,26 @@ std::vector<std::uint8_t> serialize_external_element(const SmartObjectSource& so
     object.values.emplace(std::move(key), std::move(value));
   };
 
-  BigEndianWriter body;
+  const auto length_offset = writer.bytes().size();
+  writer.write_u64(0U);
+  const auto body_start = writer.bytes().size();
   for (const char ch : {'l', 'i', 'F', 'E'}) {
-    body.write_u8(static_cast<std::uint8_t>(ch));
+    writer.write_u8(static_cast<std::uint8_t>(ch));
   }
-  body.write_u32(7);  // version
-  write_pascal_string(body, source.uuid);
-  write_descriptor_unicode_string(body, source.filename);
-  const auto write_ostype = [&body](std::string_view type, char pad) {
+  writer.write_u32(7);  // version
+  write_pascal_string(writer, source.uuid);
+  write_descriptor_unicode_string(writer, source.filename);
+  const auto write_ostype = [&writer](std::string_view type, char pad) {
     for (std::size_t i = 0; i < 4U; ++i) {
-      body.write_u8(static_cast<std::uint8_t>(i < type.size() ? type[i] : pad));
+      writer.write_u8(
+          static_cast<std::uint8_t>(i < type.size() ? type[i] : pad));
     }
   };
   write_ostype(source.filetype, ' ');
   // Photoshop writes the liFE creator as four NUL bytes.
   write_ostype(std::string_view{}, '\0');
-  body.write_u64(0);  // datasize: external elements embed no bytes
-  body.write_u8(1);   // open descriptor present
+  writer.write_u64(0);  // datasize: external elements embed no bytes
+  writer.write_u8(1);   // open descriptor present
   {
     DescriptorObject open_descriptor;
     open_descriptor.class_id = "null";
@@ -1762,8 +2004,8 @@ std::vector<std::uint8_t> serialize_external_element(const SmartObjectSource& so
     add(*comp_info.object_value, "compID", true, integer(-1));
     add(*comp_info.object_value, "originalCompID", true, integer(-1));
     add(open_descriptor, "compInfo", true, std::move(comp_info));
-    body.write_u32(16);
-    write_descriptor(body, open_descriptor);
+    writer.write_u32(16);
+    write_descriptor(writer, open_descriptor);
   }
   {
     DescriptorObject link;
@@ -1774,28 +2016,20 @@ std::vector<std::uint8_t> serialize_external_element(const SmartObjectSource& so
     add(link, "fullPath", true, text(source.external_full_path));
     add(link, "originalPath", true, text(source.external_original_path));
     add(link, "relPath", true, text(source.external_rel_path));
-    body.write_u32(16);
-    write_descriptor(body, link);
+    writer.write_u32(16);
+    write_descriptor(writer, link);
   }
-  body.write_u32(static_cast<std::uint32_t>(source.external_mod_year));
-  body.write_u8(source.external_mod_month);
-  body.write_u8(source.external_mod_day);
-  body.write_u8(source.external_mod_hour);
-  body.write_u8(source.external_mod_minute);
-  write_f64(body, source.external_mod_seconds);
-  body.write_u64(source.external_file_size);
-  write_descriptor_unicode_string(body, source.child_doc_id);
-  write_f64(body, source.asset_mod_time);
-  body.write_u8(source.asset_lock_state);
-
-  BigEndianWriter element;
-  element.write_u64(body.bytes().size());
-  element.write_bytes(body.bytes());
-  const auto padding = (4U - (body.bytes().size() % 4U)) % 4U;
-  for (std::size_t i = 0; i < padding; ++i) {
-    element.write_u8(0);
-  }
-  return element.bytes();
+  writer.write_u32(static_cast<std::uint32_t>(source.external_mod_year));
+  writer.write_u8(source.external_mod_month);
+  writer.write_u8(source.external_mod_day);
+  writer.write_u8(source.external_mod_hour);
+  writer.write_u8(source.external_mod_minute);
+  write_f64(writer, source.external_mod_seconds);
+  writer.write_u64(source.external_file_size);
+  write_descriptor_unicode_string(writer, source.child_doc_id);
+  write_f64(writer, source.asset_mod_time);
+  writer.write_u8(source.asset_lock_state);
+  finish_link_element(writer, length_offset, body_start);
 }
 
 }  // namespace
@@ -1854,7 +2088,9 @@ std::optional<std::vector<SmartObjectSource>> parse_linked_layer_block(
                                        preserve_original_payloads);
 }
 
-std::vector<std::uint8_t> serialize_linked_layer_block(const SmartObjectLinkBlock& block) {
+SaveTrackedByteBuffer serialize_linked_layer_block_tracked(
+    const SmartObjectLinkBlock& block,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   const auto any_dirty = std::any_of(block.sources.begin(), block.sources.end(),
                                      [](const SmartObjectSource& source) {
                                        return source.dirty || source.original_element_bytes == nullptr;
@@ -1863,37 +2099,46 @@ std::vector<std::uint8_t> serialize_linked_layer_block(const SmartObjectLinkBloc
   // save even when otherwise clean: Photoshop rejects the whole document over
   // them (see even_composite_rows_normalized). This is the repair path for
   // files saved before the composite writer padded its rows.
-  std::vector<std::optional<std::vector<std::uint8_t>>> normalized(block.sources.size());
+  std::vector<std::optional<SaveTrackedByteBuffer>> normalized(
+      block.sources.size());
   bool any_normalized = false;
   for (std::size_t i = 0; i < block.sources.size(); ++i) {
     const auto& source = block.sources[i];
     if (source.kind == SmartObjectSourceKind::Embedded && source.file_bytes != nullptr) {
-      normalized[i] = even_composite_rows_normalized(*source.file_bytes);
+      normalized[i] = even_composite_rows_normalized_tracked(
+          *source.file_bytes, tracked_live_budget);
       any_normalized = any_normalized || normalized[i].has_value();
     }
   }
   if (!any_dirty && !any_normalized && block.original_payload != nullptr) {
-    return *block.original_payload;
+    return save_tracked_byte_copy(*block.original_payload,
+                                  tracked_live_budget);
   }
-  std::vector<std::uint8_t> payload;
+  SaveTrackedWriter tracked_payload(tracked_live_budget);
+  auto& payload = tracked_payload.writer();
   for (std::size_t i = 0; i < block.sources.size(); ++i) {
     const auto& source = block.sources[i];
     if (!source.dirty && source.original_element_bytes != nullptr) {
       if (normalized[i].has_value()) {
-        if (auto rebuilt = rebuild_embedded_element(*source.original_element_bytes, *normalized[i]);
-            rebuilt.has_value()) {
-          payload.insert(payload.end(), rebuilt->begin(), rebuilt->end());
+        const auto checkpoint = payload.bytes().size();
+        bool rebuilt = false;
+        try {
+          rebuilt = write_rebuilt_embedded_element(
+              payload, *source.original_element_bytes,
+              normalized[i]->bytes);
+        } catch (const std::exception&) {
+          tracked_payload.rollback_to(checkpoint);
+        }
+        if (rebuilt) {
           continue;
         }
       } else {
-        payload.insert(payload.end(), source.original_element_bytes->begin(),
-                       source.original_element_bytes->end());
+        payload.write_bytes(*source.original_element_bytes);
         continue;
       }
     }
     if (source.kind == SmartObjectSourceKind::ExternalFile) {
-      const auto element = serialize_external_element(source);
-      payload.insert(payload.end(), element.begin(), element.end());
+      write_external_element(payload, source);
       continue;
     }
     if (source.kind != SmartObjectSourceKind::Embedded) {
@@ -1901,11 +2146,19 @@ std::vector<std::uint8_t> serialize_linked_layer_block(const SmartObjectLinkBloc
       // re-emit verbatim above. A dirty one without original bytes cannot round-trip.
       continue;
     }
-    const auto element = serialize_embedded_element(
-        source, normalized[i].has_value() ? &*normalized[i] : nullptr);
-    payload.insert(payload.end(), element.begin(), element.end());
+    write_embedded_element(
+        payload, source,
+        normalized[i].has_value() ? &normalized[i]->bytes : nullptr);
   }
-  return payload;
+  return std::move(tracked_payload).take_buffer();
+}
+
+std::vector<std::uint8_t> serialize_linked_layer_block(
+    const SmartObjectLinkBlock& block) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = serialize_linked_layer_block_tracked(block, tracker);
+  return std::move(payload.bytes);
 }
 
 std::optional<std::vector<std::uint8_t>> regenerate_placed_layer_payload(

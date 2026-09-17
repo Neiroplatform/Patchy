@@ -235,6 +235,52 @@ std::optional<std::vector<std::uint8_t>> test_image_resource_payload(std::span<c
   return std::nullopt;
 }
 
+std::vector<std::uint8_t> odd_composite_mini_file(bool large_document) {
+  patchy::psd::BigEndianWriter writer;
+  for (const char ch : {'8', 'B', 'P', 'S'}) {
+    writer.write_u8(static_cast<std::uint8_t>(ch));
+  }
+  writer.write_u16(large_document ? 2U : 1U);
+  for (int i = 0; i < 6; ++i) {
+    writer.write_u8(0);
+  }
+  writer.write_u16(3);  // channels
+  writer.write_u32(1);  // height
+  writer.write_u32(4);  // width
+  writer.write_u16(8);  // depth
+  writer.write_u16(3);  // RGB
+  writer.write_u32(0);  // color mode data
+  writer.write_u32(0);  // image resources
+  if (large_document) {
+    writer.write_u64(0);  // layer and mask section
+  } else {
+    writer.write_u32(0);
+  }
+  writer.write_u16(1);  // RLE composite
+  for (int channel = 0; channel < 3; ++channel) {
+    if (large_document) {
+      writer.write_u32(5);
+    } else {
+      writer.write_u16(5);
+    }
+  }
+  for (int channel = 0; channel < 3; ++channel) {
+    writer.write_u8(3);  // literal of four bytes
+    for (int i = 0; i < 4; ++i) {
+      writer.write_u8(static_cast<std::uint8_t>(50 * channel + i));
+    }
+  }
+  return std::move(writer).take_bytes();
+}
+
+std::vector<std::uint8_t> odd_composite_mini_psb() {
+  return odd_composite_mini_file(true);
+}
+
+std::vector<std::uint8_t> odd_composite_mini_psd() {
+  return odd_composite_mini_file(false);
+}
+
 std::filesystem::path arrows_fixture_path() {
   return patchy::test::committed_psd_fixture_path("arrows.psd");
 }
