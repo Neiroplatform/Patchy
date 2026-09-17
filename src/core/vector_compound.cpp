@@ -18,6 +18,13 @@ constexpr const char* kCompoundBlock = "pvcl";
 const std::vector<std::uint8_t> kCompoundPayload{'P', 'V', 'C', 'L', 0, 0, 0, 1};
 constexpr const char* kOpenPathStrokesMetadata = "patchy.psd.openPathStrokes";
 
+bool has_vector_lock_reason(const Layer& layer) noexcept {
+  for (const auto& [key, value] : layer.metadata()) {
+    if (key == kLayerMetadataVectorLock) { return !value.empty(); }
+  }
+  return false;
+}
+
 void copy_properties(const Layer& from, Layer& to) {
   to.set_visible(from.visible());
   to.set_clipped(from.clipped());
@@ -58,14 +65,24 @@ void move_properties(Layer& from, Layer& to) {
   to.move_shared_models_from(from);
 }
 
-bool needs_open_path_strokes(const Layer& layer) {
-  const auto* shape = layer.vector_shape();
-  return layer_is_vector_shape(layer) && vector_lock_reason(layer).empty() && shape->parts.empty() &&
-      !shape->path_disabled && shape->stroke.enabled && shape->stroke.width > 0.0 &&
-      shape->stroke.content.kind == VectorFillKind::Solid &&
-      shape->stroke.alignment == VectorStrokeAlignment::Center && shape->path.subpaths.size() > 1 &&
-      std::any_of(shape->path.subpaths.begin(), shape->path.subpaths.end(),
-                  [](const auto& path) { return !path.closed; });
+OpenPathStrokeExpansionPlan plan_open_path_strokes(std::uint64_t subpath_count,
+                                                   bool has_open_subpath,
+                                                   bool has_origination,
+                                                   bool path_disabled,
+                                                   bool path_inverted,
+                                                   const VectorStroke& stroke,
+                                                   float fill_opacity) {
+  OpenPathStrokeExpansionPlan plan;
+  plan.subpath_count = subpath_count;
+  plan.expands = !path_disabled && stroke.enabled && stroke.width > 0.0 &&
+      stroke.content.kind == VectorFillKind::Solid &&
+      stroke.alignment == VectorStrokeAlignment::Center && subpath_count > 1U &&
+      has_open_subpath;
+  if (!plan.expands) { return plan; }
+  plan.fill_carrier = stroke.fill_enabled || path_inverted || has_origination;
+  plan.grouped_strokes = stroke.opacity != 1.0 || stroke.blend_mode != BlendMode::Normal;
+  plan.fill_opacity_boundary = fill_opacity != 1.0F;
+  return plan;
 }
 
 bool plain_vector_group_child(const Layer& layer) {
@@ -129,6 +146,59 @@ std::optional<VectorShapeContent> restored_open_path_strokes(const std::vector<L
   return result;
 }
 }  // namespace
+
+OpenPathStrokeExpansionPlan open_path_stroke_expansion_plan(const Layer& layer) {
+  const auto* shape = layer.vector_shape();
+  if (!layer_is_vector_shape(layer) || has_vector_lock_reason(layer) ||
+      !shape->parts.empty()) {
+    return {};
+  }
+  const bool has_open_subpath = std::any_of(
+      shape->path.subpaths.begin(), shape->path.subpaths.end(),
+      [](const auto& path) { return !path.closed; });
+  std::uint64_t subpath_count = 0;
+  if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+    if (shape->path.subpaths.size() >
+        std::numeric_limits<std::uint64_t>::max()) {
+      auto overflow = OpenPathStrokeExpansionPlan{};
+      overflow.subpath_count_overflow = true;
+      return overflow;
+    }
+  }
+  subpath_count = static_cast<std::uint64_t>(shape->path.subpaths.size());
+  return plan_open_path_strokes(subpath_count, has_open_subpath,
+                                !shape->origination.empty(),
+                                shape->path_disabled, shape->path_inverted,
+                                shape->stroke, layer.fill_opacity());
+}
+
+OpenPathStrokeExpansionPlan open_path_stroke_expansion_plan(
+    const VectorShapeContent& shape, const VectorShapePart& part) {
+  std::uint64_t subpath_count = 0;
+  bool has_open_subpath = false;
+  bool has_origination = false;
+  const auto selected = [&part](std::int32_t group) {
+    return std::find(part.groups.begin(), part.groups.end(), group) !=
+        part.groups.end();
+  };
+  for (const auto& path : shape.path.subpaths) {
+    if (!selected(path.shape_group)) { continue; }
+    if (subpath_count == std::numeric_limits<std::uint64_t>::max()) {
+      auto overflow = OpenPathStrokeExpansionPlan{};
+      overflow.subpath_count_overflow = true;
+      return overflow;
+    }
+    ++subpath_count;
+    has_open_subpath = has_open_subpath || !path.closed;
+  }
+  for (const auto& origin : shape.origination) {
+    has_origination = has_origination || selected(origin.index);
+  }
+  return plan_open_path_strokes(subpath_count, has_open_subpath,
+                                has_origination, part.path_disabled,
+                                part.path_inverted, part.stroke,
+                                part.fill_opacity);
+}
 
 CompoundVectorGroupKind compound_vector_group_kind(const Layer& layer) {
   if (layer.kind() != LayerKind::Group) { return CompoundVectorGroupKind::None; }
@@ -312,7 +382,8 @@ Document expand_compound_vectors(const Document& document, bool bake) {
 bool document_has_open_path_strokes(const Document& document) {
   const auto visit = [](const auto& self, const std::vector<Layer>& layers) -> bool {
     return std::any_of(layers.begin(), layers.end(), [&](const auto& layer) {
-      return needs_open_path_strokes(layer) || self(self, layer.children());
+      return open_path_stroke_expansion_plan(layer).expands ||
+          self(self, layer.children());
     });
   };
   return visit(visit, document.layers());
@@ -322,7 +393,8 @@ Document expand_open_path_strokes(const Document& document) {
   Document result = document;
   const auto visit = [&](const auto& self, std::vector<Layer>& layers) -> void {
     for (auto& layer : layers) {
-      if (!needs_open_path_strokes(std::as_const(layer))) {
+      const auto expansion = open_path_stroke_expansion_plan(std::as_const(layer));
+      if (!expansion.expands) {
         if (layer.kind() == LayerKind::Group) { self(self, layer.children()); }
         continue;
       }
@@ -346,8 +418,7 @@ Document expand_open_path_strokes(const Document& document) {
                                    &std::as_const(result).metadata().patterns);
         return child;
       };
-      const bool fill_carrier = shape.stroke.fill_enabled || shape.path_inverted || !shape.origination.empty();
-      if (fill_carrier) {
+      if (expansion.fill_carrier) {
         auto fill = shape;
         fill.stroke.enabled = false;
         group.add_child(make_child(std::move(fill)));
@@ -357,7 +428,7 @@ Document expand_open_path_strokes(const Document& document) {
       strokes.set_blend_mode(shape.stroke.blend_mode);
       // Every native folder costs two layer records. Avoid a redundant opacity
       // boundary so dense line art stays below Photoshop's record limit.
-      const bool grouped_strokes = shape.stroke.opacity != 1.0 || shape.stroke.blend_mode != BlendMode::Normal;
+      const bool grouped_strokes = expansion.grouped_strokes;
       for (const auto& path : shape.path.subpaths) {
         VectorShapeContent stroke;
         stroke.path.subpaths.push_back(path);
@@ -371,7 +442,7 @@ Document expand_open_path_strokes(const Document& document) {
         else { group.add_child(std::move(child)); }
       }
       if (grouped_strokes) { group.add_child(std::move(strokes)); }
-      if (source.fill_opacity() != 1.0F) {
+      if (expansion.fill_opacity_boundary) {
         Layer fill_boundary(result.allocate_layer_id(), source.name(), LayerKind::Group);
         fill_boundary.set_opacity(source.fill_opacity());
         set_compound_vector_group_kind(fill_boundary, CompoundVectorGroupKind::FillOpacity);

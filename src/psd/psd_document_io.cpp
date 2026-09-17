@@ -6,6 +6,7 @@
 #include "core/adjustment_layer.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/pattern_resource.hpp"
+#include "core/smart_filter.hpp"
 #include "core/smart_object.hpp"
 #include "core/style_contour.hpp"
 #include "core/text_warp.hpp"
@@ -117,6 +118,253 @@ private:
   std::uint64_t remaining_;
   std::uint64_t* usage_;
 };
+
+struct SaveBudgetTotal {
+  std::uint64_t value{0};
+  bool overflow{false};
+
+  void add(std::uint64_t amount) noexcept {
+    if (overflow || amount > std::numeric_limits<std::uint64_t>::max() - value) {
+      overflow = true;
+      return;
+    }
+    value += amount;
+  }
+
+  void add_size(std::size_t amount) noexcept {
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint64_t)) {
+      if (amount > std::numeric_limits<std::uint64_t>::max()) {
+        overflow = true;
+        return;
+      }
+    }
+    add(static_cast<std::uint64_t>(amount));
+  }
+};
+
+struct SavePreflightPlan {
+  SaveBudgetTotal canvas_pixels;
+  SaveBudgetTotal source_pixel_bytes;
+  SaveBudgetTotal layer_records;
+  SaveBudgetTotal channel_records;
+};
+
+void add_source_pixel_buffers(const Layer& layer, SaveBudgetTotal& total) noexcept {
+  total.add_size(layer.pixels().byte_size());
+  if (layer.mask().has_value()) {
+    total.add_size(layer.mask()->pixels.byte_size());
+  }
+  if (const auto* filters = layer.smart_filter_stack()) {
+    total.add_size(filters->mask.pixels.byte_size());
+  }
+  if (const auto* shape = layer.vector_shape()) {
+    total.add_size(shape->fill_cache.byte_size());
+    total.add_size(shape->stroke_cache.byte_size());
+  }
+  if (const auto* mask = layer.vector_mask()) {
+    total.add_size(mask->cache.byte_size());
+  }
+  for (const auto& child : layer.children()) {
+    add_source_pixel_buffers(child, total);
+  }
+}
+
+[[nodiscard]] std::uint64_t raster_mask_channel(const Layer& layer) noexcept {
+  return layer.mask().has_value() && !layer.mask()->pixels.empty() ? 1U : 0U;
+}
+
+[[nodiscard]] std::uint64_t derived_mask_channel(const Layer& layer,
+                                                 bool empty_raster_mask_blocks) noexcept {
+  if ((empty_raster_mask_blocks ? layer.mask().has_value()
+                                : raster_mask_channel(layer) != 0U)) {
+    return 0U;
+  }
+  const auto* mask = layer.vector_mask();
+  return mask != nullptr && mask->path.bounds().has_value() &&
+      (mask->density != 255U || mask->feather > 0.0)
+      ? 1U : 0U;
+}
+
+void add_open_path_expansion(const OpenPathStrokeExpansionPlan& expansion,
+                             std::uint64_t outer_mask_channels,
+                             SavePreflightPlan& plan) noexcept {
+  plan.layer_records.add(2U);  // outer folder and its boundary
+  plan.layer_records.add(expansion.subpath_count);
+  if (expansion.fill_carrier) { plan.layer_records.add(1U); }
+  if (expansion.grouped_strokes) { plan.layer_records.add(2U); }
+  if (expansion.fill_opacity_boundary) { plan.layer_records.add(2U); }
+  plan.channel_records.add(outer_mask_channels);
+  if (expansion.subpath_count_overflow) {
+    plan.layer_records.overflow = true;
+    plan.channel_records.overflow = true;
+    return;
+  }
+  if (expansion.subpath_count >
+      std::numeric_limits<std::uint64_t>::max() / 4U) {
+    plan.channel_records.overflow = true;
+  } else {
+    plan.channel_records.add(expansion.subpath_count * 4U);
+  }
+  if (expansion.fill_carrier) { plan.channel_records.add(4U); }
+}
+
+void add_effective_layer_records(const Layer& layer,
+                                 SavePreflightPlan& plan) noexcept {
+  if (layer_is_compound_vector(layer)) {
+    const auto& shape = *layer.vector_shape();
+    plan.layer_records.add(2U);  // outer folder and its boundary
+    plan.channel_records.add(raster_mask_channel(layer));
+    if (raster_mask_channel(layer) == 0U) {
+      plan.channel_records.add(derived_mask_channel(layer, false));
+    }
+    if (layer.fill_opacity() != 1.0F) { plan.layer_records.add(2U); }
+    for (const auto& part : shape.parts) {
+      const auto expansion = open_path_stroke_expansion_plan(shape, part);
+      if (expansion.subpath_count_overflow) {
+        plan.layer_records.overflow = true;
+        plan.channel_records.overflow = true;
+        return;
+      }
+      if (expansion.expands) {
+        add_open_path_expansion(expansion, 0U, plan);
+      } else {
+        plan.layer_records.add(1U);
+        plan.channel_records.add(4U);
+      }
+    }
+    return;
+  }
+
+  const auto open_path = open_path_stroke_expansion_plan(layer);
+  if (open_path.subpath_count_overflow) {
+    plan.layer_records.overflow = true;
+    plan.channel_records.overflow = true;
+    return;
+  }
+  if (open_path.expands) {
+    const auto mask_channels = raster_mask_channel(layer) != 0U
+        ? 1U : derived_mask_channel(layer, false);
+    add_open_path_expansion(open_path, mask_channels, plan);
+    return;
+  }
+
+  switch (layer.kind()) {
+    case LayerKind::Group:
+      plan.layer_records.add(2U);
+      if (raster_mask_channel(layer) != 0U) {
+        plan.channel_records.add(1U);
+      } else {
+        plan.channel_records.add(derived_mask_channel(layer, false));
+      }
+      for (const auto& child : layer.children()) {
+        add_effective_layer_records(child, plan);
+      }
+      return;
+    case LayerKind::Adjustment:
+      plan.layer_records.add(1U);
+      if (raster_mask_channel(layer) != 0U) {
+        plan.channel_records.add(1U);
+      } else {
+        plan.channel_records.add(derived_mask_channel(layer, false));
+      }
+      return;
+    case LayerKind::Pixel:
+      plan.layer_records.add(1U);
+      if (layer_is_vector_shape(layer)) {
+        plan.channel_records.add(4U);
+        plan.channel_records.add(raster_mask_channel(layer));
+        return;
+      }
+      plan.channel_records.add(layer.pixels().format().channels >= 4U ? 4U : 3U);
+      if (raster_mask_channel(layer) != 0U) {
+        plan.channel_records.add(1U);
+      } else {
+        // A present-but-empty raster mask suppresses the derived plane only for
+        // ordinary pixel layers; mirror encode_layer exactly.
+        plan.channel_records.add(derived_mask_channel(layer, true));
+      }
+      return;
+    case LayerKind::Text:
+    case LayerKind::Vector:
+    case LayerKind::SmartObject:
+      // The existing encoder reports these unsupported kinds later. Model one
+      // record here so a finite structural budget still protects preflight,
+      // while unlimited callers retain the established format error.
+      plan.layer_records.add(1U);
+      return;
+  }
+}
+
+[[nodiscard]] SavePreflightPlan build_save_preflight_plan(
+    const Document& document, bool layered) noexcept {
+  SavePreflightPlan plan;
+  const auto width = static_cast<std::uint64_t>(document.width());
+  const auto height = static_cast<std::uint64_t>(document.height());
+  if (height != 0U && width > std::numeric_limits<std::uint64_t>::max() / height) {
+    plan.canvas_pixels.overflow = true;
+  } else {
+    plan.canvas_pixels.value = width * height;
+  }
+
+  for (const auto& layer : document.layers()) {
+    add_source_pixel_buffers(layer, plan.source_pixel_bytes);
+  }
+  for (const auto& channel : document.channels()) {
+    plan.source_pixel_bytes.add_size(channel.pixels().byte_size());
+  }
+
+  // RGB plus a possible merged-alpha record and every saved document channel.
+  plan.channel_records.add(4U);
+  plan.channel_records.add_size(document.channels().size());
+  if (!layered) { return plan; }
+
+  if (document.layers().empty()) {
+    plan.layer_records.add(1U);
+    plan.channel_records.add(4U);
+    return plan;
+  }
+  for (const auto& layer : document.layers()) {
+    add_effective_layer_records(layer, plan);
+  }
+  return plan;
+}
+
+void admit_save_preflight_total(const SaveBudgetTotal& total,
+                                std::uint64_t limit,
+                                std::uint64_t* usage,
+                                SaveBudgetDimension dimension) {
+  if (total.overflow || total.value > limit) {
+    throw SaveBudgetExceeded(dimension);
+  }
+  if (usage != nullptr) { *usage = total.value; }
+}
+
+void preflight_save(const Document& document, const WriteOptions& options,
+                    bool layered) {
+  const auto plan = build_save_preflight_plan(document, layered);
+  // The format validity error predates configurable budgets and remains
+  // primary for every caller, including one with a smaller finite record cap.
+  if (layered && !plan.layer_records.overflow &&
+      plan.layer_records.value > 8000U) {
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+        "QObject", "Photoshop supports at most 8000 layer records, including group boundaries"));
+  }
+  auto* usage = options.usage;
+  admit_save_preflight_total(plan.canvas_pixels, options.budget.max_canvas_pixels,
+                             usage != nullptr ? &usage->canvas_pixels : nullptr,
+                             SaveBudgetDimension::CanvasPixels);
+  admit_save_preflight_total(plan.source_pixel_bytes,
+                             options.budget.max_source_pixel_bytes,
+                             usage != nullptr ? &usage->source_pixel_bytes : nullptr,
+                             SaveBudgetDimension::SourcePixelBytes);
+  admit_save_preflight_total(plan.layer_records, options.budget.max_layer_records,
+                             usage != nullptr ? &usage->layer_records : nullptr,
+                             SaveBudgetDimension::LayerRecords);
+  admit_save_preflight_total(plan.channel_records,
+                             options.budget.max_channel_records,
+                             usage != nullptr ? &usage->channel_records : nullptr,
+                             SaveBudgetDimension::ChannelRecords);
+}
 
 std::vector<std::uint8_t> read_file_bytes_with_budget(const std::filesystem::path& path,
                                                       const ParseBudget& budget) {
@@ -1661,6 +1909,7 @@ Document DocumentIo::read_file(const std::filesystem::path& path, ReadOptions op
 std::vector<std::uint8_t> DocumentIo::write_flat_rgb8(const Document& document, WriteOptions options) {
   reset_save_usage(options.usage);
   check_write_dimensions(document, options.large_document);
+  preflight_save(document, options, false);
 
   auto composite = document_alpha_composite(document);
   if (!composite.has_value()) {
@@ -1988,6 +2237,8 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
 std::vector<std::uint8_t> DocumentIo::write_layered_rgb8(const Document& document,
                                                           WriteOptions options) {
   reset_save_usage(options.usage);
+  check_write_dimensions(document, options.large_document);
+  preflight_save(document, options, true);
   return write_layered_rgb8_impl(document, options);
 }
 

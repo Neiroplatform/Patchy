@@ -8,6 +8,7 @@
 #include "core/layer_metadata.hpp"
 #include "core/layer_tree.hpp"
 #include "core/gradient_presets.hpp"
+#include "core/smart_filter.hpp"
 #include "filters/filter_engine.hpp"
 #include "filters/filter_registry.hpp"
 #include "filters/smart_filter_recipe_mapping.hpp"
@@ -271,6 +272,611 @@ void psd_save_budget_bounds_logical_output_and_preserves_destinations() {
   CHECK(patchy::psd::DocumentIo::write_layered_rgb8(empty, empty_options) ==
         empty_bytes);
   CHECK(empty_usage.logical_output_bytes == empty_bytes.size());
+}
+
+void psd_save_preflight_budgets_source_and_normalized_structure() {
+  const patchy::psd::SaveBudget default_budget;
+  CHECK(default_budget.max_logical_output_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
+  CHECK(default_budget.max_canvas_pixels ==
+        std::numeric_limits<std::uint64_t>::max());
+  CHECK(default_budget.max_source_pixel_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
+  CHECK(default_budget.max_layer_records ==
+        std::numeric_limits<std::uint64_t>::max());
+  CHECK(default_budget.max_channel_records ==
+        std::numeric_limits<std::uint64_t>::max());
+  const patchy::psd::SaveUsage default_usage;
+  CHECK(default_usage.logical_output_bytes == 0U);
+  CHECK(default_usage.canvas_pixels == 0U);
+  CHECK(default_usage.source_pixel_bytes == 0U);
+  CHECK(default_usage.layer_records == 0U);
+  CHECK(default_usage.channel_records == 0U);
+  CHECK(static_cast<std::uint8_t>(
+            patchy::psd::SaveBudgetDimension::LogicalOutputBytes) == 0U);
+  CHECK(static_cast<std::uint8_t>(
+            patchy::psd::SaveBudgetDimension::CanvasPixels) == 1U);
+  CHECK(static_cast<std::uint8_t>(
+            patchy::psd::SaveBudgetDimension::SourcePixelBytes) == 2U);
+  CHECK(static_cast<std::uint8_t>(
+            patchy::psd::SaveBudgetDimension::LayerRecords) == 3U);
+  CHECK(static_cast<std::uint8_t>(
+            patchy::psd::SaveBudgetDimension::ChannelRecords) == 4U);
+  const patchy::psd::WriteOptions aggregate_compatible{true};
+  CHECK(aggregate_compatible.large_document);
+  CHECK(aggregate_compatible.budget.max_canvas_pixels ==
+        std::numeric_limits<std::uint64_t>::max());
+
+  patchy::Document document(7, 5, patchy::PixelFormat::rgb8());
+  auto& base = document.add_pixel_layer("Base", solid_rgb(7, 5, 30, 60, 90));
+  base.set_bounds(patchy::Rect{0, 0, 7, 5});
+
+  patchy::Layer top(document.allocate_layer_id(), "Hidden RGBA",
+                    solid_rgba(3, 2, 200, 80, 20, 160));
+  top.set_visible(false);
+  top.set_bounds(patchy::Rect{2, 1, 3, 2});
+  patchy::LayerMask top_mask;
+  top_mask.bounds = patchy::Rect{2, 1, 2, 1};
+  top_mask.pixels = patchy::PixelBuffer(2, 1, patchy::PixelFormat::gray8());
+  top.set_mask(std::move(top_mask));
+  document.add_layer(std::move(top));
+
+  patchy::Layer group(document.allocate_layer_id(), "Group", patchy::LayerKind::Group);
+  patchy::LayerMask group_mask;
+  group_mask.bounds = patchy::Rect{0, 0, 2, 1};
+  group_mask.pixels = patchy::PixelBuffer(2, 1, patchy::PixelFormat::gray8());
+  group.set_mask(std::move(group_mask));
+  patchy::Layer child(document.allocate_layer_id(), "Child",
+                      solid_rgba(2, 2, 5, 10, 15, 255));
+  child.set_bounds(patchy::Rect{1, 1, 2, 2});
+  group.add_child(std::move(child));
+  patchy::Layer adjustment(document.allocate_layer_id(), "Levels",
+                           patchy::LayerKind::Adjustment);
+  patchy::AdjustmentSettings adjustment_settings;
+  adjustment_settings.kind = patchy::AdjustmentKind::Levels;
+  patchy::configure_adjustment_layer(adjustment, adjustment_settings);
+  group.add_child(std::move(adjustment));
+  document.add_layer(std::move(group));
+
+  document.add_channel(patchy::DocumentChannel(
+      document.allocate_channel_id(), "Saved Alpha",
+      patchy::DocumentChannelKind::Alpha,
+      patchy::PixelBuffer(7, 5, patchy::PixelFormat::gray8())));
+
+  constexpr std::uint64_t kCanvasPixels = 35U;
+  constexpr std::uint64_t kSourcePixelBytes = 184U;
+  constexpr std::uint64_t kLayerRecords = 6U;
+  constexpr std::uint64_t kFlatChannelRecords = 5U;
+  constexpr std::uint64_t kLayeredChannelRecords = 18U;
+
+  const auto write = [&](bool layered, const patchy::psd::WriteOptions& options) {
+    return layered ? patchy::psd::DocumentIo::write_layered_rgb8(document, options)
+                   : patchy::psd::DocumentIo::write_flat_rgb8(document, options);
+  };
+  for (const bool large_document : {false, true}) {
+    for (const bool layered : {false, true}) {
+      patchy::psd::WriteOptions baseline_options;
+      baseline_options.large_document = large_document;
+      const auto baseline = write(layered, baseline_options);
+
+      patchy::psd::SaveUsage usage{999U, 999U, 999U, 999U, 999U};
+      auto exact = baseline_options;
+      exact.budget.max_logical_output_bytes = baseline.size();
+      exact.budget.max_canvas_pixels = kCanvasPixels;
+      exact.budget.max_source_pixel_bytes = kSourcePixelBytes;
+      exact.budget.max_layer_records = layered ? kLayerRecords : 0U;
+      exact.budget.max_channel_records = layered ? kLayeredChannelRecords
+                                                  : kFlatChannelRecords;
+      exact.usage = &usage;
+      CHECK(write(layered, exact) == baseline);
+      CHECK(usage.logical_output_bytes == baseline.size());
+      CHECK(usage.canvas_pixels == kCanvasPixels);
+      CHECK(usage.source_pixel_bytes == kSourcePixelBytes);
+      CHECK(usage.layer_records == (layered ? kLayerRecords : 0U));
+      CHECK(usage.channel_records ==
+            (layered ? kLayeredChannelRecords : kFlatChannelRecords));
+
+      const auto expect_rejection = [&](patchy::psd::SaveBudgetDimension dimension,
+                                        std::uint64_t limit) {
+        auto rejected = baseline_options;
+        rejected.usage = &usage;
+        switch (dimension) {
+          case patchy::psd::SaveBudgetDimension::CanvasPixels:
+            rejected.budget.max_canvas_pixels = limit;
+            break;
+          case patchy::psd::SaveBudgetDimension::SourcePixelBytes:
+            rejected.budget.max_source_pixel_bytes = limit;
+            break;
+          case patchy::psd::SaveBudgetDimension::LayerRecords:
+            rejected.budget.max_layer_records = limit;
+            break;
+          case patchy::psd::SaveBudgetDimension::ChannelRecords:
+            rejected.budget.max_channel_records = limit;
+            break;
+          case patchy::psd::SaveBudgetDimension::LogicalOutputBytes:
+            CHECK(false);
+            return;
+        }
+        usage = patchy::psd::SaveUsage{999U, 999U, 999U, 999U, 999U};
+        bool threw = false;
+        try {
+          (void)write(layered, rejected);
+        } catch (const patchy::psd::SaveBudgetExceeded& error) {
+          threw = true;
+          CHECK(error.dimension() == dimension);
+        }
+        CHECK(threw);
+        CHECK(usage.logical_output_bytes == 0U);
+        CHECK(usage.canvas_pixels ==
+              (dimension == patchy::psd::SaveBudgetDimension::CanvasPixels
+                   ? 0U : kCanvasPixels));
+        CHECK(usage.source_pixel_bytes ==
+              (dimension == patchy::psd::SaveBudgetDimension::CanvasPixels ||
+                       dimension == patchy::psd::SaveBudgetDimension::SourcePixelBytes
+                   ? 0U : kSourcePixelBytes));
+        CHECK(usage.layer_records ==
+              (dimension == patchy::psd::SaveBudgetDimension::LayerRecords ||
+                       dimension == patchy::psd::SaveBudgetDimension::CanvasPixels ||
+                       dimension == patchy::psd::SaveBudgetDimension::SourcePixelBytes
+                   ? 0U : (layered ? kLayerRecords : 0U)));
+        CHECK(usage.channel_records == 0U);
+      };
+
+      expect_rejection(patchy::psd::SaveBudgetDimension::CanvasPixels,
+                       kCanvasPixels - 1U);
+      expect_rejection(patchy::psd::SaveBudgetDimension::SourcePixelBytes,
+                       kSourcePixelBytes - 1U);
+      if (layered) {
+        expect_rejection(patchy::psd::SaveBudgetDimension::LayerRecords,
+                         kLayerRecords - 1U);
+      }
+      expect_rejection(patchy::psd::SaveBudgetDimension::ChannelRecords,
+                       (layered ? kLayeredChannelRecords : kFlatChannelRecords) - 1U);
+    }
+  }
+
+  const auto expect_first_failed_dimension = [&](patchy::psd::WriteOptions options,
+                                                  patchy::psd::SaveBudgetDimension expected) {
+    bool threw = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(document, options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      threw = true;
+      CHECK(error.dimension() == expected);
+    }
+    CHECK(threw);
+  };
+  patchy::psd::WriteOptions ordered;
+  ordered.budget.max_canvas_pixels = 0U;
+  ordered.budget.max_source_pixel_bytes = 0U;
+  ordered.budget.max_layer_records = 0U;
+  ordered.budget.max_channel_records = 0U;
+  expect_first_failed_dimension(ordered,
+                                patchy::psd::SaveBudgetDimension::CanvasPixels);
+  ordered.budget.max_canvas_pixels = kCanvasPixels;
+  expect_first_failed_dimension(
+      ordered, patchy::psd::SaveBudgetDimension::SourcePixelBytes);
+  ordered.budget.max_source_pixel_bytes = kSourcePixelBytes;
+  expect_first_failed_dimension(ordered,
+                                patchy::psd::SaveBudgetDimension::LayerRecords);
+  ordered.budget.max_layer_records = kLayerRecords;
+  expect_first_failed_dimension(ordered,
+                                patchy::psd::SaveBudgetDimension::ChannelRecords);
+
+  patchy::psd::SaveUsage output_rejection_usage;
+  patchy::psd::WriteOptions output_rejection;
+  output_rejection.budget.max_logical_output_bytes = 0U;
+  output_rejection.usage = &output_rejection_usage;
+  bool output_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                       output_rejection);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    output_rejected = true;
+    CHECK(error.dimension() ==
+          patchy::psd::SaveBudgetDimension::LogicalOutputBytes);
+  }
+  CHECK(output_rejected);
+  CHECK(output_rejection_usage.logical_output_bytes == 0U);
+  CHECK(output_rejection_usage.canvas_pixels == kCanvasPixels);
+  CHECK(output_rejection_usage.source_pixel_bytes == kSourcePixelBytes);
+  CHECK(output_rejection_usage.layer_records == kLayerRecords);
+  CHECK(output_rejection_usage.channel_records == kLayeredChannelRecords);
+
+  patchy::Document empty(7, 5, patchy::PixelFormat::rgb8());
+  for (const bool large_document : {false, true}) {
+    patchy::psd::SaveUsage empty_usage{999U, 999U, 999U, 999U, 999U};
+    patchy::psd::WriteOptions empty_options;
+    empty_options.large_document = large_document;
+    empty_options.budget.max_canvas_pixels = 35U;
+    empty_options.budget.max_source_pixel_bytes = 0U;
+    empty_options.budget.max_layer_records = 1U;
+    empty_options.budget.max_channel_records = 8U;
+    empty_options.usage = &empty_usage;
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(empty, empty_options);
+    CHECK(empty_usage.canvas_pixels == 35U);
+    CHECK(empty_usage.source_pixel_bytes == 0U);
+    CHECK(empty_usage.layer_records == 1U);
+    CHECK(empty_usage.channel_records == 8U);
+    empty_options.budget.max_layer_records = 0U;
+    bool empty_rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(empty, empty_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      empty_rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::LayerRecords);
+    }
+    CHECK(empty_rejected);
+    empty_options.budget.max_layer_records = 1U;
+    empty_options.budget.max_channel_records = 7U;
+    empty_rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(empty, empty_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      empty_rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::ChannelRecords);
+    }
+    CHECK(empty_rejected);
+  }
+
+  // Preflight must win before the encoder reaches this unsupported source
+  // depth, proving the canvas guard runs before raster/compression work.
+  patchy::Document unsupported(2, 2, patchy::PixelFormat::rgb8());
+  unsupported.add_pixel_layer("16-bit", patchy::PixelBuffer(2, 2,
+                                                             patchy::PixelFormat::rgb16()));
+  patchy::psd::WriteOptions early_rejection;
+  early_rejection.budget.max_canvas_pixels = 0U;
+  bool rejected_early = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(unsupported,
+                                                       early_rejection);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    rejected_early = true;
+    CHECK(error.dimension() == patchy::psd::SaveBudgetDimension::CanvasPixels);
+  }
+  CHECK(rejected_early);
+
+  patchy::Document source_census(2, 2, patchy::PixelFormat::rgb8());
+  patchy::Layer census_layer(source_census.allocate_layer_id(), "Source census",
+                             patchy::PixelBuffer(2, 2,
+                                                  patchy::PixelFormat::rgb16()));
+  patchy::LayerMask census_raster_mask;
+  census_raster_mask.bounds = patchy::Rect{0, 0, 2, 1};
+  census_raster_mask.pixels = patchy::PixelBuffer(
+      2, 1, patchy::PixelFormat::gray8());
+  census_raster_mask.disabled = true;
+  census_layer.set_mask(std::move(census_raster_mask));
+  patchy::SmartFilterStack filters;
+  filters.mask.pixels = patchy::PixelBuffer(2, 1,
+                                             patchy::PixelFormat::gray8());
+  census_layer.set_smart_filter_stack(std::move(filters));
+  patchy::VectorShapeContent census_shape;
+  census_shape.fill_cache = patchy::PixelBuffer(1, 1,
+                                                 patchy::PixelFormat::rgba8());
+  census_shape.stroke_cache = patchy::PixelBuffer(1, 1,
+                                                   patchy::PixelFormat::rgb8());
+  census_layer.set_vector_shape(std::move(census_shape));
+  patchy::LayerVectorMask census_vector_mask;
+  census_vector_mask.cache = patchy::PixelBuffer(3, 1,
+                                                  patchy::PixelFormat::gray8());
+  census_layer.set_vector_mask(std::move(census_vector_mask));
+  source_census.add_layer(std::move(census_layer));
+  source_census.add_channel(patchy::DocumentChannel(
+      source_census.allocate_channel_id(), "Census alpha",
+      patchy::DocumentChannelKind::Alpha,
+      patchy::PixelBuffer(2, 2, patchy::PixelFormat::gray8())));
+  constexpr std::uint64_t kCensusSourceBytes = 42U;
+  patchy::psd::SaveUsage census_usage;
+  patchy::psd::WriteOptions census_exact;
+  census_exact.budget.max_source_pixel_bytes = kCensusSourceBytes;
+  census_exact.usage = &census_usage;
+  bool reached_encoder = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(source_census,
+                                                       census_exact);
+  } catch (const patchy::psd::SaveBudgetExceeded&) {
+    CHECK(false);
+  } catch (const std::exception&) {
+    reached_encoder = true;
+  }
+  CHECK(reached_encoder);
+  CHECK(census_usage.source_pixel_bytes == kCensusSourceBytes);
+  auto census_rejected = census_exact;
+  census_rejected.budget.max_source_pixel_bytes = kCensusSourceBytes - 1U;
+  bool census_budget_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(source_census,
+                                                       census_rejected);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    census_budget_rejected = true;
+    CHECK(error.dimension() ==
+          patchy::psd::SaveBudgetDimension::SourcePixelBytes);
+  } catch (const std::exception&) {
+    CHECK(false);
+  }
+  CHECK(census_budget_rejected);
+
+  const auto open_line = [](double x0, double y0, double x1, double y1,
+                            std::int32_t group) {
+    patchy::PathSubpath path;
+    path.closed = false;
+    path.shape_group = group;
+    path.anchors.push_back(patchy::PathAnchor{x0, y0, x0, y0, x0, y0, false});
+    path.anchors.push_back(patchy::PathAnchor{x1, y1, x1, y1, x1, y1, false});
+    return path;
+  };
+  patchy::Document strokes(8, 8, patchy::PixelFormat::rgb8());
+  patchy::Layer stroked(strokes.allocate_layer_id(), "Open strokes",
+                        patchy::PixelBuffer());
+  stroked.metadata()[patchy::kLayerMetadataVectorShape] = "1";
+  patchy::VectorShapeContent stroke_shape;
+  stroke_shape.path.subpaths.push_back(open_line(1, 1, 6, 1, 0));
+  stroke_shape.path.subpaths.push_back(open_line(1, 3, 6, 3, 1));
+  stroke_shape.stroke.enabled = true;
+  stroke_shape.stroke.fill_enabled = false;
+  stroke_shape.stroke.width = 1.0;
+  stroke_shape.stroke.alignment = patchy::VectorStrokeAlignment::Center;
+  stroke_shape.stroke.content.kind = patchy::VectorFillKind::Solid;
+  stroked.set_vector_shape(std::move(stroke_shape));
+  strokes.add_layer(std::move(stroked));
+  for (const bool large_document : {false, true}) {
+    patchy::psd::SaveUsage stroke_usage;
+    patchy::psd::WriteOptions stroke_options;
+    stroke_options.large_document = large_document;
+    stroke_options.budget.max_layer_records = 4U;
+    stroke_options.budget.max_channel_records = 12U;
+    stroke_options.usage = &stroke_usage;
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(strokes,
+                                                       stroke_options);
+    CHECK(stroke_usage.layer_records == 4U);
+    CHECK(stroke_usage.channel_records == 12U);
+    CHECK(stroke_usage.source_pixel_bytes == 0U);
+    stroke_options.budget.max_channel_records = 11U;
+    bool stroke_rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(strokes,
+                                                         stroke_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      stroke_rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::ChannelRecords);
+    }
+    CHECK(stroke_rejected);
+  }
+
+  const auto triangle = [](double offset, std::int32_t group) {
+    patchy::PathSubpath path;
+    path.closed = true;
+    path.shape_group = group;
+    path.anchors.push_back(patchy::PathAnchor{offset + 1.0, 1.0, offset + 1.0,
+                                               1.0, offset + 1.0, 1.0, false});
+    path.anchors.push_back(patchy::PathAnchor{offset + 3.0, 1.0, offset + 3.0,
+                                               1.0, offset + 3.0, 1.0, false});
+    path.anchors.push_back(patchy::PathAnchor{offset + 2.0, 3.0, offset + 2.0,
+                                               3.0, offset + 2.0, 3.0, false});
+    return path;
+  };
+  patchy::Document compound(8, 8, patchy::PixelFormat::rgb8());
+  patchy::Layer compound_layer(compound.allocate_layer_id(), "Compound",
+                               patchy::PixelBuffer());
+  compound_layer.metadata()[patchy::kLayerMetadataVectorShape] = "1";
+  compound_layer.set_fill_opacity(0.5F);
+  patchy::LayerMask compound_mask;
+  compound_mask.bounds = patchy::Rect{0, 0, 1, 1};
+  compound_mask.pixels = patchy::PixelBuffer(1, 1,
+                                              patchy::PixelFormat::gray8());
+  compound_layer.set_mask(std::move(compound_mask));
+  patchy::VectorShapeContent compound_shape;
+  compound_shape.path.subpaths.push_back(open_line(1, 1, 6, 1, 0));
+  compound_shape.path.subpaths.push_back(open_line(1, 3, 6, 3, 1));
+  compound_shape.path.subpaths.push_back(triangle(2.0, 2));
+  patchy::VectorShapePart first_part;
+  first_part.groups = {0, 1};
+  first_part.fill.color = patchy::RgbColor{220, 20, 20};
+  first_part.fill_opacity = 0.5F;
+  first_part.stroke.enabled = true;
+  first_part.stroke.fill_enabled = true;
+  first_part.stroke.width = 1.0;
+  first_part.stroke.alignment = patchy::VectorStrokeAlignment::Center;
+  first_part.stroke.content.kind = patchy::VectorFillKind::Solid;
+  first_part.stroke.opacity = 0.5;
+  first_part.stroke.blend_mode = patchy::BlendMode::Multiply;
+  patchy::VectorShapePart second_part;
+  second_part.groups = {2};
+  second_part.fill.color = patchy::RgbColor{20, 20, 220};
+  compound_shape.parts.push_back(std::move(first_part));
+  compound_shape.parts.push_back(std::move(second_part));
+  compound_layer.set_vector_shape(std::move(compound_shape));
+  compound.add_layer(std::move(compound_layer));
+  const auto compound_revision = compound.layers().front().content_revision();
+  for (const bool large_document : {false, true}) {
+    patchy::psd::SaveUsage compound_usage;
+    patchy::psd::WriteOptions compound_options;
+    compound_options.large_document = large_document;
+    compound_options.budget.max_source_pixel_bytes = 1U;
+    compound_options.budget.max_layer_records = 14U;
+    compound_options.budget.max_channel_records = 21U;
+    compound_options.usage = &compound_usage;
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(compound,
+                                                       compound_options);
+    CHECK(compound_usage.layer_records == 14U);
+    CHECK(compound_usage.channel_records == 21U);
+    CHECK(compound_usage.source_pixel_bytes == 1U);
+
+    auto compound_rejected_options = compound_options;
+    compound_rejected_options.budget.max_layer_records = 13U;
+    bool compound_rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(
+          compound, compound_rejected_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      compound_rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::LayerRecords);
+    }
+    CHECK(compound_rejected);
+    compound_rejected_options = compound_options;
+    compound_rejected_options.budget.max_channel_records = 20U;
+    compound_rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(
+          compound, compound_rejected_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      compound_rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::ChannelRecords);
+    }
+    CHECK(compound_rejected);
+    CHECK(compound.layers().size() == 1U);
+    CHECK(compound.layers().front().content_revision() == compound_revision);
+  }
+
+  patchy::Document empty_vector_mask(2, 2, patchy::PixelFormat::rgb8());
+  auto& masked = empty_vector_mask.add_pixel_layer(
+      "Empty vector mask", solid_rgb(2, 2, 1, 2, 3));
+  patchy::LayerVectorMask vector_mask;
+  vector_mask.density = 128U;
+  masked.set_vector_mask(std::move(vector_mask));
+  patchy::psd::SaveUsage empty_mask_usage;
+  patchy::psd::WriteOptions empty_mask_options;
+  empty_mask_options.budget.max_channel_records = 7U;
+  empty_mask_options.usage = &empty_mask_usage;
+  (void)patchy::psd::DocumentIo::write_layered_rgb8(
+      empty_vector_mask, empty_mask_options);
+  CHECK(empty_mask_usage.channel_records == 7U);
+
+  patchy::LayerVectorMask nonempty_vector_mask;
+  nonempty_vector_mask.density = 128U;
+  nonempty_vector_mask.path.subpaths.push_back(triangle(-1.0, 0));
+  masked.set_vector_mask(nonempty_vector_mask);
+  empty_mask_options.budget.max_channel_records = 8U;
+  (void)patchy::psd::DocumentIo::write_layered_rgb8(
+      empty_vector_mask, empty_mask_options);
+  CHECK(empty_mask_usage.channel_records == 8U);
+  empty_mask_options.budget.max_channel_records = 7U;
+  bool derived_mask_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(
+        empty_vector_mask, empty_mask_options);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    derived_mask_rejected = true;
+    CHECK(error.dimension() ==
+          patchy::psd::SaveBudgetDimension::ChannelRecords);
+  }
+  CHECK(derived_mask_rejected);
+
+  // An empty raster-mask owner suppresses the derived slot on an ordinary
+  // pixel record, while group/adjustment encoders fall through to it.
+  patchy::LayerMask empty_raster_mask;
+  empty_raster_mask.pixels = patchy::PixelBuffer(
+      0, 0, patchy::PixelFormat::gray8());
+  masked.set_mask(empty_raster_mask);
+  empty_mask_options.budget.max_channel_records = 7U;
+  (void)patchy::psd::DocumentIo::write_layered_rgb8(
+      empty_vector_mask, empty_mask_options);
+  CHECK(empty_mask_usage.channel_records == 7U);
+
+  patchy::Document group_mask_document(2, 2, patchy::PixelFormat::rgb8());
+  patchy::Layer masked_group(group_mask_document.allocate_layer_id(),
+                             "Masked group", patchy::LayerKind::Group);
+  masked_group.set_mask(std::move(empty_raster_mask));
+  masked_group.set_vector_mask(std::move(nonempty_vector_mask));
+  group_mask_document.add_layer(std::move(masked_group));
+  patchy::psd::SaveUsage group_mask_usage;
+  patchy::psd::WriteOptions group_mask_options;
+  group_mask_options.budget.max_channel_records = 5U;
+  group_mask_options.usage = &group_mask_usage;
+  (void)patchy::psd::DocumentIo::write_layered_rgb8(
+      group_mask_document, group_mask_options);
+  CHECK(group_mask_usage.channel_records == 5U);
+  group_mask_options.budget.max_channel_records = 4U;
+  derived_mask_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(
+        group_mask_document, group_mask_options);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    derived_mask_rejected = true;
+    CHECK(error.dimension() ==
+          patchy::psd::SaveBudgetDimension::ChannelRecords);
+  }
+  CHECK(derived_mask_rejected);
+
+  // Logical source occurrences are counted even when their copy-on-write
+  // storage aliases the same allocation.
+  patchy::Document aliases(2, 2, patchy::PixelFormat::rgb8());
+  const auto shared_pixels = solid_rgba(2, 2, 9, 8, 7, 255);
+  aliases.add_layer(patchy::Layer(aliases.allocate_layer_id(), "Alias A",
+                                  shared_pixels));
+  aliases.add_layer(patchy::Layer(aliases.allocate_layer_id(), "Alias B",
+                                  shared_pixels));
+  patchy::psd::SaveUsage alias_usage;
+  patchy::psd::WriteOptions alias_options;
+  alias_options.budget.max_source_pixel_bytes = 32U;
+  alias_options.usage = &alias_usage;
+  (void)patchy::psd::DocumentIo::write_layered_rgb8(aliases, alias_options);
+  CHECK(alias_usage.source_pixel_bytes == 32U);
+
+  patchy::Document too_many_records(1, 1, patchy::PixelFormat::rgb8());
+  for (std::size_t i = 0; i < 4000U; ++i) {
+    too_many_records.add_layer(patchy::Layer(
+        too_many_records.allocate_layer_id(), "Folder",
+        patchy::LayerKind::Group));
+  }
+  too_many_records.add_layer(patchy::Layer(
+      too_many_records.allocate_layer_id(), "One too many",
+      patchy::PixelBuffer()));
+  patchy::psd::SaveUsage format_usage{999U, 999U, 999U, 999U, 999U};
+  patchy::psd::WriteOptions format_precedence;
+  format_precedence.budget.max_layer_records = 0U;
+  format_precedence.usage = &format_usage;
+  bool format_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(
+        too_many_records, format_precedence);
+  } catch (const patchy::psd::SaveBudgetExceeded&) {
+    CHECK(false);
+  } catch (const std::runtime_error& error) {
+    format_rejected = std::string(error.what()).find("8000") !=
+        std::string::npos;
+  }
+  CHECK(format_rejected);
+  CHECK(format_usage.logical_output_bytes == 0U);
+  CHECK(format_usage.canvas_pixels == 0U);
+  CHECK(format_usage.source_pixel_bytes == 0U);
+  CHECK(format_usage.layer_records == 0U);
+  CHECK(format_usage.channel_records == 0U);
+
+  // File wrappers serialize fully before opening the destination, so a new
+  // preflight rejection keeps existing bytes intact.
+  std::filesystem::create_directories("test-artifacts");
+  const auto preserved_path = std::filesystem::path("test-artifacts") /
+                              "save-preflight-preserved.bin";
+  const std::vector<std::uint8_t> sentinel{7, 6, 5, 4};
+  {
+    std::ofstream file(preserved_path, std::ios::binary | std::ios::trunc);
+    file.write(reinterpret_cast<const char*>(sentinel.data()),
+               static_cast<std::streamsize>(sentinel.size()));
+  }
+  patchy::psd::WriteOptions rejected_file_options;
+  rejected_file_options.budget.max_channel_records = kLayeredChannelRecords - 1U;
+  bool file_rejected = false;
+  try {
+    patchy::psd::DocumentIo::write_layered_rgb8_file(
+        document, preserved_path, rejected_file_options);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    file_rejected = true;
+    CHECK(error.dimension() == patchy::psd::SaveBudgetDimension::ChannelRecords);
+  }
+  CHECK(file_rejected);
+  std::ifstream preserved_file(preserved_path, std::ios::binary);
+  const std::vector<std::uint8_t> preserved{
+      std::istreambuf_iterator<char>(preserved_file),
+      std::istreambuf_iterator<char>()};
+  CHECK(preserved == sentinel);
+  preserved_file.close();
+  std::filesystem::remove(preserved_path);
 }
 
 void psd_layered_write_keeps_merged_transparency_in_composite() {
@@ -1528,6 +2134,8 @@ std::vector<patchy::test::TestCase> psd_writer_stability_tests() {
       {"psd_layered_writer_bytes_are_stable", psd_layered_writer_bytes_are_stable},
       {"psd_save_budget_bounds_logical_output_and_preserves_destinations",
        psd_save_budget_bounds_logical_output_and_preserves_destinations},
+      {"psd_save_preflight_budgets_source_and_normalized_structure",
+       psd_save_preflight_budgets_source_and_normalized_structure},
       {"psd_compound_vectors_use_plugin_resource_and_read_legacy_markers", psd_compound_vectors_use_plugin_resource_and_read_legacy_markers},
       {"psd_compound_vectors_repair_little_everywhere_if_available", psd_compound_vectors_repair_little_everywhere_if_available},
       {"psd_layer_tagged_blocks_declare_even_lengths", psd_layer_tagged_blocks_declare_even_lengths},

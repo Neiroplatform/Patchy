@@ -111,14 +111,35 @@ struct SaveBudget {
   // Exact bytes admitted to the final PSD/PSB byte stream. Intermediate
   // serialization buffers are workspace and are deliberately not counted.
   std::uint64_t max_logical_output_bytes{std::numeric_limits<std::uint64_t>::max()};
+  // Exact width * height of the document admitted once per public save.
+  std::uint64_t max_canvas_pixels{std::numeric_limits<std::uint64_t>::max()};
+  // Logical bytes in caller-supplied PixelBuffers reachable from the source
+  // layer tree and saved document channels. Generated normalization,
+  // compositor, encoding, and serialization buffers are excluded.
+  std::uint64_t max_source_pixel_bytes{std::numeric_limits<std::uint64_t>::max()};
+  // Physical layer records reserved for the effective PSD graph after
+  // compound/open-stroke normalization, including group boundaries.
+  std::uint64_t max_layer_records{std::numeric_limits<std::uint64_t>::max()};
+  // Conservative physical channel-record slots. This includes a possible
+  // merged-alpha slot and possible derived vector-mask planes because their
+  // actual emission is data-dependent and only known after rasterization.
+  std::uint64_t max_channel_records{std::numeric_limits<std::uint64_t>::max()};
 };
 
 struct SaveUsage {
   std::uint64_t logical_output_bytes{0};
+  std::uint64_t canvas_pixels{0};
+  std::uint64_t source_pixel_bytes{0};
+  std::uint64_t layer_records{0};
+  std::uint64_t channel_records{0};
 };
 
 enum class SaveBudgetDimension : std::uint8_t {
   LogicalOutputBytes = 0,
+  CanvasPixels = 1,
+  SourcePixelBytes = 2,
+  LayerRecords = 3,
+  ChannelRecords = 4,
 };
 
 class SaveBudgetExceeded final : public std::length_error {
@@ -136,8 +157,9 @@ private:
 struct WriteOptions {
   bool large_document{false};
   SaveBudget budget{};
-  // Optional observation hook. Reset at the start of every public write and
-  // updated only after a final-output charge succeeds.
+  // Optional observation hook. Reset at the start of every public write.
+  // Preflight fields update only after their dimension is admitted; final
+  // output bytes update incrementally as the stream is serialized.
   SaveUsage* usage{nullptr};
 };
 

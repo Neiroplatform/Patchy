@@ -25,6 +25,15 @@ suppressed cannot establish the absence of warnings. If Photoshop was not
 checked, say so; this requirement does not grant permission to control it.
 Follow the repository's computer-control rule and [testing.md](testing.md).
 
+Save-budget preflight must not change the bytes emitted by an unlimited write.
+It models compound-vector and multiple-open-stroke normalization without running
+that normalization, and it counts the resulting folder boundaries and native
+shape records once at the public entry. Recursive writer calls must not reset or
+charge preflight usage again. Channel-record usage is a conservative reservation,
+not an exact emitted count: one possible merged-alpha slot and qualifying derived
+vector-mask slots are admitted before their raster coverage is known. See the
+save-budget contract in [testing.md](testing.md).
+
 ## COM scripting techniques
 
 Drive PS from PowerShell: `(New-Object -ComObject Photoshop.Application).DoJavaScript($jsx)` (first call launches PS, ~30s).

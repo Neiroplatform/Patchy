@@ -3,6 +3,7 @@
 #include "core/document.hpp"
 #include "core/vector_shape.hpp"
 
+#include <cstdint>
 #include <span>
 
 namespace patchy {
@@ -23,6 +24,20 @@ void set_compound_vector_group_kind(Layer& layer, CompoundVectorGroupKind kind);
 [[nodiscard]] Document expand_compound_vectors(const Document& document, bool bake);
 // PSD closes open contours when a native stroked shape has multiple subpaths.
 // Keep solid center strokes in separate native shapes with a reversible group.
+struct OpenPathStrokeExpansionPlan {
+  bool expands{false};
+  std::uint64_t subpath_count{0};
+  bool subpath_count_overflow{false};
+  bool fill_carrier{false};
+  bool grouped_strokes{false};
+  bool fill_opacity_boundary{false};
+};
+// Allocation-free descriptions shared by normalization and save preflight.
+// The part overload models the temporary native child produced by compound
+// expansion without allocating that child or copying its selected paths.
+[[nodiscard]] OpenPathStrokeExpansionPlan open_path_stroke_expansion_plan(const Layer& layer);
+[[nodiscard]] OpenPathStrokeExpansionPlan open_path_stroke_expansion_plan(
+    const VectorShapeContent& shape, const VectorShapePart& part);
 [[nodiscard]] bool document_has_open_path_strokes(const Document& document);
 [[nodiscard]] Document expand_open_path_strokes(const Document& document);
 void collapse_compound_vector_groups(Document& document);
