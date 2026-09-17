@@ -4,6 +4,7 @@
 
 #include "psd/psd_binary.hpp"
 #include "psd/psd_descriptor.hpp"
+#include "psd/psd_save_budget_internal.hpp"
 #include "core/smart_filter.hpp"
 #include "support/translate_noop.hpp"
 
@@ -415,21 +416,30 @@ void mark_block_association_uniqueness(SmartFilterEffectsBlock &block) {
   }
 }
 
-[[nodiscard]] std::vector<std::uint8_t>
-serialize_filter_effects_record_body(const SmartFilterEffectsRecord &record) {
+struct FilterEffectsRecordSerializationPlan {
+  std::span<const std::uint8_t> raw;
+  std::size_t tail_offset{0U};
+  std::size_t body_size{0U};
+  bool rekey{false};
+};
+
+[[nodiscard]] FilterEffectsRecordSerializationPlan
+plan_filter_effects_record_serialization(
+    const SmartFilterEffectsRecord &record) {
   if (!raw_record_range_is_valid(record)) {
-    throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD filter-effects record has no raw body"));
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+        "QObject", "PSD filter-effects record has no raw body"));
   }
   const auto raw = raw_filter_effects_record_body(record);
   if (record.placed_uuid == record.original_placed_uuid) {
-    return std::vector<std::uint8_t>(raw.begin(), raw.end());
+    return FilterEffectsRecordSerializationPlan{raw, 0U, raw.size(), false};
   }
   if (record.placed_uuid.size() > 255U ||
       record.original_placed_uuid.size() > 255U || raw.empty() ||
       raw.front() != record.original_placed_uuid.size() ||
       raw.size() < 1U + record.original_placed_uuid.size()) {
-    throw std::runtime_error(
-        PATCHY_TRANSLATE_NOOP("QObject", "PSD filter-effects record cannot be rekeyed safely"));
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+        "QObject", "PSD filter-effects record cannot be rekeyed safely"));
   }
   const auto original_begin = raw.begin() + 1;
   const auto original_end =
@@ -438,21 +448,37 @@ serialize_filter_effects_record_body(const SmartFilterEffectsRecord &record) {
   if (!std::equal(original_begin, original_end,
                   record.original_placed_uuid.begin(),
                   record.original_placed_uuid.end())) {
-    throw std::runtime_error(
-        PATCHY_TRANSLATE_NOOP("QObject", "PSD filter-effects record id does not match its raw body"));
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+        "QObject", "PSD filter-effects record id does not match its raw body"));
   }
+  const auto tail_offset = 1U + record.original_placed_uuid.size();
+  const auto tail_length = raw.size() - tail_offset;
+  if (tail_length > std::numeric_limits<std::size_t>::max() - 1U -
+                        record.placed_uuid.size()) {
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+        "QObject", "PSD filter-effects record cannot be rekeyed safely"));
+  }
+  return FilterEffectsRecordSerializationPlan{
+      raw, tail_offset, 1U + record.placed_uuid.size() + tail_length, true};
+}
 
+[[nodiscard]] std::vector<std::uint8_t>
+serialize_filter_effects_record_body(const SmartFilterEffectsRecord &record) {
+  const auto plan = plan_filter_effects_record_serialization(record);
+  if (!plan.rekey) {
+    return std::vector<std::uint8_t>(plan.raw.begin(), plan.raw.end());
+  }
   // Size the body exactly, then fill it by copy. Growing it with push_back and
   // insert instead leaves GCC's optimizer unable to prove the vector's storage
   // is heap-allocated across the inlined reallocation path, which it reports as
   // a false-positive -Wfree-nonheap-object.
-  const auto tail_length = raw.size() - 1U - record.original_placed_uuid.size();
-  std::vector<std::uint8_t> body(1U + record.placed_uuid.size() + tail_length);
+  std::vector<std::uint8_t> body(plan.body_size);
   body[0] = static_cast<std::uint8_t>(record.placed_uuid.size());
   const auto tail_begin =
       std::copy(record.placed_uuid.begin(), record.placed_uuid.end(),
                 body.begin() + 1);
-  std::copy(original_end, raw.end(), tail_begin);
+  std::copy(plan.raw.begin() + static_cast<std::ptrdiff_t>(plan.tail_offset),
+            plan.raw.end(), tail_begin);
   return body;
 }
 
@@ -760,10 +786,12 @@ SmartFilterEffectsBlock parse_filter_effects_block(
                                     long_length, original_global_index);
 }
 
-std::vector<std::uint8_t>
-serialize_filter_effects_block(const SmartFilterEffectsBlock &block) {
+SaveTrackedByteBuffer serialize_filter_effects_block_tracked(
+    const SmartFilterEffectsBlock &block,
+    SaveLiveBudgetTracker &tracked_live_budget) {
   if (block.original_payload != nullptr) {
-    return *block.original_payload;
+    return save_tracked_byte_copy(*block.original_payload,
+                                  tracked_live_budget);
   }
   if (block.opaque || (block.key != "FEid" && block.key != "FXid") ||
       block.version < kMinimumOuterVersion ||
@@ -771,17 +799,35 @@ serialize_filter_effects_block(const SmartFilterEffectsBlock &block) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD filter-effects block cannot be regenerated"));
   }
 
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto &writer = tracked_writer.writer();
   writer.write_u32(block.version);
   for (const auto &record : block.records) {
-    const auto body = serialize_filter_effects_record_body(record);
-    writer.write_u64(static_cast<std::uint64_t>(body.size()));
-    writer.write_bytes(body);
+    const auto plan = plan_filter_effects_record_serialization(record);
+    writer.write_u64(static_cast<std::uint64_t>(plan.body_size));
+    if (!plan.rekey) {
+      writer.write_bytes(plan.raw);
+    } else {
+      writer.write_u8(static_cast<std::uint8_t>(record.placed_uuid.size()));
+      writer.write_bytes(std::span<const std::uint8_t>(
+          reinterpret_cast<const std::uint8_t *>(record.placed_uuid.data()),
+          record.placed_uuid.size()));
+      writer.write_bytes(plan.raw.subspan(plan.tail_offset));
+    }
     while ((writer.bytes().size() % 4U) != 0U) {
       writer.write_u8(0);
     }
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
+}
+
+std::vector<std::uint8_t>
+serialize_filter_effects_block(const SmartFilterEffectsBlock &block) {
+  SaveLiveBudgetTracker tracked_live_budget(
+      std::numeric_limits<std::uint64_t>::max(), nullptr, nullptr);
+  auto payload =
+      serialize_filter_effects_block_tracked(block, tracked_live_budget);
+  return std::move(payload.bytes);
 }
 
 std::optional<SmartFilterEffectsRecord>

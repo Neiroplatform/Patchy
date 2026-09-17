@@ -10,6 +10,7 @@
 #include "color/color_management.hpp"
 #include "core/adjustment_layer.hpp"
 #include "core/document_path.hpp"
+#include "core/smart_filter_effects.hpp"
 #include "core/text_warp.hpp"
 #include "core/vector_raster.hpp"
 #include "core/vector_shape.hpp"
@@ -586,6 +587,13 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
 void append_encoded_layers(const Layer& layer, std::vector<EncodedLayer>& encoded_layers,
                            bool large_document,
                            SaveLiveBudgetTracker& tracked_live_budget);
+
+// Save-only owner-coupled FEid/FXid serializer. The public codec keeps its
+// vector-returning API; the document writer uses this form so the generated
+// payload remains charged while it is copied into the global layer section.
+SaveTrackedByteBuffer serialize_filter_effects_block_tracked(
+    const SmartFilterEffectsBlock& block,
+    SaveLiveBudgetTracker& tracked_live_budget);
 
 // Vector shape/path codec: vmsk/vsms path records, SoCo/GdFl/PtFl fill
 // content, vstk stroke style, vogk live-shape origination, and the saved-path

@@ -157,19 +157,21 @@ change: clean-rebuild every ABI consumer rather than mixing old and new objects.
 
 The complete output, preflight, tracked-live, test, exclusion, ABI, and rollout
 contract lives in [save-budget.md](save-budget.md). Read it before changing any
-PSD/PSB write path or its tests. All dimensions remain opt-in and default to
-unlimited; tracked-live remains incomplete pending deep renderer, normalization,
-and generated-payload coverage. DP-008B1 pins the aggregate `extra` plus
-restrictions at 210 bytes and its direct record at 232 bytes/FNV, with returned
-ownership and nested-writer branch fixtures. Exact, one-short, zero, byte-equality,
-unwind, and source-audit checks remain mandatory.
+PSD/PSB write path or test. Dimensions remain opt-in and default to unlimited;
+tracked-live is incomplete pending renderer, normalization, and remaining payload
+coverage. DP-008B1 pins `extra` plus restrictions at 210 bytes and its direct
+record at 232 bytes/FNV. Exact, one-short, zero, byte-equality, unwind, and
+source-audit checks remain mandatory.
 DP-008B2a tracks the returned image-resource stream. DP-008B2b removes its raw
 copy and tracks parsed payloads through replace/erase/reorder. DP-008B2c tracks
 all generated/copied resource and path/clipping payloads before allocation,
 eliminates avoidable byte scratch, and validates deleted paths without allocating.
 Peaks are 44 minimal, 72 parsed replacement, 400 all resource families, 187
 path/clipping, and 160 clean relocation. N-1, staged, zero, malformed, byte, and
-unwind checks apply. Smart Object/Filter and pattern payloads remain.
+unwind checks apply. DP-008B3a tracks original and regenerated global FEid/FXid
+payloads; 20-byte raw/rekey pins, staged ownership, malformed unwind, and an
+12556-byte two-block public peak prove typed rejection. Smart Object/pattern
+payloads remain.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

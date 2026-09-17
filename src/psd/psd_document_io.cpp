@@ -2120,9 +2120,11 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
     for (std::size_t i = 0; i < store.blocks.size(); ++i) {
       link_payloads[i] = serialize_linked_layer_block(store.blocks[i]);
     }
-    std::vector<std::vector<std::uint8_t>> filter_payloads(filter_store.blocks.size());
+    std::vector<SaveTrackedByteBuffer> filter_payloads;
+    filter_payloads.reserve(filter_store.blocks.size());
     for (std::size_t i = 0; i < filter_store.blocks.size(); ++i) {
-      filter_payloads[i] = serialize_filter_effects_block(filter_store.blocks[i]);
+      filter_payloads.push_back(serialize_filter_effects_block_tracked(
+          filter_store.blocks[i], tracked_live_budget));
     }
     enum class GlobalEmissionKind { Unknown, Link, Filter };
     struct GlobalEmission {
@@ -2164,7 +2166,9 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
         }
         case GlobalEmissionKind::Filter: {
           const auto& block = filter_store.blocks[emission.item_index];
-          emit_global_payload(block.key, filter_payloads[emission.item_index], block.long_length);
+          emit_global_payload(block.key,
+                              filter_payloads[emission.item_index].bytes,
+                              block.long_length);
           break;
         }
       }

@@ -67,7 +67,7 @@ does not reserve a slot. This is not exact post-render channel usage.
 The Photoshop 8000-record format error precedes configurable admission. Other later
 encoder-format errors may be preceded by an earlier finite preflight rejection.
 
-## DP-008A through DP-008B2c tracked live workspace
+## DP-008A through DP-008B3a tracked live workspace
 
 `max_tracked_live_bytes` caps conservative logical reservations for instrumented
 save-owned temporary buffers. `SaveUsage::tracked_live_bytes` is current
@@ -91,7 +91,8 @@ The current implemented slices cover:
 - generated resolution, grid/guide, ICC-copy, channel-name/identifier/display,
   palette, compound-vector, saved/work-path, and clipping-path payloads;
 - the final rebuilt image-resource stream returned to the flat or layered
-  document writer.
+  document writer;
+- generated and copied document-global Smart Filter `FEid`/`FXid` payloads.
 
 RAW and RLE candidates count together while both are live. Retained encoded
 channels remain charged until their owners die. Copying `layer_info` into
@@ -117,7 +118,13 @@ check now mirrors parser acceptance without constructing a `VectorPath`, so a
 declared knot count cannot allocate geometry merely to decide whether an absent
 modeled path should remove its old resource. Path reorder vectors and resource
 container/string capacity remain the platform-dependent bookkeeping exclusions
-described below.
+described below. DP-008B3a copies an original `FEid`/`FXid` block only after
+admission and writes regenerated records directly into an owner-coupled tracked
+buffer. Unchanged record spans and rekeyed id/tail spans are streamed without a
+per-record body copy. All filter payload owners retain the historical eager
+lifetime and ordering while they overlap the growing global layer section; this
+keeps malformed-input precedence and emitted bytes unchanged while accounting
+the actual peak.
 
 ## Explicit exclusions and remaining DP-008B work
 
@@ -136,7 +143,7 @@ DP-008B remains open for:
 - compound/open-stroke normalization clones and vector-raster scratch;
 - deep compositor group, clipping, style, effect, distance-field, and blur planes;
 - generated layer-record payload producers and nested resource writers;
-- generated Smart Object, Smart Filter, and pattern serialization payloads.
+- generated Smart Object and pattern serialization payloads.
 
 Product callers must not treat DP-008A as a complete save-memory ceiling. Finite
 values and caller wiring remain downstream policy work after DP-008B and
@@ -181,6 +188,13 @@ resolution payload, and the 112-byte rebuilt stream (187 peak), plus the 160-byt
 clean relocated-path-copy peak. One-short, parser-stage, zero, and
 malformed-tail cases prove rejection, unwind, admission-before-copy, and the
 allocation-free validator's byte-preserving parity for opaque malformed paths.
+DP-008B3a pins the 20-byte unchanged `FEid` payload at FNV-1a
+`71386559776f89b4`, the same-size rekeyed payload at `5976b3c78a774ddb`,
+and the 3-byte original-payload copy at `160a9e188e7e3df9`. Direct exact,
+one-short, zero, staged-overlap, malformed-unwind, and public byte-equivalence
+checks accompany a two-block layered fixture. Its 4096-byte `FEid` and 2048-byte
+`FXid` copies produce a 12556-byte tracked peak and prove exact, one-short, and
+typed pre-copy rejection while both eager owners remain live.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero
