@@ -623,7 +623,7 @@ void psd_save_image_resource_stream_owns_tracked_reservation() {
     CHECK(parsed_current == 0U);
   }
 
-  for (const auto [limit, expected_high] :
+  for (const auto& [limit, expected_high] :
        std::array<std::pair<std::uint64_t, std::uint64_t>, 4>{{{71U, 0U}, {26U, 25U}, {10U, 3U}, {0U, 0U}}}) {
     parsed_current = 0U;
     parsed_high_water = 0U;

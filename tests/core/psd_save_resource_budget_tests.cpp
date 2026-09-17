@@ -182,7 +182,7 @@ void psd_save_generated_path_and_clipping_resources_own_budget() {
   }
   CHECK(current == 0U);
 
-  for (const auto [limit, expected_high] :
+  for (const auto& [limit, expected_high] :
        std::array<std::pair<std::uint64_t, std::uint64_t>, 4>{{{186U, 0U}, {74U, 73U}, {51U, 51U}, {0U, 0U}}}) {
     current = 0U;
     high_water = 0U;
