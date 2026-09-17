@@ -459,7 +459,10 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
                                            std::size_t* damaged_rows,
                                            ParseBudgetTracker& budget,
                                            ParseBudgetTracker& decompressed_budget,
-                                           ParseLiveBudgetTracker& tracked_live_budget) {
+                                           ParseLiveBudgetTracker& tracked_live_budget,
+                                           ParseBudgetTracker& layer_record_budget,
+                                           ParseBudgetTracker& channel_record_budget,
+                                           ParseBudgetTracker& resource_record_budget) {
   has_merged_transparency = false;
   int unrendered_color_balance_count = 0;
   const auto layer_count_raw = static_cast<std::int16_t>(layer_reader.read_u16());
@@ -467,11 +470,20 @@ std::vector<Layer> read_layer_info_records(BigEndianReader& layer_reader, std::i
   const auto layer_count = static_cast<std::uint16_t>(
       layer_count_raw < 0 ? -static_cast<std::int32_t>(layer_count_raw)
                           : static_cast<std::int32_t>(layer_count_raw));
+  constexpr std::size_t kMinimumLayerRecordBytes = 34U;
+  if (static_cast<std::size_t>(layer_count) >
+      layer_reader.remaining() / kMinimumLayerRecordBytes) {
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+        "QObject", "PSD layer record list is truncated"));
+  }
+  layer_record_budget.charge(layer_count);
   const CmykColorConverter cmyk_converter{cmyk_icc};
   std::vector<LayerRecord> records;
   records.reserve(layer_count);
   for (std::uint16_t i = 0; i < layer_count; ++i) {
-    records.push_back(read_layer_record(layer_reader, large_document, cmyk_converter));
+    records.push_back(read_layer_record(layer_reader, large_document, cmyk_converter,
+                                        channel_record_budget,
+                                        resource_record_budget));
   }
 
   std::vector<DecodedLayer> decoded_layers;
@@ -984,7 +996,10 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
                                std::size_t* damaged_rows,
                                ParseBudgetTracker& budget,
                                ParseBudgetTracker& decompressed_budget,
-                               ParseLiveBudgetTracker& tracked_live_budget) {
+                               ParseLiveBudgetTracker& tracked_live_budget,
+                               ParseBudgetTracker& layer_record_budget,
+                               ParseBudgetTracker& channel_record_budget,
+                               ParseBudgetTracker& resource_record_budget) {
   has_merged_transparency = false;
   const auto layer_info_length = large_document
                                      ? read_section_length_u64(layer_reader, "layer info")
@@ -992,15 +1007,18 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
   if (layer_info_length == 0) {
     return {};
   }
-
-  const auto layer_info_end = layer_reader.position() + static_cast<std::size_t>(layer_info_length);
-  auto layers = read_layer_info_records(layer_reader, canvas_width, canvas_height, source_color_mode, depth,
+  if (layer_info_length > layer_reader.remaining()) {
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+        "QObject", "PSD layer info exceeds the layer and mask section"));
+  }
+  BigEndianReader layer_info_reader(
+      layer_reader.read_span(static_cast<std::size_t>(layer_info_length)));
+  auto layers = read_layer_info_records(layer_info_reader, canvas_width, canvas_height, source_color_mode, depth,
                                         global_light_angle, global_light_altitude, large_document, cmyk_icc,
                                         has_merged_transparency, notices, damaged_rows, budget,
-                                        decompressed_budget, tracked_live_budget);
-  if (layer_reader.position() < layer_info_end) {
-    layer_reader.skip(layer_info_end - layer_reader.position());
-  }
+                                        decompressed_budget, tracked_live_budget,
+                                        layer_record_budget, channel_record_budget,
+                                        resource_record_budget);
   if ((layer_info_length % 2U) != 0 && layer_reader.remaining() > 0) {
     layer_reader.skip(1);
   }
@@ -1009,7 +1027,8 @@ std::vector<Layer> read_layers(BigEndianReader& layer_reader, std::int32_t canva
 
 bool read_merged_transparency_flag_and_skip_layer_mask(BigEndianReader& reader,
                                                         std::uint64_t layer_mask_length,
-                                                        const Header& header) {
+                                                        const Header& header,
+                                                        ParseBudgetTracker& resource_record_budget) {
   if (layer_mask_length > reader.remaining()) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Invalid PSD layer and mask information length"));
   }
@@ -1053,6 +1072,7 @@ bool read_merged_transparency_flag_and_skip_layer_mask(BigEndianReader& reader,
         if (block_length > section_end - reader.position()) {
           break;
         }
+        resource_record_budget.charge(1U);
         if (key == deep_key) {
           if (block_length >= 2U) {
             has_merged_transparency = static_cast<std::int16_t>(reader.read_u16()) < 0;
@@ -1076,7 +1096,8 @@ bool DocumentIo::can_read(std::span<const std::uint8_t> bytes) noexcept {
   return bytes.size() >= 4 && bytes[0] == '8' && bytes[1] == 'B' && bytes[2] == 'P' && bytes[3] == 'S';
 }
 
-Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions options) {
+Document DocumentIo::read(std::span<const std::uint8_t> bytes,
+                          ReadOptions options) try {
   reset_parse_usage(options.usage);
   ParseBudgetTracker input_budget(options.budget.max_input_bytes,
                                   options.usage != nullptr ? &options.usage->input_bytes : nullptr,
@@ -1095,6 +1116,27 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       options.usage != nullptr ? &options.usage->tracked_live_bytes : nullptr,
       options.usage != nullptr ? &options.usage->tracked_live_bytes_high_water
                                : nullptr);
+  ParseBudgetTracker layer_record_budget(
+      options.budget.max_layer_records,
+      options.usage != nullptr ? &options.usage->layer_records : nullptr,
+      ParseBudgetDimension::LayerRecords);
+  ParseBudgetTracker channel_record_budget(
+      options.budget.max_channel_records,
+      options.usage != nullptr ? &options.usage->channel_records : nullptr,
+      ParseBudgetDimension::ChannelRecords);
+  ParseBudgetTracker resource_record_budget(
+      options.budget.max_resource_records,
+      options.usage != nullptr ? &options.usage->resource_records : nullptr,
+      ParseBudgetDimension::ResourceRecords);
+  ParseBudgetTracker descriptor_node_budget(
+      options.budget.max_descriptor_nodes,
+      options.usage != nullptr ? &options.usage->descriptor_nodes : nullptr,
+      ParseBudgetDimension::DescriptorNodes);
+  ParseBudgetTracker pattern_record_budget(
+      options.budget.max_pattern_records,
+      options.usage != nullptr ? &options.usage->pattern_records : nullptr,
+      ParseBudgetDimension::PatternRecords);
+  DescriptorNodeBudgetScope descriptor_scope(descriptor_node_budget);
   BigEndianReader reader(bytes);
   const auto header = read_header(reader);
   {
@@ -1107,6 +1149,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     }
   }
   const auto format = format_from_header(header);
+  channel_record_budget.charge(header.channels);
   if (header.depth != 8 && options.notices != nullptr) {
     options.notices->push_back(header.depth == 32
                                    ? "Converted 32-bit (HDR) color to 8-bit; precision and dynamic "
@@ -1116,6 +1159,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
 
   skip_length_block(reader, "color mode data");
   auto image_resources = read_length_block(reader, "image resources");
+  charge_image_resource_records(image_resources, resource_record_budget);
   const auto channel_resources = parse_composite_channel_resources(image_resources);
 
   Document document(static_cast<std::int32_t>(header.width), static_cast<std::int32_t>(header.height), format);
@@ -1183,7 +1227,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
   std::size_t damaged_rows = 0;
   if (options.prefer_flat_composite) {
     has_merged_transparency =
-        read_merged_transparency_flag_and_skip_layer_mask(reader, layer_mask_length, header);
+        read_merged_transparency_flag_and_skip_layer_mask(
+            reader, layer_mask_length, header, resource_record_budget);
 
     auto metadata = std::move(document.metadata());
     auto color_state = std::move(document.color_state());
@@ -1219,7 +1264,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
                               header.depth, global_light_angle, global_light_altitude, header.large_document,
                               cmyk_icc, has_merged_transparency, options.notices, &damaged_rows,
                               primary_pixel_budget, decompressed_budget,
-                              tracked_live_budget);
+                              tracked_live_budget, layer_record_budget,
+                              channel_record_budget, resource_record_budget);
     const auto add_layer = [&document](const Layer& source) {
       document.add_layer(clone_layer_with_document_ids(document, source));
     };
@@ -1268,6 +1314,7 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
       if (block_length > layer_reader.remaining()) {
         break;
       }
+      resource_record_budget.charge(1U);
       const auto payload =
           layer_reader.read_span(static_cast<std::size_t>(block_length));
       const auto* layer_info_key = header.depth == 16   ? "Lr16"
@@ -1284,7 +1331,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
             block_reader, document.width(), document.height(), header.color_mode, header.depth,
             global_light_angle, global_light_altitude, header.large_document, cmyk_icc,
             has_merged_transparency, options.notices, &damaged_rows, primary_pixel_budget,
-            decompressed_budget, tracked_live_budget);
+            decompressed_budget, tracked_live_budget, layer_record_budget,
+            channel_record_budget, resource_record_budget);
         // Always Photoshop's bottom-to-top order: legacy Patchy never wrote these
         // blocks, so the legacy-order heuristic used for the standard section
         // could only misfire here.
@@ -1328,7 +1376,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
         // payload moves — the argument-evaluation-order rule.
         auto decoded = parse_patterns_block(payload, cmyk_icc,
                                             decompressed_budget,
-                                            tracked_live_budget);
+                                            tracked_live_budget,
+                                            pattern_record_budget);
         for (auto& resource : decoded) {
           document.metadata().patterns.adopt(resource);
         }
@@ -1440,6 +1489,8 @@ Document DocumentIo::read(std::span<const std::uint8_t> bytes, ReadOptions optio
     apply_patchy_palette_resource(document, *palette);
   }
   return document;
+} catch (const DescriptorNodeBudgetSignal&) {
+  throw ParseBudgetExceeded(ParseBudgetDimension::DescriptorNodes);
 }
 
 Document DocumentIo::read_file(const std::filesystem::path& path, ReadOptions options) {

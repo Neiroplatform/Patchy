@@ -359,7 +359,9 @@ EncodedLayer encode_group(const Layer& layer, bool large_document) {
 }  // namespace
 
 LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
-                              const CmykColorConverter& cmyk) {
+                              const CmykColorConverter& cmyk,
+                              ParseBudgetTracker& channel_record_budget,
+                              ParseBudgetTracker& resource_record_budget) {
   LayerRecord record;
   bool saw_lfx2_block = false;
   std::optional<std::size_t> lrfx_block_index;
@@ -370,6 +372,14 @@ LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
   record.bounds = checked_record_rect(left, top, right, bottom, "layer");
 
   const auto channel_count = reader.read_u16();
+  const auto channel_info_bytes = large_document ? 10U : 6U;
+  if (static_cast<std::size_t>(channel_count) >
+      reader.remaining() / channel_info_bytes) {
+    throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+        "QObject", "PSD layer channel list is truncated"));
+  }
+  channel_record_budget.charge(channel_count);
+  record.channels.reserve(channel_count);
   for (std::uint16_t i = 0; i < channel_count; ++i) {
     record.channels.push_back(LayerChannelInfo{
         reader.read_u16(),
@@ -464,6 +474,7 @@ LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
       if (block_length > extra_end - extra_reader.position()) {
         break;
       }
+      resource_record_budget.charge(1U);
       auto payload = extra_reader.read_bytes(static_cast<std::size_t>(block_length));
       record.additional_blocks.push_back(
           UnknownPsdBlock{key, std::move(payload), wide_length});

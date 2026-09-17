@@ -222,10 +222,14 @@ bool read_plane(BigEndianReader& reader, DecodedPlane& plane, std::size_t contai
 std::optional<PatternResource> parse_single_pattern(BigEndianReader& reader,
                                                     const CmykToRgbTransform* cmyk_icc,
                                                     ParseBudgetTracker* decompressed_budget,
-                                                    ParseLiveBudgetTracker* tracked_live_budget) {
+                                                    ParseLiveBudgetTracker* tracked_live_budget,
+                                                    ParseBudgetTracker* pattern_record_budget) {
   const auto declared_length = reader.read_u32();
   if (declared_length < 16U || declared_length > reader.remaining()) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD pattern length is invalid"));
+  }
+  if (pattern_record_budget != nullptr) {
+    pattern_record_budget->charge(1U);
   }
   const auto pattern_end = reader.position() + declared_length;
   std::optional<PatternResource> result;
@@ -391,13 +395,15 @@ namespace {
 std::vector<PatternResource> parse_patterns_block_impl(
     std::span<const std::uint8_t> payload, const CmykToRgbTransform* cmyk_icc,
     ParseBudgetTracker* decompressed_budget,
-    ParseLiveBudgetTracker* tracked_live_budget) {
+    ParseLiveBudgetTracker* tracked_live_budget,
+    ParseBudgetTracker* pattern_record_budget) {
   std::vector<PatternResource> resources;
   BigEndianReader reader(payload);
   try {
     while (reader.remaining() >= 16U) {
       auto resource = parse_single_pattern(reader, cmyk_icc, decompressed_budget,
-                                           tracked_live_budget);
+                                           tracked_live_budget,
+                                           pattern_record_budget);
       if (resource.has_value()) {
         resources.push_back(std::move(*resource));
       }
@@ -414,22 +420,25 @@ std::vector<PatternResource> parse_patterns_block_impl(
 
 std::vector<PatternResource> parse_patterns_block(std::span<const std::uint8_t> payload,
                                                   const CmykToRgbTransform* cmyk_icc) {
-  return parse_patterns_block_impl(payload, cmyk_icc, nullptr, nullptr);
+  return parse_patterns_block_impl(payload, cmyk_icc, nullptr, nullptr,
+                                   nullptr);
 }
 
 std::vector<PatternResource> parse_patterns_block(
     std::span<const std::uint8_t> payload, const CmykToRgbTransform* cmyk_icc,
     ParseBudgetTracker& decompressed_budget) {
   return parse_patterns_block_impl(payload, cmyk_icc, &decompressed_budget,
-                                   nullptr);
+                                   nullptr, nullptr);
 }
 
 std::vector<PatternResource> parse_patterns_block(
     std::span<const std::uint8_t> payload, const CmykToRgbTransform* cmyk_icc,
     ParseBudgetTracker& decompressed_budget,
-    ParseLiveBudgetTracker& tracked_live_budget) {
+    ParseLiveBudgetTracker& tracked_live_budget,
+    ParseBudgetTracker& pattern_record_budget) {
   return parse_patterns_block_impl(payload, cmyk_icc, &decompressed_budget,
-                                   &tracked_live_budget);
+                                   &tracked_live_budget,
+                                   &pattern_record_budget);
 }
 
 std::vector<std::string> pattern_ids_in_block(std::span<const std::uint8_t> payload) {

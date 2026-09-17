@@ -29,6 +29,16 @@ struct ParseBudget {
   // Conservative logical reservations for instrumented parser-owned temporary
   // buffers. This is not an RSS, allocator-capacity, or committed-WASM-heap cap.
   std::uint64_t max_tracked_live_bytes{std::numeric_limits<std::uint64_t>::max()};
+  // Serialized layer records, including group-boundary records.
+  std::uint64_t max_layer_records{std::numeric_limits<std::uint64_t>::max()};
+  // Composite/saved channel declarations plus every per-layer channel record.
+  std::uint64_t max_channel_records{std::numeric_limits<std::uint64_t>::max()};
+  // Complete image-resource plus per-layer/document-global tagged records.
+  std::uint64_t max_resource_records{std::numeric_limits<std::uint64_t>::max()};
+  // Descriptor object/value/list/reference/array nodes parsed during import.
+  std::uint64_t max_descriptor_nodes{std::numeric_limits<std::uint64_t>::max()};
+  // Complete records admitted from document-global Patt/Pat2/Pat3 blocks.
+  std::uint64_t max_pattern_records{std::numeric_limits<std::uint64_t>::max()};
 };
 
 struct ParseUsage {
@@ -39,6 +49,11 @@ struct ParseUsage {
   // A completed or unwound read always leaves tracked_live_bytes at zero.
   std::uint64_t tracked_live_bytes{0};
   std::uint64_t tracked_live_bytes_high_water{0};
+  std::uint64_t layer_records{0};
+  std::uint64_t channel_records{0};
+  std::uint64_t resource_records{0};
+  std::uint64_t descriptor_nodes{0};
+  std::uint64_t pattern_records{0};
 };
 
 enum class ParseBudgetDimension : std::uint8_t {
@@ -46,6 +61,11 @@ enum class ParseBudgetDimension : std::uint8_t {
   PrimaryPixelBytes = 1,
   DecompressedBytes = 2,
   TrackedLiveBytes = 3,
+  LayerRecords = 4,
+  ChannelRecords = 5,
+  ResourceRecords = 6,
+  DescriptorNodes = 7,
+  PatternRecords = 8,
 };
 
 class ParseBudgetExceeded final : public std::length_error {

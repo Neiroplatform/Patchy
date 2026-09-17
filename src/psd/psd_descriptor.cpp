@@ -1,12 +1,43 @@
 #include "psd/psd_descriptor.hpp"
+#include "psd/psd_parse_budget_internal.hpp"
 
 #include "support/translate_noop.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <stdexcept>
+#include <utility>
 
 namespace patchy::psd {
+
+namespace {
+
+ParseBudgetTracker*& active_descriptor_node_budget() noexcept {
+  thread_local ParseBudgetTracker* tracker = nullptr;
+  return tracker;
+}
+
+}  // namespace
+
+DescriptorNodeBudgetScope::DescriptorNodeBudgetScope(
+    ParseBudgetTracker& tracker) noexcept
+    : previous_(std::exchange(active_descriptor_node_budget(), &tracker)) {}
+
+DescriptorNodeBudgetScope::~DescriptorNodeBudgetScope() {
+  active_descriptor_node_budget() = previous_;
+}
+
+void charge_active_descriptor_nodes(std::uint64_t count) {
+  auto* tracker = active_descriptor_node_budget();
+  if (tracker == nullptr || count == 0U) {
+    return;
+  }
+  try {
+    tracker->charge(count);
+  } catch (const ParseBudgetExceeded&) {
+    throw DescriptorNodeBudgetSignal{};
+  }
+}
 
 std::array<char, 4> read_signature(BigEndianReader& reader) {
   const auto bytes = reader.read_bytes(4);
@@ -174,6 +205,7 @@ DescriptorValue read_descriptor_value(BigEndianReader& reader, const std::array<
     value.type = DescriptorValue::Type::List;
     const auto count = reader.read_u32();
     check_descriptor_count(count, 4, reader);
+    charge_active_descriptor_nodes(count);
     value.list_value.reserve(count);
     for (std::uint32_t index = 0; index < count; ++index) {
       value.list_value.push_back(read_descriptor_value(reader, read_signature(reader)));
@@ -201,6 +233,7 @@ DescriptorValue read_descriptor_value(BigEndianReader& reader, const std::array<
     value.unit = key_string(read_signature(reader));
     const auto count = reader.read_u32();
     check_descriptor_count(count, 8, reader);
+    charge_active_descriptor_nodes(count);
     value.unit_floats.reserve(count);
     for (std::uint32_t index = 0; index < count; ++index) {
       value.unit_floats.push_back(read_f64(reader));
@@ -211,7 +244,16 @@ DescriptorValue read_descriptor_value(BigEndianReader& reader, const std::array<
     // Object array: a u32 item count followed by a standard descriptor body (name,
     // class id, key count, keys) whose list values hold the per-item data.
     value.type = DescriptorValue::Type::ObjectArray;
-    value.integer_value = static_cast<std::int32_t>(reader.read_u32());
+    const auto count = reader.read_u32();
+    // The shortest possible descriptor is an empty Unicode name (4 bytes), a
+    // one-byte long-form class id (5), and its item count (4). Reject a header
+    // that cannot contain even that before admitting the logical rows.
+    if (reader.remaining() < 13U) {
+      throw std::runtime_error(PATCHY_TRANSLATE_NOOP(
+          "QObject", "Invalid PSD object array descriptor"));
+    }
+    charge_active_descriptor_nodes(count);
+    value.integer_value = static_cast<std::int32_t>(count);
     value.object_value = std::make_shared<DescriptorObject>(read_descriptor(reader));
     return value;
   }
@@ -220,6 +262,7 @@ DescriptorValue read_descriptor_value(BigEndianReader& reader, const std::array<
     value.type = DescriptorValue::Type::Reference;
     const auto count = reader.read_u32();
     check_descriptor_count(count, 4, reader);
+    charge_active_descriptor_nodes(count);
     value.reference_items.reserve(count);
     for (std::uint32_t index = 0; index < count; ++index) {
       DescriptorReferenceItem item;
@@ -251,6 +294,7 @@ DescriptorObject read_descriptor(BigEndianReader& reader) {
   object.class_id = read_descriptor_id(reader, object.class_id_long_form);
   const auto item_count = reader.read_u32();
   check_descriptor_count(item_count, 8, reader);
+  charge_active_descriptor_nodes(1U + static_cast<std::uint64_t>(item_count));
   object.key_order.reserve(item_count);
   for (std::uint32_t index = 0; index < item_count; ++index) {
     bool key_long_form = false;

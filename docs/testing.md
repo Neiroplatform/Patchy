@@ -63,6 +63,42 @@ state, and committed WebAssembly heap pages stay outside this dimension. Large I
 CMYK conversion uses a fixed 16-worker scratch envelope so the exact-fit boundary is
 identical across native and wasm worker topologies.
 
+The five structural limits are independent aggregate record-count guards:
+
+- `max_layer_records` counts physical serialized layer records, including group
+  boundary records.
+- `max_channel_records` counts the header's composite/saved-channel declarations
+  plus every traversed per-layer channel-table record.
+- `max_resource_records` counts complete image-resource entries and complete
+  per-layer or document-global tagged records.
+- `max_descriptor_nodes` counts descriptor nodes traversed by the descriptor reader.
+  This is parser work, not a count of unique semantic objects: repeated visits to the
+  same bytes are charged again, and duplicate descriptor keys still consume nodes.
+- `max_pattern_records` counts valid-length records admitted from document-global
+  `Patt`, `Pat2`, and `Pat3` blocks, even when later body parsing recovers from damage.
+
+Their matching `ParseUsage` fields are `layer_records`, `channel_records`,
+`resource_records`, `descriptor_nodes`, and `pattern_records`; the typed rejection
+dimensions are `LayerRecords`, `ChannelRecords`, `ResourceRecords`,
+`DescriptorNodes`, and `PatternRecords`. All fields and enum values are appended, and
+all limits default to unlimited. Existing local format caps remain separate validity
+checks. A count or record header must first pass the applicable structural and
+remaining-input check, then the aggregate charge succeeds before `reserve`, recursion,
+or the item loop. Consequently, an impossible header remains a malformed-input error
+rather than being converted into a budget rejection. A successful charge remains in
+usage if later semantic parsing or recovery fails, and typed budget rejection must
+escape recovery catches.
+
+Structural usage covers only records the selected read path traverses. In particular,
+`prefer_flat_composite` does not charge skipped layer records, their channel and tagged
+records, or pattern payloads. Header channels and image resources already traversed
+before that branch still count. For 16/32-bit input with empty standard layer info, the
+merged-transparency scan also charges each document-global tagged-record header it
+actually inspects while looking for `Lr16`/`Lr32`, but it does not decode or charge the
+patterns inside skipped payloads. Finite production values and caller wiring belong to
+downstream `DP-010`, after corpus and native/WASM calibration. Until then, product
+behavior remains source-compatible and unlimited.
+
 The `input_budget`, `primary_pixel_budget`, and `psd_decompressed_budget` tests pin
 exact-fit and one-byte-short behavior, aggregate accounting, compression-independent
 source-depth accounting, file/span behavior where applicable, retained-flat and
@@ -74,7 +110,9 @@ The tracked-live cases additionally pin RAII move/release semantics, decompresse
 admission precedence, zero current usage after failure, RAW/RLE/ZIP-prediction peaks,
 and typed-error escape through pattern and Smart Filter recovery catches.
 `ParseBudget` and `ParseUsage` are aggregate-initializable public structs: add fields
-only at the end and rebuild all consumers when their layout changes.
+only at the end. Appending fields preserves prior source aggregate positions, and
+appending enum values preserves earlier numeric values, but the public struct layouts
+change: clean-rebuild every ABI consumer rather than mixing old and new objects.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

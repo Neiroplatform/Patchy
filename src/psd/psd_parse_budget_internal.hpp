@@ -257,10 +257,33 @@ public:
   std::vector<std::uint8_t> bytes;
 };
 
+// PSD descriptor helpers are reused by ABR/ASL/GRD and several recovery-oriented
+// codecs. A scoped, thread-local tracker lets a DocumentIo read aggregate every
+// descriptor node without changing those other formats or threading an option
+// through every semantic decoder. The private signal deliberately does not derive
+// from std::exception, so legacy "damaged optional block" catches cannot turn a
+// structural-budget rejection into a silent fallback; DocumentIo translates it
+// back to the public typed ParseBudgetExceeded at its boundary.
+struct DescriptorNodeBudgetSignal final {};
+
+class DescriptorNodeBudgetScope {
+public:
+  explicit DescriptorNodeBudgetScope(ParseBudgetTracker& tracker) noexcept;
+  ~DescriptorNodeBudgetScope();
+  DescriptorNodeBudgetScope(const DescriptorNodeBudgetScope&) = delete;
+  DescriptorNodeBudgetScope& operator=(const DescriptorNodeBudgetScope&) = delete;
+
+private:
+  ParseBudgetTracker* previous_{nullptr};
+};
+
+void charge_active_descriptor_nodes(std::uint64_t count);
+
 [[nodiscard]] std::vector<PatternResource> parse_patterns_block(
     std::span<const std::uint8_t> payload, const CmykToRgbTransform* cmyk_icc,
     ParseBudgetTracker& decompressed_budget,
-    ParseLiveBudgetTracker& tracked_live_budget);
+    ParseLiveBudgetTracker& tracked_live_budget,
+    ParseBudgetTracker& pattern_record_budget);
 
 [[nodiscard]] SmartFilterEffectsBlock parse_filter_effects_block(
     std::string key, std::shared_ptr<const std::vector<std::uint8_t>> payload,

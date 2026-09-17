@@ -510,7 +510,9 @@ std::optional<LayerStyle> parse_patchy_layer_style(std::span<const std::uint8_t>
 // mask/blending-ranges/name and the tagged-block walk) and the write/encode
 // pipeline for the layer info section (definitions in psd_layer_records.cpp).
 LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
-                              const CmykColorConverter& cmyk);
+                              const CmykColorConverter& cmyk,
+                              ParseBudgetTracker& channel_record_budget,
+                              ParseBudgetTracker& resource_record_budget);
 // synthesized_photoshop_layer_id: nonzero writes a fresh 'lyid' block for a
 // smart-object layer that has none preserved (see write_layer_record).
 void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bool strip_smart_object_blocks,
@@ -587,6 +589,8 @@ void parse_document_path_resources(Document& document, std::span<const std::uint
 void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t id,
                            std::vector<std::uint8_t> payload);
 void remove_image_resource(std::vector<ImageResource>& resources, std::uint16_t id);
+void charge_image_resource_records(std::span<const std::uint8_t> resources,
+                                   ParseBudgetTracker& budget);
 std::optional<std::vector<std::uint8_t>> find_image_resource_payload(
     std::span<const std::uint8_t> resources, std::uint16_t id);
 std::optional<std::span<const std::uint8_t>> find_image_resource_payload_view(

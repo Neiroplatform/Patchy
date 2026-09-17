@@ -165,6 +165,48 @@ bool visit_image_resource_payloads(std::span<const std::uint8_t> bytes,
   return true;
 }
 
+}  // namespace
+
+void charge_image_resource_records(std::span<const std::uint8_t> resources,
+                                   ParseBudgetTracker& budget) {
+  BigEndianReader reader(resources);
+  while (reader.remaining() > 0U) {
+    if (reader.remaining() < 12U) {
+      return;
+    }
+    const auto signature = read_signature(reader);
+    if (signature != std::array<char, 4>{'8', 'B', 'I', 'M'} &&
+        signature != std::array<char, 4>{'8', 'B', '6', '4'}) {
+      return;
+    }
+    (void)reader.read_u16();
+    const auto name_length = static_cast<std::size_t>(reader.read_u8());
+    if (name_length > reader.remaining()) {
+      return;
+    }
+    reader.skip(name_length);
+    if (((name_length + 1U) % 2U) != 0U) {
+      if (reader.remaining() == 0U) {
+        return;
+      }
+      reader.skip(1U);
+    }
+    if (reader.remaining() < 4U) {
+      return;
+    }
+    const auto payload_length = static_cast<std::size_t>(reader.read_u32());
+    const auto padding = payload_length % 2U;
+    if (payload_length > reader.remaining() ||
+        padding > reader.remaining() - payload_length) {
+      return;
+    }
+    budget.charge(1U);
+    reader.skip(payload_length + padding);
+  }
+}
+
+namespace {
+
 void write_image_resource(BigEndianWriter& writer, const ImageResource& resource) {
   write_signature(writer, resource.signature);
   writer.write_u16(resource.id);

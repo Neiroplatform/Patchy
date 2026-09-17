@@ -119,8 +119,9 @@ std::vector<std::uint8_t> flat_cmyk_raw_psd(std::uint16_t depth) {
   return writer.bytes();
 }
 
-std::vector<std::uint8_t> deep_layer_psd(std::uint16_t depth,
-                                         bool corrupt_zip = false) {
+std::vector<std::uint8_t> deep_layer_psd(
+    std::uint16_t depth, bool corrupt_zip = false,
+    bool dummy_global_before_deep = false) {
   CHECK(depth == 16U || depth == 32U);
   const auto sample_bytes = static_cast<std::size_t>(depth / 8U);
   const std::vector<std::uint8_t> raw_plane(2U * sample_bytes, 0U);
@@ -179,6 +180,11 @@ std::vector<std::uint8_t> deep_layer_psd(std::uint16_t depth,
   patchy::psd::BigEndianWriter layer_mask;
   layer_mask.write_u32(0U);
   layer_mask.write_u32(0U);
+  if (dummy_global_before_deep) {
+    write_ascii4(layer_mask, "8BIM");
+    write_ascii4(layer_mask, "zzzz");
+    layer_mask.write_u32(0U);
+  }
   write_ascii4(layer_mask, "8BIM");
   write_ascii4(layer_mask, depth == 16U ? "Lr16" : "Lr32");
   layer_mask.write_u32(static_cast<std::uint32_t>(layer_info.bytes().size()));
@@ -269,6 +275,132 @@ std::vector<std::uint8_t> damaged_rle_layer_psd() {
     writer.write_u8(0U);
   }
   return writer.bytes();
+}
+
+void write_tagged_block(patchy::psd::BigEndianWriter& writer,
+                        const char (&key)[5],
+                        std::span<const std::uint8_t> payload) {
+  write_ascii4(writer, "8BIM");
+  write_ascii4(writer, key);
+  CHECK(payload.size() <= std::numeric_limits<std::uint32_t>::max());
+  writer.write_u32(static_cast<std::uint32_t>(payload.size()));
+  writer.write_bytes(payload);
+  if (payload.size() % 2U != 0U) {
+    writer.write_u8(0U);
+  }
+}
+
+std::vector<std::uint8_t> structural_records_psd(
+    std::span<const std::uint8_t> layer_block_payload = {},
+    const char (&layer_block_key)[5] = "zzzz",
+    std::span<const std::uint8_t> global_block_payload = {},
+    const char (&global_block_key)[5] = "zzzy") {
+  patchy::psd::BigEndianWriter image_resources;
+  write_ascii4(image_resources, "8BIM");
+  image_resources.write_u16(0x7fffU);
+  write_pascal_padded(image_resources, "", 2U);
+  image_resources.write_u32(0U);
+
+  patchy::psd::BigEndianWriter extra;
+  extra.write_u32(0U);
+  extra.write_u32(0U);
+  write_pascal_padded(extra, "Structural", 4U);
+  write_tagged_block(extra, layer_block_key, layer_block_payload);
+
+  patchy::psd::BigEndianWriter layer_info;
+  layer_info.write_u16(1U);
+  layer_info.write_u32(0U);
+  layer_info.write_u32(0U);
+  layer_info.write_u32(1U);
+  layer_info.write_u32(1U);
+  layer_info.write_u16(3U);
+  for (std::uint16_t channel = 0; channel < 3U; ++channel) {
+    layer_info.write_u16(channel);
+    layer_info.write_u32(3U);  // RAW marker plus one sample.
+  }
+  write_ascii4(layer_info, "8BIM");
+  write_ascii4(layer_info, "norm");
+  layer_info.write_u8(255U);
+  layer_info.write_u8(0U);
+  layer_info.write_u8(0U);
+  layer_info.write_u8(0U);
+  layer_info.write_u32(static_cast<std::uint32_t>(extra.bytes().size()));
+  layer_info.write_bytes(extra.bytes());
+  for (std::uint16_t channel = 0; channel < 3U; ++channel) {
+    layer_info.write_u16(0U);
+    layer_info.write_u8(static_cast<std::uint8_t>(10U + channel));
+  }
+  if (layer_info.bytes().size() % 2U != 0U) {
+    layer_info.write_u8(0U);
+  }
+
+  patchy::psd::BigEndianWriter layer_mask;
+  layer_mask.write_u32(static_cast<std::uint32_t>(layer_info.bytes().size()));
+  layer_mask.write_bytes(layer_info.bytes());
+  layer_mask.write_u32(0U);
+  write_tagged_block(layer_mask, global_block_key, global_block_payload);
+
+  patchy::psd::BigEndianWriter writer;
+  patchy::psd::write_header(
+      writer, patchy::psd::Header{false, 3, 1, 1, 8, 3});
+  writer.write_u32(0U);
+  writer.write_u32(static_cast<std::uint32_t>(image_resources.bytes().size()));
+  writer.write_bytes(image_resources.bytes());
+  writer.write_u32(static_cast<std::uint32_t>(layer_mask.bytes().size()));
+  writer.write_bytes(layer_mask.bytes());
+  writer.write_u16(0U);
+  writer.write_u8(10U);
+  writer.write_u8(11U);
+  writer.write_u8(12U);
+  return writer.bytes();
+}
+
+std::vector<std::uint8_t> descriptor_block_payload() {
+  patchy::psd::DescriptorObject descriptor;
+  descriptor.class_id = "null";
+  patchy::psd::DescriptorValue value;
+  value.type = patchy::psd::DescriptorValue::Type::Integer;
+  value.integer_value = 7;
+  descriptor.values["value"] = value;
+
+  patchy::psd::BigEndianWriter writer;
+  writer.write_u32(16U);
+  patchy::psd::write_descriptor(writer, descriptor);
+  return writer.bytes();
+}
+
+std::vector<std::uint8_t> descriptor_object_array_block_payload(
+    std::int32_t row_count) {
+  auto rows = std::make_shared<patchy::psd::DescriptorObject>();
+  rows->class_id = "null";
+
+  patchy::psd::DescriptorValue value;
+  value.type = patchy::psd::DescriptorValue::Type::ObjectArray;
+  value.integer_value = row_count;
+  value.object_value = std::move(rows);
+
+  patchy::psd::DescriptorObject descriptor;
+  descriptor.class_id = "null";
+  descriptor.values["rows"] = std::move(value);
+
+  patchy::psd::BigEndianWriter writer;
+  writer.write_u32(16U);
+  patchy::psd::write_descriptor(writer, descriptor);
+  return writer.bytes();
+}
+
+patchy::PatternResource budget_pattern(std::string id, std::uint8_t value) {
+  patchy::PatternResource pattern;
+  pattern.id = std::move(id);
+  pattern.name = "Structural budget pattern";
+  pattern.provenance = patchy::PatternProvenance::Authored;
+  pattern.tile = patchy::PixelBuffer(1, 1, patchy::PixelFormat::rgba8());
+  auto* pixel = pattern.tile.pixel(0, 0);
+  pixel[0] = value;
+  pixel[1] = static_cast<std::uint8_t>(value + 1U);
+  pixel[2] = static_cast<std::uint8_t>(value + 2U);
+  pixel[3] = 255U;
+  return pattern;
 }
 
 patchy::PixelBuffer rgb_pixels(std::int32_t width, std::int32_t height) {
@@ -384,6 +516,314 @@ void psd_decompressed_budget_api_defaults_and_usage_reset() {
   CHECK(usage.decompressed_bytes == 0U);
   CHECK(usage.tracked_live_bytes == 0U);
   CHECK(usage.tracked_live_bytes_high_water == 0U);
+}
+
+void psd_structural_budget_api_defaults_enum_and_usage_reset() {
+  const auto unlimited = std::numeric_limits<std::uint64_t>::max();
+  const patchy::psd::ParseBudget defaults;
+  CHECK(defaults.max_layer_records == unlimited);
+  CHECK(defaults.max_channel_records == unlimited);
+  CHECK(defaults.max_resource_records == unlimited);
+  CHECK(defaults.max_descriptor_nodes == unlimited);
+  CHECK(defaults.max_pattern_records == unlimited);
+
+  const patchy::psd::ParseBudget positional{11U, 22U, 33U, 44U};
+  CHECK(positional.max_primary_pixel_bytes == 11U);
+  CHECK(positional.max_input_bytes == 22U);
+  CHECK(positional.max_decompressed_bytes == 33U);
+  CHECK(positional.max_tracked_live_bytes == 44U);
+  CHECK(positional.max_layer_records == unlimited);
+  CHECK(positional.max_channel_records == unlimited);
+  CHECK(positional.max_resource_records == unlimited);
+  CHECK(positional.max_descriptor_nodes == unlimited);
+  CHECK(positional.max_pattern_records == unlimited);
+
+  const patchy::psd::ParseUsage positional_usage{1U, 2U, 3U, 4U, 5U};
+  CHECK(positional_usage.layer_records == 0U);
+  CHECK(positional_usage.channel_records == 0U);
+  CHECK(positional_usage.resource_records == 0U);
+  CHECK(positional_usage.descriptor_nodes == 0U);
+  CHECK(positional_usage.pattern_records == 0U);
+
+  using DimensionType =
+      std::underlying_type_t<patchy::psd::ParseBudgetDimension>;
+  CHECK(static_cast<DimensionType>(
+            patchy::psd::ParseBudgetDimension::LayerRecords) == 4U);
+  CHECK(static_cast<DimensionType>(
+            patchy::psd::ParseBudgetDimension::ChannelRecords) == 5U);
+  CHECK(static_cast<DimensionType>(
+            patchy::psd::ParseBudgetDimension::ResourceRecords) == 6U);
+  CHECK(static_cast<DimensionType>(
+            patchy::psd::ParseBudgetDimension::DescriptorNodes) == 7U);
+  CHECK(static_cast<DimensionType>(
+            patchy::psd::ParseBudgetDimension::PatternRecords) == 8U);
+
+  const auto valid = flat_psd(8U, 0U);
+  patchy::psd::ParseUsage usage;
+  usage.layer_records = 51U;
+  usage.channel_records = 52U;
+  usage.resource_records = 53U;
+  usage.descriptor_nodes = 54U;
+  usage.pattern_records = 55U;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  CHECK(patchy::psd::DocumentIo::read(valid, options).width() == 2);
+  CHECK(usage.layer_records == 0U);
+  CHECK(usage.channel_records == 3U);
+  CHECK(usage.resource_records == 0U);
+  CHECK(usage.descriptor_nodes == 0U);
+  CHECK(usage.pattern_records == 0U);
+
+  usage.layer_records = 61U;
+  usage.channel_records = 62U;
+  usage.resource_records = 63U;
+  usage.descriptor_nodes = 64U;
+  usage.pattern_records = 65U;
+  const std::array<std::uint8_t, 4> malformed{'8', 'B', 'P', 'S'};
+  bool malformed_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read(malformed, options);
+  } catch (const patchy::psd::ParseBudgetExceeded&) {
+    CHECK(false);
+  } catch (const std::exception&) {
+    malformed_rejected = true;
+  }
+  CHECK(malformed_rejected);
+  CHECK(usage.layer_records == 0U);
+  CHECK(usage.channel_records == 0U);
+  CHECK(usage.resource_records == 0U);
+  CHECK(usage.descriptor_nodes == 0U);
+  CHECK(usage.pattern_records == 0U);
+}
+
+void psd_structural_budget_layers_channels_and_resources_are_exact() {
+  const auto bytes = structural_records_psd();
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_layer_records = 1U;
+  options.budget.max_channel_records = 6U;
+  options.budget.max_resource_records = 3U;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options).layers().size() == 1U);
+  CHECK(usage.layer_records == 1U);
+  CHECK(usage.channel_records == 6U);
+  CHECK(usage.resource_records == 3U);
+
+  const auto expect_rejection = [&](patchy::psd::ParseBudgetDimension dimension,
+                                    std::uint64_t expected_layers,
+                                    std::uint64_t expected_channels,
+                                    std::uint64_t expected_resources) {
+    try {
+      (void)patchy::psd::DocumentIo::read(bytes, options);
+      CHECK(false);
+    } catch (const patchy::psd::ParseBudgetExceeded& error) {
+      CHECK(error.dimension() == dimension);
+      CHECK(std::string(error.what()) ==
+            "This PSD/PSB document is too large to import safely.");
+    }
+    CHECK(usage.layer_records == expected_layers);
+    CHECK(usage.channel_records == expected_channels);
+    CHECK(usage.resource_records == expected_resources);
+  };
+
+  options.budget.max_layer_records = 0U;
+  expect_rejection(patchy::psd::ParseBudgetDimension::LayerRecords,
+                   0U, 3U, 1U);
+  options.budget.max_layer_records = 1U;
+  options.budget.max_channel_records = 5U;
+  expect_rejection(patchy::psd::ParseBudgetDimension::ChannelRecords,
+                   1U, 3U, 1U);
+  options.budget.max_channel_records = 6U;
+  options.budget.max_resource_records = 2U;
+  expect_rejection(patchy::psd::ParseBudgetDimension::ResourceRecords,
+                   1U, 6U, 2U);
+}
+
+void psd_structural_budget_descriptor_rejection_escapes_recovery() {
+  const auto payload = descriptor_block_payload();
+  const auto bytes = structural_records_psd(payload, "SoCo");
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_descriptor_nodes = 2U;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options).layers().size() == 1U);
+  CHECK(usage.descriptor_nodes == 2U);
+
+  options.budget.max_descriptor_nodes = 1U;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::DescriptorNodes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
+  }
+  // Root plus declared fields are one admission, so the rejected aggregate
+  // leaves the usage unchanged.
+  CHECK(usage.descriptor_nodes == 0U);
+}
+
+void psd_structural_budget_object_array_charges_rows_before_nested_descriptor() {
+  const auto payload = descriptor_object_array_block_payload(3);
+  const auto bytes = structural_records_psd(payload, "SoCo");
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_descriptor_nodes = 6U;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options).layers().size() == 1U);
+  CHECK(usage.descriptor_nodes == 6U);
+
+  options.budget.max_descriptor_nodes = 5U;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::DescriptorNodes);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
+  }
+  // The outer descriptor and the independently validated ObAr row count are
+  // admitted first. The nested empty descriptor is one atomic rejected node.
+  CHECK(usage.descriptor_nodes == 5U);
+}
+
+void psd_structural_budget_layer_count_uses_declared_subsection() {
+  auto bytes = structural_records_psd();
+  // Header (26), color-mode length (4), image-resource length + bytes (16),
+  // then the outer layer/mask length (4). Leave only the signed layer count in
+  // the declared layer-info subsection while retaining ample trailing bytes.
+  constexpr std::size_t kLayerInfoLengthOffset = 50U;
+  CHECK(bytes.size() > kLayerInfoLengthOffset + 4U);
+  bytes[kLayerInfoLengthOffset + 0U] = 0U;
+  bytes[kLayerInfoLengthOffset + 1U] = 0U;
+  bytes[kLayerInfoLengthOffset + 2U] = 0U;
+  bytes[kLayerInfoLengthOffset + 3U] = 2U;
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_layer_records = 0U;
+  bool malformed_rejected = false;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+  } catch (const patchy::psd::ParseBudgetExceeded&) {
+    CHECK(false);
+  } catch (const std::exception&) {
+    malformed_rejected = true;
+  }
+  CHECK(malformed_rejected);
+  CHECK(usage.layer_records == 0U);
+}
+
+void psd_structural_budget_prefer_flat_charges_only_traversed_records() {
+  const auto descriptor_payload = descriptor_block_payload();
+  const std::array<patchy::PatternResource, 1> patterns{
+      budget_pattern("33333333-3333-3333-3333-333333333333", 30U)};
+  const auto pattern_payload = patchy::psd::serialize_patterns_block(patterns);
+  const auto bytes = structural_records_psd(
+      descriptor_payload, "SoCo", pattern_payload, "Patt");
+
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.prefer_flat_composite = true;
+  options.usage = &usage;
+  options.budget.max_layer_records = 0U;
+  options.budget.max_channel_records = 3U;
+  options.budget.max_resource_records = 1U;
+  options.budget.max_descriptor_nodes = 0U;
+  options.budget.max_pattern_records = 0U;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options).width() == 1);
+  CHECK(usage.layer_records == 0U);
+  CHECK(usage.channel_records == 3U);
+  CHECK(usage.resource_records == 1U);
+  CHECK(usage.descriptor_nodes == 0U);
+  CHECK(usage.pattern_records == 0U);
+}
+
+void psd_structural_budget_prefer_flat_deep_headers_are_exact() {
+  for (const auto depth : {16U, 32U}) {
+    const auto bytes = deep_layer_psd(
+        static_cast<std::uint16_t>(depth), false, true);
+    patchy::psd::ParseUsage usage;
+    patchy::psd::ReadOptions options;
+    options.prefer_flat_composite = true;
+    options.usage = &usage;
+    options.budget.max_layer_records = 0U;
+    options.budget.max_channel_records = 3U;
+    options.budget.max_resource_records = 2U;
+    options.budget.max_descriptor_nodes = 0U;
+    options.budget.max_pattern_records = 0U;
+    CHECK(patchy::psd::DocumentIo::read(bytes, options).width() == 2);
+    CHECK(usage.layer_records == 0U);
+    CHECK(usage.channel_records == 3U);
+    CHECK(usage.resource_records == 2U);
+    CHECK(usage.descriptor_nodes == 0U);
+    CHECK(usage.pattern_records == 0U);
+
+    options.budget.max_resource_records = 1U;
+    try {
+      (void)patchy::psd::DocumentIo::read(bytes, options);
+      CHECK(false);
+    } catch (const patchy::psd::ParseBudgetExceeded& error) {
+      CHECK(error.dimension() ==
+            patchy::psd::ParseBudgetDimension::ResourceRecords);
+      CHECK(std::string(error.what()) ==
+            "This PSD/PSB document is too large to import safely.");
+    }
+    CHECK(usage.layer_records == 0U);
+    CHECK(usage.channel_records == 3U);
+    CHECK(usage.resource_records == 1U);
+    CHECK(usage.descriptor_nodes == 0U);
+    CHECK(usage.pattern_records == 0U);
+  }
+}
+
+void psd_structural_budget_patterns_aggregate_and_validate_before_charge() {
+  const std::array<patchy::PatternResource, 2> patterns{
+      budget_pattern("11111111-1111-1111-1111-111111111111", 10U),
+      budget_pattern("22222222-2222-2222-2222-222222222222", 20U)};
+  const auto payload = patchy::psd::serialize_patterns_block(patterns);
+  const auto bytes = structural_records_psd({}, "zzzz", payload, "Patt");
+  patchy::psd::ParseUsage usage;
+  patchy::psd::ReadOptions options;
+  options.usage = &usage;
+  options.budget.max_pattern_records = 2U;
+  CHECK(patchy::psd::DocumentIo::read(bytes, options)
+            .metadata().patterns.patterns.size() == 2U);
+  CHECK(usage.pattern_records == 2U);
+
+  options.budget.max_pattern_records = 1U;
+  try {
+    (void)patchy::psd::DocumentIo::read(bytes, options);
+    CHECK(false);
+  } catch (const patchy::psd::ParseBudgetExceeded& error) {
+    CHECK(error.dimension() ==
+          patchy::psd::ParseBudgetDimension::PatternRecords);
+    CHECK(std::string(error.what()) ==
+          "This PSD/PSB document is too large to import safely.");
+  }
+  CHECK(usage.pattern_records == 1U);
+
+  const std::array<patchy::PatternResource, 1> first_pattern{patterns.front()};
+  auto malformed_payload =
+      patchy::psd::serialize_patterns_block(first_pattern);
+  patchy::psd::BigEndianWriter invalid_record;
+  invalid_record.write_u32(32U);
+  for (std::size_t byte = 0; byte < 12U; ++byte) {
+    invalid_record.write_u8(0U);
+  }
+  malformed_payload.insert(malformed_payload.end(),
+                           invalid_record.bytes().begin(),
+                           invalid_record.bytes().end());
+  const auto malformed_bytes =
+      structural_records_psd({}, "zzzz", malformed_payload, "Patt");
+  options.budget.max_pattern_records = 1U;
+  const auto recovered =
+      patchy::psd::DocumentIo::read(malformed_bytes, options);
+  CHECK(recovered.metadata().patterns.patterns.size() == 1U);
+  CHECK(usage.pattern_records == 1U);
 }
 
 void psd_tracked_live_budget_raii_is_exact_and_move_safe() {
@@ -846,6 +1286,22 @@ std::vector<patchy::test::TestCase> psd_parse_budget_tests() {
   return {
       {"psd_decompressed_budget_api_defaults_and_usage_reset",
        psd_decompressed_budget_api_defaults_and_usage_reset},
+      {"psd_structural_budget_api_defaults_enum_and_usage_reset",
+       psd_structural_budget_api_defaults_enum_and_usage_reset},
+      {"psd_structural_budget_layers_channels_and_resources_are_exact",
+       psd_structural_budget_layers_channels_and_resources_are_exact},
+      {"psd_structural_budget_descriptor_rejection_escapes_recovery",
+       psd_structural_budget_descriptor_rejection_escapes_recovery},
+      {"psd_structural_budget_object_array_charges_rows_before_nested_descriptor",
+       psd_structural_budget_object_array_charges_rows_before_nested_descriptor},
+      {"psd_structural_budget_layer_count_uses_declared_subsection",
+       psd_structural_budget_layer_count_uses_declared_subsection},
+      {"psd_structural_budget_prefer_flat_charges_only_traversed_records",
+       psd_structural_budget_prefer_flat_charges_only_traversed_records},
+      {"psd_structural_budget_prefer_flat_deep_headers_are_exact",
+       psd_structural_budget_prefer_flat_deep_headers_are_exact},
+      {"psd_structural_budget_patterns_aggregate_and_validate_before_charge",
+       psd_structural_budget_patterns_aggregate_and_validate_before_charge},
       {"psd_tracked_live_budget_raii_is_exact_and_move_safe",
        psd_tracked_live_budget_raii_is_exact_and_move_safe},
       {"psd_tracked_live_budget_flat_raw_precedence_and_unwind",
