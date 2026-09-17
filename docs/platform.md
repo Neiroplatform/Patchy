@@ -86,6 +86,26 @@ The `linux-asan` preset (RelWithDebInfo + `-fsanitize=address`, own `build/linux
 
 The large quarantine keeps long-ago frees poisoned for the whole run (glados has 125 GB RAM); `detect_leaks=0` keeps exits quiet. The UI suite's POSIX SIGSEGV/SIGBUS reporter steps aside under ASAN (`tests/ui/main.cpp`) so sanitizer reports are not preempted. ASAN halts at the first report, so iterate fix-and-rerun until clean. A fresh build dir also surfaces stale `test-artifacts` expectations that long-lived dirs hide; see [testing.md](testing.md).
 
+## Native PSD parser fuzzing
+
+The `fuzz` preset is a native-only Clang configuration in `build/fuzz`. It
+enables libFuzzer on `patchy_psd_fuzzer` and AddressSanitizer plus
+UndefinedBehaviorSanitizer on the PSD parser libraries. It disables the app and
+ordinary test targets so sanitizer flags do not leak into release, wasm, or
+cross-compiled builds. Configure fails explicitly for a non-Clang compiler,
+WebAssembly, or another cross build.
+
+Clang identification alone is insufficient: the selected distribution must
+ship the libFuzzer compiler-rt library for the host. In particular, an Apple
+Clang installation can include ASan/UBSan but omit the macOS fuzzer archive.
+Select a complete LLVM toolchain through `CC`/`CXX` before the first configure,
+and never switch compiler inside an existing `build/fuzz` cache.
+
+Campaign execution is local-only. Use the deterministic seed generator and the
+bounded wrapper documented in [testing.md](testing.md). Do not run fuzzing on a
+production workload host or through the remote build helpers. The Python runner
+and validator use only the standard library and operate on explicit local paths.
+
 ## Platform-specific site inventory (keep current)
 
 - `main_window_chrome.cpp` + the `use_custom_window_chrome()` call sites in `main_window.cpp` (frameless flag, chrome controls).

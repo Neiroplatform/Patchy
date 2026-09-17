@@ -25,6 +25,65 @@ Run `patchy_ui_visual_tests.exe` with `QT_QPA_PLATFORM=offscreen`. Both release 
 
 Never run two test processes (or a test process and the app) at the same time: they share the QSettings store, and a concurrent run rewrites preference keys mid-test, producing failures such as `ui_language_saved_preference_overrides_system_language` seeing its saved language clobbered. Run suites sequentially.
 
+### Local PSD/PSB fuzz campaigns
+
+The `fuzz` CMake preset builds the native Clang libFuzzer target
+`patchy_psd_fuzzer` and the deterministic seed generator
+`patchy_psd_seed_corpus`. Generate seeds into a new directory, then run one
+bounded campaign through the Python wrapper:
+
+```sh
+CC="$(brew --prefix llvm)/bin/clang" \
+  CXX="$(brew --prefix llvm)/bin/clang++" \
+  cmake --preset fuzz
+cmake --build --preset fuzz
+build/fuzz/patchy_psd_seed_corpus /tmp/patchy-psd-seeds-a
+build/fuzz/patchy_psd_seed_corpus /tmp/patchy-psd-seeds-b
+diff -rq /tmp/patchy-psd-seeds-a /tmp/patchy-psd-seeds-b
+python3 scripts/fuzz/run_psd_campaign.py \
+  --executable build/fuzz/patchy_psd_fuzzer \
+  --seed-corpus /tmp/patchy-psd-seeds-a \
+  --dictionary tests/fuzz/psd_fuzzer.dict \
+  --patchy-source . \
+  --evidence-root /tmp/patchy-fuzz-evidence-001 \
+  --receipt /tmp/patchy-fuzz-receipt-001.json
+```
+
+The first configure must use a Clang distribution that includes the libFuzzer
+compiler-rt runtime. Current Apple Command Line Tools may provide sanitizer
+headers and runtimes without `libclang_rt.fuzzer_osx.a`; use an isolated full
+LLVM toolchain in that case. Do not reuse a CMake cache configured with another
+compiler.
+
+Both evidence paths must not exist. The Patchy source tree must be clean so the
+receipt can bind one exact commit. The wrapper snapshots the executable, seeds
+and reviewed dictionary into a closed evidence root; runs only that snapshot
+with fixed run count, random seed, wall-time, per-input timeout, RSS and input
+size; captures one public-safe log and any findings; and writes the canonical
+receipt outside the closed root. Mutable coverage additions use a temporary
+subdirectory removed before the receipt is generated, so they cannot silently
+change the deterministic seed identity. The runner returns 0 for a clean
+campaign, 1 for a valid failure receipt, and 2 for a runner/evidence error.
+
+Validate a bundle against the exact executable used to create it:
+
+```sh
+python3 scripts/fuzz/validate_psd_campaign.py \
+  /tmp/patchy-fuzz-receipt-001.json \
+  /tmp/patchy-fuzz-evidence-001 \
+  --check /tmp/patchy-fuzz-receipt-001.json
+```
+
+The receipt is canonical UTF-8 JSON matching the superproject's closed v1
+contract. It contains exact Patchy, binary, dictionary, seed, log and artifact
+identities, bounded configuration, normalized outcome and derived counters. It
+contains no source bytes, timestamps, machine paths, environment values or
+private locators. Validation is strict: unknown or duplicate fields,
+non-canonical bytes, unsafe paths, non-regular or oversized files, an unbound
+file anywhere in the evidence root, and identity/counter/status mismatch fail
+the check. Keep campaigns on an isolated developer machine. The wrapper
+performs no network, server, deployment or secret access.
+
 ### PSD/PSB parse-budget tests
 
 `psd::ReadOptions::budget.max_primary_pixel_bytes` is an opt-in aggregate guard for

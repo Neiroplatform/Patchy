@@ -34,7 +34,50 @@ include(GNUInstallDirs)
 
 option(PATCHY_BUILD_APP "Build the Qt desktop application when Qt 6 is available" ON)
 option(PATCHY_BUILD_TESTS "Build unit tests" ON)
+option(PATCHY_BUILD_FUZZERS "Build native Clang PSD parser fuzzing tools" OFF)
 option(PATCHY_ENABLE_STRICT_WARNINGS "Enable strict compiler warnings" ON)
+
+if(PATCHY_BUILD_FUZZERS)
+  if(EMSCRIPTEN OR CMAKE_CROSSCOMPILING)
+    message(FATAL_ERROR "PATCHY_BUILD_FUZZERS requires a native build")
+  endif()
+  if(NOT CMAKE_C_COMPILER_ID MATCHES "^(Apple)?Clang$" OR
+     NOT CMAKE_CXX_COMPILER_ID MATCHES "^(Apple)?Clang$")
+    message(FATAL_ERROR "PATCHY_BUILD_FUZZERS requires Clang for libFuzzer")
+  endif()
+
+  # Some Apple Clang packages expose the fuzzer headers but omit the runtime.
+  # Probe the actual compile+link contract now instead of failing near the end
+  # of a fully instrumented parser build.
+  include(CheckCXXSourceCompiles)
+  set(_patchy_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+  set(_patchy_saved_required_link_options "${CMAKE_REQUIRED_LINK_OPTIONS}")
+  string(APPEND CMAKE_REQUIRED_FLAGS " -fsanitize=fuzzer")
+  list(APPEND CMAKE_REQUIRED_LINK_OPTIONS -fsanitize=fuzzer)
+  check_cxx_source_compiles(
+    "extern \"C\" int LLVMFuzzerTestOneInput(const unsigned char*, unsigned long) { return 0; }"
+    PATCHY_HAVE_LIBFUZZER_RUNTIME
+  )
+  set(CMAKE_REQUIRED_FLAGS "${_patchy_saved_required_flags}")
+  set(CMAKE_REQUIRED_LINK_OPTIONS "${_patchy_saved_required_link_options}")
+  unset(_patchy_saved_required_flags)
+  unset(_patchy_saved_required_link_options)
+  if(NOT PATCHY_HAVE_LIBFUZZER_RUNTIME)
+    message(FATAL_ERROR
+      "PATCHY_BUILD_FUZZERS requires a Clang distribution with the libFuzzer runtime"
+    )
+  endif()
+
+  # Instrument the parser libraries, not just the thin fuzz entry point. The
+  # option is off by default, and the fuzz preset disables the app and tests so
+  # these flags remain isolated from ordinary developer and release builds.
+  add_compile_options(
+    -fsanitize=address,undefined
+    -fno-sanitize-recover=all
+    -fno-omit-frame-pointer
+  )
+  add_link_options(-fsanitize=address,undefined)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -496,6 +539,22 @@ add_library(patchy_color
 )
 target_link_libraries(patchy_color PUBLIC patchy_core PRIVATE patchy_lcms2)
 patchy_configure_target(patchy_color)
+
+if(PATCHY_BUILD_FUZZERS)
+  add_executable(patchy_psd_fuzzer
+    tests/fuzz/psd_document_fuzzer.cpp
+  )
+  target_link_libraries(patchy_psd_fuzzer PRIVATE patchy_psd)
+  target_compile_options(patchy_psd_fuzzer PRIVATE -fsanitize=fuzzer)
+  target_link_options(patchy_psd_fuzzer PRIVATE -fsanitize=fuzzer)
+  patchy_configure_target(patchy_psd_fuzzer)
+
+  add_executable(patchy_psd_seed_corpus
+    tests/fuzz/psd_seed_corpus.cpp
+  )
+  target_link_libraries(patchy_psd_seed_corpus PRIVATE patchy_psd)
+  patchy_configure_target(patchy_psd_seed_corpus)
+endif()
 
 if(PATCHY_BUILD_APP)
   # Qt ships no PrintSupport (or Test need) for WebAssembly; requesting it
