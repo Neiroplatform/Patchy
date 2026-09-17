@@ -582,7 +582,7 @@ LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
 // smart-object layer that has none preserved (see write_layer_record).
 void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bool strip_smart_object_blocks,
                         bool large_document, std::uint32_t synthesized_photoshop_layer_id,
-                        Rect canvas);
+                        Rect canvas, SaveLiveBudgetTracker& tracked_live_budget);
 void append_encoded_layers(const Layer& layer, std::vector<EncodedLayer>& encoded_layers,
                            bool large_document,
                            SaveLiveBudgetTracker& tracked_live_budget);

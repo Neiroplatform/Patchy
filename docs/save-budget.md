@@ -67,7 +67,7 @@ does not reserve a slot. This is not exact post-render channel usage.
 The Photoshop 8000-record format error precedes configurable admission. Other later
 encoder-format errors may be preceded by an earlier finite preflight rejection.
 
-## DP-008A tracked live workspace
+## DP-008A and DP-008B1 tracked live workspace
 
 `max_tracked_live_bytes` caps conservative logical reservations for instrumented
 save-owned temporary buffers. `SaveUsage::tracked_live_bytes` is current
@@ -75,7 +75,7 @@ ownership-coupled usage and always unwinds to zero after public success or failu
 `tracked_live_bytes_high_water` is its monotonic per-write maximum. Recursive
 layered writes share one tracker and do not reset it.
 
-The current DP-008A slice covers:
+The current implemented slices cover:
 
 - top-level composite RGB and alpha planes;
 - the sequential compositor target and alpha-quantization envelope;
@@ -83,7 +83,10 @@ The current DP-008A slice covers:
 - PackBits row storage, count tables, row temporaries, and assembled candidates;
 - per-channel extraction buffers and RAW fallback copies;
 - retained `EncodedChannel` payloads;
-- top-level `layer_info` and `layer_mask` writers.
+- top-level `layer_info` and `layer_mask` writers;
+- the per-record `extra` writer and its nested mask, layer-id, section-divider,
+  vector-origination-version, protection, mask-effects, interior-effects, and
+  channel-restriction writers.
 
 RAW and RLE candidates count together while both are live. Retained encoded
 channels remain charged until their owners die. Copying `layer_info` into
@@ -91,17 +94,28 @@ channels remain charged until their owners die. Copying `layer_info` into
 before the encoder allocates. The final returned stream stays outside this
 dimension because `max_logical_output_bytes` guards it independently.
 
-## Explicit DP-008A exclusions and DP-008B
+The nested writer reservation is acquired before every buffer growth and remains
+live while its bytes are copied into the enclosing record. Returned internal byte
+buffers transfer their reservation with the storage; the public PSD serializer
+ABI is unchanged.
 
-DP-008A is not a complete process-memory limit. It excludes allocator capacity
+## Explicit exclusions and remaining DP-008B work
+
+The implemented slices are not a complete process-memory limit. They exclude allocator capacity
 slack, container nodes and strings, stack/runtime overhead, OS/file buffers,
 third-party internals, caller source storage, and final output storage.
+
+Contiguous byte and arithmetic planes, row/count tables, and serializer payloads
+are in scope when their allocation sites are instrumented. STL node/capacity
+overhead, descriptor-tree nodes, and string storage remain explicitly outside the
+logical-byte contract; normalization must use a documented logical envelope for
+those excluded structures rather than claim allocator-exact accounting.
 
 DP-008B remains open for:
 
 - compound/open-stroke normalization clones and vector-raster scratch;
 - deep compositor group, clipping, style, effect, distance-field, and blur planes;
-- nested layer-record and resource writers;
+- generated layer-record payload producers and nested resource writers;
 - rebuilt image-resource streams;
 - generated Smart Object, Smart Filter, and pattern serialization payloads.
 
@@ -122,7 +136,15 @@ overflow behavior, exact compositor-plane census above and below the automatic
 parallel threshold, deterministic RAW/RLE and extra-channel lifetimes, flat/layered
 PSD/PSB exact-fit, one-short and zero limits, recursive normalization, byte equality,
 usage reset/unwind after typed and ordinary encoder failures, format/preflight/output
-precedence, unchanged writer canary, and destination preservation.
+precedence, unchanged writer canary, and destination preservation. DP-008B1 pins
+the aggregate `extra` plus restrictions peak at 210 bytes and the pre-change direct
+record at 232 bytes/FNV-1a `60f80b960fca3de1`, then proves exact, one-short, zero,
+byte-equality, and unwind behavior. Separate minimal records make the layer-id,
+returned section-divider, protection, mask-effects, interior-effects, and
+restriction overlaps observable above their enclosing `extra` owner. The shared
+tracked-writer primitive has a direct returned-buffer lifetime test; earlier
+mask-data and vector-origination-version sites are additionally source-audited
+because later mandatory record bytes dominate their local overlap in high-water.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero

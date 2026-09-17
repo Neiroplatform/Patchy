@@ -210,6 +210,10 @@ public:
 
   [[nodiscard]] BigEndianWriter& writer() noexcept { return writer_; }
   [[nodiscard]] const BigEndianWriter& writer() const noexcept { return writer_; }
+  [[nodiscard]] SaveTrackedByteBuffer take_buffer() && {
+    return SaveTrackedByteBuffer(std::move(reservation_),
+                                 std::move(writer_).take_bytes());
+  }
 
 private:
   static void before_write(void* context, std::size_t bytes) {

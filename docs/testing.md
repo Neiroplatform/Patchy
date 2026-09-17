@@ -159,7 +159,13 @@ The complete output, preflight, tracked-live, test, exclusion, ABI, and rollout
 contract lives in [save-budget.md](save-budget.md). Read it before changing any
 PSD/PSB write path or its tests. All dimensions remain opt-in and default to
 unlimited; the current DP-008A tracked-live slice is explicitly incomplete until
-the DP-008B deep renderer, normalization, and serializer coverage lands.
+the remaining DP-008B deep renderer, normalization, resource, and generated-payload
+coverage lands. DP-008B1 adds an independently pinned 210-byte direct layer-record
+case for the aggregate `extra` plus restrictions overlap, a 232-byte/FNV record
+canary, direct tracked-return ownership coverage, and branch fixtures whose late
+nested writers visibly exceed the enclosing `extra` owner. Exact, one-short, zero,
+byte-equality, and unwind checks remain mandatory; source audit covers earlier
+nested writers whose local overlap is hidden by later mandatory record bytes.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

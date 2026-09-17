@@ -347,6 +347,208 @@ void psd_save_live_budget_tracker_is_overlap_and_unwind_safe() {
   CHECK(overflow_rejected);
   CHECK(current == 0U);
   CHECK(high_water == 10U);
+
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker writer_tracker(4U, &current,
+                                                       &high_water);
+    patchy::psd::SaveTrackedWriter tracked_writer(writer_tracker);
+    tracked_writer.writer().write_u32(0x01020304U);
+    auto tracked_buffer = std::move(tracked_writer).take_buffer();
+    CHECK(current == 4U);
+    CHECK(high_water == 4U);
+    CHECK(tracked_buffer.bytes ==
+          std::vector<std::uint8_t>({1U, 2U, 3U, 4U}));
+  }
+  CHECK(current == 0U);
+  CHECK(high_water == 4U);
+}
+
+void psd_save_layer_record_nested_writers_are_tracked() {
+  patchy::Document document(2, 2, patchy::PixelFormat::rgb8());
+  patchy::Layer group(document.allocate_layer_id(), "Tracked group",
+                      patchy::LayerKind::Group);
+  group.set_bounds(patchy::Rect{0, 0, 2, 2});
+  patchy::LayerMask mask;
+  mask.bounds = patchy::Rect{0, 0, 1, 1};
+  mask.pixels = patchy::PixelBuffer(1, 1, patchy::PixelFormat::gray8());
+  group.set_mask(std::move(mask));
+  patchy::set_layer_lock_flags(
+      group, patchy::psd::kPsdProtectTransparency |
+                 patchy::psd::kPsdProtectComposite |
+                 patchy::psd::kPsdProtectPosition);
+  group.layer_style().layer_mask_hides_effects = true;
+  group.layer_style().blend_interior_elements = true;
+  group.set_restricted_channels(0x07U);
+
+  patchy::psd::EncodedLayer encoded;
+  encoded.layer = &group;
+  encoded.kind = patchy::psd::EncodedLayerKind::Group;
+  encoded.bounds = group.bounds();
+  encoded.blending_ranges = &group.raw_psd_blending_ranges();
+
+  const auto write_record = [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+    patchy::psd::BigEndianWriter writer;
+    patchy::psd::write_layer_record(
+        writer, encoded, false, false, 17U,
+        patchy::Rect::from_size(document.width(), document.height()), tracker);
+    return std::move(writer).take_bytes();
+  };
+
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  std::vector<std::uint8_t> baseline;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        std::numeric_limits<std::uint64_t>::max(), &current, &high_water);
+    baseline = write_record(tracker);
+  }
+  constexpr std::uint64_t kExpectedNestedWriterPeak = 210U;
+  if (high_water != kExpectedNestedWriterPeak) {
+    std::cout << "nested layer-record writer peak: " << high_water << '\n';
+  }
+  CHECK(high_water == kExpectedNestedWriterPeak);
+  CHECK(current == 0U);
+  CHECK(!baseline.empty());
+  const auto record_hash = patchy::test::fnv1a_hash_bytes(baseline);
+  constexpr std::size_t kExpectedRecordSize = 232U;
+  constexpr std::uint64_t kExpectedRecordHash = 0x60f80b960fca3de1ULL;
+  if (baseline.size() != kExpectedRecordSize ||
+      record_hash != kExpectedRecordHash) {
+    std::cout << "nested layer-record bytes: size=" << baseline.size()
+              << " fnv=0x" << std::hex << record_hash << std::dec << '\n';
+  }
+  CHECK(baseline.size() == kExpectedRecordSize);
+  CHECK(record_hash == kExpectedRecordHash);
+
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        kExpectedNestedWriterPeak, &current, &high_water);
+    CHECK(write_record(tracker) == baseline);
+  }
+  CHECK(current == 0U);
+  CHECK(high_water == kExpectedNestedWriterPeak);
+
+  current = 0U;
+  high_water = 0U;
+  bool rejected = false;
+  try {
+    patchy::psd::SaveLiveBudgetTracker tracker(
+        kExpectedNestedWriterPeak - 1U, &current, &high_water);
+    (void)write_record(tracker);
+  } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+    rejected = true;
+  }
+  CHECK(rejected);
+  CHECK(current == 0U);
+  CHECK(high_water <= kExpectedNestedWriterPeak - 1U);
+
+  current = 0U;
+  high_water = 0U;
+  rejected = false;
+  try {
+    patchy::psd::SaveLiveBudgetTracker tracker(0U, &current, &high_water);
+    (void)write_record(tracker);
+  } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+    rejected = true;
+  }
+  CHECK(rejected);
+  CHECK(current == 0U);
+  CHECK(high_water == 0U);
+}
+
+void psd_save_layer_record_writer_branches_overlap_the_extra_owner() {
+  const auto check_overlap = [](std::string_view label, patchy::Layer& layer,
+                                patchy::psd::EncodedLayerKind kind,
+                                std::uint32_t synthesized_layer_id,
+                                bool branch_sets_peak = true) {
+    patchy::psd::EncodedLayer encoded;
+    encoded.layer = &layer;
+    encoded.kind = kind;
+    encoded.bounds = layer.bounds();
+    encoded.blending_ranges = &layer.raw_psd_blending_ranges();
+    std::uint64_t current = 0U;
+    std::uint64_t high_water = 0U;
+    patchy::psd::BigEndianWriter writer;
+    {
+      patchy::psd::SaveLiveBudgetTracker tracker(
+          std::numeric_limits<std::uint64_t>::max(), &current, &high_water);
+      patchy::psd::write_layer_record(
+          writer, encoded, false, false, synthesized_layer_id,
+          patchy::Rect::from_size(2, 2), tracker);
+    }
+    const auto bytes = std::move(writer).take_bytes();
+    constexpr std::size_t kRecordPrefixBytes = 34U;
+    CHECK(bytes.size() >= kRecordPrefixBytes);
+    const auto extra_bytes = bytes.size() - kRecordPrefixBytes;
+    if (branch_sets_peak && high_water <= extra_bytes) {
+      std::cout << "nested writer branch " << label << ": peak="
+                << high_water << " extra=" << extra_bytes << '\n';
+    }
+    CHECK(branch_sets_peak ? high_water > extra_bytes
+                           : high_water >= extra_bytes);
+    CHECK(current == 0U);
+  };
+
+  patchy::Layer masked(1U, "", patchy::PixelBuffer(
+                                      1, 1, patchy::PixelFormat::rgba8()));
+  masked.set_bounds(patchy::Rect{0, 0, 1, 1});
+  patchy::LayerMask raster_mask;
+  raster_mask.bounds = patchy::Rect{0, 0, 1, 1};
+  raster_mask.pixels =
+      patchy::PixelBuffer(1, 1, patchy::PixelFormat::gray8());
+  masked.set_mask(std::move(raster_mask));
+  patchy::LayerVectorMask vector_mask;
+  vector_mask.density = 128U;
+  masked.set_vector_mask(std::move(vector_mask));
+  // The mandatory later vector-mask block grows `extra` past the earlier
+  // mask-data overlap, so the primitive ownership test above plus source audit
+  // cover this branch; it cannot independently set the record high-water.
+  check_overlap("mask", masked, patchy::psd::EncodedLayerKind::Pixel, 0U,
+                false);
+
+  patchy::Layer identified(2U, "", patchy::PixelBuffer(
+                                          1, 1, patchy::PixelFormat::rgba8()));
+  identified.set_bounds(patchy::Rect{0, 0, 1, 1});
+  check_overlap("layer-id", identified, patchy::psd::EncodedLayerKind::Pixel,
+                17U);
+
+  patchy::Layer sectioned(3U, "", patchy::LayerKind::Group);
+  sectioned.set_bounds(patchy::Rect{0, 0, 1, 1});
+  check_overlap("section", sectioned, patchy::psd::EncodedLayerKind::Group,
+                0U);
+
+  patchy::Layer protected_layer(4U, "", patchy::PixelBuffer(
+                                                1, 1, patchy::PixelFormat::rgba8()));
+  protected_layer.set_bounds(patchy::Rect{0, 0, 1, 1});
+  patchy::set_layer_lock_flags(protected_layer,
+                               patchy::psd::kPsdProtectComposite);
+  check_overlap("protection", protected_layer,
+                patchy::psd::EncodedLayerKind::Pixel, 0U);
+
+  patchy::Layer mask_hides(5U, "", patchy::PixelBuffer(
+                                          1, 1, patchy::PixelFormat::rgba8()));
+  mask_hides.set_bounds(patchy::Rect{0, 0, 1, 1});
+  mask_hides.layer_style().layer_mask_hides_effects = true;
+  check_overlap("mask-hides", mask_hides,
+                patchy::psd::EncodedLayerKind::Pixel, 0U);
+
+  patchy::Layer interior(6U, "", patchy::PixelBuffer(
+                                        1, 1, patchy::PixelFormat::rgba8()));
+  interior.set_bounds(patchy::Rect{0, 0, 1, 1});
+  interior.layer_style().blend_interior_elements = true;
+  check_overlap("interior", interior, patchy::psd::EncodedLayerKind::Pixel,
+                0U);
+
+  patchy::Layer restricted(7U, "", patchy::PixelBuffer(
+                                          1, 1, patchy::PixelFormat::rgba8()));
+  restricted.set_bounds(patchy::Rect{0, 0, 1, 1});
+  restricted.set_restricted_channels(0x07U);
+  check_overlap("restrictions", restricted,
+                patchy::psd::EncodedLayerKind::Pixel, 0U);
 }
 
 void psd_save_composite_workspace_census_is_exact() {
@@ -2628,6 +2830,10 @@ std::vector<patchy::test::TestCase> psd_writer_stability_tests() {
        psd_save_budget_bounds_logical_output_and_preserves_destinations},
       {"psd_save_live_budget_tracker_is_overlap_and_unwind_safe",
        psd_save_live_budget_tracker_is_overlap_and_unwind_safe},
+      {"psd_save_layer_record_nested_writers_are_tracked",
+       psd_save_layer_record_nested_writers_are_tracked},
+      {"psd_save_layer_record_writer_branches_overlap_the_extra_owner",
+       psd_save_layer_record_writer_branches_overlap_the_extra_owner},
       {"psd_save_composite_workspace_census_is_exact",
        psd_save_composite_workspace_census_is_exact},
       {"psd_save_channel_workspace_tracks_raw_rle_and_extra_channels",

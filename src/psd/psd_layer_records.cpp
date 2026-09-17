@@ -121,15 +121,17 @@ std::uint32_t group_section_divider_type(const Layer& layer) {
   return 1U;
 }
 
-std::vector<std::uint8_t> section_divider_payload(std::uint32_t type, BlendMode blend_mode,
-                                                  bool include_blend_mode) {
-  BigEndianWriter payload;
+SaveTrackedByteBuffer section_divider_payload(
+    std::uint32_t type, BlendMode blend_mode, bool include_blend_mode,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_payload(tracked_live_budget);
+  auto& payload = tracked_payload.writer();
   payload.write_u32(type);
   if (include_blend_mode) {
     write_signature(payload, {'8', 'B', 'I', 'M'});
     write_signature(payload, blend_mode_key(blend_mode));
   }
-  return payload.bytes();
+  return std::move(tracked_payload).take_buffer();
 }
 
 // Per-layer smart object blocks reference embedded sources stored in the document-global
@@ -680,7 +682,7 @@ LayerRecord read_layer_record(BigEndianReader& reader, bool large_document,
 
 void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bool strip_smart_object_blocks,
                         bool large_document, std::uint32_t synthesized_photoshop_layer_id,
-                        Rect canvas) {
+                        Rect canvas, SaveLiveBudgetTracker& tracked_live_budget) {
   writer.write_u32(static_cast<std::uint32_t>(encoded.bounds.y));
   writer.write_u32(static_cast<std::uint32_t>(encoded.bounds.x));
   writer.write_u32(static_cast<std::uint32_t>(encoded.bounds.y + encoded.bounds.height));
@@ -716,14 +718,16 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
   writer.write_u8(record_flags);
   writer.write_u8(0);
 
-  BigEndianWriter extra;
+  SaveTrackedWriter tracked_extra(tracked_live_budget);
+  auto& extra = tracked_extra.writer();
   if (encoded.layer != nullptr &&
       (encoded.kind == EncodedLayerKind::Pixel || encoded.kind == EncodedLayerKind::Adjustment ||
        (encoded.kind == EncodedLayerKind::Group && encoded.layer->mask().has_value() &&
         !encoded.layer->mask()->pixels.empty())) &&
       encoded.layer->mask().has_value()) {
     const auto& mask = *encoded.layer->mask();
-    BigEndianWriter mask_data;
+    SaveTrackedWriter tracked_mask_data(tracked_live_budget);
+    auto& mask_data = tracked_mask_data.writer();
     mask_data.write_u32(static_cast<std::uint32_t>(mask.bounds.y));
     mask_data.write_u32(static_cast<std::uint32_t>(mask.bounds.x));
     mask_data.write_u32(static_cast<std::uint32_t>(mask.bounds.y + mask.bounds.height));
@@ -756,7 +760,8 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
     // data) + bit 4 (parameters present), then vector density (u8 raw) and
     // vector feather (f64) — the PS 27.8 capture layout.
     const auto plane = vector_mask_derived_plane(*vector_mask);
-    BigEndianWriter mask_data;
+    SaveTrackedWriter tracked_mask_data(tracked_live_budget);
+    auto& mask_data = tracked_mask_data.writer();
     mask_data.write_u32(static_cast<std::uint32_t>(plane.bounds.y));
     mask_data.write_u32(static_cast<std::uint32_t>(plane.bounds.x));
     mask_data.write_u32(static_cast<std::uint32_t>(plane.bounds.y + plane.bounds.height));
@@ -787,18 +792,23 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
   // July 2026). Imported layers re-emit their preserved block below; the caller
   // passes a fresh unique id (nonzero) only for id-less smart-object layers.
   if (synthesized_photoshop_layer_id != 0U) {
-    BigEndianWriter layer_id;
+    SaveTrackedWriter tracked_layer_id(tracked_live_budget);
+    auto& layer_id = tracked_layer_id.writer();
     layer_id.write_u32(synthesized_photoshop_layer_id);
     write_additional_layer_block(extra, {'l', 'y', 'i', 'd'}, layer_id.bytes(), large_document);
   }
 
   if (encoded.kind == EncodedLayerKind::GroupBoundary) {
-    const auto payload = section_divider_payload(3U, BlendMode::Normal, false);
-    write_additional_layer_block(extra, {'l', 's', 'c', 't'}, payload, large_document);
+    const auto payload = section_divider_payload(
+        3U, BlendMode::Normal, false, tracked_live_budget);
+    write_additional_layer_block(extra, {'l', 's', 'c', 't'}, payload.bytes,
+                                 large_document);
   } else if (encoded.kind == EncodedLayerKind::Group) {
-    const auto payload =
-        section_divider_payload(group_section_divider_type(*encoded.layer), encoded.layer->blend_mode(), true);
-    write_additional_layer_block(extra, {'l', 's', 'c', 't'}, payload, large_document);
+    const auto payload = section_divider_payload(
+        group_section_divider_type(*encoded.layer), encoded.layer->blend_mode(),
+        true, tracked_live_budget);
+    write_additional_layer_block(extra, {'l', 's', 'c', 't'}, payload.bytes,
+                                 large_document);
   }
 
   bool generated_style_payload = false;
@@ -909,7 +919,8 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
       // subpaths; only the live parameters are lost on reopen.
       if (!content->origination.empty() &&
           origination_covers_path_groups(content->path, content->origination)) {
-        BigEndianWriter vowv;
+        SaveTrackedWriter tracked_vowv(tracked_live_budget);
+        auto& vowv = tracked_vowv.writer();
         vowv.write_u32(2);
         write_additional_layer_block(extra, {'v', 'o', 'w', 'v'}, vowv.bytes(), large_document);
         write_additional_layer_block(
@@ -946,14 +957,16 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
     const auto protection_flags = layer_lock_flags(*encoded.layer) &
                                   (kPsdProtectTransparency | kPsdProtectComposite | kPsdProtectPosition);
     if (protection_flags != 0U) {
-      BigEndianWriter protection;
+      SaveTrackedWriter tracked_protection(tracked_live_budget);
+      auto& protection = tracked_protection.writer();
       protection.write_u32(protection_flags);
       write_additional_layer_block(extra, {'l', 's', 'p', 'f'}, protection.bytes(), large_document);
     }
 
     if (encoded.layer->layer_style().layer_mask_hides_effects) {
       // "Layer Mask Hides Effects" blending option; absence means off.
-      BigEndianWriter mask_hides;
+      SaveTrackedWriter tracked_mask_hides(tracked_live_budget);
+      auto& mask_hides = tracked_mask_hides.writer();
       mask_hides.write_u8(1);
       mask_hides.write_u8(0);
       mask_hides.write_u16(0);
@@ -963,7 +976,8 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
     if (encoded.layer->layer_style().blend_interior_elements) {
       // "Blend Interior Effects as Group" blending option; absence means off,
       // which is why an untouched infx=0 import needs no block of its own.
-      BigEndianWriter blend_interior;
+      SaveTrackedWriter tracked_blend_interior(tracked_live_budget);
+      auto& blend_interior = tracked_blend_interior.writer();
       blend_interior.write_u8(1);
       blend_interior.write_u8(0);
       blend_interior.write_u16(0);
@@ -975,7 +989,8 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
       // Advanced Blending "Channels": Photoshop writes 'brst' only when at
       // least one channel is unchecked, as ascending big-endian u32 indices of
       // the excluded channels (0=R, 1=G, 2=B).
-      BigEndianWriter restrictions;
+      SaveTrackedWriter tracked_restrictions(tracked_live_budget);
+      auto& restrictions = tracked_restrictions.writer();
       for (std::uint32_t index = 0; index < 3U; ++index) {
         if ((encoded.layer->restricted_channels() >> index) & 1U) {
           restrictions.write_u32(index);
