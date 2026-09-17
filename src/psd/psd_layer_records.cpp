@@ -825,52 +825,67 @@ void write_layer_record(BigEndianWriter& writer, const EncodedLayer& encoded, bo
   if (encoded.layer != nullptr && encoded.kind == EncodedLayerKind::Adjustment) {
     const auto settings = adjustment_settings_from_layer(*encoded.layer);
     if (settings.has_value() && settings->kind == AdjustmentKind::Levels) {
+      const auto payload = photoshop_levels_payload_tracked(
+          settings->levels, tracked_live_budget);
       write_additional_layer_block(extra, kPhotoshopLevelsAdjustmentBlockKey,
-                                   photoshop_levels_payload(settings->levels), large_document);
+                                   payload.bytes, large_document);
     }
     if (settings.has_value() && settings->kind == AdjustmentKind::Curves) {
+      const auto payload = photoshop_curves_payload_tracked(
+          settings->curves, find_layer_block(*encoded.layer, "curv"),
+          tracked_live_budget);
       write_additional_layer_block(
-          extra, kPhotoshopCurvesAdjustmentBlockKey,
-          photoshop_curves_payload(settings->curves, find_layer_block(*encoded.layer, "curv")),
+          extra, kPhotoshopCurvesAdjustmentBlockKey, payload.bytes,
           large_document);
     }
     if (settings.has_value() && settings->kind == AdjustmentKind::HueSaturation) {
+      const auto payload = photoshop_hue2_payload_tracked(
+          settings->hue_saturation, find_layer_block(*encoded.layer, "hue2"),
+          tracked_live_budget);
       write_additional_layer_block(
-          extra, kPhotoshopHueSaturationBlockKey,
-          photoshop_hue2_payload(settings->hue_saturation, find_layer_block(*encoded.layer, "hue2")),
+          extra, kPhotoshopHueSaturationBlockKey, payload.bytes,
           large_document);
     }
     if (settings.has_value() && settings->kind == AdjustmentKind::Invert) {
       write_additional_layer_block(extra, kPhotoshopInvertBlockKey, {}, large_document);
     }
     if (settings.has_value() && settings->kind == AdjustmentKind::Posterize) {
+      const auto payload = photoshop_posterize_payload_tracked(
+          settings->posterize, find_layer_block(*encoded.layer, "post"),
+          tracked_live_budget);
       write_additional_layer_block(
-          extra, kPhotoshopPosterizeBlockKey,
-          photoshop_posterize_payload(settings->posterize, find_layer_block(*encoded.layer, "post")),
+          extra, kPhotoshopPosterizeBlockKey, payload.bytes,
           large_document);
     }
     if (settings.has_value() && settings->kind == AdjustmentKind::Threshold) {
+      const auto payload = photoshop_threshold_payload_tracked(
+          settings->threshold, find_layer_block(*encoded.layer, "thrs"),
+          tracked_live_budget);
       write_additional_layer_block(
-          extra, kPhotoshopThresholdBlockKey,
-          photoshop_threshold_payload(settings->threshold, find_layer_block(*encoded.layer, "thrs")),
+          extra, kPhotoshopThresholdBlockKey, payload.bytes,
           large_document);
     }
     if (settings.has_value() && settings->kind == AdjustmentKind::BrightnessContrast) {
-      write_additional_layer_block(
-          extra, kPhotoshopBrightnessContrastBlockKey,
-          photoshop_brightness_contrast_payload(settings->brightness_contrast, *encoded.layer),
-          large_document);
-      if (auto descriptor =
-              photoshop_brightness_contrast_descriptor_payload(settings->brightness_contrast, *encoded.layer);
+      {
+        const auto payload = photoshop_brightness_contrast_payload_tracked(
+            settings->brightness_contrast, *encoded.layer, tracked_live_budget);
+        write_additional_layer_block(
+            extra, kPhotoshopBrightnessContrastBlockKey, payload.bytes,
+            large_document);
+      }
+      if (auto descriptor = photoshop_brightness_contrast_descriptor_payload_tracked(
+              settings->brightness_contrast, *encoded.layer, tracked_live_budget);
           descriptor.has_value()) {
         write_additional_layer_block(extra, kPhotoshopBrightnessContrastDescriptorBlockKey,
-                                     std::move(*descriptor), large_document);
+                                     descriptor->bytes, large_document);
       }
     }
     if (settings.has_value() && settings->kind == AdjustmentKind::ColorBalance) {
+      const auto payload = photoshop_color_balance_payload_tracked(
+          settings->color_balance, find_layer_block(*encoded.layer, "blnc"),
+          tracked_live_budget);
       write_additional_layer_block(
-          extra, kPhotoshopColorBalanceBlockKey,
-          photoshop_color_balance_payload(settings->color_balance, find_layer_block(*encoded.layer, "blnc")),
+          extra, kPhotoshopColorBalanceBlockKey, payload.bytes,
           large_document);
     }
     // Every adjustment kind is native-block only (2026-07). The private plAD

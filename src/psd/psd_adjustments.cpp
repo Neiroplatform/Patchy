@@ -35,6 +35,7 @@
 #include <future>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -254,13 +255,22 @@ int read_i32(BigEndianReader& reader) {
   return static_cast<int>(static_cast<std::int32_t>(reader.read_u32()));
 }
 
-std::vector<std::uint8_t> photoshop_levels_payload(LevelsAdjustment settings) {
-  BigEndianWriter writer;
+SaveTrackedByteBuffer photoshop_levels_payload_tracked(
+    LevelsAdjustment settings, SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u16(kPhotoshopLevelsAdjustmentVersion);
   for (int index = 0; index < kPhotoshopLevelsRecordCount; ++index) {
     write_photoshop_levels_record(writer, levels_record_for_photoshop_index(settings, index));
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
+}
+
+std::vector<std::uint8_t> photoshop_levels_payload(LevelsAdjustment settings) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_levels_payload_tracked(settings, tracker);
+  return std::move(payload.bytes);
 }
 
 std::optional<AdjustmentSettings> parse_photoshop_levels_adjustment(std::span<const std::uint8_t> payload) {
@@ -323,9 +333,11 @@ std::optional<AdjustmentSettings> parse_photoshop_hue2_adjustment(std::span<cons
   }
 }
 
-std::vector<std::uint8_t> photoshop_hue2_payload(const HueSaturationAdjustment& settings,
-                                                 const UnknownPsdBlock* original) {
-  BigEndianWriter header;
+SaveTrackedByteBuffer photoshop_hue2_payload_tracked(
+    const HueSaturationAdjustment& settings, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_header(tracked_live_budget);
+  auto& header = tracked_header.writer();
   header.write_u16(kPhotoshopHueSaturationVersion);
   header.write_u8(settings.colorize ? 1 : 0);
   header.write_u8(0);  // padding
@@ -345,22 +357,29 @@ std::vector<std::uint8_t> photoshop_hue2_payload(const HueSaturationAdjustment& 
     write_i16(header, std::clamp(band.lightness_delta, -100, 100));
   }
 
-  auto bytes = header.bytes();
   if (original != nullptr && original->payload.size() >= kPhotoshopHueSaturationHeaderSize &&
       original->payload[0] == 0x00 && original->payload[1] == kPhotoshopHueSaturationVersion) {
     // Patch-in-place: the header and the six band records come from the model,
     // the undocumented 36-byte trailer stays byte-identical to the imported
     // payload, so an unedited layer still round-trips exactly.
-    std::vector<std::uint8_t> patched(original->payload.begin(), original->payload.end());
-    const auto copied = std::min(bytes.size(), patched.size());
-    std::copy_n(bytes.begin(), copied, patched.begin());
+    auto patched = save_tracked_byte_copy(original->payload, tracked_live_budget);
+    const auto copied = std::min(header.bytes().size(), patched.bytes.size());
+    std::copy_n(header.bytes().begin(), copied, patched.bytes.begin());
     return patched;
   }
   // A fresh layer already carries its band records from the model, so only the
   // undocumented 36-byte trailer is appended from Photoshop's template.
-  bytes.insert(bytes.end(), kPhotoshopHueSaturationDefaultTail.begin() + kPhotoshopHueSaturationBandBlockSize,
-               kPhotoshopHueSaturationDefaultTail.end());
-  return bytes;
+  header.write_bytes(std::span(kPhotoshopHueSaturationDefaultTail).subspan(
+      kPhotoshopHueSaturationBandBlockSize));
+  return std::move(tracked_header).take_buffer();
+}
+
+std::vector<std::uint8_t> photoshop_hue2_payload(
+    const HueSaturationAdjustment& settings, const UnknownPsdBlock* original) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_hue2_payload_tracked(settings, original, tracker);
+  return std::move(payload.bytes);
 }
 
 std::optional<AdjustmentSettings> parse_photoshop_curves_adjustment(
@@ -383,14 +402,15 @@ std::optional<AdjustmentSettings> parse_photoshop_curves_adjustment(
   }
 }
 
-std::vector<std::uint8_t> photoshop_curves_payload(const CurvesAdjustment& curves,
-                                                   const UnknownPsdBlock* original) {
+SaveTrackedByteBuffer photoshop_curves_payload_tracked(
+    const CurvesAdjustment& curves, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   if (original != nullptr) {
     if (const auto parsed = parse_photoshop_curves_adjustment(original->payload);
         parsed.has_value() && parsed->curves == curves) {
       // The imported payload may contain compatibility details Patchy does not
       // model. Keep every byte until the modeled control points actually change.
-      return original->payload;
+      return save_tracked_byte_copy(original->payload, tracked_live_budget);
     }
   }
 
@@ -420,7 +440,8 @@ std::vector<std::uint8_t> photoshop_curves_payload(const CurvesAdjustment& curve
     }
   };
 
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u8(0U);  // curv adjustment-block prefix
   writer.write_u16(1U);
   // Photoshop 2026 writes this bitmap as four bytes even though Adobe's table
@@ -440,7 +461,15 @@ std::vector<std::uint8_t> photoshop_curves_payload(const CurvesAdjustment& curve
   while ((writer.bytes().size() % 4U) != 0U) {
     writer.write_u8(0U);
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
+}
+
+std::vector<std::uint8_t> photoshop_curves_payload(
+    const CurvesAdjustment& curves, const UnknownPsdBlock* original) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_curves_payload_tracked(curves, original, tracker);
+  return std::move(payload.bytes);
 }
 
 std::optional<AdjustmentSettings> parse_photoshop_color_balance_adjustment(
@@ -461,8 +490,13 @@ std::optional<AdjustmentSettings> parse_photoshop_color_balance_adjustment(
   return settings;
 }
 
-std::vector<std::uint8_t> photoshop_color_balance_payload(const ColorBalanceAdjustment& settings,
-                                                          const UnknownPsdBlock* original) {
+SaveTrackedByteBuffer photoshop_color_balance_payload_tracked(
+    const ColorBalanceAdjustment& settings, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget) {
+  auto reservation = tracked_live_budget.reserve_size(
+      original != nullptr && original->payload.size() >= 12U
+          ? original->payload.size()
+          : 20U);
   std::vector<std::uint8_t> payload;
   if (original != nullptr && original->payload.size() >= 12) {
     payload = original->payload;  // keep shadows/highlights/preserve-luminosity bytes
@@ -477,7 +511,16 @@ std::vector<std::uint8_t> photoshop_color_balance_payload(const ColorBalanceAdju
   write_i16_at(6, settings.cyan_red);
   write_i16_at(8, settings.magenta_green);
   write_i16_at(10, settings.yellow_blue);
-  return payload;
+  return SaveTrackedByteBuffer(std::move(reservation), std::move(payload));
+}
+
+std::vector<std::uint8_t> photoshop_color_balance_payload(
+    const ColorBalanceAdjustment& settings, const UnknownPsdBlock* original) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_color_balance_payload_tracked(settings, original,
+                                                         tracker);
+  return std::move(payload.bytes);
 }
 
 bool photoshop_color_balance_payload_has_unrendered_data(std::span<const std::uint8_t> payload) {
@@ -503,21 +546,32 @@ std::optional<AdjustmentSettings> parse_photoshop_posterize_adjustment(std::span
   return settings;
 }
 
-std::vector<std::uint8_t> photoshop_posterize_payload(const PosterizeAdjustment& settings,
-                                                      const UnknownPsdBlock* original) {
+SaveTrackedByteBuffer photoshop_posterize_payload_tracked(
+    const PosterizeAdjustment& settings, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   const auto levels = std::clamp(settings.levels, 2, 255);
   if (original != nullptr) {
     // Unedited imported payloads re-emit byte-for-byte (curv-style guard) so
     // any undocumented trailing bytes Photoshop may add survive untouched.
     const auto parsed = parse_photoshop_posterize_adjustment(original->payload);
     if (parsed.has_value() && parsed->posterize.levels == levels) {
-      return original->payload;
+      return save_tracked_byte_copy(original->payload, tracked_live_budget);
     }
   }
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u16(static_cast<std::uint16_t>(levels));
   writer.write_u16(0);
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
+}
+
+std::vector<std::uint8_t> photoshop_posterize_payload(
+    const PosterizeAdjustment& settings, const UnknownPsdBlock* original) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_posterize_payload_tracked(settings, original,
+                                                     tracker);
+  return std::move(payload.bytes);
 }
 
 std::optional<AdjustmentSettings> parse_photoshop_brightness_contrast_adjustment(
@@ -611,18 +665,20 @@ bool brightness_contrast_settings_match(const BrightnessContrastAdjustment& a,
 
 }  // namespace
 
-std::vector<std::uint8_t> photoshop_brightness_contrast_payload(const BrightnessContrastAdjustment& settings,
-                                                                const Layer& layer) {
+SaveTrackedByteBuffer photoshop_brightness_contrast_payload_tracked(
+    const BrightnessContrastAdjustment& settings, const Layer& layer,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   const auto clamped = clamp_brightness_contrast(settings);
   const auto original = original_brightness_contrast_state(layer);
   if (original.has_value() && brightness_contrast_settings_match(*original, clamped)) {
     for (const auto& block : layer.unknown_psd_blocks()) {
       if (block.key == "brit") {
-        return block.payload;  // unedited: byte-identical round trip
+        return save_tracked_byte_copy(block.payload, tracked_live_budget);
       }
     }
   }
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   if (!clamped.use_legacy) {
     // Photoshop writes an all-zero compatibility 'brit' beside a modern CgEd
     // (byte-verified on PS 2026 files); the descriptor carries the values.
@@ -631,18 +687,29 @@ std::vector<std::uint8_t> photoshop_brightness_contrast_payload(const Brightness
     writer.write_u16(0);
     writer.write_u8(0);
     writer.write_u8(0);
-    return writer.bytes();
+    return std::move(tracked_writer).take_buffer();
   }
   writer.write_u16(static_cast<std::uint16_t>(static_cast<std::int16_t>(clamped.brightness)));
   writer.write_u16(static_cast<std::uint16_t>(static_cast<std::int16_t>(clamped.contrast)));
   writer.write_u16(127);  // mean, Photoshop's fixed midpoint
   writer.write_u8(0);     // lab
   writer.write_u8(0);     // pad
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
 }
 
-std::optional<std::vector<std::uint8_t>> photoshop_brightness_contrast_descriptor_payload(
+std::vector<std::uint8_t> photoshop_brightness_contrast_payload(
     const BrightnessContrastAdjustment& settings, const Layer& layer) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_brightness_contrast_payload_tracked(settings, layer,
+                                                               tracker);
+  return std::move(payload.bytes);
+}
+
+std::optional<SaveTrackedByteBuffer>
+photoshop_brightness_contrast_descriptor_payload_tracked(
+    const BrightnessContrastAdjustment& settings, const Layer& layer,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   const auto clamped = clamp_brightness_contrast(settings);
   const UnknownPsdBlock* original_block = nullptr;
   for (const auto& block : layer.unknown_psd_blocks()) {
@@ -653,7 +720,8 @@ std::optional<std::vector<std::uint8_t>> photoshop_brightness_contrast_descripto
   const auto original = original_brightness_contrast_state(layer);
   if (original.has_value() && brightness_contrast_settings_match(*original, clamped)) {
     if (original_block != nullptr) {
-      return original_block->payload;  // unedited: byte-identical round trip
+      return save_tracked_byte_copy(original_block->payload,
+                                    tracked_live_budget);
     }
     // Legacy brit-only file, untouched: keep it descriptor-free.
     return std::nullopt;
@@ -710,10 +778,24 @@ std::optional<std::vector<std::uint8_t>> photoshop_brightness_contrast_descripto
   add_bool("Lab ", false, lab);
   add_bool("useLegacy", true, clamped.use_legacy);
   add_bool("Auto", false, auto_flag);
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u32(16);
   write_descriptor(writer, descriptor);
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
+}
+
+std::optional<std::vector<std::uint8_t>>
+photoshop_brightness_contrast_descriptor_payload(
+    const BrightnessContrastAdjustment& settings, const Layer& layer) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_brightness_contrast_descriptor_payload_tracked(
+      settings, layer, tracker);
+  if (!payload.has_value()) {
+    return std::nullopt;
+  }
+  return std::move(payload->bytes);
 }
 
 std::optional<AdjustmentSettings> parse_photoshop_threshold_adjustment(std::span<const std::uint8_t> payload) {
@@ -727,19 +809,30 @@ std::optional<AdjustmentSettings> parse_photoshop_threshold_adjustment(std::span
   return settings;
 }
 
-std::vector<std::uint8_t> photoshop_threshold_payload(const ThresholdAdjustment& settings,
-                                                      const UnknownPsdBlock* original) {
+SaveTrackedByteBuffer photoshop_threshold_payload_tracked(
+    const ThresholdAdjustment& settings, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget) {
   const auto level = std::clamp(settings.level, 1, 255);
   if (original != nullptr) {
     const auto parsed = parse_photoshop_threshold_adjustment(original->payload);
     if (parsed.has_value() && parsed->threshold.level == level) {
-      return original->payload;
+      return save_tracked_byte_copy(original->payload, tracked_live_budget);
     }
   }
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u16(static_cast<std::uint16_t>(level));
   writer.write_u16(0);
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
+}
+
+std::vector<std::uint8_t> photoshop_threshold_payload(
+    const ThresholdAdjustment& settings, const UnknownPsdBlock* original) {
+  SaveLiveBudgetTracker tracker(std::numeric_limits<std::uint64_t>::max(),
+                                nullptr, nullptr);
+  auto payload = photoshop_threshold_payload_tracked(settings, original,
+                                                     tracker);
+  return std::move(payload.bytes);
 }
 
 // Read-only since 2026-07: no adjustment kind writes plAD anymore (Photoshop

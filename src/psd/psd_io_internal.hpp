@@ -506,20 +506,34 @@ void convert_cmyk_planes_to_rgb(PixelBuffer& pixels, const std::uint8_t* cyan,
 void write_i32(BigEndianWriter& writer, int value);
 int read_i32(BigEndianReader& reader);
 std::vector<std::uint8_t> photoshop_levels_payload(LevelsAdjustment settings);
+SaveTrackedByteBuffer photoshop_levels_payload_tracked(
+    LevelsAdjustment settings, SaveLiveBudgetTracker& tracked_live_budget);
 std::optional<AdjustmentSettings> parse_photoshop_levels_adjustment(std::span<const std::uint8_t> payload);
 std::optional<AdjustmentSettings> parse_photoshop_hue2_adjustment(std::span<const std::uint8_t> payload);
 std::vector<std::uint8_t> photoshop_hue2_payload(const HueSaturationAdjustment& settings,
                                                  const UnknownPsdBlock* original);
+SaveTrackedByteBuffer photoshop_hue2_payload_tracked(
+    const HueSaturationAdjustment& settings, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget);
 std::optional<AdjustmentSettings> parse_photoshop_curves_adjustment(
     std::span<const std::uint8_t> payload);
 std::vector<std::uint8_t> photoshop_curves_payload(const CurvesAdjustment& curves,
                                                    const UnknownPsdBlock* original);
+SaveTrackedByteBuffer photoshop_curves_payload_tracked(
+    const CurvesAdjustment& curves, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget);
 std::optional<AdjustmentSettings> parse_photoshop_posterize_adjustment(std::span<const std::uint8_t> payload);
 std::vector<std::uint8_t> photoshop_posterize_payload(const PosterizeAdjustment& settings,
                                                       const UnknownPsdBlock* original);
+SaveTrackedByteBuffer photoshop_posterize_payload_tracked(
+    const PosterizeAdjustment& settings, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget);
 std::optional<AdjustmentSettings> parse_photoshop_threshold_adjustment(std::span<const std::uint8_t> payload);
 std::vector<std::uint8_t> photoshop_threshold_payload(const ThresholdAdjustment& settings,
                                                       const UnknownPsdBlock* original);
+SaveTrackedByteBuffer photoshop_threshold_payload_tracked(
+    const ThresholdAdjustment& settings, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget);
 std::optional<AdjustmentSettings> parse_photoshop_brightness_contrast_adjustment(
     std::span<const std::uint8_t> payload);
 struct BrightnessContrastDescriptorParse {
@@ -534,12 +548,19 @@ std::optional<BrightnessContrastDescriptorParse> parse_photoshop_brightness_cont
 // brit when the settings are modern. `layer` provides the preserved originals.
 std::vector<std::uint8_t> photoshop_brightness_contrast_payload(const BrightnessContrastAdjustment& settings,
                                                                 const Layer& layer);
+SaveTrackedByteBuffer photoshop_brightness_contrast_payload_tracked(
+    const BrightnessContrastAdjustment& settings, const Layer& layer,
+    SaveLiveBudgetTracker& tracked_live_budget);
 // The 'CgEd' descriptor that must accompany the brit: preserved bytes when
 // unedited, a regenerated PS-2026-shape descriptor on an edit, and nullopt
 // when the layer should stay descriptor-free (legacy settings on a file that
 // never carried one - a stale CgEd would win over brit in Photoshop).
 std::optional<std::vector<std::uint8_t>> photoshop_brightness_contrast_descriptor_payload(
     const BrightnessContrastAdjustment& settings, const Layer& layer);
+std::optional<SaveTrackedByteBuffer>
+photoshop_brightness_contrast_descriptor_payload_tracked(
+    const BrightnessContrastAdjustment& settings, const Layer& layer,
+    SaveLiveBudgetTracker& tracked_live_budget);
 std::optional<AdjustmentSettings> parse_photoshop_color_balance_adjustment(
     std::span<const std::uint8_t> payload);
 // Patch-in-place: only the midtones bytes are rewritten from the model; the
@@ -547,6 +568,9 @@ std::optional<AdjustmentSettings> parse_photoshop_color_balance_adjustment(
 // their original bytes (Patchy preserves but does not render them).
 std::vector<std::uint8_t> photoshop_color_balance_payload(const ColorBalanceAdjustment& settings,
                                                           const UnknownPsdBlock* original);
+SaveTrackedByteBuffer photoshop_color_balance_payload_tracked(
+    const ColorBalanceAdjustment& settings, const UnknownPsdBlock* original,
+    SaveLiveBudgetTracker& tracked_live_budget);
 // True when the payload carries settings Patchy preserves but does not render
 // (nonzero shadows/highlights or preserve luminosity) - drives the import notice.
 [[nodiscard]] bool photoshop_color_balance_payload_has_unrendered_data(std::span<const std::uint8_t> payload);

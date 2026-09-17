@@ -78,6 +78,42 @@ patchy::SmartObjectLinkBlock make_budget_external_link_block() {
   return block;
 }
 
+template <typename BuildPayload>
+void check_adjustment_payload_budget(std::size_t expected_bytes,
+                                     std::uint64_t expected_hash,
+                                     std::uint64_t expected_peak,
+                                     BuildPayload&& build_payload) {
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(expected_peak, &current,
+                                                &high_water);
+    const auto payload = build_payload(tracker);
+    CHECK(payload.bytes.size() == expected_bytes);
+    CHECK(patchy::test::fnv1a_hash_bytes(payload.bytes) == expected_hash);
+    CHECK(current == expected_bytes);
+    CHECK(high_water == expected_peak);
+  }
+  CHECK(current == 0U);
+
+  for (const auto limit :
+       std::array<std::uint64_t, 2>{expected_peak - 1U, 0U}) {
+    current = 0U;
+    high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &current,
+                                                  &high_water);
+      (void)build_payload(tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water <= limit);
+  }
+}
+
 std::vector<std::uint8_t> make_budget_foreign_embedded_element(
     std::span<const std::uint8_t> embedded,
     bool with_name_reference = false) {
@@ -1427,6 +1463,345 @@ void psd_save_link_globals_reach_the_public_live_budget() {
   }
 }
 
+void psd_save_native_adjustment_payloads_own_exact_budget() {
+  patchy::LevelsAdjustment levels;
+  levels.black_input = 12;
+  levels.white_input = 240;
+  levels.gamma_percent = 125;
+  levels.black_output = 4;
+  levels.white_output = 250;
+  levels.red = {5, 230, 90, 11, 244};
+  levels.green = {9, 220, 110, 13, 242};
+  levels.blue = {17, 210, 140, 19, 238};
+  check_adjustment_payload_budget(
+      292U, 0xbdeb9efaf6e93c5aULL, 292U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_levels_payload_tracked(levels, tracker);
+      });
+
+  patchy::CurvesAdjustment curves;
+  curves.rgb = {{0, 10}, {128, 200}, {255, 250}};
+  check_adjustment_payload_budget(
+      48U, 0x4cfe755d7e6f8419ULL, 48U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_curves_payload_tracked(curves, nullptr,
+                                                             tracker);
+      });
+
+  patchy::HueSaturationAdjustment hue;
+  hue.colorize = true;
+  hue.colorize_hue = 203;
+  hue.colorize_saturation = 52;
+  check_adjustment_payload_budget(
+      136U, 0xad4d7772401a6809ULL, 136U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_hue2_payload_tracked(hue, nullptr,
+                                                           tracker);
+      });
+
+  patchy::PosterizeAdjustment posterize;
+  posterize.levels = 6;
+  check_adjustment_payload_budget(
+      4U, 0x192c947f805e1bf3ULL, 4U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_posterize_payload_tracked(
+            posterize, nullptr, tracker);
+      });
+
+  patchy::ThresholdAdjustment threshold;
+  threshold.level = 96;
+  check_adjustment_payload_budget(
+      4U, 0x37f6167f00ce3e95ULL, 4U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_threshold_payload_tracked(
+            threshold, nullptr, tracker);
+      });
+
+  patchy::ColorBalanceAdjustment color_balance;
+  color_balance.cyan_red = -10;
+  color_balance.magenta_green = 20;
+  color_balance.yellow_blue = -30;
+  check_adjustment_payload_budget(
+      20U, 0x7183ad462ceed3d1ULL, 20U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_color_balance_payload_tracked(
+            color_balance, nullptr, tracker);
+      });
+
+  patchy::BrightnessContrastAdjustment brightness_contrast;
+  brightness_contrast.brightness = 25;
+  brightness_contrast.contrast = 15;
+  patchy::Layer layer(1U, "Brightness/Contrast",
+                      patchy::LayerKind::Adjustment);
+  check_adjustment_payload_budget(
+      8U, 0xa8c7f832281a39c5ULL, 8U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_brightness_contrast_payload_tracked(
+            brightness_contrast, layer, tracker);
+      });
+
+  constexpr std::size_t kDescriptorBytes = 131U;
+  constexpr std::uint64_t kDescriptorHash = 0xa04b391817bca1a9ULL;
+  check_adjustment_payload_budget(
+      kDescriptorBytes, kDescriptorHash, kDescriptorBytes,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        auto payload = patchy::psd::
+            photoshop_brightness_contrast_descriptor_payload_tracked(
+                brightness_contrast, layer, tracker);
+        CHECK(payload.has_value());
+        return std::move(*payload);
+      });
+}
+
+void psd_save_hue_payload_patch_tail_and_budget_are_stable() {
+  patchy::HueSaturationAdjustment hue;
+  hue.colorize = true;
+  hue.colorize_hue = 203;
+  hue.colorize_saturation = 52;
+  auto imported = patchy::psd::photoshop_hue2_payload(hue, nullptr);
+  CHECK(imported.size() == 136U);
+  imported.resize(4096U);
+  for (std::size_t index = 136U; index < imported.size(); ++index) {
+    imported[index] = static_cast<std::uint8_t>(index & 0xffU);
+  }
+  const patchy::UnknownPsdBlock original{"hue2", imported};
+
+  constexpr std::uint64_t kPayloadBytes = 4096U;
+  constexpr std::uint64_t kHeaderBytes = 100U;
+  constexpr std::uint64_t kExactPeak = kPayloadBytes + kHeaderBytes;
+  constexpr std::uint64_t kHash = 0xa16e223bc030b531ULL;
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(kExactPeak, &current,
+                                                &high_water);
+    const auto payload = patchy::psd::photoshop_hue2_payload_tracked(
+        hue, &original, tracker);
+    CHECK(payload.bytes == imported);
+    CHECK(patchy::test::fnv1a_hash_bytes(payload.bytes) == kHash);
+    CHECK(std::equal(payload.bytes.begin() + 136, payload.bytes.end(),
+                     imported.begin() + 136));
+    CHECK(current == kPayloadBytes);
+    CHECK(high_water == kExactPeak);
+  }
+  CHECK(current == 0U);
+
+  for (const auto limit :
+       std::array<std::uint64_t, 2>{kExactPeak - 1U, 0U}) {
+    current = 0U;
+    high_water = 0U;
+    bool rejected = false;
+    try {
+      patchy::psd::SaveLiveBudgetTracker tracker(limit, &current,
+                                                  &high_water);
+      (void)patchy::psd::photoshop_hue2_payload_tracked(hue, &original,
+                                                        tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(current == 0U);
+    CHECK(high_water <= limit);
+  }
+}
+
+void psd_save_adjustment_raw_copy_and_malformed_paths_are_stable() {
+  patchy::PosterizeAdjustment posterize;
+  posterize.levels = 6;
+  std::vector<std::uint8_t> posterize_bytes(257U);
+  posterize_bytes[0] = 0U;
+  posterize_bytes[1] = 6U;
+  for (std::size_t index = 2U; index < posterize_bytes.size(); ++index) {
+    posterize_bytes[index] = static_cast<std::uint8_t>(index & 0xffU);
+  }
+  const patchy::UnknownPsdBlock posterize_original{"post", posterize_bytes};
+  check_adjustment_payload_budget(
+      257U, 0x21f686a69d4ed7d8ULL, 257U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_posterize_payload_tracked(
+            posterize, &posterize_original, tracker);
+      });
+
+  patchy::CurvesAdjustment curves;
+  curves.rgb = {{0, 10}, {128, 200}, {255, 250}};
+  const patchy::UnknownPsdBlock malformed_curves{
+      "curv", {0xffU, 0x00U, 0x01U, 0x02U, 0x03U}};
+  check_adjustment_payload_budget(
+      48U, 0x4cfe755d7e6f8419ULL, 48U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_curves_payload_tracked(
+            curves, &malformed_curves, tracker);
+      });
+
+  patchy::ColorBalanceAdjustment color_balance;
+  color_balance.cyan_red = -10;
+  color_balance.magenta_green = 20;
+  color_balance.yellow_blue = -30;
+  std::vector<std::uint8_t> balance_bytes(64U);
+  for (std::size_t index = 0U; index < balance_bytes.size(); ++index) {
+    balance_bytes[index] =
+        static_cast<std::uint8_t>((index * 37U + 11U) & 0xffU);
+  }
+  const patchy::UnknownPsdBlock balance_original{"blnc", balance_bytes};
+  check_adjustment_payload_budget(
+      64U, 0x9055ccc52090f2f6ULL, 64U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_color_balance_payload_tracked(
+            color_balance, &balance_original, tracker);
+      });
+
+  patchy::BrightnessContrastAdjustment legacy;
+  legacy.brightness = 11;
+  legacy.contrast = -12;
+  legacy.use_legacy = true;
+  patchy::Layer layer(2U, "Imported brightness", patchy::LayerKind::Adjustment);
+  std::vector<std::uint8_t> brit_bytes(64U);
+  for (std::size_t index = 0U; index < brit_bytes.size(); ++index) {
+    brit_bytes[index] = static_cast<std::uint8_t>((index * 13U) & 0xffU);
+  }
+  brit_bytes[0] = 0U;
+  brit_bytes[1] = 11U;
+  brit_bytes[2] = 0xffU;
+  brit_bytes[3] = 0xf4U;
+  layer.unknown_psd_blocks().push_back(
+      patchy::UnknownPsdBlock{"brit", brit_bytes});
+  constexpr std::array<std::uint8_t, 7> kMalformedCgEd{
+      0xdeU, 0xadU, 0xbeU, 0xefU, 1U, 2U, 3U};
+  layer.unknown_psd_blocks().push_back(patchy::UnknownPsdBlock{
+      "CgEd", std::vector<std::uint8_t>(kMalformedCgEd.begin(),
+                                        kMalformedCgEd.end())});
+
+  check_adjustment_payload_budget(
+      64U, 0xeee77cdb858cfbebULL, 64U,
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        return patchy::psd::photoshop_brightness_contrast_payload_tracked(
+            legacy, layer, tracker);
+      });
+  check_adjustment_payload_budget(
+      kMalformedCgEd.size(), 0x5796f337d1dc7f4dULL,
+      kMalformedCgEd.size(),
+      [&](patchy::psd::SaveLiveBudgetTracker& tracker) {
+        auto payload = patchy::psd::
+            photoshop_brightness_contrast_descriptor_payload_tracked(
+                legacy, layer, tracker);
+        CHECK(payload.has_value());
+        return std::move(*payload);
+      });
+}
+
+void psd_save_adjustment_payload_owners_stage_and_unwind() {
+  patchy::LevelsAdjustment levels;
+  patchy::ColorBalanceAdjustment color_balance;
+  std::uint64_t current = 0U;
+  std::uint64_t high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(312U, &current, &high_water);
+    const auto levels_payload =
+        patchy::psd::photoshop_levels_payload_tracked(levels, tracker);
+    CHECK(current == 292U);
+    {
+      const auto balance_payload =
+          patchy::psd::photoshop_color_balance_payload_tracked(
+              color_balance, nullptr, tracker);
+      CHECK(levels_payload.bytes.size() == 292U);
+      CHECK(balance_payload.bytes.size() == 20U);
+      CHECK(current == 312U);
+      CHECK(high_water == 312U);
+    }
+    CHECK(current == 292U);
+  }
+  CHECK(current == 0U);
+
+  current = 0U;
+  high_water = 0U;
+  {
+    patchy::psd::SaveLiveBudgetTracker tracker(311U, &current, &high_water);
+    const auto levels_payload =
+        patchy::psd::photoshop_levels_payload_tracked(levels, tracker);
+    bool rejected = false;
+    try {
+      (void)patchy::psd::photoshop_color_balance_payload_tracked(
+          color_balance, nullptr, tracker);
+    } catch (const patchy::psd::SaveLiveBudgetSignal&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(levels_payload.bytes.size() == 292U);
+    CHECK(current == 292U);
+    CHECK(high_water == 292U);
+  }
+  CHECK(current == 0U);
+}
+
+void psd_save_adjustment_payload_reaches_public_live_budget() {
+  patchy::HueSaturationAdjustment hue;
+  hue.colorize = true;
+  hue.colorize_hue = 203;
+  hue.colorize_saturation = 52;
+  auto imported = patchy::psd::photoshop_hue2_payload(hue, nullptr);
+  imported.resize(4096U);
+  for (std::size_t index = 136U; index < imported.size(); ++index) {
+    imported[index] = static_cast<std::uint8_t>(index & 0xffU);
+  }
+
+  patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer(
+      "Base", patchy::test::solid_rgb(1, 1, 20U, 30U, 40U));
+  patchy::AdjustmentSettings settings;
+  settings.kind = patchy::AdjustmentKind::HueSaturation;
+  settings.hue_saturation = hue;
+  patchy::Layer adjustment(document.allocate_layer_id(), "Hue",
+                           patchy::LayerKind::Adjustment);
+  adjustment.set_bounds(patchy::Rect::from_size(1, 1));
+  patchy::configure_adjustment_layer(adjustment, settings);
+  adjustment.unknown_psd_blocks().push_back(
+      patchy::UnknownPsdBlock{"hue2", imported});
+  document.add_layer(std::move(adjustment));
+
+  patchy::psd::SaveUsage measured_usage;
+  patchy::psd::WriteOptions measured_options;
+  measured_options.usage = &measured_usage;
+  const auto baseline = patchy::psd::DocumentIo::write_layered_rgb8(
+      document, measured_options);
+  constexpr std::size_t kOutputBytes = 4359U;
+  constexpr std::uint64_t kOutputHash = 0x3cfe5cfb993ec789ULL;
+  constexpr std::uint64_t kExactPeak = 8619U;
+  CHECK(baseline.size() == kOutputBytes);
+  CHECK(patchy::test::fnv1a_hash_bytes(baseline) == kOutputHash);
+  CHECK(measured_usage.tracked_live_bytes == 0U);
+  CHECK(measured_usage.tracked_live_bytes_high_water == kExactPeak);
+
+  patchy::psd::SaveUsage exact_usage;
+  auto exact_options = measured_options;
+  exact_options.budget.max_tracked_live_bytes = kExactPeak;
+  exact_options.usage = &exact_usage;
+  CHECK(patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                     exact_options) ==
+        baseline);
+  CHECK(exact_usage.tracked_live_bytes == 0U);
+  CHECK(exact_usage.tracked_live_bytes_high_water == kExactPeak);
+
+  for (const auto limit :
+       std::array<std::uint64_t, 2>{kExactPeak - 1U, 0U}) {
+    patchy::psd::SaveUsage rejected_usage;
+    auto rejected_options = measured_options;
+    rejected_options.budget.max_tracked_live_bytes = limit;
+    rejected_options.usage = &rejected_usage;
+    bool rejected = false;
+    try {
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                         rejected_options);
+    } catch (const patchy::psd::SaveBudgetExceeded& error) {
+      rejected = true;
+      CHECK(error.dimension() ==
+            patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+    }
+    CHECK(rejected);
+    CHECK(rejected_usage.tracked_live_bytes == 0U);
+    CHECK(rejected_usage.tracked_live_bytes_high_water <= limit);
+  }
+}
+
 }  // namespace
 
 std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
@@ -1460,5 +1835,15 @@ std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
        psd_save_link_payload_owners_overlap_without_byte_drift},
       {"psd_save_link_globals_reach_the_public_live_budget",
        psd_save_link_globals_reach_the_public_live_budget},
+      {"psd_save_native_adjustment_payloads_own_exact_budget",
+       psd_save_native_adjustment_payloads_own_exact_budget},
+      {"psd_save_hue_payload_patch_tail_and_budget_are_stable",
+       psd_save_hue_payload_patch_tail_and_budget_are_stable},
+      {"psd_save_adjustment_raw_copy_and_malformed_paths_are_stable",
+       psd_save_adjustment_raw_copy_and_malformed_paths_are_stable},
+      {"psd_save_adjustment_payload_owners_stage_and_unwind",
+       psd_save_adjustment_payload_owners_stage_and_unwind},
+      {"psd_save_adjustment_payload_reaches_public_live_budget",
+       psd_save_adjustment_payload_reaches_public_live_budget},
   };
 }

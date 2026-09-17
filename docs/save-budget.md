@@ -67,7 +67,7 @@ does not reserve a slot. This is not exact post-render channel usage.
 The Photoshop 8000-record format error precedes configurable admission. Other later
 encoder-format errors may be preceded by an earlier finite preflight rejection.
 
-## DP-008A through DP-008B3c tracked live workspace
+## DP-008A through DP-008B4a tracked live workspace
 
 `max_tracked_live_bytes` caps conservative logical reservations for instrumented
 save-owned temporary buffers. `SaveUsage::tracked_live_bytes` is current
@@ -97,6 +97,8 @@ The current implemented slices cover:
   placeholder pixels;
 - copied, generated, and surgically rebuilt document-global Smart Object
   `lnk*`/`Lnk*` payloads, including normalized embedded PSD/PSB bytes.
+- generated and preserved native adjustment-layer payloads for `levl`, `curv`,
+  `hue2`, `post`, `thrs`, `brit`, `CgEd`, and `blnc` (`nvrt` is empty).
 
 RAW and RLE candidates count together while both are live. Retained encoded
 channels remain charged until their owners die. Copying `layer_info` into
@@ -148,6 +150,16 @@ eager link-before-filter build and stable global emission. Caller-owned source
 files, original element wrappers, and preserved original block payloads remain
 document state; any save-owned copy is charged before allocation. The public
 vector-returning codec and emitted bytes remain unchanged.
+DP-008B4a gives every non-empty native adjustment-layer payload an
+owner-coupled reservation before its final or preserved byte buffer is
+allocated. The owner overlaps the growing per-record `extra` writer only while
+the additional layer block is copied, then releases before the next block.
+`brit` releases before optional `CgEd`, preserving their sequential lifetime.
+The `hue2` patch path keeps its 100-byte generated header charged while the
+preserved payload copy is admitted, and writes fresh tails into the same header
+buffer instead of retaining the old redundant header copy. Existing
+vector-returning helpers remain unlimited compatibility wrappers; emitted bytes,
+block order, raw-preservation decisions, and malformed fallbacks are unchanged.
 
 ## Explicit exclusions and remaining DP-008B work
 
@@ -165,7 +177,9 @@ DP-008B remains open for:
 
 - compound/open-stroke normalization clones and vector-raster scratch;
 - deep compositor group, clipping, style, effect, distance-field, and blur planes;
-- generated layer-record payload producers and nested resource writers;
+- remaining generated layer-record payload producers and nested resource
+  writers: `luni`, `lfx2`, `TySh`, vector blocks, patched `iOpa`, and dirty
+  `SoLd`/`SoLE`/`PlLd` regeneration;
 - remaining normalization/vector-raster workspaces and the final source census.
 
 Product callers must not treat DP-008A as a complete save-memory ceiling. Finite
@@ -238,6 +252,15 @@ public fixture is 1070 bytes/FNV-1a `9a03676658d006f7` and pins the complete
 eager owner/global-copy peak at 1680 bytes. Direct and public exact/N-1/zero,
 owner-release, typed unwind, allocation-free invalid/already-compliant
 normalization, and Smart Object semantic wrapper tests cover the slice.
+DP-008B4a pins fresh `levl`, `curv`, `hue2`, `post`, `thrs`, `brit`, `CgEd`,
+and `blnc` payload bytes and hashes with direct exact/N-1/zero admission and
+unwind. A 4096-byte preserved `hue2` payload peaks at 4196 bytes while its
+100-byte generated header overlaps the admitted copy, preserving the opaque
+tail byte-for-byte. Raw-copy and malformed-fallback fixtures cover `curv`,
+`post`, `brit`, `CgEd`, and `blnc`; staged `levl` plus `blnc` owners prove
+release and non-deduplicated overlap. The public adjustment fixture is 4359
+bytes/FNV-1a `3cfe5cfb993ec789` and pins an 8619-byte tracked peak with exact,
+typed N-1, zero, and unwind-to-zero checks.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero
