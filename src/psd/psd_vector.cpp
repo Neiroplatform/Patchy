@@ -121,6 +121,55 @@ std::optional<VectorPath> parse_records(std::span<const std::uint8_t> payload, s
   return path;
 }
 
+// Save-time deletion only needs to know whether a resource is a path record
+// stream. Mirror parse_records' acceptance rules without constructing a
+// VectorPath (which could otherwise allocate attacker-sized anchor arrays).
+bool path_resource_records_are_valid(std::span<const std::uint8_t> payload) noexcept {
+  if (payload.size() < kPathRecordSize) {
+    return false;
+  }
+  bool has_current = false;
+  std::size_t knots_expected = 0U;
+  std::size_t knots_seen = 0U;
+  std::size_t offset = 0U;
+  while (offset + kPathRecordSize <= payload.size()) {
+    const auto record = payload.subspan(offset, kPathRecordSize);
+    offset += kPathRecordSize;
+    switch (read_u16_at(record, 0U)) {
+      case 6:
+      case 8:
+      case 7:
+        break;
+      case 0:
+      case 3: {
+        if (has_current && knots_seen != knots_expected) {
+          return false;
+        }
+        const auto operation = read_u16_at(record, 4U);
+        if (operation != 0xFFFFU && operation > 3U) {
+          return false;
+        }
+        has_current = true;
+        knots_expected = read_u16_at(record, 2U);
+        knots_seen = 0U;
+        break;
+      }
+      case 1:
+      case 2:
+      case 4:
+      case 5:
+        if (!has_current || knots_seen >= knots_expected) {
+          return false;
+        }
+        ++knots_seen;
+        break;
+      default:
+        return false;
+    }
+  }
+  return !has_current || knots_seen == knots_expected;
+}
+
 // Vector descriptor blocks begin with either a bare u32 descriptorVersion 16
 // (SoCo/GdFl/PtFl/vstk) or a block version followed by descriptorVersion 16
 // (vogk: 1, 16). Returns the parsed root descriptor.
@@ -455,51 +504,38 @@ void pad_payload_to_4(std::vector<std::uint8_t>& payload) {
   }
 }
 
-void write_i32_at(std::vector<std::uint8_t>& bytes, std::size_t offset, std::int32_t value) {
-  const auto raw = static_cast<std::uint32_t>(value);
-  bytes[offset] = static_cast<std::uint8_t>((raw >> 24U) & 0xffU);
-  bytes[offset + 1U] = static_cast<std::uint8_t>((raw >> 16U) & 0xffU);
-  bytes[offset + 2U] = static_cast<std::uint8_t>((raw >> 8U) & 0xffU);
-  bytes[offset + 3U] = static_cast<std::uint8_t>(raw & 0xffU);
-}
-
-void write_u16_at(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint16_t value) {
-  bytes[offset] = static_cast<std::uint8_t>((value >> 8U) & 0xffU);
-  bytes[offset + 1U] = static_cast<std::uint8_t>(value & 0xffU);
-}
-
 // Appends the 26-byte record stream (selector 6, selector 8, then subpaths).
-void append_path_records(std::vector<std::uint8_t>& out, const VectorPath& path,
-                         std::int32_t canvas_width, std::int32_t canvas_height) {
-  const auto append_record = [&out]() -> std::size_t {
-    const auto offset = out.size();
-    out.resize(offset + kPathRecordSize, 0);
-    return offset;
+void append_path_records(BigEndianWriter& writer, const VectorPath& path, std::int32_t canvas_width,
+                         std::int32_t canvas_height) {
+  const auto write_zeros = [&writer](std::size_t count) {
+    for (std::size_t index = 0; index < count; ++index) {
+      writer.write_u8(0U);
+    }
   };
-  auto fill_rule = append_record();
-  write_u16_at(out, fill_rule, 6);
-  write_u16_at(out, fill_rule + 2, path.fill_rule_value);
-  auto initial_fill = append_record();
-  write_u16_at(out, initial_fill, 8);
-  write_u16_at(out, initial_fill + 2, path.initial_fill_value);
+  writer.write_u16(6U);
+  writer.write_u16(path.fill_rule_value);
+  write_zeros(22U);
+  writer.write_u16(8U);
+  writer.write_u16(path.initial_fill_value);
+  write_zeros(22U);
   for (const auto& subpath : path.subpaths) {
-    const auto length_record = append_record();
-    write_u16_at(out, length_record, subpath.closed ? 0 : 3);
-    write_u16_at(out, length_record + 2, static_cast<std::uint16_t>(subpath.anchors.size()));
-    write_u16_at(out, length_record + 4, static_cast<std::uint16_t>(subpath.op));
-    write_u16_at(out, length_record + 6, 1);
-    write_i32_at(out, length_record + 12, subpath.shape_group);
+    writer.write_u16(subpath.closed ? 0U : 3U);
+    writer.write_u16(static_cast<std::uint16_t>(subpath.anchors.size()));
+    writer.write_u16(static_cast<std::uint16_t>(subpath.op));
+    writer.write_u16(1U);
+    writer.write_u32(0U);
+    writer.write_u32(static_cast<std::uint32_t>(subpath.shape_group));
+    write_zeros(10U);
     for (const auto& anchor : subpath.anchors) {
-      const auto knot = append_record();
       const std::uint16_t selector =
           subpath.closed ? (anchor.smooth ? 1 : 2) : (anchor.smooth ? 4 : 5);
-      write_u16_at(out, knot, selector);
-      write_i32_at(out, knot + 2, path_coordinate_to_fixed(anchor.in_y, canvas_height));
-      write_i32_at(out, knot + 6, path_coordinate_to_fixed(anchor.in_x, canvas_width));
-      write_i32_at(out, knot + 10, path_coordinate_to_fixed(anchor.anchor_y, canvas_height));
-      write_i32_at(out, knot + 14, path_coordinate_to_fixed(anchor.anchor_x, canvas_width));
-      write_i32_at(out, knot + 18, path_coordinate_to_fixed(anchor.out_y, canvas_height));
-      write_i32_at(out, knot + 22, path_coordinate_to_fixed(anchor.out_x, canvas_width));
+      writer.write_u16(selector);
+      writer.write_u32(static_cast<std::uint32_t>(path_coordinate_to_fixed(anchor.in_y, canvas_height)));
+      writer.write_u32(static_cast<std::uint32_t>(path_coordinate_to_fixed(anchor.in_x, canvas_width)));
+      writer.write_u32(static_cast<std::uint32_t>(path_coordinate_to_fixed(anchor.anchor_y, canvas_height)));
+      writer.write_u32(static_cast<std::uint32_t>(path_coordinate_to_fixed(anchor.anchor_x, canvas_width)));
+      writer.write_u32(static_cast<std::uint32_t>(path_coordinate_to_fixed(anchor.out_y, canvas_height)));
+      writer.write_u32(static_cast<std::uint32_t>(path_coordinate_to_fixed(anchor.out_x, canvas_width)));
     }
   }
 }
@@ -788,9 +824,8 @@ const char* vector_fill_block_key(VectorFillKind kind) {
 std::vector<std::uint8_t> vector_mask_block_payload(const VectorPath& path, bool disabled, bool inverted,
                                                     bool unlinked, std::int32_t canvas_width,
                                                     std::int32_t canvas_height) {
-  std::vector<std::uint8_t> payload;
-  payload.resize(8, 0);
-  write_i32_at(payload, 0, 3);  // version
+  BigEndianWriter writer;
+  writer.write_u32(3U);  // version
   std::uint32_t flags = 0;
   if (inverted) {
     flags |= 0x01U;
@@ -801,8 +836,9 @@ std::vector<std::uint8_t> vector_mask_block_payload(const VectorPath& path, bool
   if (disabled) {
     flags |= 0x04U;
   }
-  write_i32_at(payload, 4, static_cast<std::int32_t>(flags));
-  append_path_records(payload, path, canvas_width, canvas_height);
+  writer.write_u32(flags);
+  append_path_records(writer, path, canvas_width, canvas_height);
+  auto payload = std::move(writer).take_bytes();
   pad_payload_to_4(payload);
   return payload;
 }
@@ -1015,15 +1051,16 @@ CoverageBuffer vector_mask_derived_plane(const LayerVectorMask& mask) {
   return rasterize_vector_mask_coverage(plain, clip);
 }
 
-std::vector<std::uint8_t> document_path_resource_payload(const DocumentPath& path,
-                                                         std::int32_t canvas_width,
-                                                         std::int32_t canvas_height) {
-  std::vector<std::uint8_t> payload;
-  append_path_records(payload, path.path(), canvas_width, canvas_height);
-  return payload;
+SaveTrackedByteBuffer document_path_resource_payload(const DocumentPath& path, std::int32_t canvas_width,
+                                                     std::int32_t canvas_height,
+                                                     SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  append_path_records(tracked_writer.writer(), path.path(), canvas_width, canvas_height);
+  return std::move(tracked_writer).take_buffer();
 }
 
-void upsert_document_path_resources(std::vector<ImageResource>& resources, const Document& document) {
+void upsert_document_path_resources(std::vector<ImageResource>& resources, const Document& document,
+                                    SaveLiveBudgetTracker& tracked_live_budget) {
   // Remove path resources whose document path is gone (or whose kind moved).
   const auto document_uses_resource_id = [&document](std::uint16_t id) {
     for (const auto& path : document.paths()) {
@@ -1043,8 +1080,7 @@ void upsert_document_path_resources(std::vector<ImageResource>& resources, const
     // Only payloads that parse as path records were importable as document
     // paths, so their absence from the document means the user deleted them.
     // Anything unparseable in the id range stays byte-preserved (never guess).
-    return parse_path_resource_records(resource.payload.bytes, document.width(), document.height())
-        .has_value();
+    return path_resource_records_are_valid(resource.payload.bytes);
   });
 
   // Allocate ids for new paths and upsert dirty/new payloads.
@@ -1141,9 +1177,10 @@ void upsert_document_path_resources(std::vector<ImageResource>& resources, const
     if (needs_payload) {
       // Clean paths re-emit their original bytes verbatim even at a new id;
       // only dirty (user-edited) paths regenerate.
-      auto payload = !path.dirty() && path.raw_payload() != nullptr
-                         ? *path.raw_payload()
-                         : document_path_resource_payload(path, document.width(), document.height());
+      auto payload =
+          !path.dirty() && path.raw_payload() != nullptr
+              ? save_tracked_byte_copy(*path.raw_payload(), tracked_live_budget)
+              : document_path_resource_payload(path, document.width(), document.height(), tracked_live_budget);
       upsert_image_resource(resources, resource_id, std::move(payload));
     }
     if (path.kind() != DocumentPathKind::Work) {
@@ -1193,16 +1230,18 @@ void upsert_document_path_resources(std::vector<ImageResource>& resources, const
   if (clipping == nullptr) {
     remove_image_resource(resources, kPsdClippingPathNameResourceId);
   } else {
-    std::vector<std::uint8_t> payload;
+    SaveTrackedWriter tracked_writer(tracked_live_budget);
+    auto& writer = tracked_writer.writer();
     const auto& name = clipping->name();
     const auto length = std::min<std::size_t>(name.size(), 255U);
-    payload.push_back(static_cast<std::uint8_t>(length));
-    payload.insert(payload.end(), name.begin(), name.begin() + static_cast<std::ptrdiff_t>(length));
-    if (payload.size() % 2U != 0U) {
-      payload.push_back(0);
+    writer.write_u8(static_cast<std::uint8_t>(length));
+    writer.write_bytes(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(name.data()), length));
+    if ((length + 1U) % 2U != 0U) {
+      writer.write_u8(0U);
     }
-    payload.insert(payload.end(), {0, 0, 0, 0, 1});
-    upsert_image_resource(resources, kPsdClippingPathNameResourceId, std::move(payload));
+    writer.write_u32(0U);
+    writer.write_u8(1U);
+    upsert_image_resource(resources, kPsdClippingPathNameResourceId, std::move(tracked_writer).take_buffer());
   }
 }
 

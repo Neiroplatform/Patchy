@@ -59,8 +59,7 @@ namespace patchy::psd {
 
 // Promoted from the anonymous namespace so the vector codec can upsert the
 // saved-path resources (declared in psd_io_internal.hpp).
-void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t id,
-                           std::vector<std::uint8_t> payload) {
+void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t id, SaveTrackedByteBuffer payload) {
   bool replaced = false;
   for (auto it = resources.begin(); it != resources.end();) {
     if (it->id != id) {
@@ -70,8 +69,7 @@ void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t 
     if (!replaced) {
       it->signature = {'8', 'B', 'I', 'M'};
       it->name.clear();
-      it->payload = SaveTrackedByteBuffer(
-          SaveLiveBudgetTracker::Reservation{}, std::move(payload));
+      it->payload = std::move(payload);
       replaced = true;
       ++it;
     } else {
@@ -81,8 +79,7 @@ void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t 
   if (!replaced) {
     ImageResource resource;
     resource.id = id;
-    resource.payload = SaveTrackedByteBuffer(
-        SaveLiveBudgetTracker::Reservation{}, std::move(payload));
+    resource.payload = std::move(payload);
     resources.push_back(std::move(resource));
   }
 }
@@ -352,16 +349,18 @@ std::uint32_t double_to_fixed_16_16(double value) noexcept {
   return static_cast<std::uint32_t>(std::lround(value * 65536.0));
 }
 
-std::vector<std::uint8_t> resolution_resource_for_document(const Document& document) {
+SaveTrackedByteBuffer resolution_resource_for_document(const Document& document,
+                                                       SaveLiveBudgetTracker& tracked_live_budget) {
   const auto& print_settings = document.print_settings();
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u32(double_to_fixed_16_16(print_settings.horizontal_ppi));
   writer.write_u16(print_settings.horizontal_resolution_display_unit);
   writer.write_u16(print_settings.width_display_unit);
   writer.write_u32(double_to_fixed_16_16(print_settings.vertical_ppi));
   writer.write_u16(print_settings.vertical_resolution_display_unit);
   writer.write_u16(print_settings.height_display_unit);
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
 }
 
 std::int32_t sanitized_grid_cycle_32(std::int32_t value) noexcept {
@@ -372,8 +371,10 @@ std::int32_t sanitized_guide_position_32(std::int32_t value) noexcept {
   return std::max<std::int32_t>(0, value);
 }
 
-std::vector<std::uint8_t> grid_guides_resource_for_document(const Document& document) {
-  BigEndianWriter writer;
+SaveTrackedByteBuffer grid_guides_resource_for_document(const Document& document,
+                                                        SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   writer.write_u32(1);
   writer.write_u32(static_cast<std::uint32_t>(sanitized_grid_cycle_32(document.grid_settings().horizontal_cycle_32)));
   writer.write_u32(static_cast<std::uint32_t>(sanitized_grid_cycle_32(document.grid_settings().vertical_cycle_32)));
@@ -382,110 +383,152 @@ std::vector<std::uint8_t> grid_guides_resource_for_document(const Document& docu
     writer.write_u32(static_cast<std::uint32_t>(sanitized_guide_position_32(guide.position_32)));
     writer.write_u8(guide.orientation == GuideOrientation::Horizontal ? 1U : 0U);
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
 }
 
-[[nodiscard]] std::vector<std::uint8_t> patchy_palette_resource(std::span<const RgbColor> colors, bool mode_active,
-                                                                std::uint8_t alpha_threshold,
-                                                                std::span<const std::string> names) {
-  std::vector<std::uint8_t> payload;
-  payload.reserve(12U + colors.size() * 3U);
-  const auto push_u16 = [&payload](std::uint16_t value) {
-    payload.push_back(static_cast<std::uint8_t>(value >> 8U));
-    payload.push_back(static_cast<std::uint8_t>(value & 0xffU));
-  };
-  payload.push_back(static_cast<std::uint8_t>((kPatchyPaletteMagic >> 24U) & 0xffU));
-  payload.push_back(static_cast<std::uint8_t>((kPatchyPaletteMagic >> 16U) & 0xffU));
-  payload.push_back(static_cast<std::uint8_t>((kPatchyPaletteMagic >> 8U) & 0xffU));
-  payload.push_back(static_cast<std::uint8_t>(kPatchyPaletteMagic & 0xffU));
-  push_u16(1);  // version
-  push_u16(mode_active ? 1U : 0U);
-  payload.push_back(alpha_threshold);
-  payload.push_back(0);  // reserved
-  push_u16(static_cast<std::uint16_t>(colors.size()));
+[[nodiscard]] SaveTrackedByteBuffer patchy_palette_resource(std::span<const RgbColor> colors, bool mode_active,
+                                                            std::uint8_t alpha_threshold,
+                                                            std::span<const std::string> names,
+                                                            SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
+  writer.write_u32(kPatchyPaletteMagic);
+  writer.write_u16(1);  // version
+  writer.write_u16(mode_active ? 1U : 0U);
+  writer.write_u8(alpha_threshold);
+  writer.write_u8(0);  // reserved
+  writer.write_u16(static_cast<std::uint16_t>(colors.size()));
   for (const auto& color : colors) {
-    payload.push_back(color.red);
-    payload.push_back(color.green);
-    payload.push_back(color.blue);
+    writer.write_u8(color.red);
+    writer.write_u8(color.green);
+    writer.write_u8(color.blue);
   }
   // Version 1 readers accept trailing bytes. Keep the RGB table compatible and
   // omit the extension entirely for unnamed palettes (historical bytes unchanged).
   if (std::any_of(names.begin(), names.end(), [](const auto& name) { return !name.empty(); })) {
-    payload.insert(payload.end(), {'N', 'm', '0', '1'});
+    writer.write_bytes(std::array<std::uint8_t, 4>{'N', 'm', '0', '1'});
     for (std::size_t i = 0; i < colors.size(); ++i) {
       const std::string_view name = i < names.size() ? std::string_view(names[i]) : std::string_view{};
       if (name.size() > kMaxPaletteColorNameBytes) { throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Palette color name is too long")); }
-      push_u16(static_cast<std::uint16_t>(name.size()));
-      payload.insert(payload.end(), name.begin(), name.end());
+      writer.write_u16(static_cast<std::uint16_t>(name.size()));
+      writer.write_bytes(
+          std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(name.data()), name.size()));
     }
   }
-  return payload;
+  return std::move(tracked_writer).take_buffer();
 }
 
-std::vector<std::uint8_t> alpha_channel_names_resource(
-    std::span<const CompositeChannelInfo> channels) {
-  std::vector<std::uint8_t> payload;
+template <typename Visitor>
+void visit_utf8_as_utf16(std::string_view text, Visitor&& visitor) {
+  for (std::size_t index = 0; index < text.size();) {
+    const auto lead = static_cast<unsigned char>(text[index]);
+    std::uint32_t codepoint = 0x3FU;
+    std::size_t consumed = 1U;
+    if (lead < 0x80U) {
+      codepoint = lead;
+    } else if ((lead & 0xE0U) == 0xC0U && index + 1U < text.size()) {
+      codepoint = ((lead & 0x1FU) << 6U) | (static_cast<unsigned char>(text[index + 1U]) & 0x3FU);
+      consumed = 2U;
+    } else if ((lead & 0xF0U) == 0xE0U && index + 2U < text.size()) {
+      codepoint = ((lead & 0x0FU) << 12U) | ((static_cast<unsigned char>(text[index + 1U]) & 0x3FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 2U]) & 0x3FU);
+      consumed = 3U;
+    } else if ((lead & 0xF8U) == 0xF0U && index + 3U < text.size()) {
+      codepoint = ((lead & 0x07U) << 18U) | ((static_cast<unsigned char>(text[index + 1U]) & 0x3FU) << 12U) |
+                  ((static_cast<unsigned char>(text[index + 2U]) & 0x3FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 3U]) & 0x3FU);
+      consumed = 4U;
+    }
+    if (codepoint <= 0xFFFFU) {
+      visitor(static_cast<std::uint16_t>(codepoint));
+    } else {
+      codepoint -= 0x10000U;
+      visitor(static_cast<std::uint16_t>(0xD800U + (codepoint >> 10U)));
+      visitor(static_cast<std::uint16_t>(0xDC00U + (codepoint & 0x3FFU)));
+    }
+    index += consumed;
+  }
+}
+
+SaveTrackedByteBuffer alpha_channel_names_resource(std::span<const CompositeChannelInfo> channels,
+                                                   SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   for (const auto& channel : channels) {
     // Resource 1006 is a legacy one-byte Pascal string array. Photoshop uses
     // one '?' per Unicode scalar that is not representable there; the exact
     // UTF-8 name belongs in resource 1045.
-    std::vector<std::uint8_t> legacy_name;
-    legacy_name.reserve(std::min<std::size_t>(channel.name.size(), 255U));
-    const auto units = utf8_to_utf16(channel.name);
-    for (std::size_t index = 0; index < units.size() && legacy_name.size() < 255U; ++index) {
-      const auto unit = units[index];
-      if (unit >= 0xD800U && unit <= 0xDBFFU && index + 1U < units.size() &&
-          units[index + 1U] >= 0xDC00U && units[index + 1U] <= 0xDFFFU) {
-        ++index;
+    std::array<std::uint8_t, 255> legacy_name{};
+    std::size_t length = 0U;
+    std::optional<std::uint16_t> pending_high;
+    visit_utf8_as_utf16(channel.name, [&](std::uint16_t unit) {
+      if (length >= legacy_name.size()) {
+        return;
       }
-      legacy_name.push_back(unit <= 0x7FU ? static_cast<std::uint8_t>(unit)
-                                         : static_cast<std::uint8_t>('?'));
+      if (pending_high.has_value()) {
+        if (unit >= 0xDC00U && unit <= 0xDFFFU) {
+          legacy_name[length++] = '?';
+          pending_high.reset();
+          return;
+        }
+        legacy_name[length++] = '?';
+        pending_high.reset();
+        if (length >= legacy_name.size()) {
+          return;
+        }
+      }
+      if (unit >= 0xD800U && unit <= 0xDBFFU) {
+        pending_high = unit;
+      } else {
+        legacy_name[length++] = unit <= 0x7FU ? static_cast<std::uint8_t>(unit) : static_cast<std::uint8_t>('?');
+      }
+    });
+    if (pending_high.has_value() && length < legacy_name.size()) {
+      legacy_name[length++] = '?';
     }
-    payload.push_back(static_cast<std::uint8_t>(legacy_name.size()));
-    payload.insert(payload.end(), legacy_name.begin(), legacy_name.end());
+    writer.write_u8(static_cast<std::uint8_t>(length));
+    writer.write_bytes(std::span<const std::uint8_t>(legacy_name).first(length));
   }
-  return payload;
+  return std::move(tracked_writer).take_buffer();
 }
 
-std::vector<std::uint8_t> unicode_alpha_channel_names_resource(
-    std::span<const CompositeChannelInfo> channels) {
-  BigEndianWriter writer;
+SaveTrackedByteBuffer unicode_alpha_channel_names_resource(std::span<const CompositeChannelInfo> channels,
+                                                           SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   for (const auto& channel : channels) {
-    const auto units = utf8_to_utf16(channel.name);
-    writer.write_u32(checked_u32(units.size() + 1U, "Unicode alpha channel name length"));
-    for (const auto unit : units) {
-      writer.write_u16(unit);
-    }
+    std::size_t unit_count = 0U;
+    visit_utf8_as_utf16(channel.name, [&](std::uint16_t) { ++unit_count; });
+    writer.write_u32(checked_u32(unit_count + 1U, "Unicode alpha channel name length"));
+    visit_utf8_as_utf16(channel.name, [&](std::uint16_t unit) { writer.write_u16(unit); });
     writer.write_u16(0);  // Photoshop includes the terminator in the unit count.
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
 }
 
-std::vector<std::uint8_t> alpha_identifiers_resource(
-    std::span<const CompositeChannelInfo> channels) {
+SaveTrackedByteBuffer alpha_identifiers_resource(std::span<const CompositeChannelInfo> channels,
+                                                 SaveLiveBudgetTracker& tracked_live_budget) {
   const auto has_alpha_identifier = [](const CompositeChannelInfo& channel) {
     return !channel.merged_transparency && channel.alpha_identifier_eligible;
   };
-  std::vector<std::uint32_t> used;
-  for (const auto& channel : channels) {
-    if (has_alpha_identifier(channel) && channel.photoshop_identifier.has_value()) {
-      used.push_back(*channel.photoshop_identifier);
-    }
-  }
   std::uint32_t next_identifier = 1U;
-  const auto allocate_identifier = [&used, &next_identifier]() {
-    while (std::find(used.begin(), used.end(), next_identifier) != used.end()) {
+  const auto allocate_identifier = [&channels, &has_alpha_identifier, &next_identifier]() {
+    const auto identifier_is_used = [&channels, &has_alpha_identifier](std::uint32_t candidate) {
+      return std::any_of(channels.begin(), channels.end(), [candidate, &has_alpha_identifier](const auto& channel) {
+        return has_alpha_identifier(channel) && channel.photoshop_identifier == candidate;
+      });
+    };
+    while (identifier_is_used(next_identifier)) {
       ++next_identifier;
       if (next_identifier == 0U) {
         throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "PSD alpha channel identifiers are exhausted"));
       }
     }
-    const auto result = next_identifier++;
-    used.push_back(result);
-    return result;
+    return next_identifier++;
   };
 
-  BigEndianWriter writer;
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   const auto saved_count = static_cast<std::size_t>(std::count_if(
       channels.begin(), channels.end(), has_alpha_identifier));
   writer.write_u32(checked_u32(saved_count, "alpha identifier count"));
@@ -496,11 +539,10 @@ std::vector<std::uint8_t> alpha_identifiers_resource(
     writer.write_u32(channel.photoshop_identifier.has_value() ? *channel.photoshop_identifier
                                                                : allocate_identifier());
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
 }
 
-std::vector<std::uint8_t> generated_display_info_record(const DocumentChannelDisplayInfo& info) {
-  BigEndianWriter writer;
+void write_generated_display_info_record(BigEndianWriter& writer, const DocumentChannelDisplayInfo& info) {
   writer.write_u16(0);  // RGB color space.
   writer.write_u16(static_cast<std::uint16_t>(info.color.red) * 257U);
   writer.write_u16(static_cast<std::uint16_t>(info.color.green) * 257U);
@@ -510,12 +552,12 @@ std::vector<std::uint8_t> generated_display_info_record(const DocumentChannelDis
   writer.write_u8(info.color_indicates == DocumentChannelColorIndicates::SpotColor       ? 2U
                   : info.color_indicates == DocumentChannelColorIndicates::SelectedAreas ? 0U
                                                                                            : 1U);
-  return writer.bytes();
 }
 
-std::vector<std::uint8_t> display_info_resource(std::span<const CompositeChannelInfo> channels,
-                                                bool floating_point_resource) {
-  BigEndianWriter writer;
+SaveTrackedByteBuffer display_info_resource(std::span<const CompositeChannelInfo> channels,
+                                            bool floating_point_resource, SaveLiveBudgetTracker& tracked_live_budget) {
+  SaveTrackedWriter tracked_writer(tracked_live_budget);
+  auto& writer = tracked_writer.writer();
   if (floating_point_resource) {
     writer.write_u32(1);
   }
@@ -527,13 +569,13 @@ std::vector<std::uint8_t> display_info_resource(std::span<const CompositeChannel
     if (channel.raw_display_info.size() >= 13U) {
       writer.write_bytes(channel.raw_display_info.first(13U));
     } else {
-      writer.write_bytes(generated_display_info_record(channel.display_info));
+      write_generated_display_info_record(writer, channel.display_info);
     }
     if (!floating_point_resource) {
       writer.write_u8(0);
     }
   }
-  return writer.bytes();
+  return std::move(tracked_writer).take_buffer();
 }
 
 }  // namespace
@@ -904,21 +946,28 @@ SaveTrackedByteBuffer image_resources_for_document(
       sanitized_grid_cycle_32(document.grid_settings().horizontal_cycle_32) != kDefaultGridCycle32 ||
       sanitized_grid_cycle_32(document.grid_settings().vertical_cycle_32) != kDefaultGridCycle32;
 
-  upsert_document_path_resources(*parsed, document);
-  upsert_image_resource(*parsed, kImageResourceResolutionInfo, resolution_resource_for_document(document));
+  upsert_document_path_resources(*parsed, document, tracked_live_budget);
+  upsert_image_resource(*parsed, kImageResourceResolutionInfo,
+                        resolution_resource_for_document(document, tracked_live_budget));
   if (had_grid_guides_resource || has_non_default_grid_guides) {
-    upsert_image_resource(*parsed, kImageResourceGridAndGuidesInfo, grid_guides_resource_for_document(document));
+    upsert_image_resource(*parsed, kImageResourceGridAndGuidesInfo,
+                          grid_guides_resource_for_document(document, tracked_live_budget));
   }
   if (!document.color_state().embedded_icc_profile.empty()) {
-    upsert_image_resource(*parsed, kImageResourceIccProfile, document.color_state().embedded_icc_profile);
+    upsert_image_resource(*parsed, kImageResourceIccProfile,
+                          save_tracked_byte_copy(document.color_state().embedded_icc_profile, tracked_live_budget));
   }
   if (!channels.empty()) {
-    upsert_image_resource(*parsed, kImageResourceAlphaChannelNames, alpha_channel_names_resource(channels));
+    upsert_image_resource(*parsed, kImageResourceAlphaChannelNames,
+                          alpha_channel_names_resource(channels, tracked_live_budget));
     upsert_image_resource(*parsed, kImageResourceUnicodeAlphaChannelNames,
-                          unicode_alpha_channel_names_resource(channels));
-    upsert_image_resource(*parsed, kImageResourceAlphaIdentifiers, alpha_identifiers_resource(channels));
-    upsert_image_resource(*parsed, kImageResourceDisplayInfo, display_info_resource(channels, false));
-    upsert_image_resource(*parsed, kImageResourceDisplayInfoFloat, display_info_resource(channels, true));
+                          unicode_alpha_channel_names_resource(channels, tracked_live_budget));
+    upsert_image_resource(*parsed, kImageResourceAlphaIdentifiers,
+                          alpha_identifiers_resource(channels, tracked_live_budget));
+    upsert_image_resource(*parsed, kImageResourceDisplayInfo,
+                          display_info_resource(channels, false, tracked_live_budget));
+    upsert_image_resource(*parsed, kImageResourceDisplayInfoFloat,
+                          display_info_resource(channels, true, tracked_live_budget));
   } else {
     remove_image_resource(*parsed, kImageResourceAlphaChannelNames);
     remove_image_resource(*parsed, kImageResourceUnicodeAlphaChannelNames);
@@ -941,33 +990,44 @@ SaveTrackedByteBuffer image_resources_for_document(
     palette_names = &document.indexed_palette()->names;
   }
   if (palette_colors != nullptr) {
-    upsert_image_resource(*parsed, kImageResourcePatchyPalette,
-                          patchy_palette_resource(*palette_colors, palette_editing.has_value(),
-                                                  palette_editing.has_value() ? palette_editing->alpha_threshold
-                                                                              : std::uint8_t{128}, *palette_names));
+    upsert_image_resource(
+        *parsed, kImageResourcePatchyPalette,
+        patchy_palette_resource(*palette_colors, palette_editing.has_value(),
+                                palette_editing.has_value() ? palette_editing->alpha_threshold : std::uint8_t{128},
+                                *palette_names, tracked_live_budget));
   } else {
     remove_image_resource(*parsed, kImageResourcePatchyPalette);
   }
-  BigEndianWriter compound_entries;
-  const auto collect_compound = [&](const auto& self, const std::vector<Layer>& layers) -> void {
+  std::size_t compound_count = 0U;
+  const auto count_compound = [&](const auto& self, const std::vector<Layer>& layers) -> void {
     for (const auto& layer : layers) {
       const auto kind = compound_vector_group_kind(layer);
       if (const auto id = photoshop_layer_id(layer); id && kind != CompoundVectorGroupKind::None) {
-        compound_entries.write_u32(*id);
-        compound_entries.write_u32(static_cast<std::uint32_t>(kind));
+        ++compound_count;
       }
       self(self, layer.children());
     }
   };
-  collect_compound(collect_compound, document.layers());
-  if (!compound_entries.bytes().empty()) {
-    BigEndianWriter payload;
-    payload.write_u32(kPatchyCompoundVectorsMagic);
-    payload.write_u16(1);
-    payload.write_u16(0);
-    payload.write_u32(checked_u32(compound_entries.bytes().size() / 8, "compound vector group count"));
-    payload.write_bytes(compound_entries.bytes());
-    upsert_image_resource(*parsed, kImageResourcePatchyCompoundVectors, payload.bytes());
+  count_compound(count_compound, document.layers());
+  if (compound_count != 0U) {
+    SaveTrackedWriter tracked_writer(tracked_live_budget);
+    auto& writer = tracked_writer.writer();
+    writer.write_u32(kPatchyCompoundVectorsMagic);
+    writer.write_u16(1);
+    writer.write_u16(0);
+    writer.write_u32(checked_u32(compound_count, "compound vector group count"));
+    const auto write_compound = [&](const auto& self, const std::vector<Layer>& layers) -> void {
+      for (const auto& layer : layers) {
+        const auto kind = compound_vector_group_kind(layer);
+        if (const auto id = photoshop_layer_id(layer); id && kind != CompoundVectorGroupKind::None) {
+          writer.write_u32(*id);
+          writer.write_u32(static_cast<std::uint32_t>(kind));
+        }
+        self(self, layer.children());
+      }
+    };
+    write_compound(write_compound, document.layers());
+    upsert_image_resource(*parsed, kImageResourcePatchyCompoundVectors, std::move(tracked_writer).take_buffer());
   } else {
     // Retain opaque future/foreign payloads. Only our understood v1 data can
     // become stale after its marked shapes were rasterized or removed.

@@ -554,6 +554,7 @@ void psd_save_layer_record_writer_branches_overlap_the_extra_owner() {
 void psd_save_image_resource_stream_owns_tracked_reservation() {
   patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
   constexpr std::uint64_t kResourceBytes = 28U;
+  constexpr std::uint64_t kExactPeak = 44U;
   constexpr std::uint64_t kHash = 0x89d7e6821196bcadULL;
 
   const auto run = [&](std::uint64_t limit, std::uint64_t outer_bytes) {
@@ -568,16 +569,16 @@ void psd_save_image_resource_stream_owns_tracked_reservation() {
       CHECK(resources.bytes.size() == kResourceBytes);
       CHECK(patchy::test::fnv1a_hash_bytes(resources.bytes) == kHash);
       CHECK(current == outer_bytes + kResourceBytes);
-      CHECK(high_water == outer_bytes + kResourceBytes);
+      CHECK(high_water == outer_bytes + kExactPeak);
     }
     CHECK(current == outer_bytes);
     return high_water;
   };
 
-  CHECK(run(kResourceBytes, 0U) == kResourceBytes);
-  CHECK(run(kResourceBytes + 7U, 7U) == kResourceBytes + 7U);
+  CHECK(run(kExactPeak, 0U) == kExactPeak);
+  CHECK(run(kExactPeak + 7U, 7U) == kExactPeak + 7U);
 
-  for (const auto limit : {kResourceBytes - 1U, std::uint64_t{0U}}) {
+  for (const auto limit : {kExactPeak - 1U, std::uint64_t{0U}}) {
     std::uint64_t current = 0U;
     std::uint64_t high_water = 0U;
     bool rejected = false;
@@ -611,19 +612,19 @@ void psd_save_image_resource_stream_owns_tracked_reservation() {
   std::uint64_t parsed_current = 0U;
   std::uint64_t parsed_high_water = 0U;
   {
-    patchy::psd::SaveLiveBudgetTracker tracker(56U, &parsed_current, &parsed_high_water);
+    patchy::psd::SaveLiveBudgetTracker tracker(72U, &parsed_current, &parsed_high_water);
     {
       const auto resources = patchy::psd::image_resources_for_document(document, {}, tracker);
       CHECK(resources.bytes.size() == 48U);
       CHECK(patchy::test::fnv1a_hash_bytes(resources.bytes) == 0xdd749d5efe02bc9dULL);
       CHECK(parsed_current == 48U);
-      CHECK(parsed_high_water == 56U);
+      CHECK(parsed_high_water == 72U);
     }
     CHECK(parsed_current == 0U);
   }
 
   for (const auto [limit, expected_high] :
-       std::array<std::pair<std::uint64_t, std::uint64_t>, 3>{{{55U, 0U}, {10U, 3U}, {0U, 0U}}}) {
+       std::array<std::pair<std::uint64_t, std::uint64_t>, 4>{{{71U, 0U}, {26U, 25U}, {10U, 3U}, {0U, 0U}}}) {
     parsed_current = 0U;
     parsed_high_water = 0U;
     bool rejected = false;
@@ -643,11 +644,11 @@ void psd_save_image_resource_stream_owns_tracked_reservation() {
   parsed_current = 0U;
   parsed_high_water = 0U;
   {
-    patchy::psd::SaveLiveBudgetTracker tracker(kResourceBytes, &parsed_current, &parsed_high_water);
+    patchy::psd::SaveLiveBudgetTracker tracker(kExactPeak, &parsed_current, &parsed_high_water);
     const auto resources = patchy::psd::image_resources_for_document(document, {}, tracker);
     CHECK(resources.bytes.size() == kResourceBytes);
     CHECK(parsed_current == kResourceBytes);
-    CHECK(parsed_high_water == kResourceBytes);
+    CHECK(parsed_high_water == kExactPeak);
   }
   CHECK(parsed_current == 0U);
 }

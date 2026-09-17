@@ -67,7 +67,7 @@ does not reserve a slot. This is not exact post-render channel usage.
 The Photoshop 8000-record format error precedes configurable admission. Other later
 encoder-format errors may be preceded by an earlier finite preflight rejection.
 
-## DP-008A through DP-008B2b tracked live workspace
+## DP-008A through DP-008B2c tracked live workspace
 
 `max_tracked_live_bytes` caps conservative logical reservations for instrumented
 save-owned temporary buffers. `SaveUsage::tracked_live_bytes` is current
@@ -88,6 +88,8 @@ The current implemented slices cover:
   vector-origination-version, protection, mask-effects, interior-effects, and
   channel-restriction writers;
 - payload copies parsed from a valid preserved image-resource section;
+- generated resolution, grid/guide, ICC-copy, channel-name/identifier/display,
+  palette, compound-vector, saved/work-path, and clipping-path payloads;
 - the final rebuilt image-resource stream returned to the flat or layered
   document writer.
 
@@ -107,7 +109,15 @@ whole-section save copy and couples each parsed payload copy to its storage; a
 replace, erase, or reorder therefore releases or transfers the same reservation.
 The preserved raw section remains caller-owned DP-006 document state, not save
 workspace. A zero-allocation validity pass preserves malformed-section fallback
-before any parsed-payload admission. Generated payload owners remain untracked.
+before any parsed-payload admission. DP-008B2c couples every generated or copied
+image-resource payload to a pre-allocation reservation. Direct writers eliminate
+the UTF-16 name, display-record, compound-entry, and path-record byte temporaries;
+the compound resource uses a count/write traversal. The save-time path deletion
+check now mirrors parser acceptance without constructing a `VectorPath`, so a
+declared knot count cannot allocate geometry merely to decide whether an absent
+modeled path should remove its old resource. Path reorder vectors and resource
+container/string capacity remain the platform-dependent bookkeeping exclusions
+described below.
 
 ## Explicit exclusions and remaining DP-008B work
 
@@ -126,7 +136,6 @@ DP-008B remains open for:
 - compound/open-stroke normalization clones and vector-raster scratch;
 - deep compositor group, clipping, style, effect, distance-field, and blur planes;
 - generated layer-record payload producers and nested resource writers;
-- generated image-resource payloads and path/clipping resource scratch;
 - generated Smart Object, Smart Filter, and pattern serialization payloads.
 
 Product callers must not treat DP-008A as a complete save-memory ceiling. Finite
@@ -162,9 +171,16 @@ and layered PSD/PSB high-water canaries include the returned stream while it is
 copied into the final output. DP-008B2b pins a 36-byte preserved input whose
 parsed payload owners total 11 bytes and whose rebuilt stream is 48 bytes/FNV-1a
 `dd749d5efe02bc9d`: replacement releases 3 bytes before the surviving 8 overlap
-the final stream, for an exact 56-byte peak. One-short, parser-stage, zero, and
+the final stream. DP-008B2c adds the generated 16-byte resolution owner, changing
+that peak from 56 to 72 and the minimal 28-byte stream peak from 28 to 44. A
+32-byte replaced resolution fixture peaks at 48, proving replacement is not
+released before its successor is admitted. The combined grid/ICC/channel/palette/
+compound fixture pins 138 live payload bytes plus a 262-byte rebuilt stream (400
+peak). Path coverage pins 52-byte records, a 7-byte clipping selector, the 16-byte
+resolution payload, and the 112-byte rebuilt stream (187 peak), plus the 160-byte
+clean relocated-path-copy peak. One-short, parser-stage, zero, and
 malformed-tail cases prove rejection, unwind, admission-before-copy, and the
-zero-allocation fallback validation.
+allocation-free validator's byte-preserving parity for opaque malformed paths.
 
 Every later DP-008B accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero

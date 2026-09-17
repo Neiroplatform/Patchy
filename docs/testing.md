@@ -158,19 +158,18 @@ change: clean-rebuild every ABI consumer rather than mixing old and new objects.
 The complete output, preflight, tracked-live, test, exclusion, ABI, and rollout
 contract lives in [save-budget.md](save-budget.md). Read it before changing any
 PSD/PSB write path or its tests. All dimensions remain opt-in and default to
-unlimited; the current DP-008A tracked-live slice is explicitly incomplete until
-the remaining DP-008B deep renderer, normalization, resource, and generated-payload
-coverage lands. DP-008B1 adds an independently pinned 210-byte direct layer-record
-case for the aggregate `extra` plus restrictions overlap, a 232-byte/FNV record
-canary, direct tracked-return ownership coverage, and branch fixtures whose late
-nested writers visibly exceed the enclosing `extra` owner. Exact, one-short, zero,
-byte-equality, and unwind checks remain mandatory; source audit covers earlier
-nested writers whose local overlap is hidden by later mandatory record bytes.
+unlimited; tracked-live remains incomplete pending deep renderer, normalization,
+and generated-payload coverage. DP-008B1 pins the aggregate `extra` plus
+restrictions at 210 bytes and its direct record at 232 bytes/FNV, with returned
+ownership and nested-writer branch fixtures. Exact, one-short, zero, byte-equality,
+unwind, and source-audit checks remain mandatory.
 DP-008B2a tracks the returned image-resource stream. DP-008B2b removes its raw
-copy and tracks parsed payloads through replace/erase/reorder. The exact peak is
-56 bytes (8 live parsed + 48 rebuilt); N-1, parser, zero, malformed, and prior
-28-byte canaries prove unwind and stability. Generated resource, Smart Object,
-Smart Filter, and pattern payloads remain later slices.
+copy and tracks parsed payloads through replace/erase/reorder. DP-008B2c tracks
+all generated/copied resource and path/clipping payloads before allocation,
+eliminates avoidable byte scratch, and validates deleted paths without allocating.
+Peaks are 44 minimal, 72 parsed replacement, 400 all resource families, 187
+path/clipping, and 160 clean relocation. N-1, staged, zero, malformed, byte, and
+unwind checks apply. Smart Object/Filter and pattern payloads remain.
 
 The QSettings store also persists across runs, and a killed run skips every customize-then-restore test's restore step. Any settings group that one test customizes while another test asserts its defaults without seeding them (the `hotkeys` group is the known case) must be removed by the bootstrap block in `tests/ui/main.cpp`; groups whose assertion sites all clear or seed their own keys first (`palettes`, `colorPanel`, `saveOptions`, `newDocument`, `recentFiles`) need no bootstrap entry.
 

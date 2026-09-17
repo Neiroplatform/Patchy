@@ -643,10 +643,11 @@ std::vector<std::uint8_t> vector_origination_block_payload(std::span<const LiveS
 // non-default vector-mask density/feather: UNFEATHERED path coverage over the
 // path's pixel hull (+1 px pad), deterministic.
 [[nodiscard]] CoverageBuffer vector_mask_derived_plane(const LayerVectorMask& mask);
-std::vector<std::uint8_t> document_path_resource_payload(const DocumentPath& path,
-                                                         std::int32_t canvas_width,
-                                                         std::int32_t canvas_height);
-void upsert_document_path_resources(std::vector<ImageResource>& resources, const Document& document);
+SaveTrackedByteBuffer document_path_resource_payload(const DocumentPath& path, std::int32_t canvas_width,
+                                                     std::int32_t canvas_height,
+                                                     SaveLiveBudgetTracker& tracked_live_budget);
+void upsert_document_path_resources(std::vector<ImageResource>& resources, const Document& document,
+                                    SaveLiveBudgetTracker& tracked_live_budget);
 // Post-read pass (after global pattern blocks decode): rasterizes shape layers
 // whose channels were empty and bakes vector-mask caches that did not import a
 // derived plane.
@@ -658,8 +659,7 @@ void parse_document_path_resources(Document& document,
                                    bool preserve_original_payloads);
 
 // Image-resources (8BIM) section codec (definitions in psd_image_resources.cpp).
-void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t id,
-                           std::vector<std::uint8_t> payload);
+void upsert_image_resource(std::vector<ImageResource>& resources, std::uint16_t id, SaveTrackedByteBuffer payload);
 void remove_image_resource(std::vector<ImageResource>& resources, std::uint16_t id);
 void charge_image_resource_records(std::span<const std::uint8_t> resources,
                                    ParseBudgetTracker& budget);

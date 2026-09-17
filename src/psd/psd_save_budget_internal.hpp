@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -195,6 +196,16 @@ public:
 
   std::vector<std::uint8_t> bytes;
 };
+
+// Charges the logical byte owner before allocating its copy. This is used for
+// save-time payloads borrowed from the document (for example ICC profiles and
+// clean relocated paths) so admission never happens after allocation.
+inline SaveTrackedByteBuffer save_tracked_byte_copy(std::span<const std::uint8_t> source,
+                                                    SaveLiveBudgetTracker& tracker) {
+  auto reservation = tracker.reserve_size(source.size());
+  std::vector<std::uint8_t> bytes(source.begin(), source.end());
+  return SaveTrackedByteBuffer(std::move(reservation), std::move(bytes));
+}
 
 // Incrementally charges logical bytes before BigEndianWriter grows.
 class SaveTrackedWriter {
