@@ -90,7 +90,7 @@ def _arguments() -> list[str]:
     return [
         f"-runs={RUNS}", f"-seed={SEED}", f"-max_total_time={MAX_TOTAL_TIME_SECONDS}",
         f"-timeout={TIMEOUT_SECONDS}", f"-rss_limit_mb={RSS_LIMIT_MB}",
-        f"-max_len={MAX_LEN}", "-jobs=1", "-workers=1", "-print_final_stats=1",
+        f"-max_len={MAX_LEN}", "-print_final_stats=1",
         "-artifact_prefix=artifacts/", "-dict=inputs/psd.dict", "work/corpus", "seed",
     ]
 

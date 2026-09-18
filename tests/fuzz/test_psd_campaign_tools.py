@@ -15,7 +15,7 @@ RUNNER = ROOT / "scripts/fuzz/run_psd_campaign.py"
 VALIDATOR = ROOT / "scripts/fuzz/validate_psd_campaign.py"
 sys.path.insert(0, os.fspath(ROOT / "scripts/fuzz"))
 
-from run_psd_campaign import _result  # noqa: E402
+from run_psd_campaign import _arguments, _result  # noqa: E402
 
 
 class CampaignToolsTests(unittest.TestCase):
@@ -111,6 +111,13 @@ class CampaignToolsTests(unittest.TestCase):
             "bin/patchy_psd_fuzzer", "inputs/psd.dict", "logs/fuzz.log",
             "seed/valid.psb", "seed/valid.psd",
         })
+
+    def test_single_process_invocation_does_not_enable_libfuzzer_job_logs(self) -> None:
+        arguments = _arguments()
+
+        self.assertNotIn("-jobs=1", arguments)
+        self.assertNotIn("-workers=1", arguments)
+        self.assertIn("-runs=1000", arguments)
 
     def test_crash_is_a_consistent_fail_receipt(self) -> None:
         fuzzer = self._fake_fuzzer("crashing", 77, clean=False)
