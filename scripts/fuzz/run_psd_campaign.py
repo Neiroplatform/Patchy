@@ -100,6 +100,18 @@ def _last_counter(pattern: re.Pattern[bytes], log: bytes) -> int | None:
     return int(matches[-1]) if matches else None
 
 
+def _public_log(log: bytes, patchy_source: Path, evidence_root: Path) -> bytes:
+    replacements = (
+        (os.fsencode(os.fspath(patchy_source)), b"<PATCHY_SOURCE>"),
+        (os.fsencode(os.fspath(evidence_root)), b"<EVIDENCE_ROOT>"),
+    )
+    public = log
+    for private, replacement in replacements:
+        if private:
+            public = public.replace(private, replacement)
+    return public
+
+
 def _result(return_code: int, timed_out: bool, log: bytes, artifact_count: int) -> tuple[str, dict[str, Any], list[str]]:
     executed = _last_counter(EXECUTED_RE, log)
     new_units = _last_counter(NEW_UNITS_RE, log) or 0
@@ -198,6 +210,7 @@ def run_campaign(executable: Path, seed_source: Path, dictionary: Path, patchy_s
         timed_out = True
         return_code = 124
         log = (error.stdout or b"") + b"\nrunner timeout after bounded campaign window\n"
+    log = _public_log(log, source_location, evidence_location)
     (evidence_root / "logs/fuzz.log").write_bytes(log)
     shutil.rmtree(evidence_root / "work")
     artifact_paths = list((evidence_root / "artifacts").iterdir())

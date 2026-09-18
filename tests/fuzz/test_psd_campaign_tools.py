@@ -253,6 +253,31 @@ class CampaignToolsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertFalse(receipt.exists())
 
+    def test_bound_source_and_evidence_paths_are_redacted_but_other_paths_fail(self) -> None:
+        source_bound = self.base / "source-bound"
+        source_bound.write_text(
+            "#!/usr/bin/env python3\n"
+            "from pathlib import Path\n"
+            "import os\n"
+            "import sys\n"
+            "print(f'evidence {os.getcwd()}', file=sys.stderr)\n"
+            f"print('source {self.source.resolve()}', file=sys.stderr)\n"
+            "print('stat::number_of_executed_units: 1000', file=sys.stderr)\n"
+            "print('stat::new_units_added: 0', file=sys.stderr)\n",
+            encoding="utf-8",
+        )
+        source_bound.chmod(0o700)
+
+        result, evidence, receipt = self._run(source_bound, "bound-paths")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        public_log = (evidence / "logs/fuzz.log").read_text(encoding="utf-8")
+        self.assertIn("<PATCHY_SOURCE>", public_log)
+        self.assertIn("<EVIDENCE_ROOT>", public_log)
+        self.assertNotIn(os.fspath(self.source), public_log)
+        self.assertNotIn(os.fspath(evidence), public_log)
+        self.assertEqual(self._validate(receipt, evidence).returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
