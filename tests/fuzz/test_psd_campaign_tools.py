@@ -177,6 +177,18 @@ class CampaignToolsTests(unittest.TestCase):
         second, _, _ = self._run(suffix="reuse")
         self.assertEqual(second.returncode, 2)
 
+    def test_untracked_source_is_rejected(self) -> None:
+        (self.source / "untracked-build-input.cmake").write_text(
+            "set(INJECTED_SOURCE 1)\n", encoding="utf-8",
+        )
+
+        result, evidence, receipt = self._run(suffix="untracked")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Patchy source must be clean", result.stderr)
+        self.assertFalse(evidence.exists())
+        self.assertFalse(receipt.exists())
+
     def test_receipt_must_be_outside_evidence_and_both_outputs_outside_source(self) -> None:
         evidence = self.base / "evidence-nested-receipt"
         result = subprocess.run(

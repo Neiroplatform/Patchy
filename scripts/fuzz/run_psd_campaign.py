@@ -82,7 +82,9 @@ def _git_identity(source: Path) -> tuple[str, bool]:
     revision = git("rev-parse", "HEAD")
     if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise CampaignValidationError("Patchy HEAD is not a full Git SHA")
-    dirty = bool(git("status", "--porcelain", "--untracked-files=no"))
+    dirty = bool(git(
+        "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none",
+    ))
     return revision, dirty
 
 
