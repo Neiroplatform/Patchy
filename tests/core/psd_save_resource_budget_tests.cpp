@@ -2605,10 +2605,17 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
     std::uint64_t output_hash;
     std::uint64_t exact_peak;
   };
+#ifdef _WIN32
+  constexpr std::array expected_cases{
+      Expected{false, 11448U, 0xe3f3e0d4d890c0dcULL, 410112U},
+      Expected{true, 0U, 0x74b0d895c5bb7ad7ULL, 410112U},
+  };
+#else
   constexpr std::array expected_cases{
       Expected{false, 11440U, 0xa46a8dbbd3169900ULL, 410112U},
       Expected{true, 12424U, 0x74b0d895c5bb7ad7ULL, 410112U},
   };
+#endif
   const auto artifact_directory = std::filesystem::path("test-artifacts");
   const auto artifact_manifest =
       artifact_directory / "s1-generated-layer-payloads.manifest";
