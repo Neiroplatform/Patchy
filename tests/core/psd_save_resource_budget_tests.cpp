@@ -2612,8 +2612,23 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
     measured_options.usage = &measured_usage;
     const auto baseline = patchy::psd::DocumentIo::write_layered_rgb8(
         document, measured_options);
+    const auto baseline_hash = patchy::test::fnv1a_hash_bytes(baseline);
+    if (baseline.size() != expected.output_bytes ||
+        baseline_hash != expected.output_hash ||
+        measured_usage.tracked_live_bytes_high_water != expected.exact_peak) {
+      throw std::runtime_error(
+          "S1 public canary mismatch: format=" +
+          std::string(expected.large_document ? "PSB" : "PSD") +
+          " expected_size=" + std::to_string(expected.output_bytes) +
+          " actual_size=" + std::to_string(baseline.size()) +
+          " expected_fnv=" + std::to_string(expected.output_hash) +
+          " actual_fnv=" + std::to_string(baseline_hash) +
+          " expected_peak=" + std::to_string(expected.exact_peak) +
+          " actual_peak=" + std::to_string(
+              measured_usage.tracked_live_bytes_high_water));
+    }
     CHECK(baseline.size() == expected.output_bytes);
-    CHECK(patchy::test::fnv1a_hash_bytes(baseline) == expected.output_hash);
+    CHECK(baseline_hash == expected.output_hash);
     CHECK(measured_usage.tracked_live_bytes == 0U);
     CHECK(measured_usage.tracked_live_bytes_high_water == expected.exact_peak);
     accepted_artifacts[index] = baseline;
