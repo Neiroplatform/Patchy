@@ -319,11 +319,15 @@ An isolated four-byte patched `iOpa` test proves its owner overlaps the enclosin
 patched `iOpa`, live vector fill/mask/stroke/origination, a matching global
 Smart Object source plus dirty placed layer, and a native adjustment layer; both
 formats reopen and verify these semantics.
-Its PSD canary is 11440 bytes/FNV-1a `a46a8dbbd3169900` with a 410112-byte
-tracked peak; PSB is 12424 bytes/FNV-1a `74b0d895c5bb7ad7` with the same 410112-byte
-peak. Both require exact success, byte-identical repeat serialization, typed
-N-1/zero rejection, and zero current usage after success or unwind. Existing
-text, vector, Smart Object, fill-opacity, and layered-writer canaries remain
+On non-Windows hosts its PSD canary is 11440 bytes/FNV-1a
+`a46a8dbbd3169900`; PSB is 12424 bytes/FNV-1a `74b0d895c5bb7ad7`.
+Windows resolves the authored Arial run to the system PostScript name `ArialMT`,
+so its deterministic native canaries are 11448 bytes/FNV-1a
+`e3f3e0d4d890c0dc` for PSD and 12432 bytes/FNV-1a `06509563506089eb`
+for PSB. All four cases have the same 410112-byte tracked peak and require exact
+success, byte-identical repeat serialization, typed N-1/zero rejection, and
+zero current usage after success or unwind. Existing text, vector, Smart Object,
+fill-opacity, and layered-writer canaries remain
 unchanged. The integration test also materializes those exact bytes as
 `test-artifacts/s1-generated-layer-payloads.psd` and `.psb` for the external
 Photoshop gate. They are published through verified temporary files only after
