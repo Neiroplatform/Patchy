@@ -2490,10 +2490,14 @@ void psd_save_staged_layer_records_release_and_aliases_count() {
   CHECK(alias_current == 0U);
 }
 
-patchy::Document make_generated_layer_payload_budget_document() {
+patchy::Document make_generated_layer_payload_budget_document(
+    std::size_t layer_count = 5U) {
   patchy::Document document(96, 48, patchy::PixelFormat::rgb8());
   document.add_pixel_layer(
       "Base", patchy::test::solid_rgb(96, 48, 8U, 12U, 16U));
+  if (layer_count == 1U) {
+    return document;
+  }
   patchy::Layer text_layer(
       document.allocate_layer_id(), "Text \xF0\x9F\x99\x82",
       patchy::test::solid_rgba(80, 32, 0U, 0U, 0U, 0U));
@@ -2516,6 +2520,9 @@ patchy::Document make_generated_layer_payload_budget_document() {
   text_layer.unknown_psd_blocks().push_back(
       patchy::UnknownPsdBlock{"iOpa", {0xEEU, 0xA1U, 0xB2U, 0xC3U}});
   document.add_layer(std::move(text_layer));
+  if (layer_count == 2U) {
+    return document;
+  }
 
   patchy::Layer vector_layer(document.allocate_layer_id(), "Vector",
                              patchy::PixelBuffer());
@@ -2545,6 +2552,9 @@ patchy::Document make_generated_layer_payload_budget_document() {
   vector_content.origination.push_back(live_shape);
   vector_layer.set_vector_shape(std::move(vector_content));
   document.add_layer(std::move(vector_layer));
+  if (layer_count == 3U) {
+    return document;
+  }
 
   patchy::Layer placed_layer(
       document.allocate_layer_id(), "Placed",
@@ -2571,6 +2581,9 @@ patchy::Document make_generated_layer_payload_budget_document() {
   patchy::store_smart_object_placement(placed_layer, placement);
   patchy::mark_layer_smart_object_block_dirty(placed_layer);
   document.add_layer(std::move(placed_layer));
+  if (layer_count == 4U) {
+    return document;
+  }
 
   patchy::AdjustmentSettings levels;
   levels.kind = patchy::AdjustmentKind::Levels;
@@ -2616,6 +2629,18 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
     if (baseline.size() != expected.output_bytes ||
         baseline_hash != expected.output_hash ||
         measured_usage.tracked_live_bytes_high_water != expected.exact_peak) {
+      std::string layer_prefixes;
+      for (std::size_t layer_count = 1U; layer_count <= 5U; ++layer_count) {
+        patchy::psd::WriteOptions prefix_options;
+        prefix_options.large_document = expected.large_document;
+        const auto prefix = patchy::psd::DocumentIo::write_layered_rgb8(
+            make_generated_layer_payload_budget_document(layer_count),
+            prefix_options);
+        layer_prefixes += " layers=" + std::to_string(layer_count) +
+                          ":size=" + std::to_string(prefix.size()) +
+                          ":fnv=" + std::to_string(
+                              patchy::test::fnv1a_hash_bytes(prefix));
+      }
       throw std::runtime_error(
           "S1 public canary mismatch: format=" +
           std::string(expected.large_document ? "PSB" : "PSD") +
@@ -2625,7 +2650,8 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
           " actual_fnv=" + std::to_string(baseline_hash) +
           " expected_peak=" + std::to_string(expected.exact_peak) +
           " actual_peak=" + std::to_string(
-              measured_usage.tracked_live_bytes_high_water));
+              measured_usage.tracked_live_bytes_high_water) +
+          layer_prefixes);
     }
     CHECK(baseline.size() == expected.output_bytes);
     CHECK(baseline_hash == expected.output_hash);
