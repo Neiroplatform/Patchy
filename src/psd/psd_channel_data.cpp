@@ -20,6 +20,7 @@
 #include "psd/psd_filter_effects.hpp"
 #include "psd/psd_patterns.hpp"
 #include "psd/psd_smart_objects.hpp"
+#include "psd/psd_save_workspace.hpp"
 #include "render/compositor.hpp"
 #include "support/srgb_transfer.hpp"
 #include "support/string_utils.hpp"
@@ -457,13 +458,18 @@ void write_rgb8_image_data(BigEndianWriter& writer, const PixelBuffer& pixels,
   auto rgb_reservation = tracked_live_budget.reserve_product(pixels, 3U);
   auto alpha_reservation = tracked_live_budget.reserve_size(pixels);
   // The sequential compositor's target float alpha plus returned alpha
-  // quantization plane overlap the retained RGB/alpha result. Deeper render
-  // scratch remains a separately documented follow-up.
+  // quantization plane overlap the retained RGB/alpha result. DP-008B's
+  // document-derived envelope covers group/clipping snapshots, masks, vector
+  // raster work, and every enabled distance/blur/style family while the
+  // compositor owns them.
   auto compositor_scratch = tracked_live_budget.reserve_product(pixels, 5U);
+  auto renderer_scratch = tracked_live_budget.reserve(
+      save_workspace_census(document).renderer_scratch_bytes);
   std::vector<std::uint8_t> alpha;
   auto rgb = Compositor{}.flatten_rgb8_with_policy(
       document, &alpha, CompositorExecutionPolicy::Sequential);
   compositor_scratch.release();
+  renderer_scratch.release();
   const auto transparent =
       std::any_of(alpha.begin(), alpha.end(), [](std::uint8_t coverage) { return coverage != 255; });
   if (!transparent) {

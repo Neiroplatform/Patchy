@@ -17,6 +17,7 @@
 #include "psd/psd_layer_effects.hpp"
 #include "psd/psd_patterns.hpp"
 #include "psd/psd_save_budget_internal.hpp"
+#include "psd/psd_save_workspace.hpp"
 #include "psd/psd_smart_objects.hpp"
 #include "render/compositor.hpp"
 #include "support/string_utils.hpp"
@@ -1989,9 +1990,17 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
                                                   WriteOptions options,
                                                   SaveLiveBudgetTracker& tracked_live_budget) {
   check_write_dimensions(document, options.large_document);
+  const auto workspace = save_workspace_census(document);
+  auto normalization_owner = tracked_live_budget.reserve(
+      workspace.normalization_owner_bytes);
+  auto normalization_scratch = tracked_live_budget.reserve(
+      workspace.normalization_scratch_bytes);
   if (auto prepared = prepare_compound_vector_psd(document)) {
+    normalization_scratch.release();
     return write_layered_rgb8_impl(*prepared, options, tracked_live_budget);
   }
+  normalization_scratch.release();
+  normalization_owner.release();
   if (document.layers().empty()) {
     // The signed record count carries merged transparency. Supply one empty
     // record in the file without inventing a layer in the live document.

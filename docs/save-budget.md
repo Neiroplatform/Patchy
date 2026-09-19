@@ -182,7 +182,29 @@ custom `vogk` raw descriptors use the same envelope during coverage validation
 and retain it through emission. Descriptor nodes and string storage remain
 excluded as documented below.
 
-## Explicit exclusions and remaining DP-008B work
+The S2 completion closes the remaining normalization and renderer workspace with
+an allocation-free source census in `psd_save_workspace.hpp`. Before compound-
+vector/open-stroke normalization starts, it reserves separate logical owners for
+the returned document clones/generated RGBA caches and for vector-raster scratch.
+The scratch reservation is released as soon as normalization returns; the clone
+owner remains live through the recursive layered write and therefore overlaps the
+real compositor/serializer lifetime. The clone envelope counts three logical
+copies of caller pixel owners, three overlapping fill/stroke RGBA cache pairs
+per generated vector paint, and 96 bytes per
+canvas pixel for each generated vector paint while rasterization is active.
+
+Before the sequential save compositor allocates, the same census reserves a
+document-derived renderer envelope. It sums nesting-sensitive group targets,
+clipping planes, raster/vector masks, vector raster/paint/stroke workspaces,
+Blend-If/adjustment snapshots, and 192 bytes per canvas pixel for every enabled
+distance/blur/stroke/bevel/satin effect. Summing enabled effects is intentionally
+conservative even though the current renderer normally evaluates them
+sequentially; this keeps the contract safe if prepared masks later overlap. The
+existing exact five-byte-per-pixel target/alpha envelope remains separate. Both
+reservations precede the covered allocations and unwind through the private
+budget signal on every exit.
+
+## Explicit exclusions and completed DP-008B boundary
 
 The implemented slices are not a complete process-memory limit. They exclude allocator capacity
 slack, container nodes and strings, stack/runtime overhead, OS/file buffers,
@@ -194,11 +216,12 @@ overhead, descriptor-tree nodes, and string storage remain explicitly outside th
 logical-byte contract; normalization must use a documented logical envelope for
 those excluded structures rather than claim allocator-exact accounting.
 
-DP-008B remains open after S1 for:
-
-- compound/open-stroke normalization clones and vector-raster scratch;
-- deep compositor group, clipping, style, effect, distance-field, and blur planes;
-- remaining normalization/vector-raster workspaces and the final source census.
+DP-008B is complete after S2 for save-owned contiguous byte/arithmetic planes,
+normalization clones, generated raster caches, and the compositor workspaces
+listed above. The final source census is maintained in
+`psd_save_workspace.hpp`; adding a new save-reachable normalization or renderer
+temporary requires extending that census and the whole-gate fixture in the same
+change.
 
 Product callers must not treat DP-008A as a complete save-memory ceiling. Finite
 values and caller wiring remain downstream policy work after DP-008B and
@@ -296,8 +319,8 @@ An isolated four-byte patched `iOpa` test proves its owner overlaps the enclosin
 patched `iOpa`, live vector fill/mask/stroke/origination, a matching global
 Smart Object source plus dirty placed layer, and a native adjustment layer; both
 formats reopen and verify these semantics.
-Its PSD canary is 11440 bytes/FNV-1a `a46a8dbbd3169900` with an 83164-byte
-tracked peak; PSB is 12424 bytes/FNV-1a `74b0d895c5bb7ad7` with an 85452-byte
+Its PSD canary is 11440 bytes/FNV-1a `a46a8dbbd3169900` with a 410112-byte
+tracked peak; PSB is 12424 bytes/FNV-1a `74b0d895c5bb7ad7` with the same 410112-byte
 peak. Both require exact success, byte-identical repeat serialization, typed
 N-1/zero rejection, and zero current usage after success or unwind. Existing
 text, vector, Smart Object, fill-opacity, and layered-writer canaries remain
@@ -307,7 +330,19 @@ Photoshop gate. They are published through verified temporary files only after
 both formats pass every assertion; the `.manifest` file is written last and is
 the acceptance marker. These files are test evidence, not checked-in fixtures.
 
-Every later DP-008B accounting site needs admission before allocation, an owner-coupled
+The S2 whole-gate fixture combines nested groups, a clipping chain, raster and
+vector masks, compound vectors, an open multi-subpath live vector stroke that
+normalizes to native children, and concurrent drop-shadow, large outer-glow,
+stroke, bevel, and satin families. Its census pins 263040 owner bytes, 921600
+normalization-scratch bytes, 2457600 pre-normalization renderer bytes, and a
+3229440-byte public peak after
+normalization changes the effective graph. Sequential normalized rendering pins
+FNV-1a `501ebd773ac1f3bc`; reopened rendering pins `47648a1ddc27a07b`.
+The PSD is 11720 bytes/FNV-1a `a90e17b0e1df7606`; the PSB is 12660 bytes/FNV-1a
+`a6eecbb0a2011eb3`. Both formats require repeat-byte equality, semantic reopen,
+exact success, typed N-1/zero rejection, and unwind to zero.
+
+Every later save-workspace accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero
 proof, overlap rather than cumulative-sum proof, and unlimited byte-stability. The
 Photoshop warning-free gate remains separate and must report whether it actually ran.

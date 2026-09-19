@@ -6,6 +6,8 @@
 #include "core/vector_live_shapes.hpp"
 #include "psd/psd_io_internal.hpp"
 #include "psd/psd_save_budget_internal.hpp"
+#include "psd/psd_save_workspace.hpp"
+#include "render/compositor.hpp"
 
 #include "core_test_support.hpp"
 #include "psd_test_support.hpp"
@@ -2591,8 +2593,8 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
     std::uint64_t exact_peak;
   };
   constexpr std::array expected_cases{
-      Expected{false, 11440U, 0xa46a8dbbd3169900ULL, 83164U},
-      Expected{true, 12424U, 0x74b0d895c5bb7ad7ULL, 85452U},
+      Expected{false, 11440U, 0xa46a8dbbd3169900ULL, 410112U},
+      Expected{true, 12424U, 0x74b0d895c5bb7ad7ULL, 410112U},
   };
   const auto artifact_directory = std::filesystem::path("test-artifacts");
   const auto artifact_manifest =
@@ -2696,6 +2698,199 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
           manifest.size()));
 }
 
+patchy::PathSubpath s2_subpath(std::initializer_list<std::array<double, 2>> points,
+                               bool closed, std::int32_t group) {
+  patchy::PathSubpath path;
+  path.closed = closed;
+  path.shape_group = group;
+  for (const auto point : points) {
+    path.anchors.push_back(patchy::PathAnchor{
+        point[0], point[1], point[0], point[1], point[0], point[1], false});
+  }
+  return path;
+}
+
+patchy::PixelBuffer s2_gray(std::int32_t width, std::int32_t height,
+                            std::uint8_t value) {
+  patchy::PixelBuffer result(width, height, patchy::PixelFormat::gray8());
+  std::fill(result.data().begin(), result.data().end(), value);
+  return result;
+}
+
+patchy::Document make_s2_workspace_document() {
+  patchy::Document document(48, 40, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer("Base", patchy::test::solid_rgb(48, 40, 12U, 18U, 24U));
+
+  patchy::Layer outer(document.allocate_layer_id(), "Outer", patchy::LayerKind::Group);
+  patchy::Layer inner(document.allocate_layer_id(), "Inner", patchy::LayerKind::Group);
+
+  patchy::Layer carrier(document.allocate_layer_id(), "Carrier",
+                        patchy::test::solid_rgba(20, 16, 30U, 80U, 150U, 255U));
+  carrier.set_bounds(patchy::Rect{8, 8, 20, 16});
+  carrier.set_mask(patchy::LayerMask{patchy::Rect{8, 8, 20, 16},
+                                     s2_gray(20, 16, 220U), 0U, false});
+  patchy::LayerVectorMask vector_mask;
+  vector_mask.path.subpaths.push_back(s2_subpath(
+      {{8.0, 8.0}, {28.0, 8.0}, {28.0, 24.0}, {8.0, 24.0}}, true, 0));
+  vector_mask.density = 220U;
+  vector_mask.feather = 3.0;
+  vector_mask.cache = s2_gray(48, 40, 255U);
+  carrier.set_vector_mask(std::move(vector_mask));
+  inner.add_child(std::move(carrier));
+
+  patchy::Layer styled(document.allocate_layer_id(), "Styled",
+                       patchy::test::solid_rgba(20, 16, 180U, 45U, 70U, 230U));
+  styled.set_bounds(patchy::Rect{10, 10, 20, 16});
+  styled.set_clipped(true);
+  styled.set_mask(patchy::LayerMask{patchy::Rect{10, 10, 20, 16},
+                                    s2_gray(20, 16, 210U), 0U, false});
+  patchy::LayerDropShadow shadow;
+  shadow.enabled = true;
+  shadow.distance = 5.0F;
+  shadow.size = 18.0F;
+  shadow.spread = 0.2F;
+  styled.layer_style().drop_shadows.push_back(shadow);
+  patchy::LayerOuterGlow glow;
+  glow.enabled = true;
+  glow.size = 24.0F;
+  glow.spread = 0.15F;
+  styled.layer_style().outer_glows.push_back(glow);
+  patchy::LayerStroke stroke;
+  stroke.enabled = true;
+  stroke.size = 4.0F;
+  stroke.position = patchy::LayerStrokePosition::Outside;
+  stroke.color = patchy::RgbColor{240U, 180U, 30U};
+  styled.layer_style().strokes.push_back(stroke);
+  patchy::LayerBevelEmboss bevel;
+  bevel.enabled = true;
+  bevel.size = 8.0F;
+  bevel.soften = 3.0F;
+  styled.layer_style().bevels.push_back(bevel);
+  patchy::LayerSatin satin;
+  satin.enabled = true;
+  satin.size = 11.0F;
+  styled.layer_style().satins.push_back(satin);
+  inner.add_child(std::move(styled));
+
+  patchy::Layer open_vector(document.allocate_layer_id(), "Open strokes",
+                            patchy::PixelBuffer());
+  open_vector.metadata()[patchy::kLayerMetadataVectorShape] = "1";
+  patchy::VectorShapeContent shape;
+  shape.fill.kind = patchy::VectorFillKind::Solid;
+  shape.fill.color = patchy::RgbColor{20U, 170U, 90U};
+  shape.path.subpaths.push_back(s2_subpath(
+      {{5.0, 30.0}, {20.0, 26.0}, {34.0, 32.0}}, false, 0));
+  shape.path.subpaths.push_back(s2_subpath(
+      {{12.0, 35.0}, {28.0, 28.0}, {43.0, 35.0}}, false, 1));
+  shape.stroke.enabled = true;
+  shape.stroke.fill_enabled = true;
+  shape.stroke.width = 3.0;
+  shape.stroke.alignment = patchy::VectorStrokeAlignment::Center;
+  shape.stroke.content.kind = patchy::VectorFillKind::Solid;
+  shape.stroke.content.color = patchy::RgbColor{245U, 210U, 40U};
+  open_vector.set_vector_shape(std::move(shape));
+  inner.add_child(std::move(open_vector));
+
+  patchy::Layer compound(document.allocate_layer_id(), "Compound",
+                         patchy::PixelBuffer());
+  compound.metadata()[patchy::kLayerMetadataVectorShape] = "1";
+  patchy::VectorShapeContent compound_shape;
+  compound_shape.path.subpaths.push_back(s2_subpath(
+      {{4.0, 4.0}, {12.0, 4.0}, {12.0, 12.0}, {4.0, 12.0}}, true, 10));
+  compound_shape.path.subpaths.push_back(s2_subpath(
+      {{32.0, 5.0}, {43.0, 5.0}, {43.0, 15.0}, {32.0, 15.0}}, true, 11));
+  patchy::VectorShapePart first_part;
+  first_part.groups.push_back(10);
+  first_part.fill.kind = patchy::VectorFillKind::Solid;
+  first_part.fill.color = patchy::RgbColor{30U, 120U, 230U};
+  patchy::VectorShapePart second_part;
+  second_part.groups.push_back(11);
+  second_part.fill.kind = patchy::VectorFillKind::Solid;
+  second_part.fill.color = patchy::RgbColor{220U, 80U, 40U};
+  compound_shape.parts.push_back(std::move(first_part));
+  compound_shape.parts.push_back(std::move(second_part));
+  compound.set_vector_shape(std::move(compound_shape));
+  inner.add_child(std::move(compound));
+  outer.add_child(std::move(inner));
+  document.add_layer(std::move(outer));
+  return document;
+}
+
+void psd_save_s2_normalization_and_renderer_workspace_whole_gate() {
+  const auto document = make_s2_workspace_document();
+  const auto census = patchy::psd::save_workspace_census(document);
+  CHECK(census.normalization_owner_bytes == 263040U);
+  CHECK(census.normalization_scratch_bytes == 921600U);
+  CHECK(census.renderer_scratch_bytes == 2457600U);
+
+  const auto normalized = patchy::psd::prepare_compound_vector_psd(document);
+  CHECK(normalized.has_value());
+  const auto render = patchy::Compositor{}.flatten_rgb8_with_policy(
+      *normalized, nullptr, patchy::CompositorExecutionPolicy::Sequential);
+  const auto render_hash = patchy::test::fnv1a_hash_bytes(render.data());
+  CHECK(render_hash == 0x501ebd773ac1f3bcULL);
+
+  for (const bool large_document : {false, true}) {
+    patchy::psd::SaveUsage measured;
+    patchy::psd::WriteOptions options;
+    options.large_document = large_document;
+    options.usage = &measured;
+    const auto baseline = patchy::psd::DocumentIo::write_layered_rgb8(document, options);
+    CHECK(baseline.size() == (large_document ? 12660U : 11720U));
+    CHECK(patchy::test::fnv1a_hash_bytes(baseline) ==
+          (large_document ? 0xa6eecbb0a2011eb3ULL
+                          : 0xa90e17b0e1df7606ULL));
+    CHECK(measured.tracked_live_bytes == 0U);
+    const auto peak = measured.tracked_live_bytes_high_water;
+    CHECK(peak == 3229440U);
+
+    const auto repeated = patchy::psd::DocumentIo::write_layered_rgb8(document, options);
+    CHECK(repeated == baseline);
+    CHECK(measured.tracked_live_bytes == 0U);
+    CHECK(measured.tracked_live_bytes_high_water == peak);
+
+    const auto reopened = patchy::psd::DocumentIo::read(baseline);
+    CHECK(reopened.width() == document.width());
+    CHECK(reopened.height() == document.height());
+    CHECK(patchy::test::find_layer_named(reopened.layers(), "Outer") != nullptr);
+    CHECK(patchy::test::find_layer_named(reopened.layers(), "Styled") != nullptr);
+    CHECK(patchy::test::find_layer_named(reopened.layers(), "Open strokes") != nullptr);
+    CHECK(patchy::test::find_layer_named(reopened.layers(), "Compound") != nullptr);
+    const auto reopened_render = patchy::Compositor{}.flatten_rgb8_with_policy(
+        reopened, nullptr, patchy::CompositorExecutionPolicy::Sequential);
+    const auto reopened_hash =
+        patchy::test::fnv1a_hash_bytes(reopened_render.data());
+    CHECK(reopened_hash == 0x47648a1ddc27a07bULL);
+
+    patchy::psd::SaveUsage exact;
+    auto exact_options = options;
+    exact_options.budget.max_tracked_live_bytes = peak;
+    exact_options.usage = &exact;
+    CHECK(patchy::psd::DocumentIo::write_layered_rgb8(document, exact_options) == baseline);
+    CHECK(exact.tracked_live_bytes == 0U);
+    CHECK(exact.tracked_live_bytes_high_water == peak);
+
+    for (const auto limit : std::array<std::uint64_t, 2>{peak - 1U, 0U}) {
+      patchy::psd::SaveUsage rejected;
+      auto rejected_options = options;
+      rejected_options.budget.max_tracked_live_bytes = limit;
+      rejected_options.usage = &rejected;
+      bool did_reject = false;
+      try {
+        (void)patchy::psd::DocumentIo::write_layered_rgb8(document,
+                                                           rejected_options);
+      } catch (const patchy::psd::SaveBudgetExceeded& error) {
+        did_reject = true;
+        CHECK(error.dimension() ==
+              patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+      }
+      CHECK(did_reject);
+      CHECK(rejected.tracked_live_bytes == 0U);
+      CHECK(rejected.tracked_live_bytes_high_water <= limit);
+    }
+  }
+}
+
 }  // namespace
 
 std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
@@ -2751,5 +2946,7 @@ std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
        psd_save_staged_layer_records_release_and_aliases_count},
       {"psd_save_generated_layer_payloads_reach_public_budget",
        psd_save_generated_layer_payloads_reach_public_budget},
+      {"psd_save_s2_normalization_and_renderer_workspace_whole_gate",
+       psd_save_s2_normalization_and_renderer_workspace_whole_gate},
   };
 }
