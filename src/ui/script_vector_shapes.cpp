@@ -25,19 +25,12 @@ void appearance(ScriptEngineHost& host, const QJsonObject& args, VectorShapeCont
 }
 QJSValue create_shape(ScriptEngineHost& host, std::int64_t session, const QString& name,
                       VectorShapeContent content, PatternStore patterns) {
-  const auto& before = document(host, session);
-  Layer prepared(0, name.toStdString(), PixelBuffer{});
-  prepared.set_vector_shape(std::move(content));
-  prepared.metadata()[kLayerMetadataVectorShape] = "1";
-  mark_layer_vector_block_dirty(prepared);
-  update_vector_shape_raster(prepared, Rect::from_size(before.width(), before.height()), &patterns);
-  auto& doc = writable(host, session);
-  const auto id = doc.allocate_layer_id();
-  doc.metadata().patterns = std::move(patterns);
-  doc.add_layer(prepared.clone_with_id(id));
-  doc.set_active_layer(id);
-  host.note_vector_changed(session, {}, true);
-  return make_layer_value(host, session, id);
+  const auto result = host.execute_engine_command(
+      session, patchy::engine::AddVectorShapeLayer{
+                   name.toStdString(), std::move(content),
+                   std::move(patterns), std::nullopt});
+  if (!result) { invalid("shape"); }
+  return make_layer_value(host, session, result.affected_layer_id);
 }
 std::vector<LayerId> layer_ids(ScriptEngineHost& host, std::int64_t session, const QJSValue& input) {
   if (!input.isArray() || input.property("length").toUInt() > 10000) { invalid("layers"); }
@@ -119,7 +112,6 @@ void ScriptLayerObject::updateShape(const QJSValue& changes) {
     auto content = *original.vector_shape();
     const auto& old_doc = document(host_, session_id_);
     auto patterns = old_doc.metadata().patterns;
-    const auto before = to_qrect(layer_render_bounds(original));
     if (args.contains("geometry")) {
       auto fresh = geometry(host_, child_object(args, "geometry"), old_doc.print_settings().horizontal_ppi);
       if (args.contains("group")) {
@@ -168,15 +160,10 @@ void ScriptLayerObject::updateShape(const QJSValue& changes) {
     }
     if (old.path == content.path && old.origination == content.origination && old.fill == content.fill && old.stroke == content.stroke &&
         old.path_disabled == content.path_disabled && old.path_inverted == content.path_inverted) { return; }
-    Layer prepared = original;
-    prepared.set_vector_shape(std::move(content)); mark_layer_vector_block_dirty(prepared);
-    update_vector_shape_raster(prepared, Rect::from_size(old_doc.width(), old_doc.height()), &patterns);
-    auto& doc = writable(host_, session_id_);
-    (void)layer(host_, session_id_, layer_id_, true);
-    *doc.find_layer(layer_id_) = std::move(prepared);
-    doc.metadata().patterns = std::move(patterns);
-    const auto after = to_qrect(layer_render_bounds(*std::as_const(doc).find_layer(layer_id_)));
-    host_.note_vector_changed(session_id_, before.united(after));
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::UpdateVectorShapeLayer{
+                         layer_id_, std::move(content), std::move(patterns)});
+    if (!result) { invalid("layer.shape"); }
   });
 }
 void ScriptLayerObject::transformShape(const QJSValue& transform, const QJSValue& options) {

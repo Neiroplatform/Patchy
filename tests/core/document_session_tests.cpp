@@ -21,6 +21,7 @@ using patchy::PixelFormat;
 using patchy::engine::AddGroup;
 using patchy::engine::AddAdjustmentLayer;
 using patchy::engine::AddPixelLayer;
+using patchy::engine::AddVectorShapeLayer;
 using patchy::engine::ApplyFilter;
 using patchy::engine::CancellationToken;
 using patchy::engine::CropDocument;
@@ -64,6 +65,7 @@ using patchy::engine::SetSelection;
 using patchy::engine::UngroupLayers;
 using patchy::engine::TransformVectorLayers;
 using patchy::engine::UpdateAdjustmentLayer;
+using patchy::engine::UpdateVectorShapeLayer;
 using patchy::engine::VectorTransformTarget;
 using patchy::engine::WrapOffsetDocument;
 using patchy::test::TestCase;
@@ -966,6 +968,82 @@ void engine_session_vector_mask_lifecycle_is_atomic_and_round_trips() {
   CHECK(session.revision() == revision_before_rejections);
 }
 
+void engine_session_vector_shape_authoring_is_atomic_and_round_trips() {
+  DocumentSession session(Document(40, 30, PixelFormat::rgba8()));
+  patchy::VectorShapeContent content;
+  patchy::LiveShapeParams rectangle;
+  rectangle.kind = patchy::LiveShapeKind::Rectangle;
+  rectangle.left = 3.0;
+  rectangle.top = 4.0;
+  rectangle.right = 18.0;
+  rectangle.bottom = 16.0;
+  content.path.subpaths = patchy::generate_live_shape_subpaths(rectangle);
+  content.origination = {rectangle};
+  content.fill.kind = patchy::VectorFillKind::Solid;
+  content.fill.color = {220, 30, 40};
+  content.stroke.enabled = true;
+  content.stroke.width = 2.0;
+  content.stroke.content.kind = patchy::VectorFillKind::Solid;
+  content.stroke.content.color = {10, 20, 30};
+
+  const auto created = session.execute(AddVectorShapeLayer{
+      "Rectangle 1", content, session.document().metadata().patterns, {}});
+  CHECK(static_cast<bool>(created));
+  CHECK(created.affected_layer_id != 0);
+  CHECK(created.affected_region.has_value());
+  const auto layer_id = created.affected_layer_id;
+  const auto *layer = session.document().find_layer(layer_id);
+  CHECK(layer != nullptr);
+  CHECK(layer->vector_shape() != nullptr);
+  CHECK(!layer->pixels().empty());
+  CHECK(layer->metadata().at(patchy::kLayerMetadataVectorShape) == "1");
+
+  const auto revision_before_noop = session.revision();
+  const auto noop = session.execute(UpdateVectorShapeLayer{
+      layer_id, content, session.document().metadata().patterns});
+  CHECK(static_cast<bool>(noop));
+  CHECK(session.revision() == revision_before_noop);
+
+  auto updated = content;
+  updated.path.subpaths.front().anchors.front().anchor_x += 5.0;
+  updated.origination.clear();
+  const auto changed = session.execute(UpdateVectorShapeLayer{
+      layer_id, updated, session.document().metadata().patterns});
+  CHECK(static_cast<bool>(changed));
+  CHECK(changed.affected_region.has_value());
+  CHECK(session.document().find_layer(layer_id)->vector_shape()->path ==
+        updated.path);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(layer_id)->vector_shape()->path ==
+        content.path);
+
+  const auto encoded = session.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+  const auto reopened = open_psd(encoded.bytes);
+  CHECK(static_cast<bool>(reopened));
+  const auto *reopened_layer =
+      reopened.session->document().find_layer(layer_id);
+  CHECK(reopened_layer != nullptr);
+  CHECK(reopened_layer->vector_shape() != nullptr);
+  CHECK(reopened_layer->vector_shape()->path.subpaths.size() ==
+        content.path.subpaths.size());
+  CHECK(std::abs(reopened_layer->vector_shape()
+                     ->path.subpaths.front()
+                     .anchors.front()
+                     .anchor_x -
+                 content.path.subpaths.front().anchors.front().anchor_x) <
+        0.001);
+  CHECK(reopened_layer->vector_shape()->fill == content.fill);
+  CHECK(reopened_layer->vector_shape()->stroke == content.stroke);
+
+  const auto revision_before_rejection = session.revision();
+  const auto rejected = session.execute(AddVectorShapeLayer{
+      "", content, session.document().metadata().patterns, {}});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_before_rejection);
+}
+
 void engine_session_commits_prepared_smart_filter_state_atomically() {
   Document document(3, 2, PixelFormat::rgba8());
   PixelBuffer pixels(3, 2, PixelFormat::rgba8());
@@ -1177,6 +1255,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_vector_transforms_are_atomic_and_qt_free},
       {"engine_session_vector_mask_lifecycle_is_atomic_and_round_trips",
        engine_session_vector_mask_lifecycle_is_atomic_and_round_trips},
+      {"engine_session_vector_shape_authoring_is_atomic_and_round_trips",
+       engine_session_vector_shape_authoring_is_atomic_and_round_trips},
       {"engine_session_commits_prepared_smart_filter_state_atomically",
        engine_session_commits_prepared_smart_filter_state_atomically},
       {"engine_session_adjustment_layer_family_is_atomic_and_round_trips",

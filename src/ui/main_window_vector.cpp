@@ -219,18 +219,13 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
   if (subpaths.empty()) {
     return;
   }
-  const auto canvas_rect = Rect::from_size(doc.width(), doc.height());
-  const auto* patterns = &doc.metadata().patterns;
-
   // A non-default combine op extends the active shape layer (Photoshop's
   // add/subtract/intersect/exclude shape-area modes).
   if (current_vector_combine_index_ != 0) {
     if (const auto active = doc.active_layer_id(); active.has_value()) {
       if (auto* layer = doc.find_layer(*active);
           layer != nullptr && layer_is_vector_shape(*layer) && vector_lock_reason(*layer).empty()) {
-        push_undo_snapshot(tr("Edit shape"));
-        const auto old_effect_rect =
-            to_qrect(layer_bounds_with_effects(std::as_const(*layer), std::as_const(*layer).bounds()));
+        const auto layer_id = layer->id();
         auto content = *layer->vector_shape();
         const auto group = content.path.next_shape_group();
         const auto op = combine_op_for_index(current_vector_combine_index_);
@@ -255,10 +250,14 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
           origination->index = group;
           content.origination.push_back(std::move(*origination));
         }
-        layer->set_vector_shape(std::move(content));
-        layer->metadata()[kLayerMetadataVectorRasterStatus] = kVectorRasterStatusPatchy;
-        mark_layer_vector_block_dirty(*layer);
-        update_vector_shape_raster(*layer, canvas_rect, patterns);
+        push_undo_snapshot(tr("Edit shape"), false);
+        const auto result = session().engine_session.execute_external(
+            patchy::engine::UpdateVectorShapeLayer{
+                layer_id, std::move(content), doc.metadata().patterns});
+        if (!result) {
+          show_status_error(QString::fromStdString(result.error.message));
+          return;
+        }
         // Extending a shape layer changes no row structure, and the commit
         // only dirties the layer's own effect rect: a full layer-list rebuild
         // plus full-canvas recomposite per combine drag dominated the shape
@@ -268,8 +267,9 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
         refresh_layer_controls();
         path_row_hidden_for_layer_.reset();  // a fresh drag re-shows the outline
         refresh_paths_panel();
-        canvas_->document_changed_effect_bounds(old_effect_rect.united(
-            to_qrect(layer_bounds_with_effects(std::as_const(*layer), std::as_const(*layer).bounds()))));
+        canvas_->document_changed_effect_bounds(
+            result.affected_region.has_value() ? to_qrect(*result.affected_region)
+                                               : QRect{});
         return;
       }
     }
@@ -288,9 +288,7 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
     anchor_id = selected_ids.front();
   }
 
-  push_undo_snapshot(tr("New shape layer"));
-  Layer layer(doc.allocate_layer_id(), name, PixelBuffer());
-  const auto layer_id = layer.id();
+  push_undo_snapshot(tr("New shape layer"), false);
   auto content = current_shape_appearance_content();
   content.path.subpaths = std::move(subpaths);
   if (origination.has_value()) {
@@ -299,12 +297,13 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
   // A pattern default picked from the library must land in the document store
   // before the rasterize (and before the writer's Patt collection).
   ensure_vector_fill_patterns(doc, content, pattern_library());
-  layer.set_vector_shape(std::move(content));
-  layer.metadata()[kLayerMetadataVectorShape] = "1";
-  layer.metadata()[kLayerMetadataVectorRasterStatus] = kVectorRasterStatusPatchy;
-  update_vector_shape_raster(layer, canvas_rect, patterns);
-  insert_layer_after_anchor(doc, std::move(layer), anchor_id);
-  doc.set_active_layer(layer_id);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::AddVectorShapeLayer{
+          name, std::move(content), doc.metadata().patterns, anchor_id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   refresh_layer_list();
   refresh_layer_controls();
   path_row_hidden_for_layer_.reset();
@@ -312,8 +311,8 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
   // Bounded: a new shape only dirties its own effect rect; the full-canvas
   // recomposite per drag-out dominated shape workflows at small canvas sizes
   // (synchronous below the async-defer threshold, always synchronous on wasm).
-  if (const auto* created = std::as_const(doc).find_layer(layer_id); created != nullptr) {
-    canvas_->document_changed_effect_bounds(to_qrect(layer_bounds_with_effects(*created, created->bounds())));
+  if (result.affected_region.has_value()) {
+    canvas_->document_changed_effect_bounds(to_qrect(*result.affected_region));
   } else {
     canvas_->document_changed();
   }

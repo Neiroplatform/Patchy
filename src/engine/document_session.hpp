@@ -265,6 +265,19 @@ struct RasterizeVectorMask {
   LayerId layer_id{0};
 };
 
+struct AddVectorShapeLayer {
+  std::string name{};
+  VectorShapeContent content{};
+  PatternStore patterns{};
+  std::optional<LayerId> anchor_layer_id{};
+};
+
+struct UpdateVectorShapeLayer {
+  LayerId layer_id{0};
+  VectorShapeContent content{};
+  PatternStore patterns{};
+};
+
 struct CommitSmartFilterState {
   LayerId layer_id{0};
   std::optional<SmartFilterStack> stack{};
@@ -288,7 +301,8 @@ using DocumentCommand =
                  SelectLayerVectorMask, SelectSmartFilterMask,
                  SelectByColorSimilarity, SelectVectorPath,
                  TransformVectorLayers, SetVectorMaskState,
-                 RasterizeVectorMask, CommitSmartFilterState>;
+                 RasterizeVectorMask, AddVectorShapeLayer,
+                 UpdateVectorShapeLayer, CommitSmartFilterState>;
 
 struct LayerInfo {
   LayerId id{0};

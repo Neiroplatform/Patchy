@@ -1125,7 +1125,8 @@ patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
          "document session is no longer open"}};
   }
   bool vector_structure_change =
-      std::holds_alternative<patchy::engine::RasterizeVectorMask>(command);
+      std::holds_alternative<patchy::engine::RasterizeVectorMask>(command) ||
+      std::holds_alternative<patchy::engine::AddVectorShapeLayer>(command);
   if (const auto *set_mask =
           std::get_if<patchy::engine::SetVectorMaskState>(&command)) {
     const auto *layer = session->document.find_layer(set_mask->layer_id);
@@ -1146,6 +1147,8 @@ patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
           session->engine_session.selection());
     }
     if (std::holds_alternative<patchy::engine::TransformVectorLayers>(command) ||
+        std::holds_alternative<patchy::engine::AddVectorShapeLayer>(command) ||
+        std::holds_alternative<patchy::engine::UpdateVectorShapeLayer>(command) ||
         std::holds_alternative<patchy::engine::SetVectorMaskState>(command) ||
         std::holds_alternative<patchy::engine::RasterizeVectorMask>(command)) {
       note_vector_changed(

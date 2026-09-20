@@ -41,6 +41,11 @@ typed editing commands.
   lifecycle: add/edit/enable-disable/remove/rasterize, cache regeneration,
   raster-mask composition, PSD block invalidation, semantic no-op detection,
   dirty bounds and undo. Desktop commands and scripting use this shared path;
+- `AddVectorShapeLayer` and `UpdateVectorShapeLayer` own authored shape-layer
+  creation and semantic updates, including stable ID allocation, pattern-store
+  adoption, native block invalidation, rerasterization, bounded dirty output,
+  no-op detection, undo and PSD reopen. Desktop Shape/Line/Polygon/Custom/Pen
+  creation and boolean extension share this path with scripting add/fill/update;
 - `CommitSmartFilterState` atomically commits a UI-prepared supported Smart
   Filter stack or removal: modeled stack/mask state, regenerated SoLd/SoLE
   payloads, FEid/FXid cache store and rendered layer pixels share one validated
@@ -100,9 +105,10 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate remaining brush/pixel and vector creation/point-edit gestures, Smart
-  Filter preview preparation, transient adjustment previews and history
-  storage to engine commands;
+- migrate remaining brush/pixel, direct canvas vector point-edit gestures and
+  remaining desktop vector appearance/live-geometry edits, Smart Filter
+  preview preparation, transient adjustment previews and history storage to
+  engine commands;
 - add command families for pixel transforms and remaining nondestructive
   filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;

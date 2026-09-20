@@ -42,6 +42,32 @@ bool vector_masks_equal(const LayerVectorMask &left,
          left.density == right.density && left.feather == right.feather;
 }
 
+bool vector_shape_parts_equal(const VectorShapePart &left,
+                              const VectorShapePart &right) {
+  return left.groups == right.groups &&
+         left.whole_canvas == right.whole_canvas &&
+         left.path_disabled == right.path_disabled &&
+         left.path_inverted == right.path_inverted && left.fill == right.fill &&
+         left.stroke == right.stroke && left.opacity == right.opacity &&
+         left.fill_opacity == right.fill_opacity &&
+         left.pattern_anchor == right.pattern_anchor;
+}
+
+bool vector_shapes_equal(const VectorShapeContent &left,
+                         const VectorShapeContent &right) {
+  return left.path == right.path &&
+         left.path_disabled == right.path_disabled &&
+         left.path_inverted == right.path_inverted && left.fill == right.fill &&
+         left.stroke == right.stroke && left.origination == right.origination &&
+         left.parts.size() == right.parts.size() &&
+         std::equal(left.parts.begin(), left.parts.end(), right.parts.begin(),
+                    vector_shape_parts_equal);
+}
+
+Rect layer_effect_bounds(const Layer &layer) {
+  return layer_bounds_with_effects(layer, layer_render_bounds(layer));
+}
+
 void erase_vector_mask_blocks(Layer &layer) {
   auto &blocks = layer.unknown_psd_blocks();
   std::erase_if(blocks, [](const UnknownPsdBlock &block) {
@@ -887,6 +913,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             changed = true;
             return;
           } else if constexpr (std::is_same_v<Command, AddPixelLayer> ||
+                               std::is_same_v<Command, AddVectorShapeLayer> ||
                                std::is_same_v<Command, AddAdjustmentLayer> ||
                                std::is_same_v<Command, AddGroup>) {
             auto added_document = document_;
@@ -896,6 +923,30 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                   added_document,
                   Layer(layer_id, concrete.name, concrete.pixels),
                   concrete.anchor_layer_id);
+              added_document.set_active_layer(layer_id);
+            } else if constexpr (std::is_same_v<Command,
+                                                AddVectorShapeLayer>) {
+              if (concrete.name.empty()) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "vector shape name must not be empty");
+                return;
+              }
+              layer_id = added_document.allocate_layer_id();
+              Layer layer(layer_id, concrete.name, PixelBuffer{});
+              layer.set_vector_shape(concrete.content);
+              layer.metadata()[kLayerMetadataVectorShape] = "1";
+              layer.metadata()[kLayerMetadataVectorRasterStatus] =
+                  kVectorRasterStatusPatchy;
+              mark_layer_vector_block_dirty(layer);
+              added_document.metadata().patterns = concrete.patterns;
+              update_vector_shape_raster(
+                  layer,
+                  Rect::from_size(added_document.width(),
+                                  added_document.height()),
+                  &added_document.metadata().patterns);
+              affected_region = layer_effect_bounds(layer);
+              insert_layer_after_anchor(added_document, std::move(layer),
+                                        concrete.anchor_layer_id);
               added_document.set_active_layer(layer_id);
             } else if constexpr (std::is_same_v<Command,
                                                 AddAdjustmentLayer>) {
@@ -1553,6 +1604,47 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command,
+                                                UpdateVectorShapeLayer>) {
+            const auto *current = document_.find_layer(concrete.layer_id);
+            if (current == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "vector shape layer does not exist");
+              return;
+            }
+            if (current->vector_shape() == nullptr ||
+                !vector_lock_reason(*current).empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "target is not an editable vector shape");
+              return;
+            }
+            if (vector_shapes_equal(*current->vector_shape(),
+                                    concrete.content)) {
+              return;
+            }
+            const auto old_bounds = layer_effect_bounds(*current);
+            auto updated_document = document_;
+            updated_document.metadata().patterns = concrete.patterns;
+            auto *updated = updated_document.find_layer(concrete.layer_id);
+            updated->set_vector_shape(concrete.content);
+            updated->metadata()[kLayerMetadataVectorShape] = "1";
+            updated->metadata()[kLayerMetadataVectorRasterStatus] =
+                kVectorRasterStatusPatchy;
+            mark_layer_vector_block_dirty(*updated);
+            update_vector_shape_raster(
+                *updated,
+                Rect::from_size(updated_document.width(),
+                                updated_document.height()),
+                &updated_document.metadata().patterns);
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            layer_id = concrete.layer_id;
+            affected_region = unite_rect(
+                old_bounds,
+                layer_effect_bounds(
+                    *document_.find_layer(concrete.layer_id)));
+            return;
+          } else if constexpr (std::is_same_v<Command,
                                                 SetVectorMaskState>) {
             const auto *current = document_.find_layer(concrete.layer_id);
             if (current == nullptr) {
@@ -1585,7 +1677,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                  vector_masks_equal(*existing, *concrete.mask))) {
               return;
             }
-            const auto old_bounds = layer_render_bounds(*current);
+            const auto old_bounds = layer_effect_bounds(*current);
             auto updated_document = document_;
             auto *updated = updated_document.find_layer(concrete.layer_id);
             if (concrete.mask.has_value()) {
@@ -1605,7 +1697,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             layer_id = concrete.layer_id;
             affected_region = unite_rect(
                 old_bounds,
-                layer_render_bounds(*document_.find_layer(concrete.layer_id)));
+                layer_effect_bounds(
+                    *document_.find_layer(concrete.layer_id)));
             return;
           } else if constexpr (std::is_same_v<Command,
                                                 RasterizeVectorMask>) {
@@ -1625,7 +1718,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                                  "layer has no vector mask");
               return;
             }
-            const auto old_bounds = layer_render_bounds(*current);
+            const auto old_bounds = layer_effect_bounds(*current);
             auto updated_document = document_;
             bake_vector_mask_into_raster(
                 *updated_document.find_layer(concrete.layer_id),
@@ -1636,7 +1729,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             layer_id = concrete.layer_id;
             affected_region = unite_rect(
                 old_bounds,
-                layer_render_bounds(*document_.find_layer(concrete.layer_id)));
+                layer_effect_bounds(
+                    *document_.find_layer(concrete.layer_id)));
             return;
           } else if constexpr (std::is_same_v<Command, SelectVectorPath>) {
             if (concrete.combine != SelectionCombineMode::Replace &&
