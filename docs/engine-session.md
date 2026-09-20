@@ -28,7 +28,9 @@ also owns `QRegion` and `QImage` snapshots. Direct shell mutations use
 `mutable_document` together with `mark_external_modified`, and history restore
 uses `restore_external` with the recorded engine state identity.
 Layer-panel visibility, layer rename/delete and canvas-resize workflows already
-execute through typed engine commands.
+execute through typed engine commands. Selection snapshots cross the desktop
+history boundary as a Qt-free engine value with explicit retained-byte
+accounting; live selection editing is still owned by the canvas adapter.
 `execute_external` prevents that transitional path from retaining a hidden
 second undo snapshot beside UI history. The remaining MainWindow mutations
 migrate by command family.

@@ -23,6 +23,14 @@ SessionError make_error(SessionErrorCode code, std::string message) {
 DocumentSession::DocumentSession(Document document)
     : document_(std::move(document)) {}
 
+std::size_t SelectionSnapshot::retained_bytes() const noexcept {
+  return selection.capacity() * sizeof(Rect) +
+         display_region.capacity() * sizeof(Rect) + mask_alpha.data().size() +
+         (quick_mask_pixels.has_value()
+              ? quick_mask_pixels->data().size()
+              : 0U);
+}
+
 OpenResult open_psd(std::span<const std::uint8_t> bytes) {
   try {
     return OpenResult{

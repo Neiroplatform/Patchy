@@ -1410,6 +1410,68 @@ CanvasWidget::SelectionSnapshot CanvasWidget::capture_selection_snapshot() const
                          : std::nullopt};
 }
 
+namespace {
+std::vector<Rect> engine_rects(const QRegion& region) {
+  std::vector<Rect> result;
+  result.reserve(static_cast<std::size_t>(region.rectCount()));
+  for (const auto& rect : region) {
+    result.push_back(Rect{rect.x(), rect.y(), rect.width(), rect.height()});
+  }
+  return result;
+}
+
+QRegion qregion_from_engine_rects(const std::vector<Rect>& rects) {
+  QRegion result;
+  for (const auto& rect : rects) {
+    result += QRect(rect.x, rect.y, rect.width, rect.height);
+  }
+  return result;
+}
+
+PixelBuffer gray_pixels_from_qimage(const QImage& source) {
+  if (source.isNull()) {
+    return {};
+  }
+  const auto image = source.convertToFormat(QImage::Format_Grayscale8);
+  PixelBuffer result(image.width(), image.height(), PixelFormat::gray8());
+  for (int row = 0; row < image.height(); ++row) {
+    std::copy_n(image.constScanLine(row), image.width(), result.row(row).data());
+  }
+  return result;
+}
+
+QImage qimage_from_gray_pixels(const PixelBuffer& pixels) {
+  if (pixels.empty()) {
+    return {};
+  }
+  QImage result(pixels.width(), pixels.height(), QImage::Format_Grayscale8);
+  for (int row = 0; row < pixels.height(); ++row) {
+    std::copy_n(pixels.row(row).data(), pixels.width(), result.scanLine(row));
+  }
+  return result;
+}
+} // namespace
+
+patchy::engine::SelectionSnapshot
+CanvasWidget::capture_engine_selection_snapshot() const {
+  const auto snapshot = capture_selection_snapshot();
+  return patchy::engine::SelectionSnapshot{
+      engine_rects(snapshot.selection), engine_rects(snapshot.display_region),
+      Rect{snapshot.mask_bounds.x(), snapshot.mask_bounds.y(),
+           snapshot.mask_bounds.width(), snapshot.mask_bounds.height()},
+      gray_pixels_from_qimage(snapshot.mask_alpha), snapshot.quick_mask_pixels};
+}
+
+void CanvasWidget::apply_engine_selection_snapshot(
+    const patchy::engine::SelectionSnapshot& snapshot) {
+  apply_selection_snapshot(SelectionSnapshot{
+      qregion_from_engine_rects(snapshot.selection),
+      qregion_from_engine_rects(snapshot.display_region),
+      QRect(snapshot.mask_bounds.x, snapshot.mask_bounds.y,
+            snapshot.mask_bounds.width, snapshot.mask_bounds.height),
+      qimage_from_gray_pixels(snapshot.mask_alpha), snapshot.quick_mask_pixels});
+}
+
 void CanvasWidget::apply_selection_snapshot(const SelectionSnapshot& snapshot) {
   invalidate_selection_outline();
   selection_ = snapshot.selection;
@@ -1480,7 +1542,12 @@ void CanvasWidget::record_selection_history(QString label, const SelectionSnapsh
   if (selection_snapshots_equal(before, capture_selection_snapshot())) {
     return;
   }
-  selection_history_callback_(std::move(label), before, coalesce);
+  const auto before_engine = patchy::engine::SelectionSnapshot{
+      engine_rects(before.selection), engine_rects(before.display_region),
+      Rect{before.mask_bounds.x(), before.mask_bounds.y(),
+           before.mask_bounds.width(), before.mask_bounds.height()},
+      gray_pixels_from_qimage(before.mask_alpha), before.quick_mask_pixels};
+  selection_history_callback_(std::move(label), before_engine, coalesce);
 }
 
 void CanvasWidget::run_selection_command(QString label, const std::function<void()>& command) {

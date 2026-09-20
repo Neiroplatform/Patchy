@@ -242,7 +242,7 @@ private:
       std::uint64_t document_state_id{0};
       // Selection state at this point in history, so undo/redo restores the
       // selection alongside the pixels (and selection-only edits are undoable).
-      CanvasWidget::SelectionSnapshot selection;
+      patchy::engine::SelectionSnapshot selection;
       // Action that produced this state (History panel row text). The label a
       // push receives names the upcoming edit, so it becomes the label of the
       // NEXT state, not of the snapshot being stored.
@@ -1092,7 +1092,8 @@ private:
   // one caller is the canvas selection-history callback, which must never default
   // to the active session.
   void push_selection_history(DocumentSession& target_session, QString label,
-                              CanvasWidget::SelectionSnapshot before, bool coalesce = false);
+                              patchy::engine::SelectionSnapshot before,
+                              bool coalesce = false);
   // Mirror the given effective combine mode onto the Options-bar mode buttons
   // (used for both committed modes and the live Shift/Alt override).
   void update_selection_mode_buttons(CanvasWidget::SelectionMode mode);
@@ -1332,12 +1333,12 @@ private:
   // live_selection enters holding the live document's selection and exits
   // holding the restored state's selection.
   void rotate_history_state(DocumentSession& target_session, bool backward,
-                            CanvasWidget::SelectionSnapshot& live_selection);
+                            patchy::engine::SelectionSnapshot& live_selection);
   // Shared canvas/panel refresh after undo/redo/jump rotations on the active
   // session. before_document is the pre-restore document (left intact inside
   // the opposite stack by the rotation) used for the partial-repaint diff.
   void apply_history_restore_tail(DocumentSession& active_session, const Document& before_document,
-                                  CanvasWidget::SelectionSnapshot restored_selection,
+                                  patchy::engine::SelectionSnapshot restored_selection,
                                   const QString& status_message);
   void update_undo_redo_actions();
   void show_about();

@@ -394,9 +394,11 @@ void MainWindow::enforce_history_memory_budget(const DocumentSession& push_targe
     std::size_t bytes = 0;
     for (const auto& state : target.undo_stack) {
       bytes += accumulate_unique_pixel_bytes(state.document, live, seen);
+      bytes += state.selection.retained_bytes();
     }
     for (const auto& state : target.redo_stack) {
       bytes += accumulate_unique_pixel_bytes(state.document, live, seen);
+      bytes += state.selection.retained_bytes();
     }
     return bytes;
   };
@@ -448,7 +450,7 @@ void MainWindow::enforce_history_memory_budget(const DocumentSession& push_targe
 }
 
 void MainWindow::rotate_history_state(DocumentSession& target_session, bool backward,
-                                      CanvasWidget::SelectionSnapshot& live_selection) {
+                                      patchy::engine::SelectionSnapshot& live_selection) {
   auto& from = backward ? target_session.undo_stack : target_session.redo_stack;
   auto& to = backward ? target_session.redo_stack : target_session.undo_stack;
   // Braced-init evaluation is left to right, so the document moves out before
@@ -468,7 +470,7 @@ void MainWindow::rotate_history_state(DocumentSession& target_session, bool back
 
 void MainWindow::apply_history_restore_tail(DocumentSession& active_session,
                                             const Document& before_document,
-                                            CanvasWidget::SelectionSnapshot restored_selection,
+                                            patchy::engine::SelectionSnapshot restored_selection,
                                             const QString& status_message) {
   for (const auto& child : sessions_) {
     if (!child->smart_object_link.has_value() ||
@@ -514,7 +516,7 @@ void MainWindow::apply_history_restore_tail(DocumentSession& active_session,
           restore_smart_filter_mask_mode));
     }
   }
-  canvas_->apply_selection_snapshot(restored_selection);
+  canvas_->apply_engine_selection_snapshot(restored_selection);
   refresh_layer_list();
   refresh_layer_controls();
   refresh_channel_panel();
@@ -541,7 +543,7 @@ void MainWindow::undo() {
   if (active_session.undo_stack.empty()) {
     return;
   }
-  auto live_selection = canvas_->capture_selection_snapshot();
+  auto live_selection = canvas_->capture_engine_selection_snapshot();
   rotate_history_state(active_session, /*backward=*/true, live_selection);
   // The pre-undo document now sits intact at redo_stack.back(); the tail diffs
   // it against the restored document for the partial repaint.
@@ -559,7 +561,7 @@ void MainWindow::redo() {
   if (active_session.redo_stack.empty()) {
     return;
   }
-  auto live_selection = canvas_->capture_selection_snapshot();
+  auto live_selection = canvas_->capture_engine_selection_snapshot();
   rotate_history_state(active_session, /*backward=*/false, live_selection);
   apply_history_restore_tail(active_session, active_session.undo_stack.back().document,
                              std::move(live_selection), tr("Redo"));
@@ -611,8 +613,9 @@ void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString lab
   // document) so undoing this edit also restores the selection it ran against.
   // The snapshot comes from the session's OWN canvas: an edit fired by a
   // non-active canvas must not record the active document's selection.
-  auto snapshot_selection = active_session.canvas != nullptr ? active_session.canvas->capture_selection_snapshot()
-                                                             : CanvasWidget::SelectionSnapshot{};
+  auto snapshot_selection = active_session.canvas != nullptr
+                                ? active_session.canvas->capture_engine_selection_snapshot()
+                                : patchy::engine::SelectionSnapshot{};
   record_history_push(
       active_session,
       DocumentSession::HistoryState{snapshot_future.get(), snapshot_state_id, std::move(snapshot_selection), {}, 0},
@@ -633,7 +636,8 @@ void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString lab
 }
 
 void MainWindow::push_selection_history(DocumentSession& target_session, QString label,
-                                        CanvasWidget::SelectionSnapshot before, bool coalesce) {
+                                        patchy::engine::SelectionSnapshot before,
+                                        bool coalesce) {
   const bool target_is_active = &target_session == active_session();
   if (target_is_active) {
     finish_pending_layer_opacity_edit();
@@ -746,7 +750,7 @@ void MainWindow::jump_to_history_state(std::int64_t state_id) {
     refresh_history_panel();
     return;
   }
-  auto live_selection = canvas_->capture_selection_snapshot();
+  auto live_selection = canvas_->capture_engine_selection_snapshot();
   for (std::size_t step = 0; step < steps; ++step) {
     rotate_history_state(*active, backward, live_selection);
   }

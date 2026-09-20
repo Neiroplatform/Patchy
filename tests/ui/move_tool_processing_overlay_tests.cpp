@@ -809,7 +809,9 @@ struct MoveSelectionScene {
     });
     canvas.set_before_edit_callback([this](QString) { ++content_edits; });
     canvas.set_selection_history_callback(
-        [this](QString, patchy::ui::CanvasWidget::SelectionSnapshot, bool) { ++selection_edits; });
+        [this](QString, patchy::engine::SelectionSnapshot, bool) {
+          ++selection_edits;
+        });
     select({green}, green);
     canvas.show();
     QApplication::processEvents();

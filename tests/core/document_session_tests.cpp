@@ -25,6 +25,7 @@ using patchy::engine::ResizeImage;
 using patchy::engine::SessionErrorCode;
 using patchy::engine::SessionEvent;
 using patchy::engine::SessionEventKind;
+using patchy::engine::SelectionSnapshot;
 using patchy::engine::SetLayerBlendMode;
 using patchy::engine::SetLayerFillOpacity;
 using patchy::engine::SetLayerOpacity;
@@ -254,6 +255,20 @@ void engine_session_external_shell_adapter_preserves_state_identity() {
   CHECK(session.state_id() != edited_state);
 }
 
+void engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes() {
+  SelectionSnapshot snapshot;
+  snapshot.selection = {{1, 2, 3, 4}, {8, 9, 2, 2}};
+  snapshot.display_region = {{1, 2, 3, 4}};
+  snapshot.mask_bounds = {1, 2, 3, 4};
+  snapshot.mask_alpha = PixelBuffer(3, 4, PixelFormat::gray8());
+  snapshot.quick_mask_pixels = PixelBuffer(2, 2, PixelFormat::gray8());
+
+  CHECK(!snapshot.empty());
+  CHECK(snapshot.retained_bytes() >= 16);
+  snapshot.selection.clear();
+  CHECK(snapshot.empty());
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -274,5 +289,7 @@ std::vector<TestCase> document_session_tests() {
        engine_session_renders_bounded_rgba_regions_and_cancels},
       {"engine_session_external_shell_adapter_preserves_state_identity",
        engine_session_external_shell_adapter_preserves_state_identity},
+      {"engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes",
+       engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes},
   };
 }

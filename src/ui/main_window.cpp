@@ -6828,7 +6828,8 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
             canvas, layer_id, std::move(label), std::move(pixels));
       });
   canvas->set_selection_history_callback(
-      [this, canvas](QString label, CanvasWidget::SelectionSnapshot before, bool coalesce) {
+      [this, canvas](QString label, patchy::engine::SelectionSnapshot before,
+                     bool coalesce) {
         if (auto* target_session = session_for_canvas(canvas); target_session != nullptr) {
           push_selection_history(*target_session, std::move(label), std::move(before), coalesce);
         }

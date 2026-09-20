@@ -8,6 +8,7 @@
 #include "core/pixel_tools.hpp"
 #include "core/stroke_stabilizer.hpp"
 #include "core/warp_mesh.hpp"
+#include "engine/document_session.hpp"
 #include "ui/curves_clipping_preview.hpp"
 #include "ui/image_document_io.hpp"
 #include "ui/measurement_units.hpp"
@@ -575,6 +576,10 @@ public:
   void set_selection_mode_for_tool(CanvasTool tool, SelectionMode mode) noexcept;
   [[nodiscard]] SelectionSnapshot capture_selection_snapshot() const;
   void apply_selection_snapshot(const SelectionSnapshot& snapshot);
+  [[nodiscard]] patchy::engine::SelectionSnapshot
+  capture_engine_selection_snapshot() const;
+  void apply_engine_selection_snapshot(
+      const patchy::engine::SelectionSnapshot& snapshot);
   // Pins the marching-ants dash phase and stops its animation timer so tests
   // can grab deterministic frames at chosen phases.
   void set_selection_dash_offset_for_testing(int offset);
@@ -920,7 +925,9 @@ public:
   // `coalesce` marks a continuation of a move sequence (drag/nudge): consecutive
   // coalescing edits collapse into the single entry holding the pre-sequence
   // state, so a run of moves is one undo step.
-  void set_selection_history_callback(std::function<void(QString, SelectionSnapshot, bool coalesce)> callback);
+  void set_selection_history_callback(
+      std::function<void(QString, patchy::engine::SelectionSnapshot,
+                         bool coalesce)> callback);
   void set_quick_mask_changed_callback(std::function<void()> callback);
   // Receives one completed gesture/command. PixelBuffer copies are COW, so the
   // host may retain the result while rebuilding FEid and the filtered preview.
@@ -2375,7 +2382,8 @@ private:
   QImage pending_warp_source_image_{};
   std::optional<LayerId> move_transform_controls_layer_id_{};
   std::function<void(QString)> before_edit_callback_;
-  std::function<void(QString, SelectionSnapshot, bool)> selection_history_callback_;
+  std::function<void(QString, patchy::engine::SelectionSnapshot, bool)>
+      selection_history_callback_;
   std::function<void()> quick_mask_changed_callback_;
   std::function<bool(LayerId, QString, PixelBuffer, QRegion)> smart_filter_mask_committed_callback_;
   std::function<void(SelectionMode)> selection_mode_changed_callback_;

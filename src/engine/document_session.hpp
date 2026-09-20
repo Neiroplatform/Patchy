@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <variant>
@@ -155,6 +156,19 @@ struct RenderResult {
   SessionError error{};
 
   [[nodiscard]] explicit operator bool() const noexcept { return !error; }
+};
+
+// Qt-free value carried by session/history boundaries. Regions are stored as
+// non-overlapping rectangles; an optional gray8 mask preserves soft edges.
+struct SelectionSnapshot {
+  std::vector<Rect> selection{};
+  std::vector<Rect> display_region{};
+  Rect mask_bounds{};
+  PixelBuffer mask_alpha{};
+  std::optional<PixelBuffer> quick_mask_pixels{};
+
+  [[nodiscard]] bool empty() const noexcept { return selection.empty(); }
+  [[nodiscard]] std::size_t retained_bytes() const noexcept;
 };
 
 class DocumentSession {
