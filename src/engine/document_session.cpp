@@ -774,13 +774,62 @@ void DocumentSession::publish(SessionEventKind kind, LayerId layer_id) {
 
 CommandResult DocumentSession::execute(const DocumentCommand &command,
                                        const FilterProgress *filter_progress) {
+  if (preview_active()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "cannot execute a command during a transient preview")};
+  }
   return execute_impl(command, true, filter_progress);
 }
 
 CommandResult
 DocumentSession::execute_external(const DocumentCommand &command,
                                   const FilterProgress *filter_progress) {
+  if (preview_active()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "cannot execute a command during a transient preview")};
+  }
   return execute_impl(command, false, filter_progress);
+}
+
+CommandResult DocumentSession::begin_preview() {
+  if (preview_active()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "a transient preview is already active")};
+  }
+  preview_state_ = PreviewState{document_, selection_};
+  publish(SessionEventKind::PreviewStarted);
+  return CommandResult{true, {}};
+}
+
+CommandResult DocumentSession::update_preview(Rect affected_region,
+                                              LayerId layer_id) {
+  if (!preview_active()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "no transient preview is active")};
+  }
+  publish(SessionEventKind::PreviewUpdated, layer_id);
+  return CommandResult{true, {}, layer_id,
+                       affected_region.empty()
+                           ? std::nullopt
+                           : std::optional<Rect>{affected_region}};
+}
+
+CommandResult DocumentSession::end_preview() {
+  if (!preview_active()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "no transient preview is active")};
+  }
+  auto baseline = std::move(*preview_state_);
+  preview_state_.reset();
+  document_ = std::move(baseline.document);
+  selection_ = std::move(baseline.selection);
+  publish(SessionEventKind::PreviewEnded);
+  return CommandResult{true, {}};
 }
 
 CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
@@ -2341,11 +2390,30 @@ CommandResult DocumentSession::restore(bool backward) {
   return CommandResult{true, {}};
 }
 
-CommandResult DocumentSession::undo() { return restore(true); }
+CommandResult DocumentSession::undo() {
+  if (preview_active()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "cannot undo during a transient preview")};
+  }
+  return restore(true);
+}
 
-CommandResult DocumentSession::redo() { return restore(false); }
+CommandResult DocumentSession::redo() {
+  if (preview_active()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "cannot redo during a transient preview")};
+  }
+  return restore(false);
+}
 
 SaveResult DocumentSession::encode_psd(bool large_document) const {
+  if (preview_active()) {
+    return SaveResult{
+        {}, make_error(SessionErrorCode::EncodeFailed,
+                       "cannot encode a transient preview")};
+  }
   try {
     return SaveResult{
         psd::DocumentIo::write_layered_rgb8(
@@ -2410,6 +2478,7 @@ void DocumentSession::mark_external_modified() {
 void DocumentSession::restore_external(Document document,
                                        std::uint64_t state_id,
                                        SelectionSnapshot selection) {
+  preview_state_.reset();
   document_ = std::move(document);
   selection_ = std::move(selection);
   undo_stack_.clear();
@@ -2420,6 +2489,7 @@ void DocumentSession::restore_external(Document document,
 }
 
 void DocumentSession::replace_external(Document document, bool saved) {
+  preview_state_.reset();
   document_ = std::move(document);
   selection_ = {};
   undo_stack_.clear();

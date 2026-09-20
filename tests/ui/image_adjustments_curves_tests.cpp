@@ -848,6 +848,8 @@ void ui_hue_saturation_creates_masked_adjustment_layer() {
 
   bool saw_adjustment_layer_preview = false;
   bool saw_adjustment_layer_edit_lock = false;
+  const auto state_before_adjustment =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
   QTimer::singleShot(0, [&] {
     for (auto* widget : QApplication::topLevelWidgets()) {
       if (widget->objectName() != QStringLiteral("patchyHueSaturationDialog")) {
@@ -864,6 +866,10 @@ void ui_hue_saturation_creates_masked_adjustment_layer() {
       CHECK(hue != nullptr);
       hue->setValue(120);
       process_events_for(120);
+      CHECK(patchy::ui::MainWindowTestAccess::active_engine_preview_active(
+          window));
+      CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+            state_before_adjustment);
       saw_adjustment_layer_preview = color_close(canvas_pixel(*canvas, QPoint(70, 70)), QColor(0, 255, 0), 12);
       const auto preview_pixel_before_edit = canvas_pixel(*canvas, QPoint(70, 70));
       drag(*canvas, canvas->widget_position_for_document_point(QPoint(160, 40)),
@@ -879,6 +885,10 @@ void ui_hue_saturation_creates_masked_adjustment_layer() {
   QApplication::processEvents();
   CHECK(saw_adjustment_layer_preview);
   CHECK(saw_adjustment_layer_edit_lock);
+  CHECK(!patchy::ui::MainWindowTestAccess::active_engine_preview_active(
+      window));
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        state_before_adjustment + 1);
   CHECK(!canvas->edit_locked());
   CHECK(layer_list->isEnabled());
 
@@ -899,6 +909,8 @@ void ui_hue_saturation_creates_masked_adjustment_layer() {
 
   bool saw_initial_adjustment_settings = false;
   bool saw_adjustment_edit_preview = false;
+  const auto state_before_adjustment_edit =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
   QTimer::singleShot(0, [&] {
     for (auto* widget : QApplication::topLevelWidgets()) {
       if (widget->objectName() != QStringLiteral("patchyHueSaturationDialog")) {
@@ -911,6 +923,10 @@ void ui_hue_saturation_creates_masked_adjustment_layer() {
       saw_initial_adjustment_settings = hue->value() == 120;
       hue->setValue(-120);
       process_events_for(120);
+      CHECK(patchy::ui::MainWindowTestAccess::active_engine_preview_active(
+          window));
+      CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+            state_before_adjustment_edit);
       saw_adjustment_edit_preview = color_close(canvas_pixel(*canvas, QPoint(70, 70)), QColor(0, 0, 255), 20);
       dialog->accept();
       return;
@@ -921,6 +937,10 @@ void ui_hue_saturation_creates_masked_adjustment_layer() {
   QApplication::processEvents();
   CHECK(saw_initial_adjustment_settings);
   CHECK(saw_adjustment_edit_preview);
+  CHECK(!patchy::ui::MainWindowTestAccess::active_engine_preview_active(
+      window));
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        state_before_adjustment_edit + 1);
   CHECK(color_close(canvas_pixel(*canvas, QPoint(70, 70)), QColor(0, 0, 255), 20));
   CHECK(color_close(canvas_pixel(*canvas, QPoint(180, 70)), QColor(255, 0, 0), 12));
 

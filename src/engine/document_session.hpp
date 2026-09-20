@@ -356,6 +356,9 @@ struct LayerInfo {
 enum class SessionEventKind {
   CommandApplied,
   SelectionChanged,
+  PreviewStarted,
+  PreviewUpdated,
+  PreviewEnded,
   UndoApplied,
   RedoApplied,
   Saved,
@@ -433,6 +436,9 @@ public:
     return redo_stack_.size();
   }
   [[nodiscard]] std::vector<LayerInfo> layers() const;
+  [[nodiscard]] bool preview_active() const noexcept {
+    return preview_state_.has_value();
+  }
 
   void set_event_sink(EventSink sink) { event_sink_ = std::move(sink); }
   [[nodiscard]] CommandResult
@@ -443,6 +449,14 @@ public:
   [[nodiscard]] CommandResult
   execute_external(const DocumentCommand &command,
                    const FilterProgress *filter_progress = nullptr);
+  // Transitional desktop previews mutate the session-owned document without
+  // advancing canonical revision/state/dirty identity. The engine retains the
+  // exact pre-preview document and selection, emits preview-only events and
+  // restores that baseline before the accepted typed command is executed.
+  [[nodiscard]] CommandResult begin_preview();
+  [[nodiscard]] CommandResult update_preview(Rect affected_region = {},
+                                             LayerId layer_id = 0);
+  [[nodiscard]] CommandResult end_preview();
   [[nodiscard]] CommandResult undo();
   [[nodiscard]] CommandResult redo();
   [[nodiscard]] SaveResult encode_psd(bool large_document = false) const;
@@ -459,6 +473,11 @@ private:
     Document document;
     SelectionSnapshot selection{};
     std::uint64_t state_id{0};
+  };
+
+  struct PreviewState {
+    Document document;
+    SelectionSnapshot selection{};
   };
 
   static constexpr std::size_t kMaxUndoStates = 40;
@@ -481,6 +500,7 @@ private:
   std::uint64_t next_state_id_{2};
   FilterRegistry filter_registry_{};
   EventSink event_sink_{};
+  std::optional<PreviewState> preview_state_{};
 };
 
 struct OpenResult {

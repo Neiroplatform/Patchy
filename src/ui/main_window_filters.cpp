@@ -1642,6 +1642,11 @@ void MainWindow::editable_smart_filter_dialog(
               preview_layer != nullptr) {
             preview_layer->set_pixels(*original_pixels);
             preview_layer->set_bounds(original_bounds);
+            const auto updated = session().engine_session.update_preview(
+                unite_rect(*last_preview_bounds, original_bounds), layer_id);
+            if (!updated) {
+              show_status_error(QString::fromStdString(updated.error.message));
+            }
             if (canvas_ != nullptr) {
               canvas_->document_changed(
                   to_qrect(*last_preview_bounds).united(
@@ -1691,6 +1696,14 @@ void MainWindow::editable_smart_filter_dialog(
                         preview_layer != nullptr) {
                       preview_layer->set_pixels(std::move(result->pixels));
                       preview_layer->set_bounds(result->bounds);
+                      const auto updated =
+                          window->session().engine_session.update_preview(
+                              unite_rect(*last_preview_bounds, result->bounds),
+                              layer_id);
+                      if (!updated) {
+                        window->show_status_error(
+                            QString::fromStdString(updated.error.message));
+                      }
                       if (window->canvas_ != nullptr) {
                         window->canvas_->document_changed(
                             to_qrect(*last_preview_bounds)
@@ -1722,10 +1735,16 @@ void MainWindow::editable_smart_filter_dialog(
       };
 
   auto preview_edit_lock = lock_preview_dialog_edits();
-  auto preview_cleanup = qScopeGuard([this, &doc, preview_state, original = *layer] {
+  const auto preview_started = session().engine_session.begin_preview();
+  if (!preview_started) {
+    preview_edit_lock.release();
+    show_status_error(QString::fromStdString(preview_started.error.message));
+    return;
+  }
+  auto preview_cleanup = qScopeGuard([this, preview_state] {
     close_async_pixel_preview(preview_state);
-    if (auto* target = doc.find_layer(original.id()); target != nullptr) {
-      *target = original;
+    if (session().engine_session.preview_active()) {
+      static_cast<void>(session().engine_session.end_preview());
       canvas_->document_changed();
     }
   });
@@ -1739,8 +1758,15 @@ void MainWindow::editable_smart_filter_dialog(
   if (layer == nullptr) {
     return;
   }
-  layer->set_pixels(*original_pixels);
-  layer->set_bounds(original_bounds);
+  const auto preview_ended = session().engine_session.end_preview();
+  if (!preview_ended) {
+    show_status_error(QString::fromStdString(preview_ended.error.message));
+    return;
+  }
+  layer = doc.find_layer(layer_id);
+  if (layer == nullptr) {
+    return;
+  }
   canvas_->document_changed(to_qrect(*last_preview_bounds)
                                 .united(to_qrect(original_bounds)));
   preview_cleanup.dismiss();
@@ -2922,22 +2948,39 @@ void MainWindow::visual_filter_gallery_dialog() {
   auto preview_shows_original = std::make_shared<bool>(true);
   QPointer<CanvasWidget> target_canvas(target_session->canvas);
 
-  const auto restore_original = [this, session_id, layer_id, original_pixels, bounds, last_preview_bounds,
-                                 preview_shows_original, target_canvas] {
-    if (*preview_shows_original) {
-      *last_preview_bounds = bounds;
-      return;
+  const auto begin_engine_preview = [this, session_id] {
+    auto* live_session = session_with_id(session_id);
+    if (live_session == nullptr) {
+      return false;
     }
+    if (live_session->engine_session.preview_active()) {
+      return true;
+    }
+    const auto started = live_session->engine_session.begin_preview();
+    if (!started) {
+      show_status_error(QString::fromStdString(started.error.message));
+      return false;
+    }
+    return true;
+  };
+
+  const auto restore_original = [this, session_id, bounds, last_preview_bounds,
+                                 preview_shows_original, target_canvas] {
     auto* live_session = session_with_id(session_id);
     if (live_session == nullptr) {
       return;
     }
-    auto* live_layer = live_session->document.find_layer(layer_id);
-    if (live_layer == nullptr) {
+    if (!live_session->engine_session.preview_active()) {
+      *last_preview_bounds = bounds;
+      *preview_shows_original = true;
       return;
     }
     const auto dirty = to_qrect(*last_preview_bounds).united(to_qrect(bounds));
-    set_layer_pixels_preserving_origin(*live_layer, *original_pixels, bounds);
+    const auto ended = live_session->engine_session.end_preview();
+    if (!ended) {
+      show_status_error(QString::fromStdString(ended.error.message));
+      return;
+    }
     *last_preview_bounds = bounds;
     *preview_shows_original = true;
     if (target_canvas != nullptr) {
@@ -3015,6 +3058,15 @@ void MainWindow::visual_filter_gallery_dialog() {
                           const auto dirty =
                               to_qrect(*last_preview_bounds).united(to_qrect(*result_bounds));
                           set_layer_pixels_with_bounds(*live_layer, std::move(*result), *result_bounds);
+                          const auto updated =
+                              live_session->engine_session.update_preview(
+                                  unite_rect(*last_preview_bounds,
+                                             *result_bounds),
+                                  layer_id);
+                          if (!updated) {
+                            window->show_status_error(QString::fromStdString(
+                                updated.error.message));
+                          }
                           *last_preview_bounds = *result_bounds;
                           *preview_shows_original = false;
                           if (target_canvas != nullptr) {
@@ -3038,7 +3090,7 @@ void MainWindow::visual_filter_gallery_dialog() {
         };
 
     const auto preview_changed =
-        [preview_state, restore_original, preview_registry,
+        [preview_state, begin_engine_preview, restore_original, preview_registry,
          smart_object_target, native_base_stack,
          native_new_stack_mask,
          can_embed_canvas](const VisualFilterGalleryPreview& preview) {
@@ -3058,6 +3110,7 @@ void MainWindow::visual_filter_gallery_dialog() {
         return;
       }
       if (smart_object_target) {
+        static_cast<void>(begin_engine_preview());
         return;
       }
       if (can_embed_canvas &&
@@ -3066,6 +3119,10 @@ void MainWindow::visual_filter_gallery_dialog() {
         // The accepted exact render drives the canvas for canvas-filling
         // recipes, exactly like the Smart Object wiring above.
         cancel_latest_cancellable_pixel_preview(preview_state);
+        static_cast<void>(begin_engine_preview());
+        return;
+      }
+      if (!begin_engine_preview()) {
         return;
       }
       enqueue_latest_cancellable_pixel_preview(preview_state, *preview.recipe);
@@ -3123,13 +3180,14 @@ void MainWindow::visual_filter_gallery_dialog() {
     exact_preview_ready =
         [this, session_id, layer_id, last_preview_bounds,
          preview_shows_original, target_canvas,
+         begin_engine_preview,
          restore_original](const VisualFilterGalleryExactPreview& preview) {
       if (!preview.canvas_enabled || preview.rendered == nullptr) {
         restore_original();
         return;
       }
       auto* live_session = session_with_id(session_id);
-      if (live_session == nullptr) {
+      if (live_session == nullptr || !begin_engine_preview()) {
         return;
       }
       auto* live_layer = live_session->document.find_layer(layer_id);
@@ -3141,6 +3199,11 @@ void MainWindow::visual_filter_gallery_dialog() {
               .united(to_qrect(preview.rendered->bounds));
       set_layer_pixels_with_bounds(*live_layer, preview.rendered->pixels,
                                    preview.rendered->bounds);
+      const auto updated = live_session->engine_session.update_preview(
+          unite_rect(*last_preview_bounds, preview.rendered->bounds), layer_id);
+      if (!updated) {
+        show_status_error(QString::fromStdString(updated.error.message));
+      }
       *last_preview_bounds = preview.rendered->bounds;
       *preview_shows_original = false;
       if (target_canvas != nullptr) {

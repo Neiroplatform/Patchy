@@ -612,12 +612,25 @@ void MainWindow::update_adjustment_layer_preview(QString label, const Adjustment
     return;
   }
 
+  auto& engine_session = session().engine_session;
+  if (!engine_session.preview_active()) {
+    const auto started = engine_session.begin_preview();
+    if (!started) {
+      show_status_error(QString::fromStdString(started.error.message));
+      return;
+    }
+  }
   auto& doc = document();
   if (preview_id.has_value()) {
     if (auto* layer = doc.find_layer(*preview_id); layer != nullptr) {
       layer->set_name(label.toStdString());
       layer->set_bounds(Rect::from_size(doc.width(), doc.height()));
       configure_adjustment_layer(*layer, settings);
+      const auto updated = engine_session.update_preview(
+          Rect::from_size(doc.width(), doc.height()), *preview_id);
+      if (!updated) {
+        show_status_error(QString::fromStdString(updated.error.message));
+      }
       canvas_->document_changed();
       return;
     }
@@ -630,11 +643,28 @@ void MainWindow::update_adjustment_layer_preview(QString label, const Adjustment
   if (restore_active_layer.has_value() && doc.find_layer(*restore_active_layer) != nullptr) {
     doc.set_active_layer(*restore_active_layer);
   }
+  const auto updated = engine_session.update_preview(
+      Rect::from_size(doc.width(), doc.height()), *preview_id);
+  if (!updated) {
+    show_status_error(QString::fromStdString(updated.error.message));
+  }
   canvas_->document_changed();
 }
 
 void MainWindow::remove_adjustment_layer_preview(std::optional<LayerId>& preview_id,
                                                  std::optional<LayerId> restore_active_layer) {
+  auto& engine_session = session().engine_session;
+  if (engine_session.preview_active()) {
+    const auto ended = engine_session.end_preview();
+    preview_id.reset();
+    if (!ended) {
+      show_status_error(QString::fromStdString(ended.error.message));
+    }
+    if (canvas_ != nullptr) {
+      canvas_->document_changed();
+    }
+    return;
+  }
   if (!preview_id.has_value()) {
     return;
   }
@@ -705,22 +735,37 @@ void MainWindow::edit_active_adjustment_layer() {
   const auto layer_id = layer->id();
   const auto original_layer = *layer;
   auto apply_settings = [this, &doc, layer_id](const AdjustmentSettings& settings) {
+    auto& engine_session = session().engine_session;
+    if (!engine_session.preview_active()) {
+      const auto started = engine_session.begin_preview();
+      if (!started) {
+        show_status_error(QString::fromStdString(started.error.message));
+        return;
+      }
+    }
     auto* target = doc.find_layer(layer_id);
     if (target == nullptr) {
       return;
     }
     configure_adjustment_layer(*target, settings);
+    const auto updated = engine_session.update_preview(
+        Rect::from_size(doc.width(), doc.height()), layer_id);
+    if (!updated) {
+      show_status_error(QString::fromStdString(updated.error.message));
+    }
     if (canvas_ != nullptr) {
       canvas_->document_changed();
       refresh_layer_thumbnails();
     }
   };
-  auto restore_original_layer = [this, &doc, layer_id, &original_layer] {
-    auto* target = doc.find_layer(layer_id);
-    if (target == nullptr) {
-      return;
+  auto restore_original_layer = [this] {
+    auto& engine_session = session().engine_session;
+    if (engine_session.preview_active()) {
+      const auto ended = engine_session.end_preview();
+      if (!ended) {
+        show_status_error(QString::fromStdString(ended.error.message));
+      }
     }
-    *target = original_layer;
     if (canvas_ != nullptr) {
       canvas_->document_changed();
       refresh_layer_thumbnails();

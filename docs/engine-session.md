@@ -75,8 +75,17 @@ typed editing commands.
   edits for all eight supported nondestructive adjustment kinds. Engine-side
   layer-ID allocation, optional selection mask, native payload regeneration,
   full-canvas dirty bounds, semantic no-op detection, undo and PSD reopen all
-  share one Qt-free command family. Dialog previews remain a transient shell
-  projection and final desktop commits use this boundary;
+  share one Qt-free command family. Final desktop commits use this boundary;
+- `begin_preview` / `update_preview` / `end_preview` make transient dialog
+  rendering session-owned without making a preview a committed edit. The
+  session snapshots the exact document and committed selection at begin,
+  publishes preview-only events while parameters are scrubbed, and restores
+  the baseline before the accepted typed command. Revision, state identity,
+  dirty state and history remain unchanged throughout; commands, undo/redo and
+  PSD encoding fail closed until the preview ends. Adjustment-layer create/edit,
+  editable Smart Filter dialogs and both plain-layer and Smart Object Filter
+  Gallery canvas previews use this lifecycle, including asynchronous latest-wins
+  renders and cancellation;
 - every successful mutation gets a new state identity and a monotonic revision;
   rejected and no-op commands change neither;
 - undo and redo restore document state identities, so returning to the saved
@@ -125,8 +134,8 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate remaining brush/pixel gestures, Smart Filter preview preparation,
-  transient adjustment previews and history storage to engine commands;
+- migrate the remaining specialized pixel/mask gestures and history storage to
+  engine commands;
 - add command families for remaining nondestructive filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;
 - keep the desktop shell and scripting API on the same command path.

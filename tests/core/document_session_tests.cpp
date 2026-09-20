@@ -125,6 +125,77 @@ void engine_session_commands_history_dirty_and_events() {
   CHECK(events.back().revision == session.revision());
 }
 
+void engine_session_transient_preview_restores_without_canonical_mutation() {
+  DocumentSession session(make_session_document());
+  const auto layer_id = session.document().layers().front().id();
+  const auto revision = session.revision();
+  const auto state_id = session.state_id();
+  const auto undo_size = session.undo_size();
+  std::vector<SessionEvent> events;
+  session.set_event_sink(
+      [&events](const SessionEvent &event) { events.push_back(event); });
+
+  CHECK(static_cast<bool>(session.begin_preview()));
+  CHECK(session.preview_active());
+  CHECK(events.back().kind == SessionEventKind::PreviewStarted);
+  CHECK(events.back().revision == revision);
+  CHECK(events.back().state_id == state_id);
+  CHECK(!events.back().dirty);
+  CHECK(!session.begin_preview());
+  auto *previewed = session.mutable_document().find_layer(layer_id);
+  CHECK(previewed != nullptr);
+  previewed->set_name("Previewed");
+  previewed->pixels().pixel(0, 0)[0] = 240;
+  PixelBuffer temporary_pixels(session.document().width(),
+                               session.document().height(),
+                               PixelFormat::rgba8());
+  temporary_pixels.clear(99);
+  session.mutable_document().add_pixel_layer("Temporary",
+                                             std::move(temporary_pixels));
+  const auto updated = session.update_preview({0, 0, 2, 2}, layer_id);
+  CHECK(static_cast<bool>(updated));
+  CHECK(updated.affected_region.has_value());
+  CHECK(events.back().kind == SessionEventKind::PreviewUpdated);
+  CHECK(events.back().revision == revision);
+  CHECK(events.back().state_id == state_id);
+  CHECK(!events.back().dirty);
+  CHECK(session.revision() == revision);
+  CHECK(session.state_id() == state_id);
+  CHECK(session.undo_size() == undo_size);
+  CHECK(!session.dirty());
+  CHECK(session.document().layers().size() == 2U);
+
+  const auto rejected =
+      session.execute(SetLayerVisibility{layer_id, false});
+  CHECK(!rejected);
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(!session.undo());
+  CHECK(!session.redo());
+  const auto rejected_save = session.encode_psd();
+  CHECK(!rejected_save);
+  CHECK(rejected_save.error.code == SessionErrorCode::EncodeFailed);
+  CHECK(static_cast<bool>(session.end_preview()));
+  CHECK(!session.preview_active());
+  CHECK(events.back().kind == SessionEventKind::PreviewEnded);
+  CHECK(events.back().revision == revision);
+  CHECK(events.back().state_id == state_id);
+  CHECK(!events.back().dirty);
+  CHECK(session.revision() == revision);
+  CHECK(session.state_id() == state_id);
+  CHECK(session.undo_size() == undo_size);
+  CHECK(!session.dirty());
+  CHECK(session.document().layers().size() == 1U);
+  const auto *restored = session.document().find_layer(layer_id);
+  CHECK(restored != nullptr);
+  CHECK(restored->name() == "Layer 1");
+  CHECK(restored->pixels().pixel(0, 0)[0] == 12);
+  CHECK(!session.update_preview());
+  CHECK(!session.end_preview());
+  CHECK(static_cast<bool>(session.encode_psd()));
+  CHECK(static_cast<bool>(
+      session.execute(SetLayerVisibility{layer_id, false})));
+}
+
 void engine_session_rejects_invalid_commands_without_mutation() {
   DocumentSession session(make_session_document());
   const auto revision = session.revision();
@@ -1386,6 +1457,8 @@ std::vector<TestCase> document_session_tests() {
   return {
       {"engine_session_commands_history_dirty_and_events",
        engine_session_commands_history_dirty_and_events},
+      {"engine_session_transient_preview_restores_without_canonical_mutation",
+       engine_session_transient_preview_restores_without_canonical_mutation},
       {"engine_session_rejects_invalid_commands_without_mutation",
        engine_session_rejects_invalid_commands_without_mutation},
       {"engine_session_projects_and_moves_layer_tree",

@@ -279,6 +279,10 @@ public:
     return window.session().engine_session.state_id();
   }
 
+  static bool active_engine_preview_active(MainWindow& window) {
+    return window.session().engine_session.preview_active();
+  }
+
   static void undo(MainWindow& window) {
     window.undo();
   }

@@ -1519,6 +1519,8 @@ void ui_smart_filter_dialogs_with_preview_keep_unchanged_pixels() {
     return current != nullptr &&
            patchy::ui::pixel_buffers_equal(current->pixels(), doctored);
   };
+  const auto state_before_preview =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
   const auto active_row = [&]() -> QWidget* {
     auto* item =
         require_layer_item(*layers, QStringLiteral("Gaussian radius 2.0"));
@@ -1543,6 +1545,10 @@ void ui_smart_filter_dialogs_with_preview_keep_unchanged_pixels() {
     // A real change previews...
     opacity->setValue(40.0);
     CHECK(process_events_until([&] { return !pixels_are_doctored(); }));
+    CHECK(patchy::ui::MainWindowTestAccess::active_engine_preview_active(
+        window));
+    CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+          state_before_preview);
     // ...and returning to the stored value restores the exact raster.
     opacity->setValue(100.0);
     CHECK(process_events_until([&] { return pixels_are_doctored(); }));
@@ -1556,6 +1562,10 @@ void ui_smart_filter_dialogs_with_preview_keep_unchanged_pixels() {
   process_events_for(50);
   CHECK(blending_checked);
   CHECK(pixels_are_doctored());
+  CHECK(!patchy::ui::MainWindowTestAccess::active_engine_preview_active(
+      window));
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        state_before_preview);
 
   // The settings dialog takes the same unchanged-restore path.
   bool edit_checked = false;
