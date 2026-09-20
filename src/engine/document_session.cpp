@@ -758,6 +758,24 @@ void DocumentSession::push_undo_state() {
   redo_stack_.clear();
 }
 
+const Document *DocumentSession::undo_document(std::size_t index) const noexcept {
+  return index < undo_stack_.size() ? &undo_stack_[index].document : nullptr;
+}
+
+const Document *DocumentSession::redo_document(std::size_t index) const noexcept {
+  return index < redo_stack_.size() ? &redo_stack_[index].document : nullptr;
+}
+
+const SelectionSnapshot *
+DocumentSession::undo_selection(std::size_t index) const noexcept {
+  return index < undo_stack_.size() ? &undo_stack_[index].selection : nullptr;
+}
+
+const SelectionSnapshot *
+DocumentSession::redo_selection(std::size_t index) const noexcept {
+  return index < redo_stack_.size() ? &redo_stack_[index].selection : nullptr;
+}
+
 void DocumentSession::prepare_mutation(bool record_history) {
   if (record_history) {
     push_undo_state();
@@ -2643,6 +2661,40 @@ void DocumentSession::mark_external_modified() {
   ++revision_;
   publish(SessionEventKind::CommandApplied);
 }
+
+void DocumentSession::push_external_undo_state(
+    Document document, std::uint64_t state_id, SelectionSnapshot selection) {
+  preview_state_.reset();
+  undo_stack_.push_back(
+      HistoryState{std::move(document), std::move(selection), state_id});
+  if (undo_stack_.size() > kMaxUndoStates) {
+    undo_stack_.erase(undo_stack_.begin());
+  }
+  redo_stack_.clear();
+}
+
+void DocumentSession::clear_history() noexcept {
+  undo_stack_.clear();
+  redo_stack_.clear();
+}
+
+bool DocumentSession::evict_oldest_undo() noexcept {
+  if (undo_stack_.empty()) {
+    return false;
+  }
+  undo_stack_.erase(undo_stack_.begin());
+  return true;
+}
+
+void DocumentSession::trim_undo(std::size_t keep) noexcept {
+  if (undo_stack_.size() > keep) {
+    undo_stack_.erase(
+        undo_stack_.begin(),
+        undo_stack_.end() - static_cast<std::ptrdiff_t>(keep));
+  }
+}
+
+void DocumentSession::clear_redo() noexcept { redo_stack_.clear(); }
 
 void DocumentSession::restore_external(Document document,
                                        std::uint64_t state_id,

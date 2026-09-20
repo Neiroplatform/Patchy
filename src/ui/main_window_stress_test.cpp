@@ -724,6 +724,8 @@ private:
       stack.erase(stack.begin(), stack.end() - static_cast<std::ptrdiff_t>(keep));
     }
     w.session().redo_stack.clear();
+    w.session().engine_session.trim_undo(keep);
+    w.session().engine_session.clear_redo();
   }
 
   template <typename Body>

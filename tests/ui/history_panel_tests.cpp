@@ -62,6 +62,7 @@ void ui_history_panel_lists_states_oldest_first_with_current_highlight() {
   CHECK(history->currentRow() == 2);
   CHECK(history->item(2)->text().contains(QStringLiteral("Fill")));
   CHECK(MainWindowTestAccess::active_session_undo_depth(window) == 2);
+  CHECK(MainWindowTestAccess::active_engine_undo_depth(window) == 2);
 
   MainWindowTestAccess::undo(window);
   QApplication::processEvents();
@@ -69,6 +70,8 @@ void ui_history_panel_lists_states_oldest_first_with_current_highlight() {
   // state stays listed, dimmed with the future-state theme role.
   CHECK(history->count() == 3);
   CHECK(history->currentRow() == 1);
+  CHECK(MainWindowTestAccess::active_engine_undo_depth(window) == 1);
+  CHECK(MainWindowTestAccess::active_engine_redo_depth(window) == 1);
   CHECK(history->item(2)->foreground().color() == patchy::ui::theme().history_future_text);
   CHECK(history->item(0)->foreground().color() != patchy::ui::theme().history_future_text);
 }
@@ -90,6 +93,8 @@ void ui_history_click_jumps_backward_and_forward() {
   CHECK(color_close(canvas_pixel(*canvas, QPoint(40, 40)), QColor(200, 30, 30), 6));
   CHECK(MainWindowTestAccess::active_session_undo_depth(window) == 1);
   CHECK(MainWindowTestAccess::active_session_redo_depth(window) == 2);
+  CHECK(MainWindowTestAccess::active_engine_undo_depth(window) == 1);
+  CHECK(MainWindowTestAccess::active_engine_redo_depth(window) == 2);
   CHECK(history->count() == 4);
   CHECK(history->currentRow() == 1);
   CHECK(history->item(3)->foreground().color() == patchy::ui::theme().history_future_text);
@@ -99,6 +104,8 @@ void ui_history_click_jumps_backward_and_forward() {
   CHECK(color_close(canvas_pixel(*canvas, QPoint(40, 40)), QColor(30, 60, 220), 6));
   CHECK(MainWindowTestAccess::active_session_undo_depth(window) == 3);
   CHECK(MainWindowTestAccess::active_session_redo_depth(window) == 0);
+  CHECK(MainWindowTestAccess::active_engine_undo_depth(window) == 3);
+  CHECK(MainWindowTestAccess::active_engine_redo_depth(window) == 0);
   CHECK(history->currentRow() == 3);
 
   // Clicking the current row changes nothing.
@@ -140,6 +147,7 @@ void ui_history_cap_eviction_keeps_rows_consistent() {
               index % 2 == 0 ? QColor(200, 30, 30) : QColor(30, 60, 220));
   }
   CHECK(MainWindowTestAccess::active_session_undo_depth(window) == 40);
+  CHECK(MainWindowTestAccess::active_engine_undo_depth(window) == 40);
   CHECK(history->count() == 41);
   CHECK(history->currentRow() == 40);
 
@@ -148,6 +156,8 @@ void ui_history_cap_eviction_keeps_rows_consistent() {
   click_history_row(*history, 0);
   CHECK(MainWindowTestAccess::active_session_undo_depth(window) == 0);
   CHECK(MainWindowTestAccess::active_session_redo_depth(window) == 40);
+  CHECK(MainWindowTestAccess::active_engine_undo_depth(window) == 0);
+  CHECK(MainWindowTestAccess::active_engine_redo_depth(window) == 40);
   CHECK(history->count() == 41);
   CHECK(history->currentRow() == 0);
   CHECK(color_close(canvas_pixel(*canvas, QPoint(40, 40)), QColor(200, 30, 30), 6));
@@ -178,6 +188,7 @@ void ui_history_budget_evicts_oldest_but_keeps_floor() {
   // A zero budget evicts to the floor on every push; the panel mirrors the
   // survivors (three snapshots plus the current state).
   CHECK(MainWindowTestAccess::active_session_undo_depth(window) == 3);
+  CHECK(MainWindowTestAccess::active_engine_undo_depth(window) == 3);
   CHECK(history->count() == 4);
   CHECK(history->currentRow() == 3);
 

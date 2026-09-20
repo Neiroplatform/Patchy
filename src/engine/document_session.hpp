@@ -472,6 +472,12 @@ public:
   [[nodiscard]] std::size_t redo_size() const noexcept {
     return redo_stack_.size();
   }
+  [[nodiscard]] const Document *undo_document(std::size_t index) const noexcept;
+  [[nodiscard]] const Document *redo_document(std::size_t index) const noexcept;
+  [[nodiscard]] const SelectionSnapshot *undo_selection(
+      std::size_t index) const noexcept;
+  [[nodiscard]] const SelectionSnapshot *redo_selection(
+      std::size_t index) const noexcept;
   [[nodiscard]] std::vector<LayerInfo> layers() const;
   [[nodiscard]] bool preview_active() const noexcept {
     return preview_state_.has_value();
@@ -501,6 +507,15 @@ public:
   render(Rect region, const CancellationToken *cancellation = nullptr) const;
   void mark_saved();
   void mark_external_modified();
+  // Transitional shell edits capture their pre-edit COW snapshot asynchronously
+  // and transfer ownership here. Qt retains labels only; document/selection
+  // history has a single canonical owner.
+  void push_external_undo_state(Document document, std::uint64_t state_id,
+                                SelectionSnapshot selection = {});
+  void clear_history() noexcept;
+  [[nodiscard]] bool evict_oldest_undo() noexcept;
+  void trim_undo(std::size_t keep) noexcept;
+  void clear_redo() noexcept;
   void restore_external(Document document, std::uint64_t state_id,
                         SelectionSnapshot selection = {});
   void replace_external(Document document, bool saved);

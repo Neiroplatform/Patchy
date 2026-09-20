@@ -1044,6 +1044,8 @@ void ui_selection_moves_coalesce_into_one_undo_step() {
     QApplication::processEvents();
   }
   CHECK(canvas->selected_document_rect()->topLeft() == origin + QPoint(5, 1));
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_undo_depth(window) ==
+        patchy::ui::MainWindowTestAccess::active_session_undo_depth(window));
 
   // One undo returns to the pre-move position (not just one nudge back); one redo
   // restores the final moved position.
@@ -1053,6 +1055,8 @@ void ui_selection_moves_coalesce_into_one_undo_step() {
   redo_action->trigger();
   QApplication::processEvents();
   CHECK(canvas->selected_document_rect()->topLeft() == origin + QPoint(5, 1));
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_undo_depth(window) ==
+        patchy::ui::MainWindowTestAccess::active_session_undo_depth(window));
 
   // The whole run is one entry sitting on top of the marquee: undoing twice
   // removes the move, then the selection itself.

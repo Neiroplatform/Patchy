@@ -114,14 +114,15 @@ typed editing commands.
 
 ## Desktop transition
 
-The Qt shell now stores its canonical document and committed selection inside
-`engine::DocumentSession`. The canvas keeps only the transient Qt projection
-needed while a gesture is in flight; each completed desktop or scripting
-selection operation crosses `SetSelection`. Its existing history stacks remain
-a temporary adapter while their stored values are already Qt-free. Direct shell
-mutations use `mutable_document` together with `mark_external_modified`, and
-history restore uses `restore_external` with the recorded engine state identity
-and selection.
+The Qt shell now stores its canonical document, committed selection and all
+undo/redo Document/Selection snapshots inside `engine::DocumentSession`. The
+canvas keeps only the transient Qt projection needed while a gesture is in
+flight; each completed desktop or scripting selection operation crosses
+`SetSelection`. Qt history stacks retain presentation-only labels and stable row
+IDs at the matching engine indices. Direct shell mutations transfer their
+asynchronously captured pre-edit COW snapshot with
+`push_external_undo_state`, then use `mark_external_modified`; typed commands
+record or reuse the same engine history boundary.
 Layer-panel create/group/ungroup/delete/reorder, visibility, rename,
 opacity/fill/blend and flip workflows, plus canvas-resize/rotation, already
 execute through typed engine commands. The scripting API shares those commands
@@ -131,12 +132,14 @@ seam shifting, plus scripted crop, now share typed geometry commands and the
 canonical selection reset. Desktop destructive-filter and Auto All commits
 cross the same typed pixel boundary after their existing preview/progress workflow. Selection
 snapshots cross the desktop history boundary as a Qt-free engine value with
-explicit retained-byte accounting. Undo, redo, history jumps, background smart
-object commits and script selection setters all restore or read the same engine
-value instead of recapturing a second canonical state from a canvas.
-`execute_external` prevents that transitional path from retaining a hidden
-second undo snapshot beside UI history. The remaining MainWindow mutations
-migrate by command family.
+explicit retained-byte accounting. Undo, redo, multi-step history jumps,
+New-Document-From-State, background Smart Object commits, selection coalescing,
+global cross-session memory eviction and stress trimming all operate on the
+single engine-owned snapshot stacks. Partial repaint still diffs the pre-hop
+COW document against the restored canonical document. `execute_external`
+prevents transitional shell workflows that already transferred a snapshot from
+retaining a hidden duplicate. The remaining MainWindow mutations migrate by
+command family.
 
 New headless consumers must use typed commands. New Qt workflows should use
 typed commands when their operation is covered; adding new direct state owners
@@ -147,7 +150,6 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate the remaining shell-owned history storage to engine history;
 - add command families for remaining nondestructive filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;
 - keep the desktop shell and scripting API on the same command path.

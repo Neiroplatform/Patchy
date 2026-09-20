@@ -643,14 +643,8 @@ bool MainWindow::commit_smart_object_child_session(DocumentSession& child_sessio
     return false;
   }
 
-  // One parent undo step for the whole commit (push_undo_snapshot itself only
-  // operates on the active session).
-  record_history_push(*parent,
-                      DocumentSession::HistoryState{
-                          parent->document, parent->engine_session.state_id(),
-                          parent->engine_session.selection(),
-                          {}, 0},
-                      tr("Edit Smart Object Contents"));
+  // One engine-owned parent undo step for the whole background commit.
+  push_undo_snapshot(*parent, tr("Edit Smart Object Contents"), false);
   parent->document = std::move(updated_document);
   if (child_session.smart_object_link.has_value()) {
     child_session.smart_object_link->source_uuid_history.push_back(link.source_uuid);
@@ -839,14 +833,8 @@ void MainWindow::refresh_external_smart_object_after_save(DocumentSession& child
     return;
   }
 
-  // One parent undo step for the refresh (push_undo_snapshot itself only
-  // operates on the active session).
-  record_history_push(*parent,
-                      DocumentSession::HistoryState{
-                          parent->document, parent->engine_session.state_id(),
-                          parent->engine_session.selection(),
-                          {}, 0},
-                      tr("Update Smart Object Content"));
+  // One engine-owned parent undo step for the whole background refresh.
+  push_undo_snapshot(*parent, tr("Update Smart Object Content"), false);
   parent->document = std::move(updated_document);
   if (parent->canvas != nullptr) {
     parent->canvas->document_changed();

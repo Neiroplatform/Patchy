@@ -238,14 +238,8 @@ private:
     DocumentSession& operator=(DocumentSession&&) = delete;
 
     struct HistoryState {
-      Document document;
-      std::uint64_t document_state_id{0};
-      // Selection state at this point in history, so undo/redo restores the
-      // selection alongside the pixels (and selection-only edits are undoable).
-      patchy::engine::SelectionSnapshot selection;
-      // Action that produced this state (History panel row text). The label a
-      // push receives names the upcoming edit, so it becomes the label of the
-      // NEXT state, not of the snapshot being stored.
+      // Document and selection snapshots live in engine_session at the same
+      // stack index. Qt owns only presentation metadata for the History panel.
       QString label;
       // Monotonic per-session row identity; panel rows reference states by id
       // because cap eviction from the stack front shifts vector indices.
@@ -1334,7 +1328,7 @@ private:
   void open_history_state_as_new_document(std::int64_t state_id);
   // Centralized undo-stack push: cap eviction, redo clear, coalescing reset,
   // and the label/id handoff from the live state to the stored snapshot.
-  void record_history_push(DocumentSession& target_session, DocumentSession::HistoryState state,
+  void record_history_push(DocumentSession& target_session,
                            QString action_label);
   // Evicts the oldest undo states across ALL sessions until the COW-aware
   // marginal history byte total fits history_memory_budget_bytes(). Pointer
@@ -1342,16 +1336,13 @@ private:
   // kMinUndoStatesUnderPressure undo states per session. Redo stacks are
   // counted but never evicted (every push already clears redo).
   void enforce_history_memory_budget(const DocumentSession& push_target);
-  // One data-only history rotation (no canvas or UI work, so jumps can loop it).
-  // live_selection enters holding the live document's selection and exits
-  // holding the restored state's selection.
-  void rotate_history_state(DocumentSession& target_session, bool backward,
-                            patchy::engine::SelectionSnapshot& live_selection);
+  // One engine-owned history rotation plus its parallel Qt label/id rotation
+  // (no canvas or UI work, so jumps can loop it).
+  bool rotate_history_state(DocumentSession& target_session, bool backward);
   // Shared canvas/panel refresh after undo/redo/jump rotations on the active
   // session. before_document is the pre-restore document (left intact inside
   // the opposite stack by the rotation) used for the partial-repaint diff.
   void apply_history_restore_tail(DocumentSession& active_session, const Document& before_document,
-                                  patchy::engine::SelectionSnapshot restored_selection,
                                   const QString& status_message);
   void update_undo_redo_actions();
   void show_about();

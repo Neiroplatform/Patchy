@@ -490,6 +490,23 @@ void engine_session_external_shell_adapter_preserves_state_identity() {
   session.replace_external(make_session_document(), true);
   CHECK(!session.dirty());
   CHECK(session.state_id() != edited_state);
+
+  const auto shell_state = session.state_id();
+  const auto shell_layer_id = session.document().layers().front().id();
+  session.push_external_undo_state(session.document(), shell_state,
+                                   session.selection());
+  session.mutable_document().find_layer(shell_layer_id)->set_visible(false);
+  session.mark_external_modified();
+  CHECK(session.undo_size() == 1);
+  CHECK(session.undo_document(0) != nullptr);
+  CHECK(session.undo_document(0)->find_layer(shell_layer_id)->visible());
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(shell_layer_id)->visible());
+  CHECK(static_cast<bool>(session.redo()));
+  CHECK(!session.document().find_layer(shell_layer_id)->visible());
+  session.clear_history();
+  CHECK(!session.can_undo());
+  CHECK(!session.can_redo());
 }
 
 void engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes() {

@@ -365,13 +365,13 @@ void apply_history_render_refresh(CanvasWidget* canvas, const std::optional<QReg
 }  // namespace
 
 void MainWindow::record_history_push(DocumentSession& target_session,
-                                     DocumentSession::HistoryState state, QString action_label) {
+                                     QString action_label) {
   // The stored snapshot is the PRE-edit document, so it takes over the label
   // and id of the state it captures; the live document becomes a fresh state
   // named after the action that is about to (or just did) mutate it.
-  state.label = std::move(target_session.current_state_label);
-  state.state_id = target_session.current_state_id;
-  target_session.undo_stack.push_back(std::move(state));
+  target_session.undo_stack.push_back(DocumentSession::HistoryState{
+      std::move(target_session.current_state_label),
+      target_session.current_state_id});
   if (target_session.undo_stack.size() > DocumentSession::kMaxUndoStates) {
     target_session.undo_stack.erase(target_session.undo_stack.begin());
   }
@@ -392,13 +392,27 @@ void MainWindow::enforce_history_memory_budget(const DocumentSession& push_targe
     collect_pixel_storage(target.document, live);
     PixelStorageSet seen;
     std::size_t bytes = 0;
-    for (const auto& state : target.undo_stack) {
-      bytes += accumulate_unique_pixel_bytes(state.document, live, seen);
-      bytes += state.selection.retained_bytes();
+    for (std::size_t index = 0;
+         index < target.engine_session.undo_size(); ++index) {
+      const auto* document = target.engine_session.undo_document(index);
+      const auto* selection = target.engine_session.undo_selection(index);
+      if (document != nullptr) {
+        bytes += accumulate_unique_pixel_bytes(*document, live, seen);
+      }
+      if (selection != nullptr) {
+        bytes += selection->retained_bytes();
+      }
     }
-    for (const auto& state : target.redo_stack) {
-      bytes += accumulate_unique_pixel_bytes(state.document, live, seen);
-      bytes += state.selection.retained_bytes();
+    for (std::size_t index = 0;
+         index < target.engine_session.redo_size(); ++index) {
+      const auto* document = target.engine_session.redo_document(index);
+      const auto* selection = target.engine_session.redo_selection(index);
+      if (document != nullptr) {
+        bytes += accumulate_unique_pixel_bytes(*document, live, seen);
+      }
+      if (selection != nullptr) {
+        bytes += selection->retained_bytes();
+      }
     }
     return bytes;
   };
@@ -433,6 +447,7 @@ void MainWindow::enforce_history_memory_budget(const DocumentSession& push_targe
       break;
     }
     largest->first->undo_stack.erase(largest->first->undo_stack.begin());
+    static_cast<void>(largest->first->engine_session.evict_oldest_undo());
     if (largest->first == active_session()) {
       active_session_evicted = true;
     }
@@ -449,30 +464,32 @@ void MainWindow::enforce_history_memory_budget(const DocumentSession& push_targe
   }
 }
 
-void MainWindow::rotate_history_state(DocumentSession& target_session, bool backward,
-                                      patchy::engine::SelectionSnapshot& live_selection) {
+bool MainWindow::rotate_history_state(DocumentSession& target_session,
+                                      bool backward) {
   auto& from = backward ? target_session.undo_stack : target_session.redo_stack;
   auto& to = backward ? target_session.redo_stack : target_session.undo_stack;
-  // Braced-init evaluation is left to right, so the document moves out before
-  // state identity/label are read; both history hops are moves (a copy here is a
-  // full multi-hundred-MB Document duplication on large canvases).
+  if (from.empty()) {
+    return false;
+  }
+  const auto restored_result =
+      backward ? target_session.engine_session.undo()
+               : target_session.engine_session.redo();
+  if (!restored_result) {
+    return false;
+  }
   to.push_back(DocumentSession::HistoryState{
-      std::move(target_session.document), target_session.engine_session.state_id(), std::move(live_selection),
-      std::move(target_session.current_state_label), target_session.current_state_id});
+      std::move(target_session.current_state_label),
+      target_session.current_state_id});
   auto& restored = from.back();
-  target_session.engine_session.restore_external(
-      std::move(restored.document), restored.document_state_id,
-      restored.selection);
-  live_selection = target_session.engine_session.selection();
   target_session.current_state_label = std::move(restored.label);
   target_session.current_state_id = restored.state_id;
   from.pop_back();
   target_session.selection_move_coalescing = false;
+  return true;
 }
 
 void MainWindow::apply_history_restore_tail(DocumentSession& active_session,
                                             const Document& before_document,
-                                            patchy::engine::SelectionSnapshot restored_selection,
                                             const QString& status_message) {
   for (const auto& child : sessions_) {
     if (!child->smart_object_link.has_value() ||
@@ -518,7 +535,8 @@ void MainWindow::apply_history_restore_tail(DocumentSession& active_session,
           restore_smart_filter_mask_mode));
     }
   }
-  canvas_->apply_engine_selection_snapshot(restored_selection);
+  canvas_->apply_engine_selection_snapshot(
+      active_session.engine_session.selection());
   refresh_layer_list();
   refresh_layer_controls();
   refresh_channel_panel();
@@ -545,12 +563,11 @@ void MainWindow::undo() {
   if (active_session.undo_stack.empty()) {
     return;
   }
-  auto live_selection = active_session.engine_session.selection();
-  rotate_history_state(active_session, /*backward=*/true, live_selection);
-  // The pre-undo document now sits intact at redo_stack.back(); the tail diffs
-  // it against the restored document for the partial repaint.
-  apply_history_restore_tail(active_session, active_session.redo_stack.back().document,
-                             std::move(live_selection), tr("Undo"));
+  const auto before_document = active_session.document;
+  if (!rotate_history_state(active_session, /*backward=*/true)) {
+    return;
+  }
+  apply_history_restore_tail(active_session, before_document, tr("Undo"));
 }
 
 void MainWindow::redo() {
@@ -563,10 +580,11 @@ void MainWindow::redo() {
   if (active_session.redo_stack.empty()) {
     return;
   }
-  auto live_selection = active_session.engine_session.selection();
-  rotate_history_state(active_session, /*backward=*/false, live_selection);
-  apply_history_restore_tail(active_session, active_session.undo_stack.back().document,
-                             std::move(live_selection), tr("Redo"));
+  const auto before_document = active_session.document;
+  if (!rotate_history_state(active_session, /*backward=*/false)) {
+    return;
+  }
+  apply_history_restore_tail(active_session, before_document, tr("Redo"));
 }
 
 void MainWindow::push_undo_snapshot(QString label, bool mark_modified) {
@@ -615,10 +633,9 @@ void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString lab
   // document, so undo restores the exact selection the operation ran against.
   // A background edit reads its own engine session, never the active canvas.
   auto snapshot_selection = active_session.engine_session.selection();
-  record_history_push(
-      active_session,
-      DocumentSession::HistoryState{snapshot_future.get(), snapshot_state_id, std::move(snapshot_selection), {}, 0},
-      label);
+  active_session.engine_session.push_external_undo_state(
+      snapshot_future.get(), snapshot_state_id, std::move(snapshot_selection));
+  record_history_push(active_session, label);
   if (mark_modified) {
     mark_session_modified(active_session);
   }
@@ -646,9 +663,14 @@ void MainWindow::push_selection_history(DocumentSession& target_session, QString
   if (active_session.canvas == nullptr) {
     return;
   }
-  const auto selection_result = active_session.engine_session.execute_external(
-      patchy::engine::SetSelection{
-          active_session.canvas->capture_engine_selection_snapshot()});
+  const bool merge_into_previous =
+      coalesce && active_session.selection_move_coalescing &&
+      !active_session.undo_stack.empty();
+  const auto command = patchy::engine::SetSelection{
+      active_session.canvas->capture_engine_selection_snapshot()};
+  const auto selection_result = merge_into_previous
+                                    ? active_session.engine_session.execute_external(command)
+                                    : active_session.engine_session.execute(command);
   if (!selection_result) {
     return;
   }
@@ -657,7 +679,7 @@ void MainWindow::push_selection_history(DocumentSession& target_session, QString
   // selection updated but add no new entry, so undo returns to where the run
   // began and redo lands on the final position. Any non-coalescing edit (below,
   // or push_undo_snapshot) clears the flag and ends the run.
-  if (coalesce && active_session.selection_move_coalescing && !active_session.undo_stack.empty()) {
+  if (merge_into_previous) {
     if (target_is_active) {
       statusBar()->showMessage(label);
     }
@@ -667,10 +689,8 @@ void MainWindow::push_selection_history(DocumentSession& target_session, QString
   // current document together with the pre-edit selection. The document is not
   // flagged modified for save purposes (a mere selection is not unsaved work),
   // but the change still joins the undo/redo history.
-  record_history_push(
-      active_session,
-      DocumentSession::HistoryState{active_session.document, active_session.engine_session.state_id(), std::move(before), {}, 0},
-      label);
+  static_cast<void>(before);  // Canonical selection still holds this pre-edit state.
+  record_history_push(active_session, label);
   active_session.selection_move_coalescing = coalesce;
   // Panel/status mirror the active session only (see push_undo_snapshot).
   if (target_is_active) {
@@ -758,16 +778,15 @@ void MainWindow::jump_to_history_state(std::int64_t state_id) {
     refresh_history_panel();
     return;
   }
-  auto live_selection = active->engine_session.selection();
+  const auto before_document = active->document;
   for (std::size_t step = 0; step < steps; ++step) {
-    rotate_history_state(*active, backward, live_selection);
+    if (!rotate_history_state(*active, backward)) {
+      refresh_history_panel();
+      return;
+    }
   }
-  // The pre-jump document sits intact where the first rotation parked it in the
-  // opposite stack, `steps` entries below the top; the tail diffs it against
-  // the restored document so a multi-step jump still repaints partially.
-  const auto& opposite_stack = backward ? active->redo_stack : active->undo_stack;
-  apply_history_restore_tail(*active, opposite_stack[opposite_stack.size() - steps].document,
-                             std::move(live_selection), active->current_state_label);
+  apply_history_restore_tail(*active, before_document,
+                             active->current_state_label);
 }
 
 void MainWindow::show_history_context_menu(const QPoint& position) {
@@ -809,24 +828,32 @@ void MainWindow::open_history_state_as_new_document(std::int64_t state_id) {
     copy = active->document;
     state_label = active->current_state_label;
   } else {
-    const auto find_state = [state_id](const std::vector<DocumentSession::HistoryState>& stack)
-        -> const DocumentSession::HistoryState* {
-      for (const auto& state : stack) {
-        if (state.state_id == state_id) {
-          return &state;
+    const auto find_state = [state_id](
+                                const std::vector<DocumentSession::HistoryState>& stack)
+        -> std::optional<std::size_t> {
+      for (std::size_t index = 0; index < stack.size(); ++index) {
+        if (stack[index].state_id == state_id) {
+          return index;
         }
       }
-      return nullptr;
+      return std::nullopt;
     };
-    const auto* state = find_state(active->undo_stack);
-    if (state == nullptr) {
-      state = find_state(active->redo_stack);
+    const auto undo_index = find_state(active->undo_stack);
+    const auto redo_index = find_state(active->redo_stack);
+    const Document* stored_document = nullptr;
+    const DocumentSession::HistoryState* state = nullptr;
+    if (undo_index.has_value()) {
+      stored_document = active->engine_session.undo_document(*undo_index);
+      state = &active->undo_stack[*undo_index];
+    } else if (redo_index.has_value()) {
+      stored_document = active->engine_session.redo_document(*redo_index);
+      state = &active->redo_stack[*redo_index];
     }
-    if (state == nullptr) {
+    if (state == nullptr || stored_document == nullptr) {
       refresh_history_panel();
       return;
     }
-    copy = state->document;
+    copy = *stored_document;
     state_label = state->label;
   }
   auto title = state_label.isEmpty() ? tr("Untitled-%1").arg(sessions_.size() + 1) : state_label;
@@ -839,6 +866,7 @@ void MainWindow::open_history_state_as_new_document(std::int64_t state_id) {
 void MainWindow::initialize_session_history(DocumentSession& target_session, QString initial_label) {
   target_session.undo_stack.clear();
   target_session.redo_stack.clear();
+  target_session.engine_session.clear_history();
   target_session.selection_move_coalescing = false;
   target_session.current_state_label = std::move(initial_label);
   target_session.current_state_id = target_session.next_history_state_id++;

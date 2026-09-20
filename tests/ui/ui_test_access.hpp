@@ -275,6 +275,14 @@ public:
     return window.session().undo_stack.size();
   }
 
+  static std::size_t active_engine_undo_depth(MainWindow& window) {
+    return window.session().engine_session.undo_size();
+  }
+
+  static std::size_t active_engine_redo_depth(MainWindow& window) {
+    return window.session().engine_session.redo_size();
+  }
+
   static std::uint64_t active_engine_state_id(MainWindow& window) {
     return window.session().engine_session.state_id();
   }
