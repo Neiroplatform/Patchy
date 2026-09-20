@@ -3,6 +3,7 @@
 #include "core/document.hpp"
 #include "core/layer_tree.hpp"
 #include "core/pixel_tools.hpp"
+#include "filters/filter_registry.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -134,12 +135,28 @@ struct PlaceLayers {
   std::size_t index{0};
 };
 
+struct ReplaceLayerPixels {
+  LayerId layer_id{0};
+  PixelBuffer pixels{};
+  Rect bounds{};
+  bool rasterize_smart_object{false};
+};
+
+struct ApplyFilter {
+  LayerId layer_id{0};
+  FilterInvocation invocation{};
+  // Empty means the whole layer. Rectangles use document coordinates and are
+  // normalized by the caller's selection projection.
+  std::vector<Rect> selection{};
+};
+
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
                  AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas,
                  RotateCanvas, SetLayersOpacity, SetLayersFillOpacity,
-                 SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers>;
+                 SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers,
+                 ReplaceLayerPixels, ApplyFilter>;
 
 struct LayerInfo {
   LayerId id{0};
@@ -241,10 +258,14 @@ public:
   [[nodiscard]] std::vector<LayerInfo> layers() const;
 
   void set_event_sink(EventSink sink) { event_sink_ = std::move(sink); }
-  [[nodiscard]] CommandResult execute(const DocumentCommand &command);
+  [[nodiscard]] CommandResult
+  execute(const DocumentCommand &command,
+          const FilterProgress *filter_progress = nullptr);
   // Transitional shell path: applies a typed command and advances canonical
   // state without retaining a second undo snapshot beside the Qt UI history.
-  [[nodiscard]] CommandResult execute_external(const DocumentCommand &command);
+  [[nodiscard]] CommandResult
+  execute_external(const DocumentCommand &command,
+                   const FilterProgress *filter_progress = nullptr);
   [[nodiscard]] CommandResult undo();
   [[nodiscard]] CommandResult redo();
   [[nodiscard]] SaveResult encode_psd(bool large_document = false) const;
@@ -267,7 +288,8 @@ private:
   void prepare_mutation(bool record_history);
   void publish(SessionEventKind kind, LayerId layer_id = 0);
   [[nodiscard]] CommandResult execute_impl(const DocumentCommand &command,
-                                           bool record_history);
+                                           bool record_history,
+                                           const FilterProgress *filter_progress);
   [[nodiscard]] CommandResult restore(bool backward);
 
   Document document_;
@@ -277,6 +299,7 @@ private:
   std::uint64_t state_id_{1};
   std::uint64_t saved_state_id_{1};
   std::uint64_t next_state_id_{2};
+  FilterRegistry filter_registry_{};
   EventSink event_sink_{};
 };
 

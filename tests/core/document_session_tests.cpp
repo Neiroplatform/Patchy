@@ -14,6 +14,7 @@ using patchy::PixelBuffer;
 using patchy::PixelFormat;
 using patchy::engine::AddGroup;
 using patchy::engine::AddPixelLayer;
+using patchy::engine::ApplyFilter;
 using patchy::engine::CancellationToken;
 using patchy::engine::DocumentSession;
 using patchy::engine::FlipAxis;
@@ -23,6 +24,7 @@ using patchy::engine::open_psd;
 using patchy::engine::PlaceLayers;
 using patchy::engine::RemoveLayers;
 using patchy::engine::RenameLayer;
+using patchy::engine::ReplaceLayerPixels;
 using patchy::engine::ResizeCanvas;
 using patchy::engine::ResizeImage;
 using patchy::engine::RotateCanvas;
@@ -341,6 +343,59 @@ void engine_session_layer_editing_vertical_slice_is_atomic_and_undoable() {
         10);
 }
 
+void engine_session_filter_and_pixel_commands_share_atomic_history() {
+  DocumentSession session(make_session_document());
+  const auto layer_id = session.document().layers().front().id();
+  patchy::FilterRegistry registry;
+  patchy::register_builtin_filters(registry);
+  auto invert = registry.default_invocation("patchy.filters.invert");
+
+  auto blur = registry.default_invocation("patchy.filters.gaussian_blur");
+  patchy::FilterProgress cancelled_progress{
+      [](int, int, patchy::FilterProgressStage) { return false; }};
+  const auto state_before_cancel = session.state_id();
+  const auto cancelled = session.execute(
+      ApplyFilter{layer_id, std::move(blur), {}}, &cancelled_progress);
+  CHECK(!static_cast<bool>(cancelled));
+  CHECK(cancelled.error.code == SessionErrorCode::Cancelled);
+  CHECK(session.state_id() == state_before_cancel);
+  CHECK(session.undo_size() == 0);
+
+  const auto filtered = session.execute(
+      ApplyFilter{layer_id, std::move(invert), {{0, 0, 1, 1}}});
+  CHECK(static_cast<bool>(filtered));
+  CHECK(filtered.affected_region.has_value());
+  const auto *layer = session.document().find_layer(layer_id);
+  CHECK(layer != nullptr);
+  CHECK(layer->pixels().pixel(0, 0)[0] == 243);
+  CHECK(layer->pixels().pixel(1, 0)[0] == 12);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(layer_id)->pixels().pixel(0, 0)[0] ==
+        12);
+
+  auto replacement = session.document().find_layer(layer_id)->pixels();
+  replacement.pixel(1, 1)[1] = 99;
+  const auto replaced = session.execute(ReplaceLayerPixels{
+      layer_id, std::move(replacement), {4, 5, 2, 2}});
+  CHECK(static_cast<bool>(replaced));
+  CHECK(session.document().find_layer(layer_id)->bounds().x == 4);
+  const auto encoded = session.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+  const auto reopened = open_psd(encoded.bytes);
+  CHECK(static_cast<bool>(reopened));
+  const auto *reopened_layer = reopened.session->document().find_layer(layer_id);
+  CHECK(reopened_layer != nullptr);
+  CHECK(reopened_layer->bounds().x == 4);
+  CHECK(reopened_layer->pixels().pixel(1, 1)[1] == 99);
+  const auto state_before_rejection = session.state_id();
+  const auto rejected = session.execute(ReplaceLayerPixels{
+      layer_id, PixelBuffer(1, 1, PixelFormat::rgba8()), {0, 0, 2, 2}});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.state_id() == state_before_rejection);
+  CHECK(session.document().find_layer(layer_id)->bounds().x == 4);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -365,5 +420,7 @@ std::vector<TestCase> document_session_tests() {
        engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes},
       {"engine_session_layer_editing_vertical_slice_is_atomic_and_undoable",
        engine_session_layer_editing_vertical_slice_is_atomic_and_undoable},
+      {"engine_session_filter_and_pixel_commands_share_atomic_history",
+       engine_session_filter_and_pixel_commands_share_atomic_history},
   };
 }

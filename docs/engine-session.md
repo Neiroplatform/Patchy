@@ -9,7 +9,9 @@ identity, monotonic revision, dirty state and the first typed layer commands.
 - `open_psd` creates a session without `QApplication` or Qt types.
 - `execute` supports singular and atomic multi-layer visibility,
   opacity/fill/blend, rename, add/remove/group/ungroup/reorder/flip lifecycle,
-  and image/canvas geometry.
+  image/canvas geometry, atomic pixel replacement and parameterized destructive
+  filters. Filter commands accept Qt-free document-space selection rectangles,
+  report dirty bounds and reject cancellation without changing history.
 - every successful mutation gets a new state identity and a monotonic revision;
   rejected and no-op commands change neither;
 - undo and redo restore document state identities, so returning to the saved
@@ -31,7 +33,9 @@ uses `restore_external` with the recorded engine state identity.
 Layer-panel create/group/ungroup/delete/reorder, visibility, rename,
 opacity/fill/blend and flip workflows, plus canvas-resize/rotation, already
 execute through typed engine commands. The scripting API shares those commands
-for core layer add/remove/group/reorder and principal layer properties. Selection
+for core layer add/remove/group/reorder, principal layer properties and
+destructive filters. Desktop destructive-filter and Auto All commits cross the
+same typed pixel boundary after their existing preview/progress workflow. Selection
 snapshots cross the desktop history boundary as a Qt-free engine value with
 explicit retained-byte accounting; live selection editing is still owned by the
 canvas adapter.
@@ -46,8 +50,8 @@ or a second dirty/revision counter is forbidden.
 ## Remaining M2 boundary
 
 - move live selection ownership and editing behind the engine boundary;
-- migrate remaining pixel/vector/filter mutations and history storage to engine
-  commands;
+- migrate remaining brush/pixel, vector, Smart Filter and adjustment mutations,
+  plus history storage, to engine commands;
 - add command families for pixel selection, transforms and filters;
 - add progress-aware cancellation inside long render/save operations;
 - replace full-document flattening in `render` with a region compositor;

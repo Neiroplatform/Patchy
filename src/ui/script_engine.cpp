@@ -1731,12 +1731,13 @@ bool ScriptEngineHost::apply_filter_to_layer(std::int64_t session_id, LayerId la
   if (std::as_const(*layer).pixels().empty()) {
     return true;  // nothing to filter
   }
-  if (!prepare_mutation(session_id)) {
+  const auto result = execute_engine_command(
+      session_id,
+      patchy::engine::ApplyFilter{layer_id, *normalized, {}});
+  if (!result) {
+    throw_js_error(QString::fromStdString(result.error.message));
     return false;
   }
-  const auto before_bounds = to_qrect(layer_render_bounds(std::as_const(*layer)));
-  registry.apply(*normalized, layer->pixels());
-  note_pixels_changed(session_id, before_bounds);
   return true;
 }
 

@@ -173,6 +173,9 @@ everywhere a bundled script is resolved.
 - **Desktop and scripts share the layer command path.** Core layer add/remove,
   group/reorder, rename, visibility, opacity and blend mutations execute through
   the same typed engine commands while scripts retain one undo entry per run.
+  `layer.applyFilter()` also executes the normalized parameterized filter through
+  the engine session, so unsupported input, cancellation and history semantics
+  match headless consumers.
 - **Wrappers hold ids, never pointers.** Layer wrappers keep session id + LayerId and
   re-resolve on every access, throwing a JS error when the target is gone. The layers
   vector reallocates and sessions close; a stored `Layer*` is the historical

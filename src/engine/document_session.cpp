@@ -2,6 +2,7 @@
 
 #include "formats/document_flatten.hpp"
 #include "core/layer_render_utils.hpp"
+#include "core/smart_object.hpp"
 #include "psd/psd_document_io.hpp"
 
 #include <algorithm>
@@ -18,6 +19,51 @@ namespace {
 
 SessionError make_error(SessionErrorCode code, std::string message) {
   return SessionError{code, std::move(message)};
+}
+
+bool pixel_buffers_equal(const PixelBuffer &left, const PixelBuffer &right) {
+  return left.width() == right.width() && left.height() == right.height() &&
+         left.format() == right.format() &&
+         std::equal(left.data().begin(), left.data().end(),
+                    right.data().begin(), right.data().end());
+}
+
+bool rects_equal(Rect left, Rect right) {
+  return left.x == right.x && left.y == right.y &&
+         left.width == right.width && left.height == right.height;
+}
+
+void restore_pixels_outside_rect_selection(
+    PixelBuffer &filtered, const PixelBuffer &original, Rect bounds,
+    const std::vector<Rect> &selection) {
+  if (selection.empty()) {
+    return;
+  }
+  if (filtered.width() != original.width() ||
+      filtered.height() != original.height() ||
+      filtered.format() != original.format()) {
+    throw std::invalid_argument(
+        "selection-limited filters cannot expand layer bounds");
+  }
+  auto selected_pixels = std::move(filtered);
+  filtered = original;
+  const auto pixel_bytes = bytes_per_pixel(filtered.format());
+  const auto layer_bounds = Rect{bounds.x, bounds.y, filtered.width(),
+                                 filtered.height()};
+  for (const auto &rect : selection) {
+    const auto clipped = intersect_rect(rect, layer_bounds);
+    if (clipped.empty()) {
+      continue;
+    }
+    const auto local_x = clipped.x - bounds.x;
+    const auto local_y = clipped.y - bounds.y;
+    const auto row_bytes = static_cast<std::size_t>(clipped.width) * pixel_bytes;
+    for (std::int32_t row = 0; row < clipped.height; ++row) {
+      const auto *source = selected_pixels.pixel(local_x, local_y + row);
+      auto *destination = filtered.pixel(local_x, local_y + row);
+      std::copy_n(source, row_bytes, destination);
+    }
+  }
 }
 
 void insert_layer_after_anchor(Document &document, Layer layer,
@@ -70,7 +116,9 @@ grouping_destination(std::vector<Layer> &layers,
 } // namespace
 
 DocumentSession::DocumentSession(Document document)
-    : document_(std::move(document)) {}
+    : document_(std::move(document)) {
+  register_builtin_filters(filter_registry_);
+}
 
 std::size_t SelectionSnapshot::retained_bytes() const noexcept {
   return selection.capacity() * sizeof(Rect) +
@@ -112,17 +160,20 @@ void DocumentSession::publish(SessionEventKind kind, LayerId layer_id) {
   }
 }
 
-CommandResult DocumentSession::execute(const DocumentCommand &command) {
-  return execute_impl(command, true);
+CommandResult DocumentSession::execute(const DocumentCommand &command,
+                                       const FilterProgress *filter_progress) {
+  return execute_impl(command, true, filter_progress);
 }
 
 CommandResult
-DocumentSession::execute_external(const DocumentCommand &command) {
-  return execute_impl(command, false);
+DocumentSession::execute_external(const DocumentCommand &command,
+                                  const FilterProgress *filter_progress) {
+  return execute_impl(command, false, filter_progress);
 }
 
 CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
-                                            bool record_history) {
+                                            bool record_history,
+                                            const FilterProgress *filter_progress) {
   LayerId layer_id = 0;
   bool changed = false;
   SessionError error{};
@@ -130,7 +181,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
 
   try {
     std::visit(
-        [this, record_history, &layer_id, &changed, &error,
+        [this, record_history, filter_progress, &layer_id, &changed, &error,
          &affected_region](const auto &concrete) {
           using Command = std::decay_t<decltype(concrete)>;
           if constexpr (std::is_same_v<Command, RotateCanvas>) {
@@ -394,6 +445,92 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             changed = true;
             layer_id = concrete.layer_ids_bottom_to_top.front();
             return;
+          } else if constexpr (std::is_same_v<Command, ReplaceLayerPixels>) {
+            const auto *current = document_.find_layer(concrete.layer_id);
+            if (current == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "pixel target layer does not exist");
+              return;
+            }
+            if (current->kind() == LayerKind::Group) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "group layers do not own editable pixels");
+              return;
+            }
+            if (concrete.bounds.width != concrete.pixels.width() ||
+                concrete.bounds.height != concrete.pixels.height()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "pixel bounds do not match the buffer");
+              return;
+            }
+            if (!concrete.rasterize_smart_object &&
+                pixel_buffers_equal(current->pixels(), concrete.pixels) &&
+                rects_equal(current->bounds(), concrete.bounds)) {
+              return;
+            }
+            const auto old_bounds = layer_render_bounds(*current);
+            prepare_mutation(record_history);
+            auto *layer = document_.find_layer(concrete.layer_id);
+            if (concrete.rasterize_smart_object) {
+              strip_layer_smart_object_data(document_, *layer);
+            }
+            layer->set_pixels(concrete.pixels);
+            layer->set_bounds(concrete.bounds);
+            changed = true;
+            layer_id = concrete.layer_id;
+            affected_region = unite_rect(old_bounds, layer_render_bounds(*layer));
+            return;
+          } else if constexpr (std::is_same_v<Command, ApplyFilter>) {
+            const auto *current = document_.find_layer(concrete.layer_id);
+            if (current == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "filter target layer does not exist");
+              return;
+            }
+            if (current->kind() == LayerKind::Group) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "group layers cannot receive filters");
+              return;
+            }
+            const auto &original = current->pixels();
+            if (original.empty() || original.format().bit_depth != BitDepth::UInt8 ||
+                original.format().channels < 3) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "filter target must be a non-empty RGB8 layer");
+              return;
+            }
+            const auto invocation = filter_registry_.normalize(concrete.invocation);
+            if (!invocation.has_value()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "filter invocation is not supported");
+              return;
+            }
+            const auto old_bounds = current->bounds();
+            const auto old_render_bounds = layer_render_bounds(*current);
+            FilterRenderResult rendered{original, old_bounds};
+            if (concrete.selection.empty()) {
+              rendered = filter_registry_.render(*invocation, original,
+                                                  old_bounds, true,
+                                                  filter_progress);
+            } else {
+              filter_registry_.apply(*invocation, rendered.pixels,
+                                     filter_progress);
+              restore_pixels_outside_rect_selection(
+                  rendered.pixels, original, old_bounds, concrete.selection);
+            }
+            if (pixel_buffers_equal(rendered.pixels, original) &&
+                rects_equal(rendered.bounds, old_bounds)) {
+              return;
+            }
+            prepare_mutation(record_history);
+            auto *layer = document_.find_layer(concrete.layer_id);
+            layer->set_pixels(std::move(rendered.pixels));
+            layer->set_bounds(rendered.bounds);
+            changed = true;
+            layer_id = concrete.layer_id;
+            affected_region =
+                unite_rect(old_render_bounds, layer_render_bounds(*layer));
+            return;
           } else if constexpr (std::is_same_v<Command, SetLayersOpacity> ||
                                std::is_same_v<Command, SetLayersFillOpacity> ||
                                std::is_same_v<Command, SetLayersBlendMode>) {
@@ -505,6 +642,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
           }
         },
         command);
+  } catch (const FilterCancelled &exception) {
+    error = make_error(SessionErrorCode::Cancelled, exception.what());
   } catch (const std::exception &exception) {
     error = make_error(SessionErrorCode::CommandFailed, exception.what());
   }

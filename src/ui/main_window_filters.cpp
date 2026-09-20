@@ -2525,20 +2525,24 @@ void MainWindow::apply_filter(const QString& identifier) {
       return;
     }
 
-    push_undo_snapshot(tr("Filter: %1").arg(display_name));
-    layer = doc.find_layer(*active);
-    if (layer == nullptr) {
+    push_undo_snapshot(tr("Filter: %1").arg(display_name), false);
+    const auto command_result = session().engine_session.execute_external(
+        patchy::engine::ReplaceLayerPixels{*active, std::move(final_pixels),
+                                           final_bounds,
+                                           rasterize_smart_object_for_filter});
+    if (!command_result) {
+      show_status_error(QString::fromStdString(command_result.error.message));
       return;
     }
-    if (rasterize_smart_object_for_filter) {
-      strip_layer_smart_object_data(doc, *layer);
-    }
-    set_layer_pixels_with_bounds(*layer, std::move(final_pixels), final_bounds);
+    refresh_document_tab_titles();
     if (rasterize_smart_object_for_filter) {
       refresh_layer_list();
       refresh_layer_controls();
     }
-    canvas_->document_changed(to_qrect(*last_preview_bounds).united(to_qrect(final_bounds)));
+    canvas_->document_changed(
+        command_result.affected_region.has_value()
+            ? to_qrect(*command_result.affected_region)
+            : to_qrect(*last_preview_bounds).united(to_qrect(final_bounds)));
     statusBar()->showMessage(
         rasterize_smart_object_for_filter
             ? tr("Rasterized Smart Object and applied %1").arg(display_name)
@@ -2656,13 +2660,18 @@ void MainWindow::auto_all_adjustments() {
     statusBar()->showMessage(tr("%1 made no changes").arg(display_name));
     return;
   }
-  push_undo_snapshot(display_name);
-  layer = doc.find_layer(active_id);
-  if (layer == nullptr) {
+  push_undo_snapshot(display_name, false);
+  const auto command_result = session().engine_session.execute_external(
+      patchy::engine::ReplaceLayerPixels{active_id, std::move(final_pixels),
+                                         bounds});
+  if (!command_result) {
+    show_status_error(QString::fromStdString(command_result.error.message));
     return;
   }
-  set_layer_pixels_preserving_origin(*layer, std::move(final_pixels), bounds);
-  canvas_->document_changed(to_qrect(bounds));
+  refresh_document_tab_titles();
+  canvas_->document_changed(command_result.affected_region.has_value()
+                                ? to_qrect(*command_result.affected_region)
+                                : to_qrect(bounds));
   statusBar()->showMessage(tr("Applied %1").arg(display_name));
 }
 
