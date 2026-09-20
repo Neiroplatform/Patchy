@@ -26,6 +26,7 @@ using patchy::engine::ApplyFilter;
 using patchy::engine::CancellationToken;
 using patchy::engine::CropDocument;
 using patchy::engine::CommitSmartFilterState;
+using patchy::engine::CommitVectorLayerStates;
 using patchy::engine::DocumentSession;
 using patchy::engine::FlipAxis;
 using patchy::engine::FlipLayers;
@@ -67,6 +68,8 @@ using patchy::engine::TransformVectorLayers;
 using patchy::engine::UpdateAdjustmentLayer;
 using patchy::engine::UpdateVectorShapeLayer;
 using patchy::engine::VectorTransformTarget;
+using patchy::engine::VectorMaskLayerState;
+using patchy::engine::VectorShapeLayerState;
 using patchy::engine::WrapOffsetDocument;
 using patchy::test::TestCase;
 
@@ -1044,6 +1047,88 @@ void engine_session_vector_shape_authoring_is_atomic_and_round_trips() {
   CHECK(session.revision() == revision_before_rejection);
 }
 
+void engine_session_commits_previewed_vector_layer_states_atomically() {
+  DocumentSession session(Document(64, 48, PixelFormat::rgba8()));
+  patchy::VectorShapeContent content;
+  patchy::LiveShapeParams rectangle;
+  rectangle.kind = patchy::LiveShapeKind::Rectangle;
+  rectangle.left = 4.0;
+  rectangle.top = 5.0;
+  rectangle.right = 24.0;
+  rectangle.bottom = 22.0;
+  content.path.subpaths = patchy::generate_live_shape_subpaths(rectangle);
+  content.fill.kind = patchy::VectorFillKind::Solid;
+  content.fill.color = {40, 120, 220};
+
+  const auto first = session.execute(AddVectorShapeLayer{
+      "Shape 1", content, session.document().metadata().patterns, {}});
+  CHECK(static_cast<bool>(first));
+  rectangle.left += 24.0;
+  rectangle.right += 24.0;
+  auto second_content = content;
+  second_content.path.subpaths = patchy::generate_live_shape_subpaths(rectangle);
+  const auto second = session.execute(AddVectorShapeLayer{
+      "Shape 2", second_content, session.document().metadata().patterns, {}});
+  CHECK(static_cast<bool>(second));
+
+  PixelBuffer pixels(64, 48, PixelFormat::rgba8());
+  pixels.clear(255);
+  const auto mask_layer = session.execute(AddPixelLayer{"Masked", std::move(pixels), {}});
+  CHECK(static_cast<bool>(mask_layer));
+  patchy::LayerVectorMask mask;
+  mask.path = content.path;
+  CHECK(static_cast<bool>(session.execute(
+      SetVectorMaskState{mask_layer.affected_layer_id, mask})));
+
+  // Mirror the shell's cheap mouse-move preview: mutate the shared document
+  // first, then publish all final states through one engine command.
+  auto* first_layer = session.mutable_document().find_layer(first.affected_layer_id);
+  auto* second_layer = session.mutable_document().find_layer(second.affected_layer_id);
+  auto* masked_layer = session.mutable_document().find_layer(mask_layer.affected_layer_id);
+  auto first_preview = *first_layer->vector_shape();
+  auto second_preview = *second_layer->vector_shape();
+  auto mask_preview = *masked_layer->vector_mask();
+  first_preview.path.subpaths.front().anchors.front().anchor_x += 3.0;
+  second_preview.path.subpaths.front().anchors.front().anchor_y += 4.0;
+  mask_preview.path.subpaths.front().anchors.front().anchor_x += 5.0;
+  first_layer->set_vector_shape(first_preview);
+  second_layer->set_vector_shape(second_preview);
+  masked_layer->set_vector_mask(mask_preview);
+
+  const auto revision_before = session.revision();
+  const auto state_before = session.state_id();
+  const auto committed = session.execute_external(CommitVectorLayerStates{
+      {{first.affected_layer_id, first_preview},
+       {second.affected_layer_id, second_preview}},
+      {{mask_layer.affected_layer_id, mask_preview}},
+      session.document().metadata().patterns, {0, 0, 64, 48}});
+  CHECK(static_cast<bool>(committed));
+  CHECK(committed.affected_region.has_value());
+  CHECK(committed.affected_region->x == 0);
+  CHECK(committed.affected_region->y == 0);
+  CHECK(committed.affected_region->width == 64);
+  CHECK(committed.affected_region->height == 48);
+  CHECK(session.revision() == revision_before + 1);
+  CHECK(session.state_id() != state_before);
+  CHECK(session.document().find_layer(first.affected_layer_id)
+            ->vector_shape()->path == first_preview.path);
+  CHECK(session.document().find_layer(second.affected_layer_id)
+            ->vector_shape()->path == second_preview.path);
+  CHECK(session.document().find_layer(mask_layer.affected_layer_id)
+            ->vector_mask()->path == mask_preview.path);
+
+  // Rejection is preflighted across the whole batch: a duplicate id cannot
+  // partially publish or advance the revision.
+  const auto revision_before_rejection = session.revision();
+  const auto rejected = session.execute_external(CommitVectorLayerStates{
+      {{first.affected_layer_id, first_preview},
+       {first.affected_layer_id, first_preview}},
+      {}, session.document().metadata().patterns, {}});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_before_rejection);
+}
+
 void engine_session_commits_prepared_smart_filter_state_atomically() {
   Document document(3, 2, PixelFormat::rgba8());
   PixelBuffer pixels(3, 2, PixelFormat::rgba8());
@@ -1257,6 +1342,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_vector_mask_lifecycle_is_atomic_and_round_trips},
       {"engine_session_vector_shape_authoring_is_atomic_and_round_trips",
        engine_session_vector_shape_authoring_is_atomic_and_round_trips},
+      {"engine_session_commits_previewed_vector_layer_states_atomically",
+       engine_session_commits_previewed_vector_layer_states_atomically},
       {"engine_session_commits_prepared_smart_filter_state_atomically",
        engine_session_commits_prepared_smart_filter_state_atomically},
       {"engine_session_adjustment_layer_family_is_atomic_and_round_trips",

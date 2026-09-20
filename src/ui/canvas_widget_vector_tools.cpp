@@ -596,6 +596,11 @@ void CanvasWidget::set_path_edited_callback(std::function<void()> callback) {
   path_edited_callback_ = std::move(callback);
 }
 
+void CanvasWidget::set_vector_layer_commit_callback(
+    std::function<bool(std::vector<LayerId>, QRect)> callback) {
+  vector_layer_commit_callback_ = std::move(callback);
+}
+
 void CanvasWidget::set_path_selection_changed_callback(std::function<void()> callback) {
   path_selection_changed_callback_ = std::move(callback);
 }
@@ -667,11 +672,14 @@ void CanvasWidget::add_subpaths_to_vector_mask(std::vector<PathSubpath> subpaths
   update_vector_mask_raster(*layer, Rect::from_size(document_->width(), document_->height()));
   // Bounded: the mask only attenuates this layer, so a full-canvas
   // recomposite per commit is wasted work.
-  document_changed_effect_bounds(old_effect_rect.united(
-      to_qrect(layer_bounds_with_effects(std::as_const(*layer), std::as_const(*layer).bounds()))));
+  const auto affected = old_effect_rect.united(
+      to_qrect(layer_bounds_with_effects(std::as_const(*layer), std::as_const(*layer).bounds())));
+  document_changed_effect_bounds(affected);
   if (path_edited_callback_) {
     path_edited_callback_();
   }
+  queue_vector_layer_commit(layer->id(), affected);
+  commit_queued_vector_layers();
 }
 
 void CanvasWidget::arm_path_edit_undo(const QString& label) {
@@ -683,13 +691,57 @@ void CanvasWidget::arm_path_edit_undo(const QString& label) {
   }
 }
 
+void CanvasWidget::queue_vector_layer_commit(LayerId id, QRect affected_bounds) {
+  if (id != 0) {
+    queued_vector_layer_commits_.insert(id);
+    queued_vector_layer_commit_bounds_ =
+        queued_vector_layer_commit_bounds_.united(affected_bounds);
+  }
+}
+
+bool CanvasWidget::commit_queued_vector_layers() {
+  if (queued_vector_layer_commits_.empty()) {
+    return true;
+  }
+  std::vector<LayerId> ids(queued_vector_layer_commits_.begin(),
+                           queued_vector_layer_commits_.end());
+  const bool committed = !vector_layer_commit_callback_ ||
+                         vector_layer_commit_callback_(
+                             std::move(ids), queued_vector_layer_commit_bounds_);
+  queued_vector_layer_commits_.clear();
+  queued_vector_layer_commit_bounds_ = {};
+  return committed;
+}
+
 void CanvasWidget::apply_path_edit(VectorPath path, const QString& label,
                                    const std::vector<int>& touched_groups) {
   if (document_ == nullptr) {
     return;
   }
   arm_path_edit_undo(label);
+  LayerId layer_id = 0;
+  QRect old_effect_bounds;
+  if (layer_edit_target_ == LayerEditTarget::VectorMask) {
+    if (const auto* layer = vector_mask_target_layer(); layer != nullptr) {
+      layer_id = layer->id();
+      old_effect_bounds = to_qrect(layer_bounds_with_effects(
+          std::as_const(*layer), std::as_const(*layer).bounds()));
+    }
+  } else if (!active_document_path_.has_value()) {
+    if (const auto* layer = path_edit_target_layer(); layer != nullptr) {
+      layer_id = layer->id();
+      old_effect_bounds = to_qrect(layer_bounds_with_effects(
+          std::as_const(*layer), std::as_const(*layer).bounds()));
+    }
+  }
   replace_path_edit_target(std::move(path), touched_groups);
+  QRect affected = old_effect_bounds;
+  if (const auto* updated = std::as_const(*document_).find_layer(layer_id);
+      updated != nullptr) {
+    affected = affected.united(to_qrect(layer_bounds_with_effects(
+        *updated, updated->bounds())));
+  }
+  queue_vector_layer_commit(layer_id, affected);
 }
 
 void CanvasWidget::replace_path_edit_target(VectorPath path, const std::vector<int>& touched_groups) {
@@ -1250,7 +1302,15 @@ bool CanvasWidget::update_path_edit_drag(QPointF document_point, Qt::KeyboardMod
       }
       arm_path_edit_undo(label);
       path_edit_changed_ = true;
+      const auto old_effect_bounds = to_qrect(layer_bounds_with_effects(
+          *extra_layer, extra_layer->bounds()));
       write_shape_layer_path(*document_->find_layer(id), std::move(extra_working), extra_touched);
+      const auto* updated = std::as_const(*document_).find_layer(id);
+      queue_vector_layer_commit(
+          id, updated == nullptr
+                  ? old_effect_bounds
+                  : old_effect_bounds.united(to_qrect(
+                        layer_bounds_with_effects(*updated, updated->bounds()))));
     }
     if (path_selected_anchors_.empty()) {
       update();
@@ -1389,6 +1449,10 @@ bool CanvasWidget::handle_path_edit_release(QMouseEvent* event) {
       }
     }
   }
+  if (path_edit_changed_) {
+    commit_queued_vector_layers();
+    path_edit_changed_ = false;
+  }
   path_drag_mode_ = PathEditDrag::None;
   update();
   return true;
@@ -1453,10 +1517,19 @@ void CanvasWidget::delete_selected_path_anchors() {
     std::erase_if(working.subpaths,
                   [](const PathSubpath& subpath) { return subpath.anchors.size() < 2; });
     arm_path_edit_undo(tr("Delete anchors"));
+    const auto old_effect_bounds = to_qrect(layer_bounds_with_effects(
+        *extra_layer, extra_layer->bounds()));
     write_shape_layer_path(*document_->find_layer(id), std::move(working), touched_groups);
+    const auto* updated = std::as_const(*document_).find_layer(id);
+    queue_vector_layer_commit(
+        id, updated == nullptr
+                ? old_effect_bounds
+                : old_effect_bounds.united(to_qrect(
+                      layer_bounds_with_effects(*updated, updated->bounds()))));
   }
   extra_selected_anchors_.clear();
   notify_path_selection_changed();
+  commit_queued_vector_layers();
   path_edit_undo_armed_ = false;
   update();
 }
@@ -1556,8 +1629,17 @@ bool CanvasWidget::handle_path_edit_key(QKeyEvent* event) {
         std::vector<int> touched_groups;
         nudge_keys(working, keys, touched_groups);
         arm_path_edit_undo(tr("Nudge anchors"));
+        const auto old_effect_bounds = to_qrect(layer_bounds_with_effects(
+            *extra_layer, extra_layer->bounds()));
         write_shape_layer_path(*document_->find_layer(id), std::move(working), touched_groups);
+        const auto* updated = std::as_const(*document_).find_layer(id);
+        queue_vector_layer_commit(
+            id, updated == nullptr
+                    ? old_effect_bounds
+                    : old_effect_bounds.united(to_qrect(
+                          layer_bounds_with_effects(*updated, updated->bounds()))));
       }
+      commit_queued_vector_layers();
       return true;
     }
     default:
@@ -1638,6 +1720,7 @@ bool CanvasWidget::apply_pen_hover_edit(const PenHoverHit& hit) {
         anchor_data.out_y = anchor_data.anchor_y + tangent_y;
       }
       apply_path_edit(std::move(working), tr("Convert point"), {group});
+      commit_queued_vector_layers();
       return true;
     }
     case PenHoverAction::Delete: {
@@ -1652,6 +1735,7 @@ bool CanvasWidget::apply_pen_hover_edit(const PenHoverHit& hit) {
       }
       path_selected_anchors_.clear();
       apply_path_edit(std::move(working), tr("Delete anchor"), {group});
+      commit_queued_vector_layers();
       return true;
     }
     case PenHoverAction::Add: {
@@ -1665,6 +1749,7 @@ bool CanvasWidget::apply_pen_hover_edit(const PenHoverHit& hit) {
       subpath.anchors.insert(subpath.anchors.begin() + hit.segment.second + 1, inserted);
       path_edit_undo_armed_ = false;
       apply_path_edit(std::move(working), tr("Add anchor"), {group});
+      commit_queued_vector_layers();
       return true;
     }
     default:
@@ -1861,6 +1946,7 @@ void CanvasWidget::set_selected_subpaths_combine_op(PathCombineOp op) {
   }
   path_edit_undo_armed_ = false;
   apply_path_edit(std::move(working), tr("Change shape combine mode"), {});
+  commit_queued_vector_layers();
   path_edit_undo_armed_ = false;
 }
 
@@ -2330,6 +2416,7 @@ void CanvasWidget::commit_path_transform() {
   if (changed) {
     path_edit_undo_armed_ = false;
     apply_path_edit(std::move(transformed), tr("Transform path"), touched_groups);
+    commit_queued_vector_layers();
     path_edit_undo_armed_ = false;
     if (status_callback_) {
       status_callback_(tr("Transformed the path"));

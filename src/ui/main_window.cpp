@@ -6944,6 +6944,45 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
     }
     refresh_paths_panel();
   });
+  canvas->set_vector_layer_commit_callback(
+      [this, canvas](std::vector<LayerId> layer_ids, QRect affected_bounds) {
+        auto* owner = session_for_canvas(canvas);
+        if (owner == nullptr || layer_ids.empty()) {
+          return false;
+        }
+        patchy::engine::CommitVectorLayerStates command;
+        command.patterns = owner->document.metadata().patterns;
+        command.preview_affected_region = to_core_rect(affected_bounds);
+        for (const auto id : layer_ids) {
+          const auto* layer = std::as_const(owner->document).find_layer(id);
+          if (layer == nullptr) {
+            return false;
+          }
+          if (layer->vector_shape() != nullptr) {
+            command.shapes.push_back(
+                patchy::engine::VectorShapeLayerState{id, *layer->vector_shape()});
+          } else if (layer->vector_mask() != nullptr) {
+            command.masks.push_back(
+                patchy::engine::VectorMaskLayerState{id, *layer->vector_mask()});
+          } else {
+            return false;
+          }
+        }
+        const auto result = owner->engine_session.execute_external(command);
+        if (!result) {
+          show_status_error(QString::fromStdString(result.error.message));
+          return false;
+        }
+        canvas->document_changed_effect_bounds(
+            result.affected_region.has_value() ? to_qrect(*result.affected_region)
+                                               : QRect{});
+        if (canvas == canvas_) {
+          refresh_layer_thumbnails();
+          refresh_layer_controls();
+          refresh_paths_panel();
+        }
+        return true;
+      });
   canvas->set_path_selection_changed_callback([this, canvas] {
     if (canvas != canvas_) {
       return;

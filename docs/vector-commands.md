@@ -114,10 +114,16 @@ map beside `path_selected_anchors_`); eligibility per layer is the
 `combine_shape_candidates` lock triple via `extra_edit_shape_layer`. Writes go
 through `write_shape_layer_path` (the shared shape re-bake tail split out of
 `replace_path_edit_target`), armed by `arm_path_edit_undo` so N layers coalesce
-into the one document-wide undo snapshot per gesture. The count chip totals
-both structures. Deliberately primary-target-only: bezier handle editing, the
-Combine op box, and Free Transform Points (`path_transform_subset_` snapshots
-one path). Panel deselection of a layer drops its point selection
+into the one document-wide undo snapshot per gesture. During a drag those
+writes are transient preview frames. The completion boundary queues the stable
+layer ids and `MainWindow` snapshots their final shape/vector-mask values into
+one Qt-free `CommitVectorLayerStates`; validation, pattern adoption, all
+re-bakes, dirty-bounds union and state-identity advance are atomic across the
+set. Discrete add/delete/convert/nudge/combine and path-transform commits use
+the same boundary. The count chip totals both structures. Deliberately
+primary-target-only: bezier handle editing, the Combine op box, and Free
+Transform Points (`path_transform_subset_` snapshots one path). Panel
+deselection of a layer drops its point selection
 (`set_panel_selected_layer_ids`); document swaps clear both structures.
 
 ## Path context menu

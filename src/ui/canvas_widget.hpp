@@ -683,6 +683,11 @@ public:
   // transforms, vector-mask appends) so the Paths panel rows and thumbnails
   // never go stale; the panel's revision-keyed caches keep the refresh cheap.
   void set_path_edited_callback(std::function<void()> callback);
+  // Invoked once at the completion boundary of a layer-backed canvas path
+  // edit. Mouse-move previews stay local and cheap; the owner publishes these
+  // final layer states through one atomic engine command.
+  void set_vector_layer_commit_callback(
+      std::function<bool(std::vector<LayerId>, QRect)> callback);
   // Invoked whenever the set of selected anchors changes (clicks, marquees,
   // deletes, prunes); MainWindow refreshes the options-bar selected-point
   // count from it.
@@ -1454,6 +1459,8 @@ private:
   void write_shape_layer_path(patchy::Layer& layer, patchy::VectorPath path,
                               const std::vector<int>& touched_groups);
   void arm_path_edit_undo(const QString& label);
+  void queue_vector_layer_commit(LayerId id, QRect affected_bounds);
+  bool commit_queued_vector_layers();
   void prune_extra_path_selection();
   bool handle_path_edit_press(QMouseEvent* event, QPointF document_point);
   bool handle_path_edit_move(QMouseEvent* event, QPointF document_point);
@@ -1838,6 +1845,9 @@ private:
   std::function<void()> path_display_dismiss_callback_;
   std::function<void()> path_load_selection_callback_;
   std::function<void()> path_edited_callback_;
+  std::function<bool(std::vector<LayerId>, QRect)> vector_layer_commit_callback_;
+  std::set<LayerId> queued_vector_layer_commits_;
+  QRect queued_vector_layer_commit_bounds_;
   std::function<void()> path_selection_changed_callback_;
   // Path free-transform session state. The affine maps the original rect onto
   // the (possibly negative-extent, i.e. flipped) current rect, then rotates

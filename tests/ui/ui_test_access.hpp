@@ -275,6 +275,10 @@ public:
     return window.session().undo_stack.size();
   }
 
+  static std::uint64_t active_engine_state_id(MainWindow& window) {
+    return window.session().engine_session.state_id();
+  }
+
   static void undo(MainWindow& window) {
     window.undo();
   }

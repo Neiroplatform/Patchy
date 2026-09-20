@@ -14,6 +14,7 @@
 #include <cstring>
 #include <exception>
 #include <iterator>
+#include <set>
 #include <type_traits>
 #include <utility>
 
@@ -1646,6 +1647,80 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                 old_bounds,
                 layer_effect_bounds(
                     *document_.find_layer(concrete.layer_id)));
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                CommitVectorLayerStates>) {
+            if (concrete.shapes.empty() && concrete.masks.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "vector state commit is empty");
+              return;
+            }
+            std::set<LayerId> target_ids;
+            Rect affected = concrete.preview_affected_region;
+            for (const auto &state : concrete.shapes) {
+              const auto *current = document_.find_layer(state.layer_id);
+              if (current == nullptr) {
+                error = make_error(SessionErrorCode::LayerNotFound,
+                                   "vector shape layer does not exist");
+                return;
+              }
+              if (!target_ids.insert(state.layer_id).second ||
+                  current->vector_shape() == nullptr ||
+                  !vector_lock_reason(*current).empty()) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "target is not a unique editable vector shape");
+                return;
+              }
+              affected = unite_rect(affected, layer_effect_bounds(*current));
+            }
+            for (const auto &state : concrete.masks) {
+              const auto *current = document_.find_layer(state.layer_id);
+              if (current == nullptr) {
+                error = make_error(SessionErrorCode::LayerNotFound,
+                                   "vector-mask layer does not exist");
+                return;
+              }
+              if (!target_ids.insert(state.layer_id).second ||
+                  current->vector_mask() == nullptr ||
+                  !vector_lock_reason(*current).empty() ||
+                  !std::isfinite(state.mask.feather) ||
+                  state.mask.feather < 0.0 || state.mask.feather > 1000.0) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "target is not a unique editable vector mask");
+                return;
+              }
+              affected = unite_rect(affected, layer_effect_bounds(*current));
+            }
+
+            auto updated_document = document_;
+            updated_document.metadata().patterns = concrete.patterns;
+            const auto canvas = Rect::from_size(updated_document.width(),
+                                                updated_document.height());
+            for (const auto &state : concrete.shapes) {
+              auto *updated = updated_document.find_layer(state.layer_id);
+              updated->set_vector_shape(state.content);
+              updated->metadata()[kLayerMetadataVectorShape] = "1";
+              updated->metadata()[kLayerMetadataVectorRasterStatus] =
+                  kVectorRasterStatusPatchy;
+              mark_layer_vector_block_dirty(*updated);
+              update_vector_shape_raster(
+                  *updated, canvas, &updated_document.metadata().patterns);
+              affected = unite_rect(affected, layer_effect_bounds(*updated));
+            }
+            for (const auto &state : concrete.masks) {
+              auto *updated = updated_document.find_layer(state.layer_id);
+              updated->set_vector_mask(state.mask);
+              mark_layer_vector_block_dirty(*updated);
+              update_vector_mask_raster(*updated, canvas);
+              affected = unite_rect(affected, layer_effect_bounds(*updated));
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            layer_id = concrete.shapes.empty()
+                           ? concrete.masks.front().layer_id
+                           : concrete.shapes.front().layer_id;
+            affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command,
                                                 SetVectorMaskState>) {

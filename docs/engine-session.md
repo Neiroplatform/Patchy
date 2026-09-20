@@ -48,6 +48,13 @@ typed editing commands.
   Shape/Line/Polygon/Custom/Pen creation, boolean extension, fill-layer
   creation and final appearance/live-geometry commits share this path with
   scripting add/fill/update; dialog scrubbing remains transient shell preview;
+- `CommitVectorLayerStates` is the atomic completion boundary for direct-canvas
+  point editing. Anchor/handle drag frames remain a bounded shell preview, but
+  mouse release and discrete add/delete/convert/nudge/combine/path-transform
+  commits snapshot every affected shape/vector-mask layer, validate the whole
+  set, re-bake it and advance one shared engine state identity. Cross-layer
+  Direct Select therefore publishes one mutation rather than one command per
+  layer, while the transitional desktop history keeps exactly one snapshot;
 - `CommitSmartFilterState` atomically commits a UI-prepared supported Smart
   Filter stack or removal: modeled stack/mask state, regenerated SoLd/SoLE
   payloads, FEid/FXid cache store and rendered layer pixels share one validated
@@ -107,9 +114,8 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate remaining brush/pixel, direct canvas vector point-edit gestures and
-  Smart Filter preview preparation, transient adjustment previews and history
-  storage to engine commands;
+- migrate remaining brush/pixel gestures, Smart Filter preview preparation,
+  transient adjustment previews and history storage to engine commands;
 - add command families for pixel transforms and remaining nondestructive
   filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;

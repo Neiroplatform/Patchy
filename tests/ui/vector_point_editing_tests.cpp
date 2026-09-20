@@ -831,6 +831,47 @@ void ui_direct_select_drags_marquee_selection_by_segment() {
   CHECK(!canvas->pen_session_active());
 }
 
+// Direct-canvas editing stays a cheap transient preview while the pointer is
+// down, then publishes one canonical engine state at the completion boundary.
+// Keyboard point edits use the same finalization path.
+void ui_direct_vector_edits_publish_engine_state_on_completion() {
+  VectorSettingsGuard settings_guard;
+  patchy::ui::MainWindow window;
+  show_window(window);
+  auto* canvas = require_canvas(window);
+  make_rect_shape_layer(window, *canvas);
+  canvas->set_tool(patchy::ui::CanvasTool::DirectSelect);
+  QApplication::processEvents();
+
+  const auto widget_point = [&](QPoint document_point) {
+    return canvas->widget_position_for_document_point(document_point);
+  };
+  const auto state_before_drag =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
+  send_mouse(*canvas, QEvent::MouseButtonPress, widget_point(QPoint(100, 100)),
+             Qt::LeftButton, Qt::LeftButton);
+  send_mouse(*canvas, QEvent::MouseMove, widget_point(QPoint(118, 112)),
+             Qt::NoButton, Qt::LeftButton);
+  const auto preview_state =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
+  CHECK(preview_state != state_before_drag);  // the one UI-history snapshot
+  send_mouse(*canvas, QEvent::MouseMove, widget_point(QPoint(122, 114)),
+             Qt::NoButton, Qt::LeftButton);
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        preview_state);  // subsequent preview frames stay transient
+  send_mouse(*canvas, QEvent::MouseButtonRelease, widget_point(QPoint(122, 114)),
+             Qt::LeftButton, Qt::NoButton);
+  QApplication::processEvents();
+  const auto state_after_drag =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
+  CHECK(state_after_drag != preview_state);
+
+  send_key(*canvas, Qt::Key_Right);
+  QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) !=
+        state_after_drag);
+}
+
 // Shift during an anchor drag constrains movement to the nearest horizontal,
 // vertical, or 45-degree axis, re-evaluated per move against the total delta
 // from the press point (Photoshop's vertex constraint, never latched).
@@ -1167,6 +1208,8 @@ std::vector<patchy::test::TestCase> vector_point_editing_tests() {
        ui_ctrl_h_hides_path_points_with_selection_edges},
       {"ui_direct_select_drags_marquee_selection_by_segment",
        ui_direct_select_drags_marquee_selection_by_segment},
+      {"ui_direct_vector_edits_publish_engine_state_on_completion",
+       ui_direct_vector_edits_publish_engine_state_on_completion},
       {"ui_direct_select_shift_drag_constrains_axis", ui_direct_select_shift_drag_constrains_axis},
       {"ui_direct_select_shift_toggle_mid_drag_reapplies_without_motion",
        ui_direct_select_shift_toggle_mid_drag_reapplies_without_motion},

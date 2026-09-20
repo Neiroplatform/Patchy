@@ -279,6 +279,29 @@ struct UpdateVectorShapeLayer {
   PatternStore patterns{};
 };
 
+struct VectorShapeLayerState {
+  LayerId layer_id{0};
+  VectorShapeContent content{};
+};
+
+struct VectorMaskLayerState {
+  LayerId layer_id{0};
+  LayerVectorMask mask{};
+};
+
+// Publishes one already-previewed direct-canvas edit as a single canonical
+// engine mutation. The Qt shell owns the transient mouse-move preview and its
+// history snapshot; this command validates and re-bakes every final layer
+// state atomically, then advances the shared state identity exactly once.
+struct CommitVectorLayerStates {
+  std::vector<VectorShapeLayerState> shapes{};
+  std::vector<VectorMaskLayerState> masks{};
+  PatternStore patterns{};
+  // Union accumulated while transient preview frames mutated the shared
+  // document. The final state alone cannot reconstruct vacated old bounds.
+  Rect preview_affected_region{};
+};
+
 struct CommitSmartFilterState {
   LayerId layer_id{0};
   std::optional<SmartFilterStack> stack{};
@@ -303,7 +326,8 @@ using DocumentCommand =
                  SelectByColorSimilarity, SelectVectorPath,
                  TransformVectorLayers, SetVectorMaskState,
                  RasterizeVectorMask, AddVectorShapeLayer,
-                 UpdateVectorShapeLayer, CommitSmartFilterState>;
+                 UpdateVectorShapeLayer, CommitVectorLayerStates,
+                 CommitSmartFilterState>;
 
 struct LayerInfo {
   LayerId id{0};
