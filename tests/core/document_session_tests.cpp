@@ -22,6 +22,7 @@ using patchy::engine::RemoveLayers;
 using patchy::engine::RenameLayer;
 using patchy::engine::ResizeCanvas;
 using patchy::engine::ResizeImage;
+using patchy::engine::RotateCanvas;
 using patchy::engine::SessionErrorCode;
 using patchy::engine::SessionEvent;
 using patchy::engine::SessionEventKind;
@@ -149,6 +150,10 @@ void engine_session_layer_lifecycle_and_document_geometry_are_atomic() {
   CHECK(session.document().width() == 6);
   CHECK(session.document().height() == 5);
   CHECK(static_cast<bool>(session.execute(
+      RotateCanvas{90.0, patchy::EditColor{255, 255, 255, 255}})));
+  CHECK(session.document().width() == 5);
+  CHECK(session.document().height() == 6);
+  CHECK(static_cast<bool>(session.execute(
       RemoveLayers{{added_id, pixel_result.affected_layer_id}})));
   CHECK(session.document().find_layer(added_id) == nullptr);
 
@@ -171,6 +176,8 @@ void engine_session_rejects_non_atomic_lifecycle_commands() {
   CHECK(
       !static_cast<bool>(session.execute(RemoveLayers{{original_id, 999999}})));
   CHECK(!static_cast<bool>(session.execute(ResizeImage{0, 10})));
+  CHECK(!static_cast<bool>(session.execute(
+      RotateCanvas{std::nan(""), patchy::EditColor{}})));
   CHECK(session.state_id() == original_state);
   CHECK(session.undo_size() == 0);
   CHECK(session.document().layers().size() == 1);

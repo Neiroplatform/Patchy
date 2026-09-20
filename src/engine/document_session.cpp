@@ -83,8 +83,35 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
         [this, record_history, &layer_id, &changed,
          &error](const auto &concrete) {
           using Command = std::decay_t<decltype(concrete)>;
-          if constexpr (std::is_same_v<Command, ResizeImage> ||
-                        std::is_same_v<Command, ResizeCanvas>) {
+          if constexpr (std::is_same_v<Command, RotateCanvas>) {
+            if (!std::isfinite(concrete.clockwise_degrees)) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "rotation must be finite");
+              return;
+            }
+            const auto normalized = std::fmod(concrete.clockwise_degrees, 360.0);
+            if (std::abs(normalized) < 0.01) {
+              return;
+            }
+            auto rotated_document = document_;
+            if (std::abs(normalized - 90.0) < 0.01 ||
+                std::abs(normalized + 270.0) < 0.01) {
+              rotate_document_clockwise(rotated_document);
+            } else if (std::abs(normalized + 90.0) < 0.01 ||
+                       std::abs(normalized - 270.0) < 0.01) {
+              rotate_document_counterclockwise(rotated_document);
+            } else if (!rotate_document_arbitrary(rotated_document, normalized,
+                                                   concrete.extension_color)) {
+              error = make_error(SessionErrorCode::CommandFailed,
+                                 "document rotation failed");
+              return;
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(rotated_document);
+            changed = true;
+            return;
+          } else if constexpr (std::is_same_v<Command, ResizeImage> ||
+                               std::is_same_v<Command, ResizeCanvas>) {
             if (concrete.width <= 0 || concrete.height <= 0) {
               error = make_error(SessionErrorCode::InvalidArgument,
                                  "document dimensions must be positive");

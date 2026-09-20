@@ -88,6 +88,11 @@ struct ResizeCanvas {
   EditColor extension_color{255, 255, 255, 255};
 };
 
+struct RotateCanvas {
+  double clockwise_degrees{0.0};
+  EditColor extension_color{255, 255, 255, 255};
+};
+
 struct MoveLayers {
   std::vector<LayerId> layer_ids_top_to_bottom{};
   std::optional<LayerId> target_layer_id{};
@@ -97,7 +102,8 @@ struct MoveLayers {
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
-                 AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas>;
+                 AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas,
+                 RotateCanvas>;
 
 struct LayerInfo {
   LayerId id{0};

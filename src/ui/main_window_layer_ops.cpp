@@ -3669,17 +3669,22 @@ void MainWindow::commit_crop_rect(QRect rect, double angle_degrees) {
 }
 
 void MainWindow::rotate_canvas_clockwise() {
-  auto& doc = document();
   if (refuse_document_geometry_change()) {
     return;
   }
-  push_undo_snapshot(tr("Rotate canvas"));
-  patchy::rotate_document_clockwise(doc);
+  push_undo_snapshot(tr("Rotate canvas"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::RotateCanvas{90.0, edit_color(canvas_->secondary_color())});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  refresh_document_tab_titles();
   canvas_->clear_selection();
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
-  canvas_->set_document(&doc);
+  canvas_->set_document(&document());
   restore_channel_target_after_document_reset(previous_channel_target, previous_channel_id,
                                               previous_channel_display);
   // Swapped dimensions make the old pan stale, so recenter at the current zoom.
@@ -3691,17 +3696,22 @@ void MainWindow::rotate_canvas_clockwise() {
 }
 
 void MainWindow::rotate_canvas_counterclockwise() {
-  auto& doc = document();
   if (refuse_document_geometry_change()) {
     return;
   }
-  push_undo_snapshot(tr("Rotate canvas"));
-  patchy::rotate_document_counterclockwise(doc);
+  push_undo_snapshot(tr("Rotate canvas"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::RotateCanvas{-90.0, edit_color(canvas_->secondary_color())});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  refresh_document_tab_titles();
   canvas_->clear_selection();
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
-  canvas_->set_document(&doc);
+  canvas_->set_document(&document());
   restore_channel_target_after_document_reset(previous_channel_target, previous_channel_id,
                                               previous_channel_display);
   // Swapped dimensions make the old pan stale, so recenter at the current zoom.

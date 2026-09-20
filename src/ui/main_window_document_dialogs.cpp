@@ -1377,11 +1377,16 @@ void MainWindow::rotate_canvas_arbitrary() {
     return;
   }
 
-  push_undo_snapshot(tr("Rotate canvas"));
+  push_undo_snapshot(tr("Rotate canvas"), false);
   // Exposed corners take the background color under a Background layer, transparent elsewhere.
-  if (!patchy::rotate_document_arbitrary(doc, settings->clockwise_degrees, edit_color(canvas_->secondary_color()))) {
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::RotateCanvas{settings->clockwise_degrees,
+                                  edit_color(canvas_->secondary_color())});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
     return;
   }
+  refresh_document_tab_titles();
   // The rotation resampled every raster; text layers re-render crisp through the composed
   // matrix, exactly as after Image Size.
   rerender_text_layers_through_transforms(session());
