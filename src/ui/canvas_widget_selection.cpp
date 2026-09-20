@@ -339,6 +339,14 @@ void CanvasWidget::invert_selection() {
 }
 
 void CanvasWidget::clear_selection() {
+  clear_selection_projection();
+  if (selection_projection_commit_callback_) {
+    static_cast<void>(selection_projection_commit_callback_(
+        capture_engine_selection_snapshot()));
+  }
+}
+
+void CanvasWidget::clear_selection_projection() {
   if (!selection_.isEmpty()) {
     last_cleared_selection_ = selection_;
     last_cleared_selection_display_region_ = selection_display_region_;

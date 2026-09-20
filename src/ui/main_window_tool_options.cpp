@@ -1288,18 +1288,16 @@ void MainWindow::set_active_layer_visible(bool visible) {
   if (ids.empty()) {
     return;
   }
-  auto& doc = document();
-  push_undo_snapshot(tr("Visibility"));
-  Rect affected;
-  for (const auto id : ids) {
-    auto* layer = doc.find_layer(id);
-    if (layer == nullptr) {
-      continue;
-    }
-    layer->set_visible(visible);
-    affected = unite_rect(affected, layer_render_bounds(*layer));
+  push_undo_snapshot(tr("Visibility"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayersVisibility{ids, visible});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
-  canvas_->document_changed(to_qrect(affected));
+  canvas_->document_changed(result.affected_region.has_value()
+                                ? to_qrect(*result.affected_region)
+                                : QRect{});
   refresh_layer_list();
   refresh_layer_controls();
 }
@@ -1313,14 +1311,21 @@ void MainWindow::set_layer_lock_flag_state(LayerId id, LayerLockFlags flag, bool
     refresh_layer_controls();
     return;
   }
-  auto* layer = document().find_layer(id);
+  const auto* layer = std::as_const(document()).find_layer(id);
   if (layer == nullptr || ((layer_lock_flags(*layer) & flag) != kLayerLockNone) == locked) {
     refresh_layer_list();
     refresh_layer_controls();
     return;
   }
-  push_undo_snapshot(tr("Lock layer"));
-  set_layer_lock_flag(*layer, flag, locked);
+  auto flags = layer_lock_flags(*layer);
+  flags = locked ? flags | flag : flags & ~flag;
+  push_undo_snapshot(tr("Lock layer"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerLockStates{{{id, flags}}});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   refresh_layer_list();
   refresh_layer_controls();
   statusBar()->showMessage(locked ? tr("Layer lock enabled") : tr("Layer lock disabled"));
@@ -1343,14 +1348,27 @@ void MainWindow::set_active_layer_lock_flag(LayerLockFlags flag, bool locked) {
   if (ids.empty()) {
     return;
   }
-  auto& doc = document();
-  push_undo_snapshot(tr("Lock layer"));
+  const auto& doc = std::as_const(document());
+  std::vector<patchy::engine::LayerLockState> states;
+  states.reserve(ids.size());
   for (const auto id : ids) {
-    auto* layer = doc.find_layer(id);
+    const auto* layer = doc.find_layer(id);
     if (layer == nullptr) {
       continue;
     }
-    set_layer_lock_flag(*layer, flag, locked);
+    auto flags = layer_lock_flags(*layer);
+    flags = locked ? flags | flag : flags & ~flag;
+    states.push_back({id, flags});
+  }
+  if (states.empty()) {
+    return;
+  }
+  push_undo_snapshot(tr("Lock layer"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerLockStates{std::move(states)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
   refresh_layer_list();
   refresh_layer_controls();
@@ -1408,26 +1426,17 @@ void MainWindow::toggle_active_layer_clipping() {
     return;
   }
 
-  push_undo_snapshot(clipped ? tr("Release clipping mask") : tr("Create clipping mask"));
-  auto* mutable_layer = doc.find_layer(*active);
-  if (mutable_layer == nullptr) {
+  push_undo_snapshot(clipped ? tr("Release clipping mask") : tr("Create clipping mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerClipping{*active, !clipped});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
     return;
   }
-  mutable_layer->set_clipped(!clipped);
-  QRect affected = to_qrect(layer_render_bounds(*mutable_layer));
-  // The base's rendering changes too (the isolated group re-forms around it);
-  // bump its render revision so the undo diff repaints its footprint.
-  if (const auto base_location = find_layer_location(std::as_const(doc).layers(), *active);
-      base_location.has_value()) {
-    if (const auto* base = effective_clip_base(*base_location->siblings, base_location->index); base != nullptr) {
-      if (auto* mutable_base = doc.find_layer(base->id()); mutable_base != nullptr) {
-        mutable_base->mark_render_changed();
-        affected = affected.united(to_qrect(layer_render_bounds(*mutable_base)));
-      }
-    }
-  }
   if (canvas_ != nullptr) {
-    canvas_->document_changed(affected);
+    canvas_->document_changed(result.affected_region.has_value()
+                                  ? to_qrect(*result.affected_region)
+                                  : QRect{});
   }
   refresh_layer_list();
   refresh_layer_controls();
@@ -1449,14 +1458,25 @@ void MainWindow::set_active_layer_lock_all(bool locked) {
   if (ids.empty()) {
     return;
   }
-  auto& doc = document();
-  push_undo_snapshot(tr("Lock layer"));
+  const auto& doc = std::as_const(document());
+  std::vector<patchy::engine::LayerLockState> states;
+  states.reserve(ids.size());
   for (const auto id : ids) {
-    auto* layer = doc.find_layer(id);
+    const auto* layer = doc.find_layer(id);
     if (layer == nullptr) {
       continue;
     }
-    set_layer_locks_all(*layer, locked);
+    states.push_back({id, locked ? kLayerLockAll : kLayerLockNone});
+  }
+  if (states.empty()) {
+    return;
+  }
+  push_undo_snapshot(tr("Lock layer"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerLockStates{std::move(states)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
   refresh_layer_list();
   refresh_layer_controls();

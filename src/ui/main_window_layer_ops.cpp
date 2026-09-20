@@ -1342,19 +1342,28 @@ void MainWindow::add_layer_mask() {
     return;
   }
 
-  push_undo_snapshot(tr("Add layer mask"));
-  const auto before = layer_render_bounds(*layer);
+  std::optional<LayerMask> mask;
   if (from_selection) {
     auto mask_pixels = selection_mask_pixels(*canvas_, selection_rect);
-    layer->set_mask(LayerMask{to_core_rect(selection_rect), std::move(mask_pixels), 0, false});
+    mask = LayerMask{to_core_rect(selection_rect), std::move(mask_pixels), 0,
+                     false};
   } else {
     PixelBuffer mask_pixels(doc.width(), doc.height(), PixelFormat::gray8());
     mask_pixels.clear(255);
-    layer->set_mask(LayerMask{Rect{0, 0, doc.width(), doc.height()}, std::move(mask_pixels), 255, false});
+    mask = LayerMask{Rect{0, 0, doc.width(), doc.height()},
+                     std::move(mask_pixels), 255, false};
   }
-  const auto after = layer_render_bounds(*layer);
+  push_undo_snapshot(tr("Add layer mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerMaskState{*active, std::move(mask), true});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   canvas_->invalidate_mask_display();
-  canvas_->document_changed(to_qrect(unite_rect(before, after)));
+  canvas_->document_changed(result.affected_region.has_value()
+                                ? to_qrect(*result.affected_region)
+                                : QRect{});
   refresh_layer_list();
   set_layer_edit_target_ui(CanvasWidget::LayerEditTarget::Mask, false);
   statusBar()->showMessage(from_selection
@@ -1378,12 +1387,17 @@ void MainWindow::delete_active_layer_mask() {
     return;
   }
 
-  push_undo_snapshot(tr("Delete layer mask"));
-  const auto affected = layer_render_bounds(*layer);
-  layer->clear_mask();
-  layer->metadata().erase(kLayerMetadataMaskLinked);
+  push_undo_snapshot(tr("Delete layer mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerMaskState{*active, std::nullopt, true});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   canvas_->invalidate_mask_display();
-  canvas_->document_changed(to_qrect(affected));
+  canvas_->document_changed(result.affected_region.has_value()
+                                ? to_qrect(*result.affected_region)
+                                : QRect{});
   refresh_layer_list();
   set_layer_edit_target_ui(CanvasWidget::LayerEditTarget::Content, false);
   statusBar()->showMessage(tr("Deleted layer mask"));
@@ -1409,8 +1423,14 @@ void MainWindow::set_active_layer_mask_linked(bool linked) {
     return;
   }
 
-  push_undo_snapshot(linked ? tr("Link layer mask") : tr("Unlink layer mask"));
-  set_layer_mask_linked(*layer, linked);
+  const auto mask = *layer->mask();
+  push_undo_snapshot(linked ? tr("Link layer mask") : tr("Unlink layer mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerMaskState{*active, mask, linked});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   refresh_layer_list();
   refresh_layer_controls();
   statusBar()->showMessage(linked ? tr("Layer and mask linked") : tr("Layer and mask unlinked"));
@@ -1598,9 +1618,19 @@ void MainWindow::set_active_layer_mask_disabled(bool disabled) {
     return;
   }
 
-  push_undo_snapshot(disabled ? tr("Disable layer mask") : tr("Enable layer mask"));
-  layer->mask()->disabled = disabled;
-  canvas_->document_changed(to_qrect(layer->bounds()));
+  auto mask = *layer->mask();
+  mask.disabled = disabled;
+  const auto linked = layer_mask_linked(*layer);
+  push_undo_snapshot(disabled ? tr("Disable layer mask") : tr("Enable layer mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerMaskState{*active, std::move(mask), linked});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  canvas_->document_changed(result.affected_region.has_value()
+                                ? to_qrect(*result.affected_region)
+                                : QRect{});
   // The mask overlay spans the whole canvas, so a partial repaint of the layer
   // bounds is not enough when it appears or disappears.
   canvas_->update();
@@ -1628,17 +1658,25 @@ void MainWindow::invert_active_layer_mask() {
     return;
   }
 
-  push_undo_snapshot(tr("Invert layer mask"));
-  auto& mask = *layer->mask();
+  auto mask = *layer->mask();
   mask.default_color = static_cast<std::uint8_t>(255 - mask.default_color);
   if (!mask.pixels.empty()) {
     for (auto& value : mask.pixels.data()) {
       value = static_cast<std::uint8_t>(255 - value);
     }
   }
-  const auto dirty = unite_rect(layer_render_bounds(*layer), mask.bounds.empty() ? layer->bounds() : mask.bounds);
+  const auto linked = layer_mask_linked(*layer);
+  push_undo_snapshot(tr("Invert layer mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayerMaskState{*active, std::move(mask), linked});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   canvas_->invalidate_mask_display();
-  canvas_->document_changed(to_qrect(dirty));
+  canvas_->document_changed(result.affected_region.has_value()
+                                ? to_qrect(*result.affected_region)
+                                : QRect{});
   refresh_layer_list();
   refresh_layer_controls();
   statusBar()->showMessage(tr("Inverted layer mask"));
@@ -2252,21 +2290,6 @@ void MainWindow::edit_active_layer_style() {
       canvas_->document_changed_async_preview();
     }
   };
-  auto apply_committed_settings = [this, &doc, layer_id, set_layer_style_settings](
-                                      const LayerStyleSettings& settings,
-                                      const PatternStore* transient_patterns) {
-    auto* target = doc.find_layer(layer_id);
-    if (target == nullptr) {
-      return;
-    }
-    ensure_patterns_for_style(doc, settings.style, pattern_library(), transient_patterns);
-    const auto before = layer_render_bounds(*target);
-    set_layer_style_settings(*target, settings);
-    const auto after = layer_render_bounds(*target);
-    if (canvas_ != nullptr) {
-      canvas_->document_changed(to_qrect(unite_rect(before, after)));
-    }
-  };
   auto restore_original = [this, &doc, layer_id, original_opacity, original_fill_opacity,
                            original_blend_mode, original_style,
                            original_blend_if_payload, original_blend_if_rgb_compatible,
@@ -2356,18 +2379,30 @@ void MainWindow::edit_active_layer_style() {
   }
 
   const auto dialog_patterns = doc.metadata().patterns;
+  auto prepared_layer = *doc.find_layer(layer_id);
+  clear_layer_psd_style_source(prepared_layer);
+  set_layer_style_settings(prepared_layer, *settings);
   const auto restore_started = std::chrono::steady_clock::now();
   restore_original();
   const auto restore_ms = phase_ms(restore_started);
   preview_edit_lock.release();
   const auto undo_started = std::chrono::steady_clock::now();
-  push_undo_snapshot(tr("Layer style"));
+  push_undo_snapshot(tr("Layer style"), false);
   const auto undo_ms = phase_ms(undo_started);
-  if (auto* target = doc.find_layer(layer_id); target != nullptr) {
-    clear_layer_psd_style_source(*target);
-  }
   const auto apply_started = std::chrono::steady_clock::now();
-  apply_committed_settings(*settings, &dialog_patterns);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::CommitPreviewedLayerStates{
+          {{layer_id, std::move(prepared_layer)}}, {}, dialog_patterns});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    open_pending_pattern_images();
+    return;
+  }
+  if (canvas_ != nullptr) {
+    canvas_->document_changed(result.affected_region.has_value()
+                                  ? to_qrect(*result.affected_region)
+                                  : QRect{});
+  }
   const auto apply_ms = phase_ms(apply_started);
   const auto list_started = std::chrono::steady_clock::now();
   refresh_layer_list();
@@ -2448,22 +2483,21 @@ void MainWindow::paste_layer_style_to_selected_layers() {
     return;
   }
 
-  auto& mutable_doc = document();
-  push_undo_snapshot(tr("Paste layer style"));
+  auto prepared_document = document();
   for (const auto& resource : layer_style_clipboard_->patterns) {
     PatternResource adopted = resource;
     adopted.provenance = PatternProvenance::Authored;  // the target file has no raw block for it
-    mutable_doc.metadata().patterns.adopt(adopted);
+    prepared_document.metadata().patterns.adopt(adopted);
   }
-  ensure_patterns_for_style(mutable_doc, layer_style_clipboard_->style, pattern_library());
-  Rect affected;
-  std::size_t pasted_count = 0;
+  ensure_patterns_for_style(prepared_document, layer_style_clipboard_->style,
+                            pattern_library());
+  std::vector<patchy::engine::PreviewedLayerState> prepared_layers;
+  prepared_layers.reserve(targets.size());
   for (const auto id : targets) {
-    auto* layer = mutable_doc.find_layer(id);
+    auto* layer = prepared_document.find_layer(id);
     if (layer == nullptr) {
       continue;
     }
-    affected = unite_rect(affected, layer_render_bounds(*layer));
     clear_layer_psd_style_source(*layer);
     layer->layer_style() = layer_style_clipboard_->style;
     if (layer_style_clipboard_->blend_if.has_value()) {
@@ -2473,17 +2507,26 @@ void MainWindow::paste_layer_style_to_selected_layers() {
         layer->channel_restriction_supported()) {
       layer->set_restricted_channels(*layer_style_clipboard_->restricted_channels);
     }
-    affected = unite_rect(affected, layer_render_bounds(*layer));
-    ++pasted_count;
+    prepared_layers.push_back({id, *layer});
+  }
+  push_undo_snapshot(tr("Paste layer style"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::CommitPreviewedLayerStates{
+          std::move(prepared_layers), {}, prepared_document.metadata().patterns});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
 
   refresh_layer_list();
   refresh_layer_controls();
   if (canvas_ != nullptr) {
-    canvas_->document_changed(affected.empty() ? QRect() : to_qrect(affected));
+    canvas_->document_changed(result.affected_region.has_value()
+                                  ? to_qrect(*result.affected_region)
+                                  : QRect{});
   }
   statusBar()->showMessage(
-      tr("Pasted layer style to %1 layer(s)").arg(static_cast<qulonglong>(pasted_count)));
+      tr("Pasted layer style to %1 layer(s)").arg(static_cast<qulonglong>(targets.size())));
 }
 
 void MainWindow::delete_selected_layer_styles() {
@@ -2506,29 +2549,32 @@ void MainWindow::delete_selected_layer_styles() {
     return;
   }
 
-  auto& mutable_doc = document();
-  push_undo_snapshot(tr("Delete layer style"));
-  Rect affected;
-  std::size_t deleted_count = 0;
+  std::vector<patchy::engine::PreviewedLayerState> prepared_layers;
+  prepared_layers.reserve(targets.size());
   for (const auto id : targets) {
-    auto* layer = mutable_doc.find_layer(id);
-    if (layer == nullptr || layer->layer_style().empty()) {
-      continue;
-    }
-    affected = unite_rect(affected, layer_render_bounds(*layer));
-    clear_layer_psd_style_source(*layer);
-    layer->layer_style() = {};
-    affected = unite_rect(affected, layer_render_bounds(*layer));
-    ++deleted_count;
+    auto prepared = *document().find_layer(id);
+    clear_layer_psd_style_source(prepared);
+    prepared.layer_style() = {};
+    prepared_layers.push_back({id, std::move(prepared)});
+  }
+  push_undo_snapshot(tr("Delete layer style"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::CommitPreviewedLayerStates{
+          std::move(prepared_layers), {}, std::nullopt});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
 
   refresh_layer_list();
   refresh_layer_controls();
   if (canvas_ != nullptr) {
-    canvas_->document_changed(affected.empty() ? QRect() : to_qrect(affected));
+    canvas_->document_changed(result.affected_region.has_value()
+                                  ? to_qrect(*result.affected_region)
+                                  : QRect{});
   }
   statusBar()->showMessage(
-      tr("Deleted layer style from %1 layer(s)").arg(static_cast<qulonglong>(deleted_count)));
+      tr("Deleted layer style from %1 layer(s)").arg(static_cast<qulonglong>(targets.size())));
 }
 
 void MainWindow::refresh_layer_style_action_states() {

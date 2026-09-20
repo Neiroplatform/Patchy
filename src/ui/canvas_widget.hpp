@@ -946,6 +946,11 @@ public:
   void set_selection_history_callback(
       std::function<void(QString, patchy::engine::SelectionSnapshot,
                          bool coalesce)> callback);
+  // Low-level callers may clear the Canvas projection without creating a UI
+  // history row. Publish that final projection so the next interactive gesture
+  // still starts from the canonical engine baseline.
+  void set_selection_projection_commit_callback(
+      std::function<bool(patchy::engine::SelectionSnapshot)> callback);
   void set_quick_mask_changed_callback(std::function<void()> callback);
   // Receives one completed gesture/command. PixelBuffer copies are COW, so the
   // host may retain the result while rebuilding FEid and the filtered preview.
@@ -1603,6 +1608,7 @@ private:
   [[nodiscard]] int magnetic_anchor_spacing() const noexcept;  // SCREEN px between auto anchors
   void set_selection_from_region(QRegion selection);
   void set_selection_from_mask(QRegion selection, QRect mask_bounds, QImage mask_alpha);
+  void clear_selection_projection();
   void restore_selection_before_edit();
   void finish_quick_mask_edit();
   void invalidate_quick_mask_display() noexcept;
@@ -2422,6 +2428,8 @@ private:
   QRect pending_document_channel_edit_affected_bounds_;
   std::function<void(QString, patchy::engine::SelectionSnapshot, bool)>
       selection_history_callback_;
+  std::function<bool(patchy::engine::SelectionSnapshot)>
+      selection_projection_commit_callback_;
   std::function<void()> quick_mask_changed_callback_;
   std::function<bool(LayerId, QString, PixelBuffer, QRegion)> smart_filter_mask_committed_callback_;
   std::function<void(SelectionMode)> selection_mode_changed_callback_;

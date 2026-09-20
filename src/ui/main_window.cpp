@@ -6906,6 +6906,21 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
           push_selection_history(*target_session, std::move(label), std::move(before), coalesce);
         }
       });
+  canvas->set_selection_projection_commit_callback(
+      [this, canvas](patchy::engine::SelectionSnapshot selection) {
+        auto* owner = session_for_canvas(canvas);
+        if (owner == nullptr) {
+          return false;
+        }
+        const auto result = owner->engine_session.execute_external(
+            patchy::engine::SetSelection{std::move(selection)});
+        if (!result) {
+          canvas->apply_engine_selection_snapshot(owner->engine_session.selection());
+          show_status_error(QString::fromStdString(result.error.message));
+          return false;
+        }
+        return true;
+      });
   canvas->set_quick_mask_changed_callback([this, canvas] {
     QTimer::singleShot(0, this, [this, canvas] {
       if (canvas == canvas_) {

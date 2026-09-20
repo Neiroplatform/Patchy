@@ -29,6 +29,7 @@ using patchy::engine::CropDocument;
 using patchy::engine::CommitSmartFilterState;
 using patchy::engine::CommitPreviewedDocumentChannel;
 using patchy::engine::CommitPreviewedLayerStates;
+using patchy::engine::CommitPreparedSelection;
 using patchy::engine::CommitVectorLayerStates;
 using patchy::engine::DocumentSession;
 using patchy::engine::FlipAxis;
@@ -66,8 +67,13 @@ using patchy::engine::SelectVectorPath;
 using patchy::engine::SelectionCombineMode;
 using patchy::engine::SetLayerBlendMode;
 using patchy::engine::SetLayerFillOpacity;
+using patchy::engine::SetLayerClipping;
+using patchy::engine::SetLayerLockStates;
+using patchy::engine::SetLayerMaskState;
 using patchy::engine::SetLayerOpacity;
 using patchy::engine::SetLayerVisibility;
+using patchy::engine::SetLayersVisibility;
+using patchy::engine::LayerLockState;
 using patchy::engine::SetVectorMaskState;
 using patchy::engine::SetLayersBlendMode;
 using patchy::engine::SetLayersFillOpacity;
@@ -768,6 +774,97 @@ void engine_session_memory_census_is_cow_aware_across_owned_state() {
   CHECK(session.memory_usage().preview_selection_bytes == 0U);
 }
 
+void engine_session_prepared_selection_commit_rejects_stale_gestures() {
+  DocumentSession session(make_session_document());
+  const auto initial_revision = session.revision();
+  const auto initial_state_id = session.state_id();
+  const auto before = session.selection();
+
+  SelectionSnapshot prepared;
+  prepared.selection = {{0, 0, 1, 2}};
+  prepared.display_region = prepared.selection;
+  const auto committed = session.execute(
+      CommitPreparedSelection{before, prepared});
+  CHECK(static_cast<bool>(committed));
+  CHECK(committed.changed);
+  CHECK(session.selection().selection.size() == 1U);
+  CHECK(session.revision() == initial_revision + 1U);
+  CHECK(session.state_id() == initial_state_id);
+  CHECK(session.undo_size() == 1U);
+  CHECK(!session.dirty());
+
+  SelectionSnapshot late_result;
+  late_result.selection = {{1, 0, 1, 2}};
+  late_result.display_region = late_result.selection;
+  const auto revision_before_stale = session.revision();
+  const auto undo_before_stale = session.undo_size();
+  const auto stale = session.execute(
+      CommitPreparedSelection{before, std::move(late_result)});
+  CHECK(!static_cast<bool>(stale));
+  CHECK(stale.error.code == SessionErrorCode::CommandFailed);
+  CHECK(session.revision() == revision_before_stale);
+  CHECK(session.undo_size() == undo_before_stale);
+  CHECK(session.selection().selection.front().x == 0);
+
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.selection().empty());
+  CHECK(static_cast<bool>(session.redo()));
+  CHECK(session.selection().selection.size() == 1U);
+  CHECK(session.selection().selection.front().x == 0);
+
+  DocumentSession quick_mask_session(make_session_document());
+  SelectionSnapshot quick_mask_before;
+  quick_mask_before.quick_mask_pixels =
+      PixelBuffer(2, 2, PixelFormat::gray8());
+  quick_mask_before.quick_mask_pixels->clear(0);
+  auto quick_mask_after = quick_mask_before;
+  quick_mask_after.quick_mask_pixels->clear(128);
+  const auto quick_mask_commit = quick_mask_session.execute(
+      CommitPreparedSelection{quick_mask_before, quick_mask_after});
+  CHECK(static_cast<bool>(quick_mask_commit));
+  CHECK(quick_mask_session.selection().quick_mask_pixels.has_value());
+  CHECK(quick_mask_session.selection().quick_mask_pixels->pixel(0, 0)[0] ==
+        128U);
+
+  DocumentSession equivalent_region_session(make_session_document());
+  SelectionSnapshot canonical_region;
+  canonical_region.selection = {{0, 0, 2, 2}};
+  canonical_region.display_region = canonical_region.selection;
+  canonical_region.mask_bounds = {0, 0, 2, 2};
+  canonical_region.mask_alpha = PixelBuffer(2, 2, PixelFormat::gray8());
+  canonical_region.mask_alpha.clear(255);
+  CHECK(static_cast<bool>(equivalent_region_session.execute(
+      SetSelection{canonical_region})));
+  auto equivalent_before = canonical_region;
+  equivalent_before.selection = {{0, 0, 2, 1}, {0, 1, 2, 1}};
+  equivalent_before.display_region = equivalent_before.selection;
+  auto equivalent_after = canonical_region;
+  equivalent_after.selection = {{1, 0, 1, 2}};
+  equivalent_after.display_region = equivalent_after.selection;
+  equivalent_after.mask_bounds = {1, 0, 1, 2};
+  equivalent_after.mask_alpha = PixelBuffer(1, 2, PixelFormat::gray8());
+  equivalent_after.mask_alpha.clear(255);
+  CHECK(static_cast<bool>(equivalent_region_session.execute(
+      CommitPreparedSelection{equivalent_before, equivalent_after})));
+  CHECK(equivalent_region_session.selection().mask_bounds.x == 1);
+
+  DocumentSession hard_region_session(make_session_document());
+  SelectionSnapshot canonical_hard_region;
+  canonical_hard_region.selection = {{0, 0, 2, 1}, {0, 1, 2, 1}};
+  canonical_hard_region.display_region = canonical_hard_region.selection;
+  CHECK(static_cast<bool>(
+      hard_region_session.execute(SetSelection{canonical_hard_region})));
+  auto coalesced_before = canonical_hard_region;
+  coalesced_before.selection = {{0, 0, 2, 2}};
+  coalesced_before.display_region = coalesced_before.selection;
+  SelectionSnapshot hard_region_after;
+  hard_region_after.selection = {{1, 0, 1, 2}};
+  hard_region_after.display_region = hard_region_after.selection;
+  CHECK(static_cast<bool>(hard_region_session.execute(CommitPreparedSelection{
+      coalesced_before, hard_region_after})));
+  CHECK(hard_region_session.selection().selection.front().x == 1);
+}
+
 void engine_session_selection_is_canonical_undoable_and_not_dirty() {
   DocumentSession session(make_session_document());
   const auto initial_state_id = session.state_id();
@@ -1103,6 +1200,88 @@ void engine_session_layer_editing_vertical_slice_is_atomic_and_undoable() {
   CHECK(static_cast<bool>(session.undo()));
   CHECK(session.document().find_layer(second_id)->pixels().pixel(0, 0)[0] ==
         10);
+}
+
+void engine_session_nondestructive_layer_state_is_atomic_and_round_trips() {
+  Document document(2, 2, PixelFormat::rgba8());
+  PixelBuffer base_pixels(2, 2, PixelFormat::rgba8());
+  base_pixels.clear(255);
+  patchy::Layer base(document.allocate_layer_id(), "Base",
+                     std::move(base_pixels));
+  const auto base_id = base.id();
+  document.add_layer(std::move(base));
+  PixelBuffer upper_pixels(2, 2, PixelFormat::rgba8());
+  upper_pixels.clear(180);
+  patchy::Layer upper(document.allocate_layer_id(), "Upper",
+                      std::move(upper_pixels));
+  const auto upper_id = upper.id();
+  document.add_layer(std::move(upper));
+  DocumentSession session(std::move(document));
+
+  auto result = session.execute(
+      SetLayersVisibility{{base_id, upper_id}, false});
+  CHECK(static_cast<bool>(result));
+  CHECK(result.changed);
+  CHECK(!session.document().find_layer(base_id)->visible());
+  CHECK(!session.document().find_layer(upper_id)->visible());
+
+  const auto lock_revision = session.revision();
+  result = session.execute(SetLayerLockStates{
+      {LayerLockState{base_id, patchy::kLayerLockAll},
+       LayerLockState{upper_id, patchy::kLayerLockPosition}}});
+  CHECK(static_cast<bool>(result));
+  CHECK(session.revision() == lock_revision + 1U);
+  CHECK(session.document().find_layer(base_id)->lock_flags() ==
+        patchy::kLayerLockAll);
+  CHECK(session.document().find_layer(upper_id)->lock_flags() ==
+        patchy::kLayerLockPosition);
+
+  result = session.execute(SetLayerClipping{upper_id, true});
+  CHECK(static_cast<bool>(result));
+  CHECK(result.affected_region.has_value());
+  CHECK(session.document().find_layer(upper_id)->clipped());
+
+  patchy::LayerMask mask;
+  mask.bounds = {0, 0, 2, 2};
+  mask.pixels = PixelBuffer(2, 2, PixelFormat::gray8());
+  mask.pixels.clear(255);
+  *mask.pixels.pixel(1, 1) = 0;
+  mask.default_color = 255;
+  result = session.execute(
+      SetLayerMaskState{upper_id, mask, false});
+  CHECK(static_cast<bool>(result));
+  const auto *masked = session.document().find_layer(upper_id);
+  CHECK(masked->mask().has_value());
+  CHECK(!patchy::layer_mask_linked(*masked));
+  CHECK(masked->mask()->pixels.pixel(1, 1)[0] == 0U);
+
+  const auto revision_before_invalid = session.revision();
+  const auto invalid = session.execute(SetLayerLockStates{
+      {LayerLockState{base_id, patchy::kLayerLockNone},
+       LayerLockState{base_id, patchy::kLayerLockAll}}});
+  CHECK(!static_cast<bool>(invalid));
+  CHECK(invalid.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_before_invalid);
+  CHECK(session.document().find_layer(base_id)->lock_flags() ==
+        patchy::kLayerLockAll);
+
+  const auto encoded = session.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+  const auto reopened = open_psd(encoded.bytes);
+  CHECK(static_cast<bool>(reopened));
+  const auto *reopened_upper = reopened.session->document().find_layer(upper_id);
+  CHECK(reopened_upper != nullptr);
+  CHECK(reopened_upper->clipped());
+  CHECK(reopened_upper->mask().has_value());
+  CHECK(!patchy::layer_mask_linked(*reopened_upper));
+  CHECK(reopened_upper->lock_flags() == patchy::kLayerLockPosition);
+
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(!session.document().find_layer(upper_id)->mask().has_value());
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(!session.document().find_layer(upper_id)->clipped());
+  CHECK(static_cast<bool>(session.redo()));
+  CHECK(session.document().find_layer(upper_id)->clipped());
 }
 
 void engine_session_filter_and_pixel_commands_share_atomic_history() {
@@ -1844,6 +2023,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_projects_and_moves_layer_tree},
       {"engine_session_layer_lifecycle_and_document_geometry_are_atomic",
        engine_session_layer_lifecycle_and_document_geometry_are_atomic},
+      {"engine_session_nondestructive_layer_state_is_atomic_and_round_trips",
+       engine_session_nondestructive_layer_state_is_atomic_and_round_trips},
       {"engine_session_crop_and_wrap_geometry_are_atomic_and_restore_selection",
        engine_session_crop_and_wrap_geometry_are_atomic_and_restore_selection},
       {"engine_session_rejects_non_atomic_lifecycle_commands",
@@ -1862,6 +2043,8 @@ std::vector<TestCase> document_session_tests() {
        engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes},
       {"engine_session_memory_census_is_cow_aware_across_owned_state",
        engine_session_memory_census_is_cow_aware_across_owned_state},
+      {"engine_session_prepared_selection_commit_rejects_stale_gestures",
+       engine_session_prepared_selection_commit_rejects_stale_gestures},
       {"engine_session_selection_is_canonical_undoable_and_not_dirty",
        engine_session_selection_is_canonical_undoable_and_not_dirty},
       {"engine_session_selection_operations_are_qt_free_and_undoable",

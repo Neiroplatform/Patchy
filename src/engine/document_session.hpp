@@ -97,6 +97,31 @@ struct SetLayersBlendMode {
   BlendMode blend_mode{BlendMode::Normal};
 };
 
+struct SetLayersVisibility {
+  std::vector<LayerId> layer_ids{};
+  bool visible{true};
+};
+
+struct LayerLockState {
+  LayerId layer_id{0};
+  LayerLockFlags flags{kLayerLockNone};
+};
+
+struct SetLayerLockStates {
+  std::vector<LayerLockState> layers{};
+};
+
+struct SetLayerClipping {
+  LayerId layer_id{0};
+  bool clipped{false};
+};
+
+struct SetLayerMaskState {
+  LayerId layer_id{0};
+  std::optional<LayerMask> mask{};
+  bool linked{true};
+};
+
 struct AddPixelLayer {
   std::string name{};
   PixelBuffer pixels{};
@@ -197,6 +222,16 @@ struct ApplyFilter {
 };
 
 struct SetSelection {
+  SelectionSnapshot selection{};
+};
+
+// Publishes the final result of an interactive selection gesture. The shell may
+// preview marquee/lasso/wand/Quick Select geometry while the pointer is down,
+// but the canonical commit succeeds only if the engine still owns the exact
+// pre-gesture selection. This prevents a late gesture completion from
+// overwriting a newer selection command.
+struct CommitPreparedSelection {
+  SelectionSnapshot before{};
   SelectionSnapshot selection{};
 };
 
@@ -314,6 +349,10 @@ struct PreviewedLayerState {
 struct CommitPreviewedLayerStates {
   std::vector<PreviewedLayerState> layers{};
   Rect preview_affected_region{};
+  // Nondestructive appearance commits may adopt pattern resources together
+  // with the prepared layer state. Interactive pixel/transform completions
+  // leave this empty and preserve the canonical store.
+  std::optional<PatternStore> patterns{};
 };
 
 // Publishes one already-previewed saved-channel edit as a single canonical
@@ -365,9 +404,11 @@ using DocumentCommand =
                  AddAdjustmentLayer, UpdateAdjustmentLayer,
                  AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas,
                  RotateCanvas, CropDocument, WrapOffsetDocument,
-                 SetLayersOpacity, SetLayersFillOpacity,
-                 SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers,
+                 SetLayersOpacity, SetLayersFillOpacity, SetLayersBlendMode,
+                 SetLayersVisibility, SetLayerLockStates, SetLayerClipping,
+                 SetLayerMaskState, UngroupLayers, FlipLayers, PlaceLayers,
                  ReplaceLayerPixels, ApplyFilter, SetSelection,
+                 CommitPreparedSelection,
                  ModifySelection, SelectLayerAlpha, SelectLayerMask,
                  SelectLayerVectorMask, SelectSmartFilterMask,
                  SelectByColorSimilarity, SelectVectorPath,

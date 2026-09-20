@@ -19,6 +19,12 @@ typed editing commands.
 - `SetSelection` commits a Qt-free region/mask/Quick Mask snapshot. Selection
   changes advance revision and participate in undo/redo, but retain the current
   document state identity and therefore do not make the file dirty;
+- `CommitPreparedSelection` is the completion boundary for every interactive
+  marquee/lasso/wand/Quick Select/Magnetic Lasso/move/nudge/Quick Mask gesture.
+  Pointer frames remain responsive in Canvas, but release commits only when the
+  canonical selection still matches the pre-gesture baseline. Semantic region
+  comparison accepts equivalent Qt rectangle decompositions after undo/redo;
+  stale completions are rejected and Canvas is resynchronized from the engine;
 - `ModifySelection` owns Select All, Deselect, Invert and square-radius
   Expand/Contract/Border morphology without Qt geometry. Desktop Select menu
   and scripting select-all/deselect project the resulting canonical snapshot
@@ -63,7 +69,17 @@ typed editing commands.
   layer payloads, reports accumulated old/new dirty bounds and advances one
   engine state identity. Transform commits include linked mask riders; paint
   commits cover Brush/Eraser/Mixer/Pattern Stamp/Clone/Healing/local adjustment/
-  Smudge, Fill, Gradient, raster Shape, Spot Healing and Patch completion;
+  Smudge, Fill, Gradient, raster Shape, Spot Healing and Patch completion. The
+  same boundary can atomically adopt a prepared document pattern store for
+  accepted layer-style edit/paste/delete state while ordinary gesture commits
+  leave resources untouched;
+- `SetLayersVisibility`, `SetLayerLockStates`, `SetLayerClipping` and
+  `SetLayerMaskState` own the remaining nondestructive layer protection,
+  compositing and raster-mask lifecycle. Multi-layer commands validate the
+  entire target set before mutation; clipping validates its effective base and
+  invalidates both participants; mask add/delete/link/enable/invert validate
+  geometry, preserve off-canvas imported bounds, report old/new effect bounds
+  and round-trip through PSD with one revision and undo state;
 - `CommitPreviewedDocumentChannel` is the matching atomic completion boundary
   for saved alpha-channel gestures. Canvas keeps responsive brush/fill frames,
   accumulates their bounded dirty union and records one transitional UI undo
@@ -142,15 +158,17 @@ WASM configurations enforce the same boundary.
 The Qt shell now stores its canonical document, committed selection and all
 undo/redo Document/Selection snapshots inside `engine::DocumentSession`. The
 canvas keeps only the transient Qt projection needed while a gesture is in
-flight; each completed desktop or scripting selection operation crosses
-`SetSelection`. Qt history stacks retain presentation-only labels and stable row
+flight; direct selection commands use `SetSelection`, while interactive
+gesture release crosses `CommitPreparedSelection` with stale-result rejection.
+Qt history stacks retain presentation-only labels and stable row
 IDs at the matching engine indices. Direct shell mutations transfer their
 asynchronously captured pre-edit COW snapshot with
 `push_external_undo_state`, then use `mark_external_modified`; typed commands
 record or reuse the same engine history boundary.
-Layer-panel create/group/ungroup/delete/reorder, visibility, rename,
-opacity/fill/blend and flip workflows, plus canvas-resize/rotation, already
-execute through typed engine commands. The scripting API shares those commands
+Layer-panel create/group/ungroup/delete/reorder, visibility, lock, clipping,
+raster-mask lifecycle, layer-style final state, rename, opacity/fill/blend and
+flip workflows, plus canvas-resize/rotation, already execute through typed
+engine commands. The scripting API shares those commands
 for core layer add/remove/group/reorder, principal layer properties and
 destructive filters. Desktop crop-to-selection, expanding/rotated crop and tile
 seam shifting, plus scripted crop, now share typed geometry commands and the
@@ -172,8 +190,8 @@ or a second dirty/revision counter is forbidden.
 
 ## Remaining M2 boundary
 
-- move the remaining in-flight gesture selection algorithms behind the engine
-  boundary (committed ownership, menu morphology, similarity, path and all
-  layer-thumbnail-derived selections are already there);
-- add command families for remaining nondestructive filters/adjustments;
+- migrate the remaining direct text, Smart Object, path and merge/rasterize
+  commits by cohesive command family rather than adding a second state owner;
+- expose/version the same typed contract for the browser host and prove the
+  identical command scenario under the supported wasm-core/Qt-WASM toolchain;
 - keep the desktop shell and scripting API on the same command path.

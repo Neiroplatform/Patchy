@@ -638,12 +638,17 @@ void MainWindow::push_selection_history(DocumentSession& target_session, QString
   const bool merge_into_previous =
       coalesce && active_session.selection_move_coalescing &&
       !active_session.undo_stack.empty();
-  const auto command = patchy::engine::SetSelection{
-      active_session.canvas->capture_engine_selection_snapshot()};
+  const auto command = patchy::engine::CommitPreparedSelection{
+      before, active_session.canvas->capture_engine_selection_snapshot()};
   const auto selection_result = merge_into_previous
                                     ? active_session.engine_session.execute_external(command)
                                     : active_session.engine_session.execute(command);
   if (!selection_result) {
+    active_session.canvas->apply_engine_selection_snapshot(
+        active_session.engine_session.selection());
+    if (target_is_active) {
+      show_status_error(QString::fromStdString(selection_result.error.message));
+    }
     return;
   }
   // A run of moves/nudges collapses into one undo step: once the first move has
@@ -661,7 +666,6 @@ void MainWindow::push_selection_history(DocumentSession& target_session, QString
   // current document together with the pre-edit selection. The document is not
   // flagged modified for save purposes (a mere selection is not unsaved work),
   // but the change still joins the undo/redo history.
-  static_cast<void>(before);  // Canonical selection still holds this pre-edit state.
   record_history_push(active_session, label);
   active_session.selection_move_coalescing = coalesce;
   // Panel/status mirror the active session only (see push_undo_snapshot).

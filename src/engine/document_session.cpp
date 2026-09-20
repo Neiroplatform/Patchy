@@ -16,6 +16,7 @@
 #include <exception>
 #include <iterator>
 #include <set>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -60,6 +61,16 @@ bool vector_masks_equal(const LayerVectorMask &left,
          left.inverted == right.inverted && left.unlinked == right.unlinked &&
          left.hides_effects == right.hides_effects &&
          left.density == right.density && left.feather == right.feather;
+}
+
+bool layer_masks_equal(const LayerMask &left, const LayerMask &right) {
+  return left.bounds.x == right.bounds.x &&
+         left.bounds.y == right.bounds.y &&
+         left.bounds.width == right.bounds.width &&
+         left.bounds.height == right.bounds.height &&
+         pixel_buffers_equal(left.pixels, right.pixels) &&
+         left.default_color == right.default_color &&
+         left.disabled == right.disabled;
 }
 
 bool vector_shape_parts_equal(const VectorShapePart &left,
@@ -162,6 +173,90 @@ bool rect_lists_equal(const std::vector<Rect> &left,
                     });
 }
 
+bool rect_regions_equal(const std::vector<Rect> &left,
+                        const std::vector<Rect> &right) {
+  if (rect_lists_equal(left, right)) {
+    return true;
+  }
+  struct Event {
+    std::int64_t y{};
+    std::int64_t x_begin{};
+    std::int64_t x_end{};
+    bool add{};
+    bool left_side{};
+  };
+  std::vector<Event> events;
+  events.reserve((left.size() + right.size()) * 2U);
+  const auto add_events = [&events](const std::vector<Rect> &rects,
+                                    bool left_side) {
+    for (const auto rect : rects) {
+      if (rect.width <= 0 || rect.height <= 0) {
+        return false;
+      }
+      const auto x_begin = static_cast<std::int64_t>(rect.x);
+      const auto y_begin = static_cast<std::int64_t>(rect.y);
+      const auto x_end = x_begin + static_cast<std::int64_t>(rect.width);
+      const auto y_end = y_begin + static_cast<std::int64_t>(rect.height);
+      events.push_back({y_begin, x_begin, x_end, true, left_side});
+      events.push_back({y_end, x_begin, x_end, false, left_side});
+    }
+    return true;
+  };
+  if (!add_events(left, true) || !add_events(right, false)) {
+    return false;
+  }
+  std::sort(events.begin(), events.end(), [](const Event &first,
+                                             const Event &second) {
+    return std::tie(first.y, first.left_side, first.add, first.x_begin,
+                    first.x_end) <
+           std::tie(second.y, second.left_side, second.add, second.x_begin,
+                    second.x_end);
+  });
+  using Interval = std::pair<std::int64_t, std::int64_t>;
+  std::multiset<Interval> left_active;
+  std::multiset<Interval> right_active;
+  const auto apply = [](std::multiset<Interval> &active,
+                        const Event &event) {
+    const Interval interval{event.x_begin, event.x_end};
+    if (event.add) {
+      active.insert(interval);
+      return true;
+    }
+    const auto found = active.find(interval);
+    if (found == active.end()) {
+      return false;
+    }
+    active.erase(found);
+    return true;
+  };
+  const auto merged = [](const std::multiset<Interval> &active) {
+    std::vector<Interval> result;
+    for (const auto interval : active) {
+      if (result.empty() || interval.first > result.back().second) {
+        result.push_back(interval);
+      } else {
+        result.back().second = std::max(result.back().second, interval.second);
+      }
+    }
+    return result;
+  };
+  std::size_t index = 0;
+  while (index < events.size()) {
+    const auto y = events[index].y;
+    while (index < events.size() && events[index].y == y) {
+      auto &active = events[index].left_side ? left_active : right_active;
+      if (!apply(active, events[index])) {
+        return false;
+      }
+      ++index;
+    }
+    if (merged(left_active) != merged(right_active)) {
+      return false;
+    }
+  }
+  return left_active.empty() && right_active.empty();
+}
+
 bool selection_snapshots_equal(const SelectionSnapshot &left,
                                const SelectionSnapshot &right) {
   if (!rect_lists_equal(left.selection, right.selection) ||
@@ -175,6 +270,49 @@ bool selection_snapshots_equal(const SelectionSnapshot &left,
   return !left.quick_mask_pixels.has_value() ||
          pixel_buffers_equal(*left.quick_mask_pixels,
                              *right.quick_mask_pixels);
+}
+
+PixelBuffer materialize_selection_alpha(const SelectionSnapshot &selection,
+                                        std::int32_t width,
+                                        std::int32_t height);
+
+bool prepared_selection_baseline_matches(const SelectionSnapshot &canonical,
+                                         const SelectionSnapshot &prepared,
+                                         std::int32_t width,
+                                         std::int32_t height) {
+  if (selection_snapshots_equal(canonical, prepared)) {
+    return true;
+  }
+  // QRegion is free to coalesce the same raster coverage into a different
+  // rectangle decomposition after undo/redo. A soft-mask snapshot carries the
+  // authoritative coverage, so compare that coverage instead of treating the
+  // shell's equivalent rectangle list as a stale gesture.
+  const bool has_raster_coverage = !canonical.mask_alpha.empty() ||
+                                   !prepared.mask_alpha.empty();
+  const bool geometry_matches =
+      has_raster_coverage
+          ? rects_equal(canonical.mask_bounds, prepared.mask_bounds) &&
+                pixel_buffers_equal(canonical.mask_alpha, prepared.mask_alpha)
+          : rect_regions_equal(canonical.selection, prepared.selection) &&
+                rect_regions_equal(canonical.display_region,
+                                   prepared.display_region);
+  if (!geometry_matches) {
+    return false;
+  }
+  if (canonical.quick_mask_pixels.has_value() ==
+      prepared.quick_mask_pixels.has_value()) {
+    return !canonical.quick_mask_pixels.has_value() ||
+           pixel_buffers_equal(*canonical.quick_mask_pixels,
+                               *prepared.quick_mask_pixels);
+  }
+  // Entering Quick Mask is transient UI state: the first mask gesture's
+  // pre-image carries the projected mask while canonical engine state still
+  // carries the equivalent committed selection. Once a first mask edit is
+  // published, both sides have quick-mask pixels and exact comparison resumes.
+  return !canonical.quick_mask_pixels.has_value() &&
+         prepared.quick_mask_pixels.has_value() &&
+         pixel_buffers_equal(materialize_selection_alpha(canonical, width, height),
+                             *prepared.quick_mask_pixels);
 }
 
 bool adjustment_settings_equal(const AdjustmentSettings &left,
@@ -1942,6 +2080,9 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             }
 
             auto updated_document = document_;
+            if (concrete.patterns.has_value()) {
+              updated_document.metadata().patterns = *concrete.patterns;
+            }
             for (const auto &state : concrete.layers) {
               *updated_document.find_layer(state.layer_id) = state.layer;
             }
@@ -2466,62 +2607,107 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             affects_document = false;
             event_kind = SessionEventKind::SelectionChanged;
             return;
-          } else if constexpr (std::is_same_v<Command, SetSelection>) {
+          } else if constexpr (std::is_same_v<Command, SetSelection> ||
+                               std::is_same_v<Command,
+                                              CommitPreparedSelection>) {
+            if constexpr (std::is_same_v<Command,
+                                         CommitPreparedSelection>) {
+              if (!prepared_selection_baseline_matches(
+                      selection_, concrete.before, document_.width(),
+                      document_.height())) {
+                error = make_error(
+                    SessionErrorCode::CommandFailed,
+                    "selection changed before the gesture could commit");
+                return;
+              }
+            }
+            const auto &prepared = concrete.selection;
             const auto valid_rect = [this](Rect rect) {
               return rect.width > 0 && rect.height > 0 && rect.x >= 0 &&
                      rect.y >= 0 && rect.x <= document_.width() - rect.width &&
                      rect.y <= document_.height() - rect.height;
             };
-            if (!std::all_of(concrete.selection.selection.begin(),
-                             concrete.selection.selection.end(), valid_rect) ||
-                !std::all_of(concrete.selection.display_region.begin(),
-                             concrete.selection.display_region.end(),
+            if (!std::all_of(prepared.selection.begin(),
+                             prepared.selection.end(), valid_rect) ||
+                !std::all_of(prepared.display_region.begin(),
+                             prepared.display_region.end(),
                              valid_rect)) {
               error = make_error(SessionErrorCode::InvalidArgument,
                                  "selection rectangles must be inside the document");
               return;
             }
-            if (!concrete.selection.mask_alpha.empty() &&
-                (concrete.selection.mask_alpha.format() != PixelFormat::gray8() ||
-                 concrete.selection.mask_alpha.width() !=
-                     concrete.selection.mask_bounds.width ||
-                 concrete.selection.mask_alpha.height() !=
-                     concrete.selection.mask_bounds.height ||
-                 !valid_rect(concrete.selection.mask_bounds))) {
+            if (!prepared.mask_alpha.empty() &&
+                (prepared.mask_alpha.format() != PixelFormat::gray8() ||
+                 prepared.mask_alpha.width() != prepared.mask_bounds.width ||
+                 prepared.mask_alpha.height() != prepared.mask_bounds.height ||
+                 !valid_rect(prepared.mask_bounds))) {
               error = make_error(SessionErrorCode::InvalidArgument,
                                  "selection mask does not match its bounds");
               return;
             }
-            if (concrete.selection.quick_mask_pixels.has_value() &&
-                (!concrete.selection.quick_mask_pixels->empty()) &&
-                (concrete.selection.quick_mask_pixels->format() !=
-                     PixelFormat::gray8() ||
-                 concrete.selection.quick_mask_pixels->width() !=
-                     document_.width() ||
-                 concrete.selection.quick_mask_pixels->height() !=
-                     document_.height())) {
+            if (prepared.quick_mask_pixels.has_value() &&
+                (!prepared.quick_mask_pixels->empty()) &&
+                (prepared.quick_mask_pixels->format() != PixelFormat::gray8() ||
+                 prepared.quick_mask_pixels->width() != document_.width() ||
+                 prepared.quick_mask_pixels->height() != document_.height())) {
               error = make_error(SessionErrorCode::InvalidArgument,
                                  "quick mask must cover the document");
               return;
             }
-            if (selection_snapshots_equal(selection_, concrete.selection)) {
+            if (selection_snapshots_equal(selection_, prepared)) {
               return;
             }
             prepare_mutation(record_history);
-            selection_ = concrete.selection;
+            selection_ = prepared;
             changed = true;
             affects_document = false;
             event_kind = SessionEventKind::SelectionChanged;
             return;
+          } else if constexpr (std::is_same_v<Command, SetLayerLockStates>) {
+            if (concrete.layers.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "lock edit requires at least one layer");
+              return;
+            }
+            std::set<LayerId> target_ids;
+            bool any_changed = false;
+            for (const auto &state : concrete.layers) {
+              const auto *target = document_.find_layer(state.layer_id);
+              if (target == nullptr) {
+                error = make_error(SessionErrorCode::LayerNotFound,
+                                   "locked layer does not exist");
+                return;
+              }
+              if (state.layer_id == 0 ||
+                  !target_ids.insert(state.layer_id).second ||
+                  (state.flags & ~kLayerLockAll) != 0U) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "lock targets must be unique with valid flags");
+                return;
+              }
+              any_changed = any_changed || target->lock_flags() != state.flags;
+            }
+            if (!any_changed) {
+              return;
+            }
+            prepare_mutation(record_history);
+            for (const auto &state : concrete.layers) {
+              document_.find_layer(state.layer_id)->set_lock_flags(state.flags);
+            }
+            changed = true;
+            layer_id = concrete.layers.front().layer_id;
+            return;
           } else if constexpr (std::is_same_v<Command, SetLayersOpacity> ||
                                std::is_same_v<Command, SetLayersFillOpacity> ||
-                               std::is_same_v<Command, SetLayersBlendMode>) {
+                               std::is_same_v<Command, SetLayersBlendMode> ||
+                               std::is_same_v<Command, SetLayersVisibility>) {
             if (concrete.layer_ids.empty()) {
               error = make_error(SessionErrorCode::InvalidArgument,
                                  "property edit requires at least one layer");
               return;
             }
-            if constexpr (!std::is_same_v<Command, SetLayersBlendMode>) {
+            if constexpr (std::is_same_v<Command, SetLayersOpacity> ||
+                          std::is_same_v<Command, SetLayersFillOpacity>) {
               if (!std::isfinite(concrete.opacity) || concrete.opacity < 0.0F ||
                   concrete.opacity > 1.0F) {
                 error = make_error(SessionErrorCode::InvalidArgument,
@@ -2529,6 +2715,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                 return;
               }
             }
+            bool any_changed = false;
             Rect affected{};
             for (const auto id : concrete.layer_ids) {
               const auto *layer = document_.find_layer(id);
@@ -2545,6 +2732,22 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                   return;
                 }
               }
+              if constexpr (std::is_same_v<Command, SetLayersOpacity>) {
+                any_changed = any_changed || layer->opacity() != concrete.opacity;
+              } else if constexpr (std::is_same_v<Command,
+                                                  SetLayersFillOpacity>) {
+                any_changed = any_changed ||
+                              layer->fill_opacity() != concrete.opacity;
+              } else if constexpr (std::is_same_v<Command,
+                                                  SetLayersBlendMode>) {
+                any_changed = any_changed ||
+                              layer->blend_mode() != concrete.blend_mode;
+              } else {
+                any_changed = any_changed || layer->visible() != concrete.visible;
+              }
+            }
+            if (!any_changed) {
+              return;
             }
             prepare_mutation(record_history);
             for (const auto id : concrete.layer_ids) {
@@ -2555,8 +2758,11 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
               } else if constexpr (std::is_same_v<Command,
                                                   SetLayersFillOpacity>) {
                 layer->set_fill_opacity(concrete.opacity);
-              } else {
+              } else if constexpr (std::is_same_v<Command,
+                                                  SetLayersBlendMode>) {
                 layer->set_blend_mode(concrete.blend_mode);
+              } else {
+                layer->set_visible(concrete.visible);
               }
               affected = unite_rect(affected, layer_render_bounds(*layer));
             }
@@ -2624,6 +2830,100 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                 layer->set_name(concrete.name);
                 changed = true;
               }
+            } else if constexpr (std::is_same_v<Command, SetLayerClipping>) {
+              const auto location =
+                  find_layer_location(document_.layers(), concrete.layer_id);
+              if (!location.has_value() || location->siblings == nullptr ||
+                  layer->kind() == LayerKind::Group) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "clipping target must be a non-group layer");
+                return;
+              }
+              if (concrete.clipped && !layer->clipped() &&
+                  effective_clip_base(*location->siblings, location->index) ==
+                      nullptr) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "clipping target has no effective base");
+                return;
+              }
+              if (layer->clipped() == concrete.clipped) {
+                return;
+              }
+              std::optional<LayerId> old_base_id;
+              if (const auto *base = effective_clip_base(*location->siblings,
+                                                         location->index);
+                  base != nullptr) {
+                old_base_id = base->id();
+              }
+              Rect affected = layer_effect_bounds(*layer);
+              if (old_base_id.has_value()) {
+                affected = unite_rect(
+                    affected,
+                    layer_effect_bounds(*document_.find_layer(*old_base_id)));
+              }
+              prepare_mutation(record_history);
+              layer = document_.find_layer(concrete.layer_id);
+              layer->set_clipped(concrete.clipped);
+              const auto updated_location =
+                  find_layer_location(document_.layers(), concrete.layer_id);
+              if (old_base_id.has_value()) {
+                document_.find_layer(*old_base_id)->mark_render_changed();
+              }
+              if (updated_location.has_value() &&
+                  updated_location->siblings != nullptr) {
+                if (const auto *base = effective_clip_base(
+                        *updated_location->siblings, updated_location->index);
+                    base != nullptr) {
+                  auto *mutable_base = document_.find_layer(base->id());
+                  mutable_base->mark_render_changed();
+                  affected = unite_rect(affected,
+                                        layer_effect_bounds(*mutable_base));
+                }
+              }
+              affected_region = unite_rect(affected, layer_effect_bounds(*layer));
+              changed = true;
+            } else if constexpr (std::is_same_v<Command, SetLayerMaskState>) {
+              if (concrete.mask.has_value()) {
+                const auto &mask = *concrete.mask;
+                const bool valid_bounds =
+                    mask.bounds.width > 0 && mask.bounds.height > 0;
+                const bool valid_pixels =
+                    mask.pixels.empty() ||
+                    (mask.pixels.format() == PixelFormat::gray8() &&
+                     mask.pixels.width() == mask.bounds.width &&
+                     mask.pixels.height() == mask.bounds.height);
+                if (!valid_bounds || !valid_pixels) {
+                  error = make_error(SessionErrorCode::InvalidArgument,
+                                     "layer mask geometry is invalid");
+                  return;
+                }
+              }
+              const auto &current_mask =
+                  static_cast<const Layer &>(*layer).mask();
+              const bool same_mask =
+                  current_mask.has_value() == concrete.mask.has_value() &&
+                  (!current_mask.has_value() ||
+                   layer_masks_equal(*current_mask, *concrete.mask));
+              const bool current_linked =
+                  current_mask.has_value() ? layer_mask_linked(*layer) : true;
+              const bool requested_linked =
+                  concrete.mask.has_value() ? concrete.linked : true;
+              if (same_mask && current_linked == requested_linked) {
+                return;
+              }
+              const auto before = layer_effect_bounds(*layer);
+              prepare_mutation(record_history);
+              layer = document_.find_layer(concrete.layer_id);
+              if (concrete.mask.has_value()) {
+                layer->set_mask(*concrete.mask);
+                set_layer_mask_linked(*layer, concrete.linked);
+              } else {
+                layer->clear_mask();
+                layer->metadata().erase(kLayerMetadataMaskLinked);
+              }
+              affected_region =
+                  unite_rect(before, layer_effect_bounds(*layer));
+              changed = true;
             }
           }
         },

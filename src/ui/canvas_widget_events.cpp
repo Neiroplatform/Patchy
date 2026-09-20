@@ -2295,7 +2295,7 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* event) {
       // A press inside the selection that never became a drag is a plain click,
       // which deselects (matching the click-to-deselect behaviour elsewhere).
       restore_selection_before_edit();
-      clear_selection();
+      clear_selection_projection();
       record_selection_history(tr("Deselect"), selection_snapshot_before_edit());
     } else {
       apply_selection_move(document_point - selection_move_origin_document_);
@@ -2326,7 +2326,7 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* event) {
       // A plain click (no drag) deselects in Replace mode; add/subtract are no-ops.
       restore_selection_before_edit();
       if (selection_operation_ == SelectionMode::Replace) {
-        clear_selection();
+        clear_selection_projection();
       }
       record_selection_history(tr("Deselect"), selection_snapshot_before_edit());
       selection_before_edit_ = QRegion();
@@ -2412,7 +2412,7 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* event) {
       // A plain click (no drag) deselects in Replace mode; add/subtract are no-ops.
       restore_selection_before_edit();
       if (selection_operation_ == SelectionMode::Replace) {
-        clear_selection();
+        clear_selection_projection();
       }
       record_selection_history(tr("Deselect"), selection_snapshot_before_edit());
       selection_before_edit_ = QRegion();

@@ -1063,6 +1063,11 @@ void CanvasWidget::set_selection_history_callback(
   selection_history_callback_ = std::move(callback);
 }
 
+void CanvasWidget::set_selection_projection_commit_callback(
+    std::function<bool(patchy::engine::SelectionSnapshot)> callback) {
+  selection_projection_commit_callback_ = std::move(callback);
+}
+
 void CanvasWidget::set_quick_mask_changed_callback(
     std::function<void()> callback) {
   quick_mask_changed_callback_ = std::move(callback);
