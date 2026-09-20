@@ -37,6 +37,10 @@ typed editing commands.
   several shape/vector-mask layers, including rerasterization, stroke scaling,
   dirty bounds and undo. Scripting shape and vector-mask transforms use this
   command instead of replacing the session document directly;
+- `SetVectorMaskState` and `RasterizeVectorMask` own the committed vector-mask
+  lifecycle: add/edit/enable-disable/remove/rasterize, cache regeneration,
+  raster-mask composition, PSD block invalidation, semantic no-op detection,
+  dirty bounds and undo. Desktop commands and scripting use this shared path;
 - `CommitSmartFilterState` atomically commits a UI-prepared supported Smart
   Filter stack or removal: modeled stack/mask state, regenerated SoLd/SoLE
   payloads, FEid/FXid cache store and rendered layer pixels share one validated
@@ -96,9 +100,9 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate remaining brush/pixel, vector creation/edit and Smart Filter preview
-  preparation, plus transient adjustment previews and history storage, to
-  engine commands;
+- migrate remaining brush/pixel and vector creation/point-edit gestures, Smart
+  Filter preview preparation, transient adjustment previews and history
+  storage to engine commands;
 - add command families for pixel transforms and remaining nondestructive
   filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;

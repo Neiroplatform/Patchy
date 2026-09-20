@@ -37,6 +37,7 @@ using patchy::engine::RenameLayer;
 using patchy::engine::ReplaceLayerPixels;
 using patchy::engine::ResizeCanvas;
 using patchy::engine::ResizeImage;
+using patchy::engine::RasterizeVectorMask;
 using patchy::engine::RotateCanvas;
 using patchy::engine::SessionErrorCode;
 using patchy::engine::SessionEvent;
@@ -55,6 +56,7 @@ using patchy::engine::SetLayerBlendMode;
 using patchy::engine::SetLayerFillOpacity;
 using patchy::engine::SetLayerOpacity;
 using patchy::engine::SetLayerVisibility;
+using patchy::engine::SetVectorMaskState;
 using patchy::engine::SetLayersBlendMode;
 using patchy::engine::SetLayersFillOpacity;
 using patchy::engine::SetLayersOpacity;
@@ -864,6 +866,106 @@ void engine_session_vector_transforms_are_atomic_and_qt_free() {
   CHECK(session.revision() == revision);
 }
 
+void engine_session_vector_mask_lifecycle_is_atomic_and_round_trips() {
+  Document document(32, 24, PixelFormat::rgba8());
+  PixelBuffer pixels(32, 24, PixelFormat::rgba8());
+  pixels.clear(255);
+  const auto layer_id = document.allocate_layer_id();
+  patchy::Layer layer(layer_id, "Vector mask", std::move(pixels));
+  layer.unknown_psd_blocks().push_back({"vmsk", {1, 2, 3}});
+  layer.unknown_psd_blocks().push_back({"keep", {4, 5, 6}});
+  document.add_layer(std::move(layer));
+  DocumentSession session(std::move(document));
+
+  patchy::LayerVectorMask mask;
+  patchy::LiveShapeParams rectangle;
+  rectangle.kind = patchy::LiveShapeKind::Rectangle;
+  rectangle.left = 4.0;
+  rectangle.top = 3.0;
+  rectangle.right = 14.0;
+  rectangle.bottom = 12.0;
+  mask.path.subpaths = patchy::generate_live_shape_subpaths(rectangle);
+  mask.inverted = true;
+  mask.unlinked = true;
+  mask.density = 192;
+  mask.feather = 2.5;
+
+  const auto added = session.execute(SetVectorMaskState{layer_id, mask});
+  CHECK(static_cast<bool>(added));
+  CHECK(added.affected_region.has_value());
+  const auto *added_mask =
+      session.document().find_layer(layer_id)->vector_mask();
+  CHECK(added_mask != nullptr);
+  CHECK(!added_mask->cache.empty());
+  CHECK(added_mask->inverted);
+  CHECK(added_mask->unlinked);
+  CHECK(added_mask->density == 192);
+  CHECK(added_mask->feather == 2.5);
+  CHECK(session.dirty());
+
+  const auto revision_after_add = session.revision();
+  const auto noop = session.execute(SetVectorMaskState{layer_id, mask});
+  CHECK(static_cast<bool>(noop));
+  CHECK(session.revision() == revision_after_add);
+
+  auto disabled = mask;
+  disabled.disabled = true;
+  CHECK(static_cast<bool>(
+      session.execute(SetVectorMaskState{layer_id, disabled})));
+  CHECK(session.document().find_layer(layer_id)->vector_mask()->disabled);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(!session.document().find_layer(layer_id)->vector_mask()->disabled);
+
+  const auto encoded = session.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+  const auto reopened = open_psd(encoded.bytes);
+  CHECK(static_cast<bool>(reopened));
+  const auto *reopened_mask =
+      reopened.session->document().find_layer(layer_id)->vector_mask();
+  CHECK(reopened_mask != nullptr);
+  CHECK(reopened_mask->path == mask.path);
+  CHECK(reopened_mask->inverted);
+  CHECK(reopened_mask->unlinked);
+  CHECK(reopened_mask->density == 192);
+  CHECK(reopened_mask->feather == 2.5);
+
+  const auto rasterized = session.execute(RasterizeVectorMask{layer_id});
+  CHECK(static_cast<bool>(rasterized));
+  CHECK(rasterized.affected_region.has_value());
+  const auto *rasterized_layer = session.document().find_layer(layer_id);
+  CHECK(rasterized_layer->vector_mask() == nullptr);
+  CHECK(rasterized_layer->mask().has_value());
+  CHECK(rasterized_layer->mask()->pixels.width() == 32);
+  CHECK(rasterized_layer->mask()->pixels.height() == 24);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(layer_id)->vector_mask() != nullptr);
+  CHECK(!session.document().find_layer(layer_id)->mask().has_value());
+
+  CHECK(static_cast<bool>(
+      session.execute(SetVectorMaskState{layer_id, std::nullopt})));
+  const auto *removed = session.document().find_layer(layer_id);
+  CHECK(removed->vector_mask() == nullptr);
+  CHECK(std::none_of(removed->unknown_psd_blocks().begin(),
+                     removed->unknown_psd_blocks().end(),
+                     [](const auto &block) { return block.key == "vmsk"; }));
+  CHECK(std::any_of(removed->unknown_psd_blocks().begin(),
+                    removed->unknown_psd_blocks().end(),
+                    [](const auto &block) { return block.key == "keep"; }));
+
+  const auto revision_before_rejections = session.revision();
+  auto invalid = mask;
+  invalid.feather = -1.0;
+  const auto rejected =
+      session.execute(SetVectorMaskState{layer_id, std::move(invalid)});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_before_rejections);
+  const auto missing = session.execute(RasterizeVectorMask{layer_id});
+  CHECK(!static_cast<bool>(missing));
+  CHECK(missing.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_before_rejections);
+}
+
 void engine_session_commits_prepared_smart_filter_state_atomically() {
   Document document(3, 2, PixelFormat::rgba8());
   PixelBuffer pixels(3, 2, PixelFormat::rgba8());
@@ -1073,6 +1175,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_filter_and_pixel_commands_share_atomic_history},
       {"engine_session_vector_transforms_are_atomic_and_qt_free",
        engine_session_vector_transforms_are_atomic_and_qt_free},
+      {"engine_session_vector_mask_lifecycle_is_atomic_and_round_trips",
+       engine_session_vector_mask_lifecycle_is_atomic_and_round_trips},
       {"engine_session_commits_prepared_smart_filter_state_atomically",
        engine_session_commits_prepared_smart_filter_state_atomically},
       {"engine_session_adjustment_layer_family_is_atomic_and_round_trips",

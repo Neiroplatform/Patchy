@@ -1043,6 +1043,7 @@ void MainWindow::add_vector_mask(bool hide_all, bool from_work_path) {
   if (layer == nullptr) {
     return;
   }
+  const auto layer_id = layer->id();
   auto& doc = document();
   LayerVectorMask mask;
   if (from_work_path) {
@@ -1054,10 +1055,13 @@ void MainWindow::add_vector_mask(bool hide_all, bool from_work_path) {
     mask.path = work->path();
   }
   mask.inverted = hide_all;
-  push_undo_snapshot(tr("Add vector mask"));
-  layer->set_vector_mask(std::move(mask));
-  mark_layer_vector_block_dirty(*layer);
-  update_vector_mask_raster(*layer, Rect::from_size(doc.width(), doc.height()));
+  push_undo_snapshot(tr("Add vector mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetVectorMaskState{layer_id, std::move(mask)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   if (canvas_ != nullptr) {
     canvas_->set_layer_edit_target(CanvasWidget::LayerEditTarget::VectorMask);
   }
@@ -1072,13 +1076,14 @@ void MainWindow::delete_active_vector_mask() {
   if (layer == nullptr) {
     return;
   }
-  push_undo_snapshot(tr("Delete vector mask"));
-  layer->clear_vector_mask();
-  auto& blocks = layer->unknown_psd_blocks();
-  std::erase_if(blocks, [](const UnknownPsdBlock& block) {
-    return block.key == "vmsk" || block.key == "vsms";
-  });
-  mark_layer_vector_block_dirty(*layer);
+  const auto layer_id = layer->id();
+  push_undo_snapshot(tr("Delete vector mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetVectorMaskState{layer_id, std::nullopt});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   if (canvas_ != nullptr &&
       canvas_->layer_edit_target() == CanvasWidget::LayerEditTarget::VectorMask) {
     canvas_->set_layer_edit_target(CanvasWidget::LayerEditTarget::Content);
@@ -1097,11 +1102,16 @@ void MainWindow::set_active_layer_vector_mask_disabled(bool disabled) {
   if (layer->vector_mask()->disabled == disabled) {
     return;
   }
-  push_undo_snapshot(disabled ? tr("Disable vector mask") : tr("Enable vector mask"));
+  const auto layer_id = layer->id();
   auto mask = *layer->vector_mask();
   mask.disabled = disabled;
-  layer->set_vector_mask(std::move(mask));
-  mark_layer_vector_block_dirty(*layer);
+  push_undo_snapshot(disabled ? tr("Disable vector mask") : tr("Enable vector mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetVectorMaskState{layer_id, std::move(mask)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();
@@ -1114,9 +1124,14 @@ void MainWindow::rasterize_active_vector_mask() {
   if (layer == nullptr) {
     return;
   }
-  auto& doc = document();
-  push_undo_snapshot(tr("Rasterize vector mask"));
-  bake_vector_mask(*layer, doc.width(), doc.height());
+  const auto layer_id = layer->id();
+  push_undo_snapshot(tr("Rasterize vector mask"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::RasterizeVectorMask{layer_id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   if (canvas_ != nullptr &&
       canvas_->layer_edit_target() == CanvasWidget::LayerEditTarget::VectorMask) {
     canvas_->set_layer_edit_target(CanvasWidget::LayerEditTarget::Mask);

@@ -1124,6 +1124,15 @@ patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
         {patchy::engine::SessionErrorCode::CommandFailed,
          "document session is no longer open"}};
   }
+  bool vector_structure_change =
+      std::holds_alternative<patchy::engine::RasterizeVectorMask>(command);
+  if (const auto *set_mask =
+          std::get_if<patchy::engine::SetVectorMaskState>(&command)) {
+    const auto *layer = session->document.find_layer(set_mask->layer_id);
+    vector_structure_change =
+        layer != nullptr &&
+        (layer->vector_mask() != nullptr) != set_mask->mask.has_value();
+  }
   auto result = session->engine_session.execute_external(command);
   if (result) {
     const bool resets_selection =
@@ -1136,12 +1145,15 @@ patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
       session->canvas->apply_engine_selection_snapshot(
           session->engine_session.selection());
     }
-    if (std::holds_alternative<patchy::engine::TransformVectorLayers>(command)) {
+    if (std::holds_alternative<patchy::engine::TransformVectorLayers>(command) ||
+        std::holds_alternative<patchy::engine::SetVectorMaskState>(command) ||
+        std::holds_alternative<patchy::engine::RasterizeVectorMask>(command)) {
       note_vector_changed(
           session_id,
           result.affected_region.has_value()
               ? to_qrect(*result.affected_region)
-              : QRect{});
+              : QRect{},
+          vector_structure_change);
     } else {
       note_structure_changed(session_id);
     }

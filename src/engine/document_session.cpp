@@ -34,6 +34,74 @@ bool pixel_buffers_equal(const PixelBuffer &left, const PixelBuffer &right) {
                     right.data().begin(), right.data().end());
 }
 
+bool vector_masks_equal(const LayerVectorMask &left,
+                        const LayerVectorMask &right) {
+  return left.path == right.path && left.disabled == right.disabled &&
+         left.inverted == right.inverted && left.unlinked == right.unlinked &&
+         left.hides_effects == right.hides_effects &&
+         left.density == right.density && left.feather == right.feather;
+}
+
+void erase_vector_mask_blocks(Layer &layer) {
+  auto &blocks = layer.unknown_psd_blocks();
+  std::erase_if(blocks, [](const UnknownPsdBlock &block) {
+    return block.key == "vmsk" || block.key == "vsms";
+  });
+}
+
+void bake_vector_mask_into_raster(Layer &layer, std::int32_t width,
+                                  std::int32_t height) {
+  const auto *mask = std::as_const(layer).vector_mask();
+  if (mask == nullptr || mask->disabled) {
+    layer.clear_vector_mask();
+    erase_vector_mask_blocks(layer);
+    mark_layer_vector_block_dirty(layer);
+    return;
+  }
+  PixelBuffer coverage(width, height, PixelFormat::gray8());
+  for (std::int32_t y = 0; y < height; ++y) {
+    for (std::int32_t x = 0; x < width; ++x) {
+      const auto local_x = x - mask->cache_bounds.x;
+      const auto local_y = y - mask->cache_bounds.y;
+      std::uint8_t value = 0;
+      if (!mask->cache.empty() && local_x >= 0 && local_y >= 0 &&
+          local_x < mask->cache.width() && local_y < mask->cache.height()) {
+        value = *mask->cache.pixel(local_x, local_y);
+      }
+      *coverage.pixel(x, y) = value;
+    }
+  }
+  if (mask->density != 255U) {
+    const auto density = static_cast<std::int32_t>(mask->density);
+    for (auto &value : coverage.data()) {
+      value = static_cast<std::uint8_t>((value * density) / 255 +
+                                        (255 - density));
+    }
+  }
+  if (const auto &existing = std::as_const(layer).mask();
+      existing.has_value() && !existing->disabled) {
+    for (std::int32_t y = 0; y < height; ++y) {
+      for (std::int32_t x = 0; x < width; ++x) {
+        const auto local_x = x - existing->bounds.x;
+        const auto local_y = y - existing->bounds.y;
+        auto raster_value = existing->default_color;
+        if (!existing->pixels.empty() && local_x >= 0 && local_y >= 0 &&
+            local_x < existing->pixels.width() &&
+            local_y < existing->pixels.height()) {
+          raster_value = *existing->pixels.pixel(local_x, local_y);
+        }
+        auto *value = coverage.pixel(x, y);
+        *value = static_cast<std::uint8_t>((*value * raster_value) / 255);
+      }
+    }
+  }
+  layer.set_mask(LayerMask{Rect::from_size(width, height),
+                           std::move(coverage), 255, false});
+  layer.clear_vector_mask();
+  erase_vector_mask_blocks(layer);
+  mark_layer_vector_block_dirty(layer);
+}
+
 bool rects_equal(Rect left, Rect right) {
   return left.x == right.x && left.y == right.y &&
          left.width == right.width && left.height == right.height;
@@ -1483,6 +1551,92 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             changed = true;
             layer_id = concrete.layer_ids.front();
             affected_region = affected;
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                SetVectorMaskState>) {
+            const auto *current = document_.find_layer(concrete.layer_id);
+            if (current == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "vector-mask layer does not exist");
+              return;
+            }
+            if (!vector_lock_reason(*current).empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "layer vector data is locked");
+              return;
+            }
+            if (current->vector_mask() == nullptr &&
+                concrete.mask.has_value() && current->vector_shape() != nullptr) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "shape layers cannot receive a second vector mask");
+              return;
+            }
+            if (concrete.mask.has_value() &&
+                (!std::isfinite(concrete.mask->feather) ||
+                 concrete.mask->feather < 0.0 ||
+                 concrete.mask->feather > 1000.0)) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "vector-mask feather must be in [0, 1000]");
+              return;
+            }
+            const auto *existing = current->vector_mask();
+            if ((existing == nullptr && !concrete.mask.has_value()) ||
+                (existing != nullptr && concrete.mask.has_value() &&
+                 vector_masks_equal(*existing, *concrete.mask))) {
+              return;
+            }
+            const auto old_bounds = layer_render_bounds(*current);
+            auto updated_document = document_;
+            auto *updated = updated_document.find_layer(concrete.layer_id);
+            if (concrete.mask.has_value()) {
+              updated->set_vector_mask(*concrete.mask);
+              mark_layer_vector_block_dirty(*updated);
+              update_vector_mask_raster(
+                  *updated, Rect::from_size(updated_document.width(),
+                                            updated_document.height()));
+            } else {
+              updated->clear_vector_mask();
+              erase_vector_mask_blocks(*updated);
+              mark_layer_vector_block_dirty(*updated);
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            layer_id = concrete.layer_id;
+            affected_region = unite_rect(
+                old_bounds,
+                layer_render_bounds(*document_.find_layer(concrete.layer_id)));
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                RasterizeVectorMask>) {
+            const auto *current = document_.find_layer(concrete.layer_id);
+            if (current == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "vector-mask layer does not exist");
+              return;
+            }
+            if (!vector_lock_reason(*current).empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "layer vector data is locked");
+              return;
+            }
+            if (current->vector_mask() == nullptr) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "layer has no vector mask");
+              return;
+            }
+            const auto old_bounds = layer_render_bounds(*current);
+            auto updated_document = document_;
+            bake_vector_mask_into_raster(
+                *updated_document.find_layer(concrete.layer_id),
+                updated_document.width(), updated_document.height());
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            layer_id = concrete.layer_id;
+            affected_region = unite_rect(
+                old_bounds,
+                layer_render_bounds(*document_.find_layer(concrete.layer_id)));
             return;
           } else if constexpr (std::is_same_v<Command, SelectVectorPath>) {
             if (concrete.combine != SelectionCombineMode::Replace &&

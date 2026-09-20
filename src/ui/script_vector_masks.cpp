@@ -16,13 +16,6 @@ QJsonObject mask_json(const LayerVectorMask& mask) {
   return {{"path", path_json(mask.path)}, {"enabled", !mask.disabled}, {"inverted", mask.inverted},
     {"linked", !mask.unlinked}, {"density", mask.density * 100.0 / 255.0}, {"feather", mask.feather}};
 }
-void commit_mask(ScriptEngineHost& host, std::int64_t session, LayerId id, Layer prepared, QRect before, bool structure) {
-  const auto after = to_qrect(layer_render_bounds(std::as_const(prepared)));
-  auto& doc = writable(host, session);
-  (void)layer(host, session, id, true);
-  *doc.find_layer(id) = std::move(prepared);
-  host.note_vector_changed(session, before.united(after), structure);
-}
 }
 QJSValue ScriptLayerObject::getVectorMask() const {
   return guarded(host_, [&] {
@@ -39,7 +32,6 @@ void ScriptLayerObject::setVectorMask(const QJSValue& options) {
       host_.throw_js_error(ScriptEngineHost::tr("Put shape layers in a group and apply the vector mask to that group."));
       return;
     }
-    const auto& doc = document(host_, session_id_);
     auto mask = old.vector_mask() ? *old.vector_mask() : LayerVectorMask{};
     if (args.contains("path")) {
       auto path = parse_path(child_object(args, "path"));
@@ -51,21 +43,18 @@ void ScriptLayerObject::setVectorMask(const QJSValue& options) {
     mask.density = static_cast<std::uint8_t>(std::lround(number(args, "density", mask.density * 100.0 / 255.0, 0, 100) * 255.0 / 100.0));
     mask.feather = number(args, "feather", mask.feather, 0, 1000);
     if (old.vector_mask() && mask_json(*old.vector_mask()) == mask_json(mask)) { return; }
-    const auto before = to_qrect(layer_render_bounds(old));
-    const bool structure = old.vector_mask() == nullptr;
-    auto prepared = old;
-    prepared.set_vector_mask(std::move(mask)); mark_layer_vector_block_dirty(prepared);
-    update_vector_mask_raster(prepared, Rect::from_size(doc.width(), doc.height()));
-    commit_mask(host_, session_id_, layer_id_, std::move(prepared), before, structure);
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::SetVectorMaskState{layer_id_, std::move(mask)});
+    if (!result) { invalid("layer.vectorMask"); }
   });
 }
 void ScriptLayerObject::removeVectorMask() {
   guarded(host_, [&] {
     const auto& old = layer(host_, session_id_, layer_id_, true);
     if (!old.vector_mask()) { return; }
-    auto prepared = old; const auto before = to_qrect(layer_render_bounds(old));
-    prepared.clear_vector_mask(); erase_mask_blocks(prepared);
-    commit_mask(host_, session_id_, layer_id_, std::move(prepared), before, true);
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::SetVectorMaskState{layer_id_, std::nullopt});
+    if (!result) { invalid("layer.vectorMask"); }
   });
 }
 void ScriptLayerObject::transformVectorMask(const QJSValue& value) {
@@ -86,10 +75,9 @@ void ScriptLayerObject::rasterizeVectorMask() {
   guarded(host_, [&] {
     const auto& old = layer(host_, session_id_, layer_id_, true);
     if (!old.vector_mask()) { invalid("layer.vectorMask"); }
-    auto prepared = old; const auto before = to_qrect(layer_render_bounds(old));
-    const auto& doc = document(host_, session_id_);
-    bake_vector_mask(prepared, doc.width(), doc.height());
-    commit_mask(host_, session_id_, layer_id_, std::move(prepared), before, true);
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::RasterizeVectorMask{layer_id_});
+    if (!result) { invalid("layer.vectorMask"); }
   });
 }
 void ScriptLayerObject::strokePath(const QJSValue& data, const QJSValue& options) {

@@ -256,6 +256,15 @@ struct TransformVectorLayers {
   VectorTransformTarget target{VectorTransformTarget::ShapeAndMask};
 };
 
+struct SetVectorMaskState {
+  LayerId layer_id{0};
+  std::optional<LayerVectorMask> mask{};
+};
+
+struct RasterizeVectorMask {
+  LayerId layer_id{0};
+};
+
 struct CommitSmartFilterState {
   LayerId layer_id{0};
   std::optional<SmartFilterStack> stack{};
@@ -278,7 +287,8 @@ using DocumentCommand =
                  ModifySelection, SelectLayerAlpha, SelectLayerMask,
                  SelectLayerVectorMask, SelectSmartFilterMask,
                  SelectByColorSimilarity, SelectVectorPath,
-                 TransformVectorLayers, CommitSmartFilterState>;
+                 TransformVectorLayers, SetVectorMaskState,
+                 RasterizeVectorMask, CommitSmartFilterState>;
 
 struct LayerInfo {
   LayerId id{0};
