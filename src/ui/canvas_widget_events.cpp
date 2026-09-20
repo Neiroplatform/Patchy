@@ -3435,6 +3435,16 @@ bool CanvasWidget::begin_edit(QString label) {
     }
     return true;
   }
+  const auto begin_layer_pixel_transaction = [this](const QString& label) {
+    if (pixel_edit_history_callback_ && pixel_edit_commit_callback_ &&
+        document_ != nullptr && document_->active_layer_id().has_value()) {
+      pixel_edit_history_callback_(label);
+      pending_pixel_edit_layer_id_ = *document_->active_layer_id();
+      pending_pixel_edit_affected_bounds_ = {};
+    } else if (before_edit_callback_) {
+      before_edit_callback_(label);
+    }
+  };
   if (layer_edit_target_ == LayerEditTarget::DocumentChannel) {
     const auto* channel = active_document_channel_const();
     if (channel == nullptr) {
@@ -3473,9 +3483,7 @@ bool CanvasWidget::begin_edit(QString label) {
       report_status_error(tr("Select a layer mask to edit"));
       return false;
     }
-    if (before_edit_callback_) {
-      before_edit_callback_(label);
-    }
+    begin_layer_pixel_transaction(label);
     return true;
   }
 
@@ -3509,9 +3517,7 @@ bool CanvasWidget::begin_edit(QString label) {
     return false;
   }
 
-  if (before_edit_callback_) {
-    before_edit_callback_(label);
-  }
+  begin_layer_pixel_transaction(label);
   return true;
 }
 

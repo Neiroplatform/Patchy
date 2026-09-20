@@ -497,6 +497,58 @@ void ui_free_transform_uses_opaque_pixel_bounds() {
   save_widget_artifact("ui_transform_opaque_bounds", window);
 }
 
+void ui_brush_stroke_publishes_one_engine_state_on_release() {
+  patchy::ui::MainWindow window;
+  show_window(window);
+  auto* canvas = require_canvas(window);
+  require_action(window, "toolBrushAction")->trigger();
+  canvas->set_brush_size(18);
+  canvas->set_primary_color(Qt::black);
+  QApplication::processEvents();
+
+  const auto state_before =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
+  const auto undo_before =
+      patchy::ui::MainWindowTestAccess::active_session_undo_depth(window);
+  const auto start = canvas->widget_position_for_document_point(QPoint(90, 90));
+  const auto finish = canvas->widget_position_for_document_point(QPoint(150, 120));
+  send_mouse(*canvas, QEvent::MouseButtonPress, start, Qt::LeftButton,
+             Qt::LeftButton);
+  send_mouse(*canvas, QEvent::MouseMove, finish, Qt::NoButton,
+             Qt::LeftButton);
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        state_before);
+  send_mouse(*canvas, QEvent::MouseButtonRelease, finish, Qt::LeftButton,
+             Qt::NoButton);
+  QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        state_before + 1);
+  CHECK(patchy::ui::MainWindowTestAccess::active_session_undo_depth(window) ==
+        undo_before + 1);
+
+  patchy::ui::MainWindowTestAccess::undo(window);
+  QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        state_before);
+  patchy::ui::MainWindowTestAccess::redo(window);
+  QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        state_before + 1);
+
+  const auto state_before_fill =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
+  require_action(window, "toolFillAction")->trigger();
+  const auto fill_point =
+      canvas->widget_position_for_document_point(QPoint(220, 180));
+  send_mouse(*canvas, QEvent::MouseButtonPress, fill_point, Qt::LeftButton,
+             Qt::LeftButton);
+  send_mouse(*canvas, QEvent::MouseButtonRelease, fill_point, Qt::LeftButton,
+             Qt::NoButton);
+  QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        state_before_fill + 1);
+}
+
 // Arrow keys during a Free Transform (Ctrl+T) must nudge the bounding box (and the
 // previewed pixels) together. The box used to stay put while the keys fell through to a
 // destructive layer move — regression for the Ctrl+T pixel-nudge desync.
@@ -1384,6 +1436,8 @@ std::vector<patchy::test::TestCase> clipboard_free_transform_tests() {
       {"ui_external_clipboard_image_paste_overrides_internal_payload",
        ui_external_clipboard_image_paste_overrides_internal_payload},
       {"ui_free_transform_uses_opaque_pixel_bounds", ui_free_transform_uses_opaque_pixel_bounds},
+      {"ui_brush_stroke_publishes_one_engine_state_on_release",
+       ui_brush_stroke_publishes_one_engine_state_on_release},
       {"ui_transform_shift_frees_aspect_ratio_by_default",
        ui_transform_shift_frees_aspect_ratio_by_default},
       {"ui_transform_shift_aspect_preference_restores_legacy",

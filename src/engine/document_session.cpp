@@ -1723,10 +1723,10 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command,
-                                                CommitTransformedLayerStates>) {
+                                                CommitPreviewedLayerStates>) {
             if (concrete.layers.empty()) {
               error = make_error(SessionErrorCode::InvalidArgument,
-                                 "transform state commit is empty");
+                                 "previewed layer state commit is empty");
               return;
             }
             const auto same_topology = [](const Layer &left,
@@ -1753,7 +1753,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
               const auto *current = document_.find_layer(state.layer_id);
               if (current == nullptr) {
                 error = make_error(SessionErrorCode::LayerNotFound,
-                                   "transform target layer does not exist");
+                                   "previewed target layer does not exist");
                 return;
               }
               if (!target_ids.insert(state.layer_id).second ||
@@ -1761,7 +1761,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                   !same_topology(*current, state.layer)) {
                 error = make_error(
                     SessionErrorCode::InvalidArgument,
-                    "transform targets must be unique and preserve topology");
+                    "previewed targets must be unique and preserve topology");
                 return;
               }
               affected = unite_rect(affected, layer_effect_bounds(*current));

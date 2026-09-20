@@ -385,6 +385,17 @@ void CanvasWidget::end_processing_operation() {
 }
 
 void CanvasWidget::notify_document_changed(DocumentChangeReason reason) {
+  if (reason != DocumentChangeReason::BrushStrokePreview &&
+      pending_pixel_edit_layer_id_.has_value()) {
+    const auto layer_id = *pending_pixel_edit_layer_id_;
+    const auto affected_bounds = pending_pixel_edit_affected_bounds_;
+    pending_pixel_edit_layer_id_.reset();
+    pending_pixel_edit_affected_bounds_ = {};
+    if (pixel_edit_commit_callback_) {
+      static_cast<void>(
+          pixel_edit_commit_callback_({layer_id}, affected_bounds));
+    }
+  }
   invalidate_vector_preview();
   if (document_changed_reason_callback_) {
     document_changed_reason_callback_(reason);
@@ -496,6 +507,10 @@ void CanvasWidget::grayscale_target_changed(QRect document_rect, DocumentChangeR
 }
 
 void CanvasWidget::active_edit_target_changed_impl(QRegion document_region, DocumentChangeReason reason) {
+  if (pending_pixel_edit_layer_id_.has_value() && !document_region.isEmpty()) {
+    pending_pixel_edit_affected_bounds_ =
+        pending_pixel_edit_affected_bounds_.united(document_region.boundingRect());
+  }
   // Mask/channel edit branches below return without document_changed_impl;
   // invalidate the retained move caches up front (harmlessly repeated when
   // the plain branch falls through to document_changed_impl).

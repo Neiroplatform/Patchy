@@ -6827,7 +6827,16 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
       push_undo_snapshot(*target_session, std::move(label), false);
     }
   });
-  canvas->set_transform_commit_callback(
+  canvas->set_pixel_edit_history_callback([this, canvas](QString label) {
+    if (scripted_stroke_undo_suppressed_) {
+      return;  // Stroke Path owns one history snapshot for all sub-strokes.
+    }
+    if (auto* target_session = session_for_canvas(canvas);
+        target_session != nullptr) {
+      push_undo_snapshot(*target_session, std::move(label), false);
+    }
+  });
+  const auto commit_previewed_layer_states =
       [this, canvas](std::vector<LayerId> layer_ids, QRect affected_bounds) {
         auto* owner = session_for_canvas(canvas);
         if (owner == nullptr || layer_ids.empty()) {
@@ -6836,7 +6845,7 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
         std::sort(layer_ids.begin(), layer_ids.end());
         layer_ids.erase(std::unique(layer_ids.begin(), layer_ids.end()),
                         layer_ids.end());
-        patchy::engine::CommitTransformedLayerStates command;
+        patchy::engine::CommitPreviewedLayerStates command;
         command.preview_affected_region = to_core_rect(affected_bounds);
         command.layers.reserve(layer_ids.size());
         for (const auto id : layer_ids) {
@@ -6845,7 +6854,7 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
             return false;
           }
           command.layers.push_back(
-              patchy::engine::TransformedLayerState{id, *layer});
+              patchy::engine::PreviewedLayerState{id, *layer});
         }
         const auto result = owner->engine_session.execute_external(command);
         if (!result) {
@@ -6857,7 +6866,9 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
           refresh_layer_controls();
         }
         return true;
-      });
+      };
+  canvas->set_transform_commit_callback(commit_previewed_layer_states);
+  canvas->set_pixel_edit_commit_callback(commit_previewed_layer_states);
   canvas->set_smart_filter_mask_committed_callback(
       [this, canvas](LayerId layer_id, QString label, PixelBuffer pixels,
                      QRegion) {
