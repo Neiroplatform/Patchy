@@ -1723,6 +1723,63 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command,
+                                                CommitTransformedLayerStates>) {
+            if (concrete.layers.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "transform state commit is empty");
+              return;
+            }
+            const auto same_topology = [](const Layer &left,
+                                          const Layer &right) {
+              const auto compare = [&](const auto &self, const Layer &a,
+                                       const Layer &b) -> bool {
+                if (a.id() != b.id() || a.kind() != b.kind() ||
+                    a.children().size() != b.children().size()) {
+                  return false;
+                }
+                for (std::size_t index = 0; index < a.children().size();
+                     ++index) {
+                  if (!self(self, a.children()[index], b.children()[index])) {
+                    return false;
+                  }
+                }
+                return true;
+              };
+              return compare(compare, left, right);
+            };
+            std::set<LayerId> target_ids;
+            Rect affected = concrete.preview_affected_region;
+            for (const auto &state : concrete.layers) {
+              const auto *current = document_.find_layer(state.layer_id);
+              if (current == nullptr) {
+                error = make_error(SessionErrorCode::LayerNotFound,
+                                   "transform target layer does not exist");
+                return;
+              }
+              if (!target_ids.insert(state.layer_id).second ||
+                  state.layer_id == 0 || state.layer.id() != state.layer_id ||
+                  !same_topology(*current, state.layer)) {
+                error = make_error(
+                    SessionErrorCode::InvalidArgument,
+                    "transform targets must be unique and preserve topology");
+                return;
+              }
+              affected = unite_rect(affected, layer_effect_bounds(*current));
+              affected = unite_rect(affected,
+                                     layer_effect_bounds(state.layer));
+            }
+
+            auto updated_document = document_;
+            for (const auto &state : concrete.layers) {
+              *updated_document.find_layer(state.layer_id) = state.layer;
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            layer_id = concrete.layers.front().layer_id;
+            affected_region = affected;
+            return;
+          } else if constexpr (std::is_same_v<Command,
                                                 SetVectorMaskState>) {
             const auto *current = document_.find_layer(concrete.layer_id);
             if (current == nullptr) {

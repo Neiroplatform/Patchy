@@ -302,6 +302,20 @@ struct CommitVectorLayerStates {
   Rect preview_affected_region{};
 };
 
+struct TransformedLayerState {
+  LayerId layer_id{0};
+  Layer layer{};
+};
+
+// Publishes the final state of one already-previewed Free Transform/Warp
+// transaction. The Qt shell owns interactive resampling and its UI history;
+// the engine validates the complete target set and advances canonical state
+// exactly once at the completion boundary.
+struct CommitTransformedLayerStates {
+  std::vector<TransformedLayerState> layers{};
+  Rect preview_affected_region{};
+};
+
 struct CommitSmartFilterState {
   LayerId layer_id{0};
   std::optional<SmartFilterStack> stack{};
@@ -327,6 +341,7 @@ using DocumentCommand =
                  TransformVectorLayers, SetVectorMaskState,
                  RasterizeVectorMask, AddVectorShapeLayer,
                  UpdateVectorShapeLayer, CommitVectorLayerStates,
+                 CommitTransformedLayerStates,
                  CommitSmartFilterState>;
 
 struct LayerInfo {

@@ -925,6 +925,12 @@ public:
     return document_position(widget_position);
   }
   void set_before_edit_callback(std::function<void(QString)> callback);
+  // Free Transform/Warp uses a two-phase host transaction: snapshot without
+  // independently dirtying engine state, then publish all final layer states
+  // through one typed Qt-free command at completion.
+  void set_transform_history_callback(std::function<void(QString)> callback);
+  void set_transform_commit_callback(
+      std::function<bool(std::vector<LayerId>, QRect)> callback);
   // Invoked when a selection-only edit completes and actually changed the
   // selection, so the host can push an undo entry holding the pre-edit state.
   // `coalesce` marks a continuation of a move sequence (drag/nudge): consecutive
@@ -1677,6 +1683,9 @@ private:
   void update_free_transform_preview(QPointF document_point, Qt::KeyboardModifiers modifiers);
   void commit_free_transform();
   void commit_free_transform_with_pending_warp();
+  void begin_transform_history(QString label);
+  [[nodiscard]] bool publish_transform_states(std::vector<LayerId> layer_ids,
+                                              QRect affected_bounds);
   // Committed-transform hold frame: the commit paths compose the session's
   // final preview (base + accurate patches, or the same approximate blit the
   // live preview drew) into one canvas image and keep painting it while the
@@ -2392,6 +2401,9 @@ private:
   QImage pending_warp_source_image_{};
   std::optional<LayerId> move_transform_controls_layer_id_{};
   std::function<void(QString)> before_edit_callback_;
+  std::function<void(QString)> transform_history_callback_;
+  std::function<bool(std::vector<LayerId>, QRect)>
+      transform_commit_callback_;
   std::function<void(QString, patchy::engine::SelectionSnapshot, bool)>
       selection_history_callback_;
   std::function<void()> quick_mask_changed_callback_;

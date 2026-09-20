@@ -1024,6 +1024,16 @@ void CanvasWidget::set_before_edit_callback(std::function<void(QString)> callbac
   before_edit_callback_ = std::move(callback);
 }
 
+void CanvasWidget::set_transform_history_callback(
+    std::function<void(QString)> callback) {
+  transform_history_callback_ = std::move(callback);
+}
+
+void CanvasWidget::set_transform_commit_callback(
+    std::function<bool(std::vector<LayerId>, QRect)> callback) {
+  transform_commit_callback_ = std::move(callback);
+}
+
 void CanvasWidget::set_selection_history_callback(
     std::function<void(QString, patchy::engine::SelectionSnapshot, bool)> callback) {
   selection_history_callback_ = std::move(callback);

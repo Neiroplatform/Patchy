@@ -26,6 +26,7 @@ using patchy::engine::ApplyFilter;
 using patchy::engine::CancellationToken;
 using patchy::engine::CropDocument;
 using patchy::engine::CommitSmartFilterState;
+using patchy::engine::CommitTransformedLayerStates;
 using patchy::engine::CommitVectorLayerStates;
 using patchy::engine::DocumentSession;
 using patchy::engine::FlipAxis;
@@ -65,6 +66,7 @@ using patchy::engine::SetLayersOpacity;
 using patchy::engine::SetSelection;
 using patchy::engine::UngroupLayers;
 using patchy::engine::TransformVectorLayers;
+using patchy::engine::TransformedLayerState;
 using patchy::engine::UpdateAdjustmentLayer;
 using patchy::engine::UpdateVectorShapeLayer;
 using patchy::engine::VectorTransformTarget;
@@ -1129,6 +1131,66 @@ void engine_session_commits_previewed_vector_layer_states_atomically() {
   CHECK(session.revision() == revision_before_rejection);
 }
 
+void engine_session_commits_previewed_transform_states_atomically() {
+  DocumentSession session(Document(32, 24, PixelFormat::rgba8()));
+  PixelBuffer first_pixels(6, 5, PixelFormat::rgba8());
+  first_pixels.clear(90);
+  PixelBuffer second_pixels(4, 3, PixelFormat::rgba8());
+  second_pixels.clear(180);
+  const auto first = session.execute(
+      AddPixelLayer{"First", std::move(first_pixels), {}});
+  const auto second = session.execute(
+      AddPixelLayer{"Second", std::move(second_pixels), {}});
+  CHECK(static_cast<bool>(first));
+  CHECK(static_cast<bool>(second));
+
+  auto first_final = *session.document().find_layer(first.affected_layer_id);
+  auto second_final = *session.document().find_layer(second.affected_layer_id);
+  first_final.set_bounds({3, 4, 6, 5});
+  second_final.set_bounds({14, 9, 4, 3});
+  *session.mutable_document().find_layer(first.affected_layer_id) = first_final;
+  *session.mutable_document().find_layer(second.affected_layer_id) = second_final;
+
+  const auto revision_before = session.revision();
+  const auto state_before = session.state_id();
+  const auto committed = session.execute_external(CommitTransformedLayerStates{
+      {{first.affected_layer_id, first_final},
+       {second.affected_layer_id, second_final}},
+      {1, 2, 20, 14}});
+  CHECK(static_cast<bool>(committed));
+  CHECK(committed.changed);
+  CHECK(committed.affected_region.has_value());
+  CHECK(committed.affected_region->x == 1);
+  CHECK(committed.affected_region->y == 2);
+  CHECK(committed.affected_region->width == 20);
+  CHECK(committed.affected_region->height == 14);
+  CHECK(session.revision() == revision_before + 1);
+  CHECK(session.state_id() != state_before);
+  CHECK(session.document().find_layer(first.affected_layer_id)->bounds().x == 3);
+  CHECK(session.document().find_layer(second.affected_layer_id)->bounds().x == 14);
+  const auto encoded = session.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+  const auto reopened = open_psd(encoded.bytes);
+  CHECK(static_cast<bool>(reopened));
+  CHECK(reopened.session->document()
+            .find_layer(first.affected_layer_id)
+            ->bounds()
+            .x == 3);
+  CHECK(reopened.session->document()
+            .find_layer(second.affected_layer_id)
+            ->bounds()
+            .x == 14);
+
+  const auto revision_before_rejection = session.revision();
+  const auto rejected = session.execute_external(CommitTransformedLayerStates{
+      {{first.affected_layer_id, first_final},
+       {first.affected_layer_id, first_final}},
+      {}});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_before_rejection);
+}
+
 void engine_session_commits_prepared_smart_filter_state_atomically() {
   Document document(3, 2, PixelFormat::rgba8());
   PixelBuffer pixels(3, 2, PixelFormat::rgba8());
@@ -1344,6 +1406,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_vector_shape_authoring_is_atomic_and_round_trips},
       {"engine_session_commits_previewed_vector_layer_states_atomically",
        engine_session_commits_previewed_vector_layer_states_atomically},
+      {"engine_session_commits_previewed_transform_states_atomically",
+       engine_session_commits_previewed_transform_states_atomically},
       {"engine_session_commits_prepared_smart_filter_state_atomically",
        engine_session_commits_prepared_smart_filter_state_atomically},
       {"engine_session_adjustment_layer_family_is_atomic_and_round_trips",

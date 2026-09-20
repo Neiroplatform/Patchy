@@ -68,6 +68,7 @@
 #include "synthetic_dng.hpp"
 #include "test_fonts.hpp"
 #include "test_harness.hpp"
+#include "ui_test_access.hpp"
 #include "local_psd_fixtures.hpp"
 
 #include <QAbstractItemModel>
@@ -467,9 +468,13 @@ void ui_free_transform_uses_opaque_pixel_bounds() {
   drag(*canvas, handle, expanded);
   QApplication::processEvents();
   CHECK(canvas->free_transform_active());
+  const auto preview_state =
+      patchy::ui::MainWindowTestAccess::active_engine_state_id(window);
   send_key(*canvas, Qt::Key_Return);
   QApplication::processEvents();
   CHECK(!canvas->free_transform_active());
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_state_id(window) ==
+        preview_state + 1);
 
   const auto transformed_rect = canvas->active_layer_document_rect();
   CHECK(transformed_rect.has_value());

@@ -55,6 +55,13 @@ typed editing commands.
   set, re-bake it and advance one shared engine state identity. Cross-layer
   Direct Select therefore publishes one mutation rather than one command per
   layer, while the transitional desktop history keeps exactly one snapshot;
+- `CommitTransformedLayerStates` is the atomic completion boundary for desktop
+  Free Transform and Warp. Interactive resampling/proxy frames remain in the
+  Qt canvas, but single-layer, folder and multi-selection commits snapshot the
+  complete final target set (including linked mask riders), validate stable
+  IDs/topology, report accumulated old/new dirty bounds and advance one engine
+  state identity. The host records its UI undo snapshot without independently
+  dirtying the session, so transform completion is one canonical mutation;
 - `CommitSmartFilterState` atomically commits a UI-prepared supported Smart
   Filter stack or removal: modeled stack/mask state, regenerated SoLd/SoLE
   payloads, FEid/FXid cache store and rendered layer pixels share one validated
@@ -116,7 +123,6 @@ or a second dirty/revision counter is forbidden.
   layer-thumbnail-derived selections are already there);
 - migrate remaining brush/pixel gestures, Smart Filter preview preparation,
   transient adjustment previews and history storage to engine commands;
-- add command families for pixel transforms and remaining nondestructive
-  filters/adjustments;
+- add command families for remaining nondestructive filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;
 - keep the desktop shell and scripting API on the same command path.

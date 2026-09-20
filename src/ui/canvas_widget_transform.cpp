@@ -2195,6 +2195,22 @@ void CanvasWidget::update_free_transform_preview(QPointF document_point, Qt::Key
   notify_transform_controls_changed();
 }
 
+void CanvasWidget::begin_transform_history(QString label) {
+  if (transform_history_callback_ && transform_commit_callback_) {
+    transform_history_callback_(std::move(label));
+  } else if (before_edit_callback_) {
+    before_edit_callback_(std::move(label));
+  }
+}
+
+bool CanvasWidget::publish_transform_states(std::vector<LayerId> layer_ids,
+                                            QRect affected_bounds) {
+  if (!transform_history_callback_ || !transform_commit_callback_) {
+    return true;
+  }
+  return transform_commit_callback_(std::move(layer_ids), affected_bounds);
+}
+
 void CanvasWidget::commit_free_transform() {
   if (transforming_layer_ && !transform_targets_.empty()) {
     // Multi-target session; pending warp cannot coexist (warp refuses these).
@@ -2249,8 +2265,8 @@ void CanvasWidget::commit_free_transform() {
   std::optional<Document> rollback_document;
   if (transactional_smart_filter) {
     rollback_document.emplace(*document_);
-  } else if (changed && before_edit_callback_) {
-    before_edit_callback_(tr("Free Transform"));
+  } else if (changed) {
+    begin_transform_history(tr("Free Transform"));
   }
   bool smart_filter_rerender_failed = false;
   if (changed) {
@@ -2312,22 +2328,24 @@ void CanvasWidget::commit_free_transform() {
   } else if (transactional_smart_filter && rollback_document.has_value()) {
     auto committed_document = *document_;
     *document_ = std::move(*rollback_document);
-    if (before_edit_callback_) {
-      before_edit_callback_(tr("Free Transform"));
-    }
+    begin_transform_history(tr("Free Transform"));
     *document_ = std::move(committed_document);
   }
 
+  const auto affected_bounds = to_qrect(old_bounds).united(to_qrect(new_bounds));
+  const bool canonical_commit_succeeded =
+      !changed || smart_filter_rerender_failed ||
+      publish_transform_states({*transform_layer_id_}, affected_bounds);
   if (changed && !smart_filter_rerender_failed) {
     arm_transform_commit_hold();
   }
   reset_free_transform_session_state();
   update_tool_cursor();
-  document_changed(to_qrect(old_bounds).united(to_qrect(new_bounds)));
+  document_changed(affected_bounds);
   disarm_transform_commit_hold_if_settled();
   if (smart_filter_rerender_failed) {
     report_status_error(tr("Could not rebuild the Smart Filter preview and cache"));
-  } else if (status_callback_) {
+  } else if (canonical_commit_succeeded && status_callback_) {
     status_callback_(changed ? tr("Transformed layer")
                              : tr("Free Transform cancelled"));
   }
@@ -2401,8 +2419,8 @@ void CanvasWidget::commit_free_transform_multi() {
   std::optional<Document> rollback_document;
   if (transactional_smart_filter) {
     rollback_document.emplace(*document_);
-  } else if (changed && before_edit_callback_) {
-    before_edit_callback_(tr("Free Transform"));
+  } else if (changed) {
+    begin_transform_history(tr("Free Transform"));
   }
 
   bool smart_filter_rerender_failed = false;
@@ -2509,22 +2527,35 @@ void CanvasWidget::commit_free_transform_multi() {
     // pre-edit document even though the mutation had to be attempted first.
     auto committed_document = *document_;
     *document_ = std::move(*rollback_document);
-    if (before_edit_callback_) {
-      before_edit_callback_(tr("Free Transform"));
-    }
+    begin_transform_history(tr("Free Transform"));
     *document_ = std::move(committed_document);
   }
 
+  std::vector<LayerId> committed_layer_ids;
+  committed_layer_ids.reserve(transform_targets_.size() +
+                              transform_mask_only_ids_.size());
+  for (const auto& target : transform_targets_) {
+    committed_layer_ids.push_back(target.id);
+  }
+  committed_layer_ids.insert(committed_layer_ids.end(),
+                             transform_mask_only_ids_.begin(),
+                             transform_mask_only_ids_.end());
+  const auto affected_bounds =
+      dirty_rect.isEmpty() ? canvas_rect : dirty_rect.intersected(canvas_rect);
+  const bool canonical_commit_succeeded =
+      !changed || smart_filter_rerender_failed ||
+      publish_transform_states(std::move(committed_layer_ids),
+                               affected_bounds);
   if (changed && !smart_filter_rerender_failed) {
     arm_transform_commit_hold();
   }
   reset_free_transform_session_state();
   update_tool_cursor();
-  document_changed(dirty_rect.isEmpty() ? canvas_rect : dirty_rect.intersected(canvas_rect));
+  document_changed(affected_bounds);
   disarm_transform_commit_hold_if_settled();
   if (smart_filter_rerender_failed) {
     report_status_error(tr("Could not rebuild the Smart Filter preview and cache"));
-  } else if (status_callback_) {
+  } else if (canonical_commit_succeeded && status_callback_) {
     status_callback_(changed ? tr("Transformed layers") : tr("Free Transform cancelled"));
   }
   notify_transform_controls_changed();
@@ -2557,8 +2588,8 @@ void CanvasWidget::commit_free_transform_with_pending_warp() {
   }
   bool smart_filter_rerender_failed = false;
   if (changed) {
-    if (!transactional_smart_filter && before_edit_callback_) {
-      before_edit_callback_(tr("Warp Transform"));
+    if (!transactional_smart_filter) {
+      begin_transform_history(tr("Warp Transform"));
     }
     // ONE bake from the original content source through mesh + composed map: the
     // baked preview the affine stage displayed never resamples into the document.
@@ -2574,22 +2605,24 @@ void CanvasWidget::commit_free_transform_with_pending_warp() {
   } else if (transactional_smart_filter && rollback_document.has_value()) {
     auto committed_document = *document_;
     *document_ = std::move(*rollback_document);
-    if (before_edit_callback_) {
-      before_edit_callback_(tr("Warp Transform"));
-    }
+    begin_transform_history(tr("Warp Transform"));
     *document_ = std::move(committed_document);
   }
+  const auto affected_bounds = to_qrect(old_bounds).united(to_qrect(new_bounds));
+  const bool canonical_commit_succeeded =
+      !changed || smart_filter_rerender_failed ||
+      publish_transform_states({layer_id}, affected_bounds);
   if (changed && !smart_filter_rerender_failed) {
     arm_transform_commit_hold();
   }
   reset_free_transform_session_state();
   clear_pending_warp();
   update_tool_cursor();
-  document_changed(to_qrect(old_bounds).united(to_qrect(new_bounds)));
+  document_changed(affected_bounds);
   disarm_transform_commit_hold_if_settled();
   if (smart_filter_rerender_failed) {
     report_status_error(tr("Could not rebuild the Smart Filter preview and cache"));
-  } else if (status_callback_) {
+  } else if (canonical_commit_succeeded && status_callback_) {
     status_callback_(changed ? tr("Warped layer")
                              : tr("Warp Transform cancelled"));
   }
@@ -3037,8 +3070,8 @@ void CanvasWidget::commit_warp_transform() {
   }
   bool smart_filter_rerender_failed = false;
   if (changed) {
-    if (!transactional_smart_filter && before_edit_callback_) {
-      before_edit_callback_(tr("Warp Transform"));
+    if (!transactional_smart_filter) {
+      begin_transform_history(tr("Warp Transform"));
     }
     const auto baked = bake_warp_into_layer(
         *layer, warp_mesh_, warp_content_to_document_, warp_content_width_,
@@ -3051,17 +3084,19 @@ void CanvasWidget::commit_warp_transform() {
   } else if (transactional_smart_filter && rollback_document.has_value()) {
     auto committed_document = *document_;
     *document_ = std::move(*rollback_document);
-    if (before_edit_callback_) {
-      before_edit_callback_(tr("Warp Transform"));
-    }
+    begin_transform_history(tr("Warp Transform"));
     *document_ = std::move(committed_document);
   }
+  const auto affected_bounds = to_qrect(old_bounds).united(to_qrect(new_bounds));
+  const bool canonical_commit_succeeded =
+      !changed || smart_filter_rerender_failed ||
+      publish_transform_states({*warp_layer_id_}, affected_bounds);
   reset_warp_state();
   update_tool_cursor();
-  document_changed(to_qrect(old_bounds).united(to_qrect(new_bounds)));
+  document_changed(affected_bounds);
   if (smart_filter_rerender_failed) {
     report_status_error(tr("Could not rebuild the Smart Filter preview and cache"));
-  } else if (status_callback_) {
+  } else if (canonical_commit_succeeded && status_callback_) {
     status_callback_(changed ? tr("Warped layer")
                              : tr("Warp Transform cancelled"));
   }
