@@ -1027,6 +1027,9 @@ private:
   void fill_active_layer_with_color(QColor color, QString label);
   void clear_active_layer();
   void stroke_selection();
+  bool apply_engine_selection_operation(
+      patchy::engine::SelectionOperation operation,
+      std::int32_t pixels = 0);
   void apply_brush_tip_to_canvas(CanvasWidget* canvas);
   void import_brush_tips_from_abr();
   void open_brush_tip_manager();

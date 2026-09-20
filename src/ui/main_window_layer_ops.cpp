@@ -3446,6 +3446,22 @@ void MainWindow::stroke_selection() {
   statusBar()->showMessage(tr("Stroked selection"));
 }
 
+bool MainWindow::apply_engine_selection_operation(
+    patchy::engine::SelectionOperation operation, std::int32_t pixels) {
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::ModifySelection{operation, pixels});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return false;
+  }
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
+  if (operation == patchy::engine::SelectionOperation::SelectAll ||
+      operation == patchy::engine::SelectionOperation::Clear) {
+    canvas_->set_selection_edges_visible(true);
+  }
+  return true;
+}
+
 void MainWindow::expand_selection_dialog() {
   if (!canvas_->has_selection()) {
     show_status_error(tr("Make a selection before expanding"));
@@ -3454,7 +3470,10 @@ void MainWindow::expand_selection_dialog() {
   const auto pixels = request_integer_input(this, QStringLiteral("patchyExpandSelectionDialog"),
                                             tr("Expand Selection"), tr("Expand by"), 4, 1, 250, 1);
   if (pixels.has_value()) {
-    canvas_->run_selection_command(tr("Expand Selection"), [this, pixels] { canvas_->expand_selection(*pixels); });
+    canvas_->run_selection_command(tr("Expand Selection"), [this, pixels] {
+      apply_engine_selection_operation(
+          patchy::engine::SelectionOperation::Expand, *pixels);
+    });
   }
 }
 
@@ -3466,7 +3485,10 @@ void MainWindow::contract_selection_dialog() {
   const auto pixels = request_integer_input(this, QStringLiteral("patchyContractSelectionDialog"),
                                             tr("Contract Selection"), tr("Contract by"), 4, 1, 250, 1);
   if (pixels.has_value()) {
-    canvas_->run_selection_command(tr("Contract Selection"), [this, pixels] { canvas_->contract_selection(*pixels); });
+    canvas_->run_selection_command(tr("Contract Selection"), [this, pixels] {
+      apply_engine_selection_operation(
+          patchy::engine::SelectionOperation::Contract, *pixels);
+    });
   }
 }
 
@@ -3478,7 +3500,10 @@ void MainWindow::border_selection_dialog() {
   const auto pixels = request_integer_input(this, QStringLiteral("patchyBorderSelectionDialog"),
                                             tr("Border Selection"), tr("Width"), 4, 1, 250, 1);
   if (pixels.has_value()) {
-    canvas_->run_selection_command(tr("Border Selection"), [this, pixels] { canvas_->border_selection(*pixels); });
+    canvas_->run_selection_command(tr("Border Selection"), [this, pixels] {
+      apply_engine_selection_operation(
+          patchy::engine::SelectionOperation::Border, *pixels);
+    });
   }
 }
 

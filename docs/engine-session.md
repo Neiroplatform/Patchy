@@ -19,6 +19,10 @@ typed editing commands.
 - `SetSelection` commits a Qt-free region/mask/Quick Mask snapshot. Selection
   changes advance revision and participate in undo/redo, but retain the current
   document state identity and therefore do not make the file dirty;
+- `ModifySelection` owns Select All, Deselect, Invert and square-radius
+  Expand/Contract/Border morphology without Qt geometry. Desktop Select menu
+  and scripting select-all/deselect project the resulting canonical snapshot
+  back to Canvas instead of running a second UI algorithm;
 - every successful mutation gets a new state identity and a monotonic revision;
   rejected and no-op commands change neither;
 - undo and redo restore document state identities, so returning to the saved
@@ -62,8 +66,9 @@ or a second dirty/revision counter is forbidden.
 
 ## Remaining M2 boundary
 
-- move transient selection gesture algorithms themselves behind the engine
-  boundary (committed ownership and history are already there);
+- move the remaining gesture-, grow/similar-, layer-alpha- and path-derived
+  selection algorithms behind the engine boundary (committed ownership and
+  core menu morphology are already there);
 - migrate remaining brush/pixel, vector, Smart Filter and adjustment mutations,
   plus history storage, to engine commands;
 - add command families for pixel transforms and remaining nondestructive

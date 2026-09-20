@@ -59,6 +59,176 @@ bool selection_snapshots_equal(const SelectionSnapshot &left,
                              *right.quick_mask_pixels);
 }
 
+using SelectionIntervals =
+    std::vector<std::pair<std::int32_t, std::int32_t>>;
+using SelectionRows = std::vector<SelectionIntervals>;
+
+void normalize_intervals(SelectionIntervals &intervals) {
+  std::sort(intervals.begin(), intervals.end());
+  SelectionIntervals merged;
+  for (const auto interval : intervals) {
+    if (interval.first >= interval.second) {
+      continue;
+    }
+    if (merged.empty() || interval.first > merged.back().second) {
+      merged.push_back(interval);
+    } else {
+      merged.back().second = std::max(merged.back().second, interval.second);
+    }
+  }
+  intervals = std::move(merged);
+}
+
+SelectionRows selection_rows(const std::vector<Rect> &rects,
+                             std::int32_t width, std::int32_t height) {
+  SelectionRows rows(static_cast<std::size_t>(height));
+  for (const auto rect : rects) {
+    const auto clipped = intersect_rect(rect, Rect::from_size(width, height));
+    for (auto y = clipped.y; y < clipped.y + clipped.height; ++y) {
+      rows[static_cast<std::size_t>(y)].emplace_back(
+          clipped.x, clipped.x + clipped.width);
+    }
+  }
+  for (auto &row : rows) {
+    normalize_intervals(row);
+  }
+  return rows;
+}
+
+std::vector<Rect> rects_from_rows(const SelectionRows &rows) {
+  std::vector<Rect> result;
+  SelectionIntervals previous;
+  std::int32_t run_start = 0;
+  const auto flush = [&result, &previous, &run_start](std::int32_t y) {
+    for (const auto [x0, x1] : previous) {
+      result.push_back(Rect{x0, run_start, x1 - x0, y - run_start});
+    }
+  };
+  for (std::int32_t y = 0; y < static_cast<std::int32_t>(rows.size()); ++y) {
+    const auto &current = rows[static_cast<std::size_t>(y)];
+    if (current != previous) {
+      flush(y);
+      previous = current;
+      run_start = y;
+    }
+  }
+  flush(static_cast<std::int32_t>(rows.size()));
+  return result;
+}
+
+std::vector<Rect> invert_rect_selection(const std::vector<Rect> &selection,
+                                        std::int32_t width,
+                                        std::int32_t height) {
+  auto rows = selection_rows(selection, width, height);
+  for (auto &row : rows) {
+    SelectionIntervals inverted;
+    std::int32_t cursor = 0;
+    for (const auto [start, end] : row) {
+      if (start > cursor) {
+        inverted.emplace_back(cursor, start);
+      }
+      cursor = end;
+    }
+    if (cursor < width) {
+      inverted.emplace_back(cursor, width);
+    }
+    row = std::move(inverted);
+  }
+  return rects_from_rows(rows);
+}
+
+SelectionIntervals intersect_intervals(const SelectionIntervals &left,
+                                       const SelectionIntervals &right) {
+  SelectionIntervals result;
+  std::size_t left_index = 0;
+  std::size_t right_index = 0;
+  while (left_index < left.size() && right_index < right.size()) {
+    const auto start =
+        std::max(left[left_index].first, right[right_index].first);
+    const auto end =
+        std::min(left[left_index].second, right[right_index].second);
+    if (start < end) {
+      result.emplace_back(start, end);
+    }
+    if (left[left_index].second < right[right_index].second) {
+      ++left_index;
+    } else {
+      ++right_index;
+    }
+  }
+  return result;
+}
+
+SelectionRows dilate_selection(const std::vector<Rect> &selection,
+                               std::int32_t width, std::int32_t height,
+                               std::int32_t pixels) {
+  SelectionRows rows(static_cast<std::size_t>(height));
+  for (const auto rect : selection) {
+    const auto expanded = intersect_rect(
+        Rect{rect.x - pixels, rect.y - pixels, rect.width + pixels * 2,
+             rect.height + pixels * 2},
+        Rect::from_size(width, height));
+    for (auto y = expanded.y; y < expanded.y + expanded.height; ++y) {
+      rows[static_cast<std::size_t>(y)].emplace_back(
+          expanded.x, expanded.x + expanded.width);
+    }
+  }
+  for (auto &row : rows) {
+    normalize_intervals(row);
+  }
+  return rows;
+}
+
+SelectionRows erode_selection(const std::vector<Rect> &selection,
+                              std::int32_t width, std::int32_t height,
+                              std::int32_t pixels) {
+  auto source = selection_rows(selection, width, height);
+  for (auto &row : source) {
+    for (auto &interval : row) {
+      interval.first += pixels;
+      interval.second -= pixels;
+    }
+    normalize_intervals(row);
+  }
+  SelectionRows eroded(static_cast<std::size_t>(height));
+  for (std::int32_t y = pixels; y < height - pixels; ++y) {
+    auto row = source[static_cast<std::size_t>(y - pixels)];
+    for (auto sample_y = y - pixels + 1; sample_y <= y + pixels && !row.empty();
+         ++sample_y) {
+      row = intersect_intervals(
+          row, source[static_cast<std::size_t>(sample_y)]);
+    }
+    eroded[static_cast<std::size_t>(y)] = std::move(row);
+  }
+  return eroded;
+}
+
+SelectionRows subtract_rows(const SelectionRows &left,
+                            const SelectionRows &right) {
+  SelectionRows result(left.size());
+  for (std::size_t y = 0; y < left.size(); ++y) {
+    for (const auto [left_start, left_end] : left[y]) {
+      auto cursor = left_start;
+      for (const auto [right_start, right_end] : right[y]) {
+        if (right_end <= cursor || right_start >= left_end) {
+          continue;
+        }
+        if (right_start > cursor) {
+          result[y].emplace_back(cursor, std::min(right_start, left_end));
+        }
+        cursor = std::max(cursor, right_end);
+        if (cursor >= left_end) {
+          break;
+        }
+      }
+      if (cursor < left_end) {
+        result[y].emplace_back(cursor, left_end);
+      }
+    }
+  }
+  return result;
+}
+
 void restore_pixels_outside_rect_selection(
     PixelBuffer &filtered, const PixelBuffer &original, Rect bounds,
     const std::vector<Rect> &selection) {
@@ -622,6 +792,67 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             layer_id = concrete.layer_id;
             affected_region =
                 unite_rect(old_render_bounds, layer_render_bounds(*layer));
+            return;
+          } else if constexpr (std::is_same_v<Command, ModifySelection>) {
+            const bool morphology =
+                concrete.operation == SelectionOperation::Expand ||
+                concrete.operation == SelectionOperation::Contract ||
+                concrete.operation == SelectionOperation::Border;
+            if (morphology && (concrete.pixels < 1 || concrete.pixels > 250)) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "selection radius must be in [1, 250]");
+              return;
+            }
+            SelectionSnapshot modified;
+            switch (concrete.operation) {
+            case SelectionOperation::SelectAll:
+              modified.selection = {
+                  Rect::from_size(document_.width(), document_.height())};
+              modified.display_region = modified.selection;
+              break;
+            case SelectionOperation::Clear:
+              break;
+            case SelectionOperation::Invert:
+              modified.selection = invert_rect_selection(
+                  selection_.selection, document_.width(), document_.height());
+              modified.display_region = modified.selection;
+              break;
+            case SelectionOperation::Expand: {
+              const auto rows = dilate_selection(
+                  selection_.selection, document_.width(), document_.height(),
+                  concrete.pixels);
+              modified.selection = rects_from_rows(rows);
+              modified.display_region = modified.selection;
+              break;
+            }
+            case SelectionOperation::Contract: {
+              const auto rows = erode_selection(
+                  selection_.selection, document_.width(), document_.height(),
+                  concrete.pixels);
+              modified.selection = rects_from_rows(rows);
+              modified.display_region = modified.selection;
+              break;
+            }
+            case SelectionOperation::Border: {
+              const auto outside = dilate_selection(
+                  selection_.selection, document_.width(), document_.height(),
+                  concrete.pixels);
+              const auto inside = erode_selection(
+                  selection_.selection, document_.width(), document_.height(),
+                  concrete.pixels);
+              modified.selection = rects_from_rows(subtract_rows(outside, inside));
+              modified.display_region = modified.selection;
+              break;
+            }
+            }
+            if (selection_snapshots_equal(selection_, modified)) {
+              return;
+            }
+            prepare_mutation(record_history);
+            selection_ = std::move(modified);
+            changed = true;
+            affects_document = false;
+            event_kind = SessionEventKind::SelectionChanged;
             return;
           } else if constexpr (std::is_same_v<Command, SetSelection>) {
             const auto valid_rect = [this](Rect rect) {

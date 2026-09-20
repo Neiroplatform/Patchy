@@ -184,6 +184,20 @@ struct SetSelection {
   SelectionSnapshot selection{};
 };
 
+enum class SelectionOperation {
+  SelectAll,
+  Clear,
+  Invert,
+  Expand,
+  Contract,
+  Border,
+};
+
+struct ModifySelection {
+  SelectionOperation operation{SelectionOperation::Clear};
+  std::int32_t pixels{0};
+};
+
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
@@ -191,7 +205,8 @@ using DocumentCommand =
                  RotateCanvas, CropDocument, WrapOffsetDocument,
                  SetLayersOpacity, SetLayersFillOpacity,
                  SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers,
-                 ReplaceLayerPixels, ApplyFilter, SetSelection>;
+                 ReplaceLayerPixels, ApplyFilter, SetSelection,
+                 ModifySelection>;
 
 struct LayerInfo {
   LayerId id{0};

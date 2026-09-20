@@ -594,13 +594,29 @@ void MainWindow::build_menu_bar_actions(ActionBuildContext& ctx) {
   register_hotkey(layer_transparency_action, "select.layer_transparency");
   register_hotkey(stroke_selection_action, "edit.stroke_selection");
   connect(select_all_action, &QAction::triggered, this,
-          [this] { canvas_->run_selection_command(tr("Select All"), [this] { canvas_->select_all(); }); });
+          [this] {
+            canvas_->run_selection_command(tr("Select All"), [this] {
+              apply_engine_selection_operation(patchy::engine::SelectionOperation::SelectAll);
+            });
+          });
   connect(clear_selection_action, &QAction::triggered, this,
-          [this] { canvas_->run_selection_command(tr("Deselect"), [this] { canvas_->clear_selection(); }); });
+          [this] {
+            canvas_->run_selection_command(tr("Deselect"), [this] {
+              apply_engine_selection_operation(patchy::engine::SelectionOperation::Clear);
+            });
+          });
   connect(reselect_action, &QAction::triggered, this,
           [this] { canvas_->run_selection_command(tr("Reselect"), [this] { canvas_->reselect(); }); });
   connect(inverse_selection_action, &QAction::triggered, this,
-          [this] { canvas_->run_selection_command(tr("Inverse Selection"), [this] { canvas_->invert_selection(); }); });
+          [this] {
+            canvas_->run_selection_command(tr("Inverse Selection"), [this] {
+              if (canvas_->quick_mask_active()) {
+                canvas_->invert_selection();
+              } else {
+                apply_engine_selection_operation(patchy::engine::SelectionOperation::Invert);
+              }
+            });
+          });
   connect(quick_mask_action_, &QAction::triggered, this,
           [this] { toggle_quick_mask_mode(); });
   connect(grow_selection_action, &QAction::triggered, this,

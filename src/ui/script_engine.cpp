@@ -1472,17 +1472,35 @@ CanvasWidget* ScriptEngineHost::session_canvas(std::int64_t session_id) const {
 }
 
 void ScriptEngineHost::select_all(std::int64_t session_id) {
-  if (auto* canvas = session_canvas(session_id)) {
-    canvas->select_all();
-    sync_canvas_selection(session_id);
+  auto* session = window_.session_with_id(session_id);
+  if (session == nullptr || session->canvas == nullptr) {
+    return;
   }
+  const auto result = session->engine_session.execute_external(
+      patchy::engine::ModifySelection{
+          patchy::engine::SelectionOperation::SelectAll});
+  if (!result) {
+    throw_js_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  session->canvas->apply_engine_selection_snapshot(
+      session->engine_session.selection());
 }
 
 void ScriptEngineHost::deselect(std::int64_t session_id) {
-  if (auto* canvas = session_canvas(session_id)) {
-    canvas->clear_selection();
-    sync_canvas_selection(session_id);
+  auto* session = window_.session_with_id(session_id);
+  if (session == nullptr || session->canvas == nullptr) {
+    return;
   }
+  const auto result = session->engine_session.execute_external(
+      patchy::engine::ModifySelection{
+          patchy::engine::SelectionOperation::Clear});
+  if (!result) {
+    throw_js_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  session->canvas->apply_engine_selection_snapshot(
+      session->engine_session.selection());
 }
 
 void ScriptEngineHost::select_region(std::int64_t session_id, const QRegion& region) {

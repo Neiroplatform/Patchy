@@ -4,6 +4,7 @@
 #include "test_groups.hpp"
 #include "test_harness.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -21,6 +22,7 @@ using patchy::engine::DocumentSession;
 using patchy::engine::FlipAxis;
 using patchy::engine::FlipLayers;
 using patchy::engine::MoveLayers;
+using patchy::engine::ModifySelection;
 using patchy::engine::open_psd;
 using patchy::engine::PlaceLayers;
 using patchy::engine::RemoveLayers;
@@ -33,6 +35,7 @@ using patchy::engine::SessionErrorCode;
 using patchy::engine::SessionEvent;
 using patchy::engine::SessionEventKind;
 using patchy::engine::SelectionSnapshot;
+using patchy::engine::SelectionOperation;
 using patchy::engine::SetLayerBlendMode;
 using patchy::engine::SetLayerFillOpacity;
 using patchy::engine::SetLayerOpacity;
@@ -401,6 +404,79 @@ void engine_session_selection_is_canonical_undoable_and_not_dirty() {
   CHECK(!shell_session.dirty());
 }
 
+void engine_session_selection_operations_are_qt_free_and_undoable() {
+  DocumentSession session(make_session_document());
+  const auto initial_state = session.state_id();
+
+  CHECK(static_cast<bool>(session.execute(
+      ModifySelection{SelectionOperation::SelectAll})));
+  CHECK(session.selection().selection.size() == 1);
+  CHECK(session.selection().selection.front().width == 2);
+  CHECK(session.selection().selection.front().height == 2);
+  CHECK(session.state_id() == initial_state);
+  CHECK(!session.dirty());
+
+  CHECK(static_cast<bool>(
+      session.execute(ModifySelection{SelectionOperation::Invert})));
+  CHECK(session.selection().empty());
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.selection().selection.size() == 1);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.selection().empty());
+
+  SelectionSnapshot corner;
+  corner.selection = {{0, 0, 1, 1}};
+  corner.display_region = corner.selection;
+  CHECK(static_cast<bool>(session.execute(SetSelection{corner})));
+  CHECK(static_cast<bool>(
+      session.execute(ModifySelection{SelectionOperation::Invert})));
+  CHECK(session.selection().selection.size() == 2);
+  CHECK(static_cast<bool>(
+      session.execute(ModifySelection{SelectionOperation::Clear})));
+  CHECK(session.selection().empty());
+  CHECK(!session.dirty());
+
+  DocumentSession morphology(
+      Document(8, 8, PixelFormat::rgba8()));
+  SelectionSnapshot square;
+  square.selection = {{2, 2, 4, 4}};
+  square.display_region = square.selection;
+  CHECK(static_cast<bool>(morphology.execute(SetSelection{square})));
+  CHECK(static_cast<bool>(morphology.execute(
+      ModifySelection{SelectionOperation::Expand, 1})));
+  CHECK(morphology.selection().selection.size() == 1);
+  CHECK(morphology.selection().selection.front().x == 1);
+  CHECK(morphology.selection().selection.front().y == 1);
+  CHECK(morphology.selection().selection.front().width == 6);
+  CHECK(morphology.selection().selection.front().height == 6);
+  CHECK(static_cast<bool>(morphology.undo()));
+  CHECK(static_cast<bool>(morphology.execute(
+      ModifySelection{SelectionOperation::Contract, 1})));
+  CHECK(morphology.selection().selection.size() == 1);
+  CHECK(morphology.selection().selection.front().x == 3);
+  CHECK(morphology.selection().selection.front().y == 3);
+  CHECK(morphology.selection().selection.front().width == 2);
+  CHECK(morphology.selection().selection.front().height == 2);
+  CHECK(static_cast<bool>(morphology.undo()));
+  CHECK(static_cast<bool>(morphology.execute(
+      ModifySelection{SelectionOperation::Border, 1})));
+  const auto contains = [&morphology](std::int32_t x, std::int32_t y) {
+    return std::any_of(
+        morphology.selection().selection.begin(),
+        morphology.selection().selection.end(), [x, y](patchy::Rect rect) {
+          return x >= rect.x && y >= rect.y && x < rect.x + rect.width &&
+                 y < rect.y + rect.height;
+        });
+  };
+  CHECK(contains(1, 1));
+  CHECK(contains(2, 2));
+  CHECK(!contains(3, 3));
+  const auto revision = morphology.revision();
+  CHECK(!static_cast<bool>(morphology.execute(
+      ModifySelection{SelectionOperation::Expand, 251})));
+  CHECK(morphology.revision() == revision);
+}
+
 void engine_session_layer_editing_vertical_slice_is_atomic_and_undoable() {
   DocumentSession session(make_session_document());
   const auto original_id = session.document().layers().front().id();
@@ -538,6 +614,8 @@ std::vector<TestCase> document_session_tests() {
        engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes},
       {"engine_session_selection_is_canonical_undoable_and_not_dirty",
        engine_session_selection_is_canonical_undoable_and_not_dirty},
+      {"engine_session_selection_operations_are_qt_free_and_undoable",
+       engine_session_selection_operations_are_qt_free_and_undoable},
       {"engine_session_layer_editing_vertical_slice_is_atomic_and_undoable",
        engine_session_layer_editing_vertical_slice_is_atomic_and_undoable},
       {"engine_session_filter_and_pixel_commands_share_atomic_history",
