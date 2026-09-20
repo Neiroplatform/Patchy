@@ -1075,7 +1075,8 @@ std::vector<LayerId> ScriptEngineHost::duplicate_layers_to_session(std::int64_t 
   return root_ids;
 }
 
-bool ScriptEngineHost::prepare_mutation(std::int64_t session_id) {
+bool ScriptEngineHost::prepare_mutation(std::int64_t session_id,
+                                        bool mark_modified) {
   pump_progress_indicator();
   if (engine_ && engine_->isInterrupted()) { return false; }
   auto* session = window_.session_with_id(session_id);
@@ -1093,13 +1094,15 @@ bool ScriptEngineHost::prepare_mutation(std::int64_t session_id) {
     if (!run_->undo_enabled) {
       // Undo opted out (app.undoEnabled = false): skip the snapshot, but the
       // session is still modified work that closing must protect.
-      window_.mark_session_modified(*session);
+      if (mark_modified) {
+        window_.mark_session_modified(*session);
+      }
       return true;
     }
     if (run_->undo_group_sessions.count(session_id) == 0) {
       const auto label = slow_mode() ? tr("Script: %1 (step %2)").arg(run_->name).arg(run_->undo_steps[session_id] + 1)
                                     : tr("Script: %1").arg(run_->name);
-      window_.push_undo_snapshot(*session, label);
+      window_.push_undo_snapshot(*session, label, mark_modified);
       run_->snapshotted_sessions.insert(session_id);
       run_->undo_group_sessions.insert(session_id);
       ++run_->undo_steps[session_id];
@@ -1107,9 +1110,25 @@ bool ScriptEngineHost::prepare_mutation(std::int64_t session_id) {
   } else {
     // Defensive: wrappers should never outlive their run, but a mutation with
     // no run still deserves an undo entry.
-    window_.push_undo_snapshot(*session, tr("Script"));
+    window_.push_undo_snapshot(*session, tr("Script"), mark_modified);
   }
   return true;
+}
+
+patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
+    std::int64_t session_id, const patchy::engine::DocumentCommand& command) {
+  auto* session = window_.session_with_id(session_id);
+  if (session == nullptr || !prepare_mutation(session_id, false)) {
+    return patchy::engine::CommandResult{
+        false,
+        {patchy::engine::SessionErrorCode::CommandFailed,
+         "document session is no longer open"}};
+  }
+  auto result = session->engine_session.execute_external(command);
+  if (result) {
+    note_structure_changed(session_id);
+  }
+  return result;
 }
 
 bool ScriptEngineHost::resize_session_image(std::int64_t session_id, int width, int height) {

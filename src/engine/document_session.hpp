@@ -63,13 +63,41 @@ struct SetLayerBlendMode {
   BlendMode blend_mode{BlendMode::Normal};
 };
 
+struct SetLayersOpacity {
+  std::vector<LayerId> layer_ids{};
+  float opacity{1.0F};
+};
+
+struct SetLayersFillOpacity {
+  std::vector<LayerId> layer_ids{};
+  float opacity{1.0F};
+};
+
+struct SetLayersBlendMode {
+  std::vector<LayerId> layer_ids{};
+  BlendMode blend_mode{BlendMode::Normal};
+};
+
 struct AddPixelLayer {
   std::string name{};
   PixelBuffer pixels{};
+  std::optional<LayerId> anchor_layer_id{};
 };
 
 struct AddGroup {
   std::string name{};
+  std::vector<LayerId> grouped_layer_ids_top_to_bottom{};
+};
+
+struct UngroupLayers {
+  std::vector<LayerId> group_ids{};
+};
+
+enum class FlipAxis { Horizontal, Vertical };
+
+struct FlipLayers {
+  std::vector<LayerId> layer_ids{};
+  FlipAxis axis{FlipAxis::Horizontal};
 };
 
 struct RemoveLayers {
@@ -99,11 +127,19 @@ struct MoveLayers {
   LayerDropPosition position{LayerDropPosition::OnViewport};
 };
 
+struct PlaceLayers {
+  // Storage/composite order (bottom to top), matching Document::layers().
+  std::vector<LayerId> layer_ids_bottom_to_top{};
+  std::optional<LayerId> parent_group_id{};
+  std::size_t index{0};
+};
+
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
                  AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas,
-                 RotateCanvas>;
+                 RotateCanvas, SetLayersOpacity, SetLayersFillOpacity,
+                 SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers>;
 
 struct LayerInfo {
   LayerId id{0};
@@ -133,6 +169,7 @@ struct CommandResult {
   bool changed{false};
   SessionError error{};
   LayerId affected_layer_id{0};
+  std::optional<Rect> affected_region{};
 
   [[nodiscard]] explicit operator bool() const noexcept { return !error; }
 };

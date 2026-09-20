@@ -236,9 +236,10 @@ QString ScriptLayerObject::name() const {
 
 void ScriptLayerObject::set_name(const QString& name) {
   const ScriptApiCall api_call(host_);
-  if (auto* layer = write_layer()) {
-    layer->set_name(name.toStdString());
-    host_.note_structure_changed(session_id_);
+  const auto result = host_.execute_engine_command(
+      session_id_, patchy::engine::RenameLayer{layer_id_, name.toStdString()});
+  if (!result) {
+    host_.throw_js_error(QString::fromStdString(result.error.message));
   }
 }
 
@@ -255,11 +256,12 @@ void ScriptLayerObject::set_opacity(double opacity) {
     host_.throw_js_error(ScriptEngineHost::tr("opacity needs a number between 0 and 100."));
     return;
   }
-  if (auto* layer = write_layer()) {
-    const auto before = to_qrect(layer_render_bounds(std::as_const(*layer)));
-    layer->set_opacity(static_cast<float>(std::clamp(opacity, 0.0, 100.0) / 100.0));
-    host_.note_pixels_changed(session_id_, before, false);
-    host_.note_structure_changed(session_id_);
+  const auto result = host_.execute_engine_command(
+      session_id_, patchy::engine::SetLayerOpacity{
+                       layer_id_, static_cast<float>(
+                                      std::clamp(opacity, 0.0, 100.0) / 100.0)});
+  if (!result) {
+    host_.throw_js_error(QString::fromStdString(result.error.message));
   }
 }
 
@@ -271,12 +273,10 @@ bool ScriptLayerObject::visible() const {
 
 void ScriptLayerObject::set_visible(bool visible) {
   const ScriptApiCall api_call(host_);
-  if (auto* layer = write_layer()) {
-    layer->set_visible(visible);
-    // set_visible deliberately does not bump revisions; repaint the layer's
-    // reach and refresh the panel's eye toggle.
-    host_.note_pixels_changed(session_id_, to_qrect(layer_render_bounds(std::as_const(*layer))), false);
-    host_.note_structure_changed(session_id_);
+  const auto result = host_.execute_engine_command(
+      session_id_, patchy::engine::SetLayerVisibility{layer_id_, visible});
+  if (!result) {
+    host_.throw_js_error(QString::fromStdString(result.error.message));
   }
 }
 
@@ -293,10 +293,10 @@ void ScriptLayerObject::set_blend_mode(const QString& mode) {
     host_.throw_js_error(ScriptEngineHost::tr("Unknown blend mode: %1").arg(mode));
     return;
   }
-  if (auto* layer = write_layer()) {
-    layer->set_blend_mode(parsed);
-    host_.note_pixels_changed(session_id_, to_qrect(layer_render_bounds(std::as_const(*layer))), false);
-    host_.note_structure_changed(session_id_);
+  const auto result = host_.execute_engine_command(
+      session_id_, patchy::engine::SetLayerBlendMode{layer_id_, parsed});
+  if (!result) {
+    host_.throw_js_error(QString::fromStdString(result.error.message));
   }
 }
 
@@ -471,11 +471,11 @@ void ScriptLayerObject::remove() {
     host_.throw_js_error(ScriptEngineHost::tr("The layer no longer exists."));
     return;
   }
-  if (!host_.prepare_mutation(session_id_)) {
-    return;
+  const auto result = host_.execute_engine_command(
+      session_id_, patchy::engine::RemoveLayers{{layer_id_}});
+  if (!result) {
+    host_.throw_js_error(QString::fromStdString(result.error.message));
   }
-  document->remove_layer(layer_id_);
-  host_.note_structure_changed(session_id_);
 }
 
 QJSValue ScriptLayerObject::ungroup() {
@@ -1340,18 +1340,16 @@ QJSValue ScriptDocumentObject::selection() const {
 
 QJSValue ScriptDocumentObject::addLayer(const QString& name) {
   const ScriptApiCall api_call(host_);
-  auto* document = write_document();
-  if (document == nullptr) {
+  const auto result = host_.execute_engine_command(
+      session_id_, patchy::engine::AddPixelLayer{
+                       name.isEmpty() ? ScriptEngineHost::tr("Layer").toStdString()
+                                      : name.toStdString(),
+                       PixelBuffer{}, std::nullopt});
+  if (!result) {
+    host_.throw_js_error(QString::fromStdString(result.error.message));
     return QJSValue();
   }
-  Layer layer(document->allocate_layer_id(),
-              name.isEmpty() ? ScriptEngineHost::tr("Layer").toStdString() : name.toStdString(),
-              PixelBuffer{});
-  const auto id = layer.id();
-  document->add_layer(std::move(layer));
-  document->set_active_layer(id);
-  host_.note_structure_changed(session_id_);
-  return make_layer_value(host_, session_id_, id);
+  return make_layer_value(host_, session_id_, result.affected_layer_id);
 }
 
 QJSValue ScriptDocumentObject::addTextLayer(const QString& text, const QJSValue& options) {

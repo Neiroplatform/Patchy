@@ -224,31 +224,23 @@ QJSValue ScriptDocumentObject::listVectorResources() const {
 }
 QJSValue ScriptDocumentObject::addGroup(const QString& name) {
   return guarded(host_, [&] {
-    (void)document(host_, session_id_);
-    auto& doc = writable(host_, session_id_);
-    const auto id = doc.allocate_layer_id();
-    Layer group(id, name.toStdString(), LayerKind::Group); group.set_blend_mode(BlendMode::PassThrough);
-    doc.add_layer(std::move(group)); doc.set_active_layer(id);
-    host_.note_vector_changed(session_id_, {}, true);
-    return make_layer_value(host_, session_id_, id);
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::AddGroup{name.toStdString(), {}});
+    if (!result) { invalid("group"); }
+    return make_layer_value(host_, session_id_, result.affected_layer_id);
   });
 }
 QJSValue ScriptDocumentObject::groupLayers(const QJSValue& layers, const QString& name) {
   return guarded(host_, [&] {
-    const auto ids = layer_ids(host_, session_id_, layers);
+    auto ids = layer_ids(host_, session_id_, layers);
     const auto& original = document(host_, session_id_);
     const auto first = find_layer_location(original.layers(), ids.front());
     for (const auto id : ids) { if (find_layer_location(original.layers(), id)->siblings != first->siblings) { invalid("layers.parent"); } }
-    auto staged = original;
-    const auto destination = find_layer_location(staged.layers(), ids.front());
-    const auto id = staged.allocate_layer_id();
-    Layer group(id, name.toStdString(), LayerKind::Group); group.set_blend_mode(BlendMode::PassThrough);
-    for (const auto child : ids) { auto moved = take_layer_from_tree(staged.layers(), child); group.add_child(std::move(*moved)); }
-    destination->siblings->insert(destination->siblings->begin() + static_cast<std::ptrdiff_t>(destination->index), std::move(group));
-    staged.set_active_layer(id);
-    auto& doc = writable(host_, session_id_); doc = std::move(staged);
-    host_.note_vector_changed(session_id_, {}, true);
-    return make_layer_value(host_, session_id_, id);
+    std::reverse(ids.begin(), ids.end());
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::AddGroup{name.toStdString(), ids});
+    if (!result) { invalid("layers"); }
+    return make_layer_value(host_, session_id_, result.affected_layer_id);
   });
 }
 void ScriptDocumentObject::moveLayers(const QJSValue& layers, const QJSValue& destination) {
@@ -271,8 +263,10 @@ void ScriptDocumentObject::moveLayers(const QJSValue& layers, const QJSValue& de
     const auto index = integer(args, "index", static_cast<int>(siblings.size()), 0, static_cast<int>(siblings.size()));
     siblings.insert(siblings.begin() + index, std::make_move_iterator(moved.begin()), std::make_move_iterator(moved.end()));
     if (layer_tree_signature(original.layers()) == layer_tree_signature(std::as_const(staged).layers())) { return; }
-    auto& doc = writable(host_, session_id_); doc = std::move(staged);
-    host_.note_vector_changed(session_id_, {}, true);
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::PlaceLayers{ids, parent,
+                                                 static_cast<std::size_t>(index)});
+    if (!result) { invalid("destination"); }
   });
 }
 }  // namespace patchy::ui

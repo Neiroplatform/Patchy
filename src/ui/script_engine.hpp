@@ -8,6 +8,7 @@
 
 #include "core/document.hpp"
 #include "core/layer.hpp"
+#include "engine/document_session.hpp"
 
 #include <QColor>
 #include <QElapsedTimer>
@@ -188,7 +189,10 @@ public:
   // Undo integration: the FIRST mutation a run makes to a session pushes one
   // "Script: <name>" snapshot; later mutations in the same run ride it, so the
   // whole run undoes in one step. Returns false when the session is gone.
-  bool prepare_mutation(std::int64_t session_id);
+  bool prepare_mutation(std::int64_t session_id, bool mark_modified = true);
+  [[nodiscard]] patchy::engine::CommandResult
+  execute_engine_command(std::int64_t session_id,
+                         const patchy::engine::DocumentCommand& command);
   // Scripts can opt out of the undo snapshot for speed (app.undoEnabled = false;
   // per-run state, default on). Off = mutations from that point cannot be
   // undone; sessions are still marked modified so closing protects the work.

@@ -475,48 +475,11 @@ struct LayerCopyPixels {
   std::vector<LayerId> source_layer_ids;
 };
 
-struct LayerGroupingDestination {
-  std::vector<Layer>* siblings{nullptr};
-  std::size_t insert_index{0};
-};
-
 void collect_layer_names(const std::vector<Layer>& layers, std::set<std::string>& names) {
   for (const auto& layer : layers) {
     names.insert(layer.name());
     collect_layer_names(layer.children(), names);
   }
-}
-
-std::optional<LayerGroupingDestination> common_sibling_grouping_destination(
-    std::vector<Layer>& layers,
-    const std::vector<LayerId>& ids_top_to_bottom) {
-  if (ids_top_to_bottom.empty()) {
-    return std::nullopt;
-  }
-
-  std::vector<LayerSiblingLocation> locations;
-  locations.reserve(ids_top_to_bottom.size());
-  std::vector<Layer>* siblings = nullptr;
-  for (const auto id : ids_top_to_bottom) {
-    auto location = find_layer_location(layers, id);
-    if (!location.has_value() || location->siblings == nullptr) {
-      return std::nullopt;
-    }
-    if (siblings == nullptr) {
-      siblings = location->siblings;
-    } else if (siblings != location->siblings) {
-      return std::nullopt;
-    }
-    locations.push_back(*location);
-  }
-
-  const auto topmost = std::max_element(locations.begin(), locations.end(), [](const auto& left, const auto& right) {
-    return left.index < right.index;
-  });
-  const auto moved_below_topmost = std::count_if(locations.begin(), locations.end(), [topmost](const auto& location) {
-    return location.index < topmost->index;
-  });
-  return LayerGroupingDestination{siblings, topmost->index - static_cast<std::size_t>(moved_below_topmost)};
 }
 
 void collect_referenced_smart_filter_records(const Layer& layer,
@@ -725,9 +688,7 @@ void MainWindow::ungroup_selected_layers() {
       return;
     }
   }
-  push_undo_snapshot(tr("Ungroup layers"));
   bool dropped_attributes = false;
-  std::optional<LayerId> first_released;
   for (const auto id : groups) {
     if (const auto* group = std::as_const(doc).find_layer(id); group != nullptr) {
       // Photoshop drops the folder's own attributes; say so afterwards.
@@ -735,15 +696,18 @@ void MainWindow::ungroup_selected_layers() {
                            group->blend_mode() != BlendMode::PassThrough || group->mask().has_value() ||
                            group->vector_mask() != nullptr || group->clipped();
     }
-    const auto released = ungroup_layer(doc.layers(), id);
-    if (released.has_value() && !released->empty() && !first_released.has_value()) {
-      first_released = released->front();
-    }
+  }
+  push_undo_snapshot(tr("Ungroup layers"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::UngroupLayers{groups});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  for (const auto id : groups) {
     session().collapsed_layer_groups.erase(id);
   }
-  if (first_released.has_value()) {
-    doc.set_active_layer(*first_released);
-  }
+  refresh_document_tab_titles();
   refresh_layer_list();
   refresh_layer_controls();
   refresh_document_info();
@@ -1223,15 +1187,17 @@ void MainWindow::add_layer() {
     anchor_id = selected_ids.front();
   }
 
-  push_undo_snapshot(tr("New layer"));
+  push_undo_snapshot(tr("New layer"), false);
   auto layer_pixels =
       make_solid_pixels(doc.width(), doc.height(), QColor(0, 0, 0, 0), PixelFormat::rgba8());
-  Layer layer(doc.allocate_layer_id(), name.toStdString(), std::move(layer_pixels));
-  const auto layer_id = layer.id();
-  layer.set_opacity(1.0F);
-  layer.set_blend_mode(BlendMode::Normal);
-  insert_layer_after_anchor(doc, std::move(layer), anchor_id);
-  doc.set_active_layer(layer_id);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::AddPixelLayer{name.toStdString(), std::move(layer_pixels),
+                                   anchor_id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  refresh_document_tab_titles();
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();
@@ -1253,30 +1219,14 @@ void MainWindow::create_layer_folder_from_layers(std::vector<LayerId> ids) {
   } while (existing_names.contains(name));
 
   auto grouped_ids = root_drop_layer_ids(doc.layers(), ids);
-  const auto destination = common_sibling_grouping_destination(doc.layers(), grouped_ids);
-
-  push_undo_snapshot(tr("New folder"));
-  Layer folder(doc.allocate_layer_id(), name, LayerKind::Group);
-  const auto folder_id = folder.id();
-  folder.set_blend_mode(BlendMode::PassThrough);
-  if (!grouped_ids.empty()) {
-    std::vector<Layer> grouped_top_to_bottom;
-    grouped_top_to_bottom.reserve(grouped_ids.size());
-    for (const auto id : grouped_ids) {
-      if (auto grouped = take_layer_from_tree(doc.layers(), id); grouped.has_value()) {
-        grouped_top_to_bottom.push_back(std::move(*grouped));
-      }
-    }
-    for (auto it = grouped_top_to_bottom.rbegin(); it != grouped_top_to_bottom.rend(); ++it) {
-      folder.add_child(std::move(*it));
-    }
+  push_undo_snapshot(tr("New folder"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::AddGroup{name, grouped_ids});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
-
-  auto* siblings = destination.has_value() && destination->siblings != nullptr ? destination->siblings : &doc.layers();
-  const auto insert_index =
-      destination.has_value() ? std::min(destination->insert_index, siblings->size()) : siblings->size();
-  siblings->insert(siblings->begin() + static_cast<std::ptrdiff_t>(insert_index), std::move(folder));
-  doc.set_active_layer(folder_id);
+  refresh_document_tab_titles();
   refresh_layer_list();
   refresh_layer_controls();
   refresh_document_info();
@@ -3550,13 +3500,18 @@ void MainWindow::flip_active_layer_horizontal() {
     return;
   }
 
-  auto& doc = document();
-  push_undo_snapshot(tr("Flip horizontal"));
-  Rect affected;
-  for (const auto id : editable_ids) {
-    affected = unite_rect(affected, patchy::flip_layer_horizontal(doc, id));
+  push_undo_snapshot(tr("Flip horizontal"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::FlipLayers{editable_ids,
+                                 patchy::engine::FlipAxis::Horizontal});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
-  canvas_->document_changed(to_qrect(affected));
+  refresh_document_tab_titles();
+  canvas_->document_changed(result.affected_region.has_value()
+                                ? to_qrect(*result.affected_region)
+                                : QRect{});
   refresh_layer_list();
   refresh_layer_controls();
 }
@@ -3588,13 +3543,18 @@ void MainWindow::flip_active_layer_vertical() {
     return;
   }
 
-  auto& doc = document();
-  push_undo_snapshot(tr("Flip vertical"));
-  Rect affected;
-  for (const auto id : editable_ids) {
-    affected = unite_rect(affected, patchy::flip_layer_vertical(doc, id));
+  push_undo_snapshot(tr("Flip vertical"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::FlipLayers{editable_ids,
+                                 patchy::engine::FlipAxis::Vertical});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
-  canvas_->document_changed(to_qrect(affected));
+  refresh_document_tab_titles();
+  canvas_->document_changed(result.affected_region.has_value()
+                                ? to_qrect(*result.affected_region)
+                                : QRect{});
 }
 
 void MainWindow::crop_to_selection() {

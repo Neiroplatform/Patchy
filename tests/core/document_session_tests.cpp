@@ -16,8 +16,11 @@ using patchy::engine::AddGroup;
 using patchy::engine::AddPixelLayer;
 using patchy::engine::CancellationToken;
 using patchy::engine::DocumentSession;
+using patchy::engine::FlipAxis;
+using patchy::engine::FlipLayers;
 using patchy::engine::MoveLayers;
 using patchy::engine::open_psd;
+using patchy::engine::PlaceLayers;
 using patchy::engine::RemoveLayers;
 using patchy::engine::RenameLayer;
 using patchy::engine::ResizeCanvas;
@@ -31,6 +34,10 @@ using patchy::engine::SetLayerBlendMode;
 using patchy::engine::SetLayerFillOpacity;
 using patchy::engine::SetLayerOpacity;
 using patchy::engine::SetLayerVisibility;
+using patchy::engine::SetLayersBlendMode;
+using patchy::engine::SetLayersFillOpacity;
+using patchy::engine::SetLayersOpacity;
+using patchy::engine::UngroupLayers;
 using patchy::test::TestCase;
 
 namespace {
@@ -276,6 +283,64 @@ void engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes() {
   CHECK(snapshot.empty());
 }
 
+void engine_session_layer_editing_vertical_slice_is_atomic_and_undoable() {
+  DocumentSession session(make_session_document());
+  const auto original_id = session.document().layers().front().id();
+  PixelBuffer pixels(2, 1, PixelFormat::rgba8());
+  pixels.pixel(0, 0)[0] = 10;
+  pixels.pixel(0, 0)[3] = 255;
+  pixels.pixel(1, 0)[0] = 20;
+  pixels.pixel(1, 0)[3] = 255;
+  const auto added = session.execute(
+      AddPixelLayer{"Second", std::move(pixels), original_id});
+  CHECK(static_cast<bool>(added));
+  const auto second_id = added.affected_layer_id;
+
+  CHECK(static_cast<bool>(
+      session.execute(SetLayersOpacity{{original_id, second_id}, 0.5F})));
+  CHECK(static_cast<bool>(session.execute(
+      SetLayersFillOpacity{{original_id, second_id}, 0.75F})));
+  CHECK(static_cast<bool>(session.execute(SetLayersBlendMode{
+      {original_id, second_id}, patchy::BlendMode::Multiply})));
+  CHECK(session.document().find_layer(second_id)->opacity() == 0.5F);
+
+  const auto grouped =
+      session.execute(AddGroup{"Group", {second_id, original_id}});
+  CHECK(static_cast<bool>(grouped));
+  const auto group_id = grouped.affected_layer_id;
+  const auto *group = session.document().find_layer(group_id);
+  CHECK(group != nullptr);
+  CHECK(group->children().size() == 2);
+  CHECK(group->children().front().id() == original_id);
+  CHECK(group->children().back().id() == second_id);
+
+  CHECK(static_cast<bool>(session.execute(UngroupLayers{{group_id}})));
+  CHECK(session.document().find_layer(group_id) == nullptr);
+  const auto destination = session.execute(AddGroup{"Destination", {}});
+  CHECK(static_cast<bool>(destination));
+  CHECK(static_cast<bool>(session.execute(PlaceLayers{
+      {second_id}, destination.affected_layer_id, 0})));
+  CHECK(session.document().find_layer(destination.affected_layer_id)
+            ->children()
+            .front()
+            .id() == second_id);
+  CHECK(static_cast<bool>(
+      session.execute(FlipLayers{{second_id}, FlipAxis::Horizontal})));
+  const auto *flipped = session.document().find_layer(second_id);
+  CHECK(flipped != nullptr);
+  CHECK(flipped->pixels().pixel(0, 0)[0] == 20);
+  CHECK(flipped->pixels().pixel(1, 0)[0] == 10);
+
+  const auto state_before_rejection = session.state_id();
+  CHECK(!static_cast<bool>(
+      session.execute(SetLayersOpacity{{second_id, 999999}, 0.25F})));
+  CHECK(session.state_id() == state_before_rejection);
+  CHECK(session.document().find_layer(second_id)->opacity() == 0.5F);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(second_id)->pixels().pixel(0, 0)[0] ==
+        10);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -298,5 +363,7 @@ std::vector<TestCase> document_session_tests() {
        engine_session_external_shell_adapter_preserves_state_identity},
       {"engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes",
        engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes},
+      {"engine_session_layer_editing_vertical_slice_is_atomic_and_undoable",
+       engine_session_layer_editing_vertical_slice_is_atomic_and_undoable},
   };
 }

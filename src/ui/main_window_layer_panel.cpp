@@ -2421,8 +2421,16 @@ void MainWindow::handle_layer_drop() {
     return;
   }
 
-  push_undo_snapshot(tr("Reorder layers"));
-  doc.layers() = std::move(trial_layers);
+  push_undo_snapshot(tr("Reorder layers"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::MoveLayers{request->layer_ids_top_to_bottom,
+                                request->target_layer_id, request->position});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    refresh_layer_list();
+    return;
+  }
+  refresh_document_tab_titles();
   if (request->position == LayerDropPosition::OnItem && request->target_layer_id.has_value()) {
     if (const auto* target = doc.find_layer(*request->target_layer_id);
         target != nullptr && target->kind() == LayerKind::Group) {
@@ -2555,28 +2563,16 @@ void MainWindow::reorder_layers_from_list() {
     }
   }
 
-  push_undo_snapshot(tr("Reorder layers"));
-  auto old_layers = std::move(layers);
-  std::vector<Layer> reordered;
-  reordered.reserve(old_layers.size());
-  for (auto id_it = top_to_bottom.rbegin(); id_it != top_to_bottom.rend(); ++id_it) {
-    const auto found = std::find_if(old_layers.begin(), old_layers.end(), [id = *id_it](const Layer& layer) {
-      return layer.id() == id;
-    });
-    if (found == old_layers.end()) {
-      layers = std::move(old_layers);
-      refresh_layer_list();
-      return;
-    }
-    reordered.push_back(std::move(*found));
-    old_layers.erase(found);
-  }
-  if (!old_layers.empty()) {
-    layers = std::move(old_layers);
+  std::reverse(top_to_bottom.begin(), top_to_bottom.end());
+  push_undo_snapshot(tr("Reorder layers"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::PlaceLayers{top_to_bottom, std::nullopt, 0});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
     refresh_layer_list();
     return;
   }
-  layers = std::move(reordered);
+  refresh_document_tab_titles();
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();

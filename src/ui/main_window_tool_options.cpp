@@ -1133,7 +1133,7 @@ void MainWindow::set_active_layer_opacity(int value) {
     if (ids.empty()) {
       return;
     }
-    push_undo_snapshot(tr("Opacity"));
+    push_undo_snapshot(tr("Opacity"), false);
     pending_layer_opacity_ids_ = std::move(ids);
     pending_layer_opacity_edit_active_ = true;
   }
@@ -1159,18 +1159,16 @@ void MainWindow::apply_pending_layer_opacity() {
     return;
   }
 
-  auto& doc = document();
-  bool changed = false;
-  for (const auto id : pending_layer_opacity_ids_) {
-    auto* layer = doc.find_layer(id);
-    if (layer == nullptr) {
-      continue;
-    }
-    layer->set_opacity(static_cast<float>(value) / 100.0F);
-    changed = true;
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayersOpacity{
+          pending_layer_opacity_ids_, static_cast<float>(value) / 100.0F});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
-  if (changed && canvas_ != nullptr) {
+  if (result.changed && canvas_ != nullptr) {
     canvas_->document_changed_async_preview();
+    refresh_document_tab_titles();
   }
 }
 
@@ -1207,7 +1205,7 @@ void MainWindow::set_active_layer_fill_opacity(int value) {
                 return layer == nullptr || layer->kind() == LayerKind::Group;
               }), ids.end());
     if (ids.empty()) return;
-    push_undo_snapshot(tr("Fill Opacity"));
+    push_undo_snapshot(tr("Fill Opacity"), false);
     pending_layer_fill_opacity_ids_ = std::move(ids);
     pending_layer_fill_opacity_edit_active_ = true;
   }
@@ -1222,14 +1220,18 @@ void MainWindow::apply_pending_layer_fill_opacity() {
   const auto value = *pending_layer_fill_opacity_value_;
   pending_layer_fill_opacity_value_.reset();
   if (!has_active_document()) return;
-  bool changed = false;
-  for (const auto id : pending_layer_fill_opacity_ids_) {
-    if (auto* layer = document().find_layer(id); layer != nullptr && layer->kind() != LayerKind::Group) {
-      layer->set_fill_opacity(static_cast<float>(value) / 100.0F);
-      changed = true;
-    }
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayersFillOpacity{
+          pending_layer_fill_opacity_ids_,
+          static_cast<float>(value) / 100.0F});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
-  if (changed && canvas_ != nullptr) canvas_->document_changed_async_preview();
+  if (result.changed && canvas_ != nullptr) {
+    canvas_->document_changed_async_preview();
+    refresh_document_tab_titles();
+  }
 }
 
 void MainWindow::finish_pending_layer_fill_opacity_edit() {
@@ -1258,18 +1260,19 @@ void MainWindow::set_active_layer_blend(int index) {
   if (ids.empty()) {
     return;
   }
-  auto& doc = document();
-  push_undo_snapshot(tr("Blend mode"));
-  Rect affected;
-  for (const auto id : ids) {
-    auto* layer = doc.find_layer(id);
-    if (layer == nullptr) {
-      continue;
-    }
-    layer->set_blend_mode(static_cast<BlendMode>(blend_combo_->itemData(index).toInt()));
-    affected = unite_rect(affected, layer_render_bounds(*layer));
+  push_undo_snapshot(tr("Blend mode"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SetLayersBlendMode{
+          ids,
+          static_cast<BlendMode>(blend_combo_->itemData(index).toInt())});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
-  canvas_->document_changed(to_qrect(affected));
+  refresh_document_tab_titles();
+  canvas_->document_changed(result.affected_region.has_value()
+                                ? to_qrect(*result.affected_region)
+                                : QRect{});
 }
 
 void MainWindow::set_active_layer_visible(bool visible) {

@@ -170,6 +170,9 @@ everywhere a bundled script is resolved.
   modified so closing protects the work (`breakout.js` uses this). Connector sessions
   reject disabling history so failed edits remain recoverable. `patchy.ui.slowMode`
   instead separates native strokes and undoable edits; see [automation-feedback.md](automation-feedback.md).
+- **Desktop and scripts share the layer command path.** Core layer add/remove,
+  group/reorder, rename, visibility, opacity and blend mutations execute through
+  the same typed engine commands while scripts retain one undo entry per run.
 - **Wrappers hold ids, never pointers.** Layer wrappers keep session id + LayerId and
   re-resolve on every access, throwing a JS error when the target is gone. The layers
   vector reallocates and sessions close; a stored `Layer*` is the historical
