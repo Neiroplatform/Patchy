@@ -1,6 +1,7 @@
 #include "engine/document_session.hpp"
 
 #include "formats/document_flatten.hpp"
+#include "core/document_memory.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/layer_render_utils.hpp"
 #include "core/smart_object.hpp"
@@ -26,6 +27,24 @@ constexpr auto kTileSeamOffsetMetadataKey = "patchy.tile.seamOffset";
 
 SessionError make_error(SessionErrorCode code, std::string message) {
   return SessionError{code, std::move(message)};
+}
+
+SavePhase engine_save_phase(psd::SavePhase phase) {
+  switch (phase) {
+  case psd::SavePhase::Started:
+    return SavePhase::Started;
+  case psd::SavePhase::Normalizing:
+    return SavePhase::Normalizing;
+  case psd::SavePhase::Compositing:
+    return SavePhase::Compositing;
+  case psd::SavePhase::EncodingLayers:
+    return SavePhase::EncodingLayers;
+  case psd::SavePhase::Serializing:
+    return SavePhase::Serializing;
+  case psd::SavePhase::Complete:
+    return SavePhase::Complete;
+  }
+  return SavePhase::Started;
 }
 
 bool pixel_buffers_equal(const PixelBuffer &left, const PixelBuffer &right) {
@@ -818,6 +837,44 @@ std::optional<Rect> DocumentSession::take_pending_render_region() noexcept {
   auto region = pending_render_region_;
   pending_render_region_.reset();
   return region;
+}
+
+SessionMemoryUsage DocumentSession::memory_usage() const {
+  SessionMemoryUsage usage;
+  usage.undo_states = undo_stack_.size();
+  usage.redo_states = redo_stack_.size();
+
+  const PixelStorageSet excluded;
+  PixelStorageSet seen;
+  usage.document_pixel_bytes =
+      accumulate_unique_pixel_bytes(document_, excluded, seen);
+  usage.selection_bytes = selection_.retained_bytes();
+
+  const auto account_history = [&usage, &seen, &excluded](
+                                   const std::vector<HistoryState> &states) {
+    for (const auto &state : states) {
+      usage.history_pixel_bytes +=
+          accumulate_unique_pixel_bytes(state.document, excluded, seen);
+      usage.history_selection_bytes += state.selection.retained_bytes();
+    }
+  };
+  account_history(undo_stack_);
+  account_history(redo_stack_);
+
+  if (preview_state_.has_value()) {
+    usage.preview_pixel_bytes = accumulate_unique_pixel_bytes(
+        preview_state_->document, excluded, seen);
+    usage.preview_selection_bytes =
+        preview_state_->selection.retained_bytes();
+  }
+
+  usage.history_retained_bytes =
+      usage.history_pixel_bytes + usage.history_selection_bytes;
+  usage.total_retained_bytes =
+      usage.document_pixel_bytes + usage.history_pixel_bytes +
+      usage.preview_pixel_bytes + usage.selection_bytes +
+      usage.history_selection_bytes + usage.preview_selection_bytes;
+  return usage;
 }
 
 CommandResult DocumentSession::execute(const DocumentCommand &command,
@@ -2652,17 +2709,42 @@ CommandResult DocumentSession::redo() {
   return restore(false);
 }
 
-SaveResult DocumentSession::encode_psd(bool large_document) const {
+SaveResult DocumentSession::encode_psd(
+    bool large_document, const CancellationToken *cancellation,
+    const SaveOperationProgress *progress) const {
   if (preview_active()) {
     return SaveResult{
         {}, make_error(SessionErrorCode::EncodeFailed,
                        "cannot encode a transient preview")};
   }
-  try {
+  const auto cancelled = [cancellation]() {
+    return cancellation != nullptr && cancellation->cancelled();
+  };
+  if (cancelled()) {
     return SaveResult{
-        psd::DocumentIo::write_layered_rgb8(
-            document_, psd::WriteOptions{.large_document = large_document}),
+        {}, make_error(SessionErrorCode::Cancelled, "save cancelled")};
+  }
+  try {
+    psd::WriteOptions options;
+    options.large_document = large_document;
+    if (cancellation != nullptr ||
+        (progress != nullptr && progress->update)) {
+      options.progress = [progress, &cancelled](
+                             const psd::SaveProgress &save_progress) {
+        if (cancelled()) {
+          return false;
+        }
+        return progress == nullptr || !progress->update ||
+               progress->update(engine_save_phase(save_progress.phase),
+                                save_progress.logical_output_bytes);
+      };
+    }
+    return SaveResult{
+        psd::DocumentIo::write_layered_rgb8(document_, std::move(options)),
         {}};
+  } catch (const psd::SaveCancelled &) {
+    return SaveResult{
+        {}, make_error(SessionErrorCode::Cancelled, "save cancelled")};
   } catch (const std::exception &exception) {
     return SaveResult{
         {}, make_error(SessionErrorCode::EncodeFailed, exception.what())};

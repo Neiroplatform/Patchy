@@ -49,6 +49,8 @@ using patchy::engine::ResizeCanvas;
 using patchy::engine::ResizeImage;
 using patchy::engine::RasterizeVectorMask;
 using patchy::engine::RotateCanvas;
+using patchy::engine::SaveOperationProgress;
+using patchy::engine::SavePhase;
 using patchy::engine::SessionErrorCode;
 using patchy::engine::SessionEvent;
 using patchy::engine::SessionEventKind;
@@ -375,6 +377,51 @@ void engine_session_headless_psd_open_edit_save_reopen() {
   CHECK(rejected.error.code == SessionErrorCode::DecodeFailed);
 }
 
+void engine_session_save_reports_progress_and_cancels_without_partial_bytes() {
+  DocumentSession session(make_session_document());
+  const auto baseline = session.encode_psd();
+  CHECK(static_cast<bool>(baseline));
+
+  std::vector<std::pair<SavePhase, std::uint64_t>> updates;
+  const SaveOperationProgress progress{
+      [&updates](SavePhase phase, std::uint64_t bytes) {
+        updates.emplace_back(phase, bytes);
+        return true;
+      }};
+  const auto progressive = session.encode_psd(false, nullptr, &progress);
+  CHECK(static_cast<bool>(progressive));
+  CHECK(progressive.bytes == baseline.bytes);
+  CHECK(!updates.empty());
+  CHECK(updates.front().first == SavePhase::Started);
+  CHECK(updates.back().first == SavePhase::Complete);
+  CHECK(updates.back().second == progressive.bytes.size());
+  for (std::size_t index = 1; index < updates.size(); ++index) {
+    CHECK(static_cast<std::uint8_t>(updates[index - 1].first) <=
+          static_cast<std::uint8_t>(updates[index].first));
+    if (updates[index].first == SavePhase::Serializing &&
+        updates[index - 1].first == SavePhase::Serializing) {
+      CHECK(updates[index - 1].second <= updates[index].second);
+    }
+  }
+
+  const SaveOperationProgress cancel_during_encoding{
+      [](SavePhase phase, std::uint64_t) {
+        return phase != SavePhase::EncodingLayers;
+      }};
+  const auto cancelled =
+      session.encode_psd(false, nullptr, &cancel_during_encoding);
+  CHECK(!static_cast<bool>(cancelled));
+  CHECK(cancelled.error.code == SessionErrorCode::Cancelled);
+  CHECK(cancelled.bytes.empty());
+
+  CancellationToken cancellation;
+  cancellation.cancel();
+  const auto pre_cancelled = session.encode_psd(false, &cancellation);
+  CHECK(!static_cast<bool>(pre_cancelled));
+  CHECK(pre_cancelled.error.code == SessionErrorCode::Cancelled);
+  CHECK(pre_cancelled.bytes.empty());
+}
+
 void engine_session_renders_bounded_rgba_regions_and_cancels() {
   DocumentSession session(make_session_document());
   const auto full = session.render(patchy::Rect{0, 0, 2, 2});
@@ -655,6 +702,70 @@ void engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes() {
   CHECK(snapshot.retained_bytes() >= 16);
   snapshot.selection.clear();
   CHECK(snapshot.empty());
+}
+
+void engine_session_memory_census_is_cow_aware_across_owned_state() {
+  DocumentSession session(make_session_document());
+  const auto layer_id = session.document().layers().front().id();
+  const auto initial = session.memory_usage();
+  CHECK(initial.document_pixel_bytes == 16U);
+  CHECK(initial.history_retained_bytes == 0U);
+  CHECK(initial.total_retained_bytes == 16U);
+  CHECK(initial.undo_states == 0U);
+  CHECK(initial.redo_states == 0U);
+
+  CHECK(static_cast<bool>(
+      session.execute(SetLayerVisibility{layer_id, false})));
+  const auto shared_history = session.memory_usage();
+  CHECK(shared_history.document_pixel_bytes == 16U);
+  CHECK(shared_history.history_pixel_bytes == 0U);
+  CHECK(shared_history.history_retained_bytes == 0U);
+  CHECK(shared_history.undo_states == 1U);
+
+  PixelBuffer replacement(2, 2, PixelFormat::rgba8());
+  replacement.clear(210);
+  CHECK(static_cast<bool>(session.execute(
+      ReplaceLayerPixels{layer_id, std::move(replacement), {0, 0, 2, 2}})));
+  const auto detached_history = session.memory_usage();
+  CHECK(detached_history.document_pixel_bytes == 16U);
+  CHECK(detached_history.history_pixel_bytes == 16U);
+  CHECK(detached_history.history_retained_bytes == 16U);
+  CHECK(detached_history.total_retained_bytes == 32U);
+  CHECK(detached_history.undo_states == 2U);
+
+  SelectionSnapshot first_selection;
+  first_selection.selection = {{0, 0, 1, 1}};
+  first_selection.display_region = first_selection.selection;
+  first_selection.mask_bounds = {0, 0, 1, 1};
+  first_selection.mask_alpha = PixelBuffer(1, 1, PixelFormat::gray8());
+  *first_selection.mask_alpha.pixel(0, 0) = 128;
+  CHECK(static_cast<bool>(
+      session.execute(SetSelection{std::move(first_selection)})));
+  SelectionSnapshot second_selection;
+  second_selection.selection = {{1, 1, 1, 1}};
+  second_selection.display_region = second_selection.selection;
+  CHECK(static_cast<bool>(
+      session.execute(SetSelection{std::move(second_selection)})));
+  const auto selection_history = session.memory_usage();
+  CHECK(selection_history.selection_bytes > 0U);
+  CHECK(selection_history.history_selection_bytes > 0U);
+  CHECK(selection_history.history_retained_bytes ==
+        selection_history.history_pixel_bytes +
+            selection_history.history_selection_bytes);
+  CHECK(selection_history.total_retained_bytes ==
+        selection_history.document_pixel_bytes +
+            selection_history.history_pixel_bytes +
+            selection_history.preview_pixel_bytes +
+            selection_history.selection_bytes +
+            selection_history.history_selection_bytes +
+            selection_history.preview_selection_bytes);
+
+  CHECK(static_cast<bool>(session.begin_preview()));
+  const auto preview = session.memory_usage();
+  CHECK(preview.preview_pixel_bytes == 0U);
+  CHECK(preview.preview_selection_bytes > 0U);
+  CHECK(static_cast<bool>(session.end_preview()));
+  CHECK(session.memory_usage().preview_selection_bytes == 0U);
 }
 
 void engine_session_selection_is_canonical_undoable_and_not_dirty() {
@@ -1739,6 +1850,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_rejects_non_atomic_lifecycle_commands},
       {"engine_session_headless_psd_open_edit_save_reopen",
        engine_session_headless_psd_open_edit_save_reopen},
+      {"engine_session_save_reports_progress_and_cancels_without_partial_bytes",
+       engine_session_save_reports_progress_and_cancels_without_partial_bytes},
       {"engine_session_renders_bounded_rgba_regions_and_cancels",
        engine_session_renders_bounded_rgba_regions_and_cancels},
       {"engine_session_coalesces_dirty_render_regions_and_publishes_them",
@@ -1747,6 +1860,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_external_shell_adapter_preserves_state_identity},
       {"engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes",
        engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes},
+      {"engine_session_memory_census_is_cow_aware_across_owned_state",
+       engine_session_memory_census_is_cow_aware_across_owned_state},
       {"engine_session_selection_is_canonical_undoable_and_not_dirty",
        engine_session_selection_is_canonical_undoable_and_not_dirty},
       {"engine_session_selection_operations_are_qt_free_and_undoable",

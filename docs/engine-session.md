@@ -110,6 +110,11 @@ typed editing commands.
   current canvas;
 - undo and redo restore document state identities, so returning to the saved
   state clears dirty even after intervening edits;
+- `memory_usage()` reports the session's retained document, undo/redo, preview
+  and selection memory. Pixel storage is counted once across COW-sharing state;
+  selection container/mask ownership is reported conservatively per snapshot.
+  The desktop history budget consumes this engine-owned census instead of
+  walking canonical snapshots from Qt;
 - `layers()` exposes a flat stable-ID projection for non-Qt clients;
 - `render` returns a bounded RGBA8 region tied to the session revision. The
   compositor clips directly to that document-space region and allocates only
@@ -118,9 +123,19 @@ typed editing commands.
   in bounded horizontal bands, preserves byte-for-byte parity with one-shot
   compositing and checks cancellation between bands. Callback cancellation
   returns no partial pixel buffer and never changes document state;
-- `encode_psd` writes layered PSD bytes, while `mark_saved` is separate so a
-  failed filesystem write cannot falsely clear dirty state;
+- `encode_psd` writes layered PSD bytes and accepts a cancellation token plus a
+  phase/output-byte progress callback. Cancellation is checked before
+  normalization, compositing, layer encoding and each committed serialization
+  write; it returns `Cancelled` with no partial byte vector. Successful
+  progressive output stays byte-identical to one-shot encoding. `mark_saved`
+  remains separate so a cancelled or failed filesystem write cannot falsely
+  clear dirty state;
 - errors cross the boundary as `SessionError`, not Qt dialogs or C++ pointers.
+
+The build recursively rejects any Qt target in `patchy_engine`'s dependency
+tree and rejects Qt includes in the public engine facade at configure time. A
+negative CMake fixture proves the guard fails closed, so native, Windows and
+WASM configurations enforce the same boundary.
 
 ## Desktop transition
 
@@ -161,6 +176,4 @@ or a second dirty/revision counter is forbidden.
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
 - add command families for remaining nondestructive filters/adjustments;
-- add progress-aware cancellation inside long save operations (render is now
-  banded and cancellable);
 - keep the desktop shell and scripting API on the same command path.

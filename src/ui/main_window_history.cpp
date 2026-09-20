@@ -9,7 +9,6 @@
 #include "ui/main_window_shared.hpp"
 
 #include "core/blend_math.hpp"
-#include "core/document_memory.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/smart_object.hpp"
 #include "core/text_warp.hpp"
@@ -384,37 +383,10 @@ void MainWindow::record_history_push(DocumentSession& target_session,
 
 void MainWindow::enforce_history_memory_budget(const DocumentSession& push_target) {
   const std::size_t budget = history_memory_budget_bytes();
-  // A session's marginal history bytes: buffers still shared with its live
-  // document are free (evicting the state would release nothing), and buffers
-  // shared between several history states count once.
+  // The engine owns both snapshots and their COW-aware retained-byte census;
+  // Qt consumes only the aggregate when choosing a session to evict.
   const auto session_history_bytes = [](const DocumentSession& target) {
-    PixelStorageSet live;
-    collect_pixel_storage(target.document, live);
-    PixelStorageSet seen;
-    std::size_t bytes = 0;
-    for (std::size_t index = 0;
-         index < target.engine_session.undo_size(); ++index) {
-      const auto* document = target.engine_session.undo_document(index);
-      const auto* selection = target.engine_session.undo_selection(index);
-      if (document != nullptr) {
-        bytes += accumulate_unique_pixel_bytes(*document, live, seen);
-      }
-      if (selection != nullptr) {
-        bytes += selection->retained_bytes();
-      }
-    }
-    for (std::size_t index = 0;
-         index < target.engine_session.redo_size(); ++index) {
-      const auto* document = target.engine_session.redo_document(index);
-      const auto* selection = target.engine_session.redo_selection(index);
-      if (document != nullptr) {
-        bytes += accumulate_unique_pixel_bytes(*document, live, seen);
-      }
-      if (selection != nullptr) {
-        bytes += selection->retained_bytes();
-      }
-    }
-    return bytes;
+    return target.engine_session.memory_usage().history_retained_bytes;
   };
   std::vector<std::pair<DocumentSession*, std::size_t>> totals;
   totals.reserve(sessions_.size());

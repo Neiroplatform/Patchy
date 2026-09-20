@@ -442,6 +442,22 @@ struct OperationProgress {
   std::function<bool(std::int32_t completed, std::int32_t total)> update{};
 };
 
+enum class SavePhase : std::uint8_t {
+  Started = 0,
+  Normalizing = 1,
+  Compositing = 2,
+  EncodingLayers = 3,
+  Serializing = 4,
+  Complete = 5,
+};
+
+struct SaveOperationProgress {
+  // Return false to cancel. Bytes are exact and monotonic once serialization
+  // starts; phase is monotonic across a normal layered save.
+  std::function<bool(SavePhase phase, std::uint64_t logical_output_bytes)>
+      update{};
+};
+
 struct RenderResult {
   PixelBuffer pixels{};
   Rect region{};
@@ -449,6 +465,19 @@ struct RenderResult {
   SessionError error{};
 
   [[nodiscard]] explicit operator bool() const noexcept { return !error; }
+};
+
+struct SessionMemoryUsage {
+  std::size_t document_pixel_bytes{0};
+  std::size_t history_pixel_bytes{0};
+  std::size_t preview_pixel_bytes{0};
+  std::size_t selection_bytes{0};
+  std::size_t history_selection_bytes{0};
+  std::size_t preview_selection_bytes{0};
+  std::size_t history_retained_bytes{0};
+  std::size_t total_retained_bytes{0};
+  std::size_t undo_states{0};
+  std::size_t redo_states{0};
 };
 
 class DocumentSession {
@@ -492,6 +521,7 @@ public:
     return pending_render_region_;
   }
   [[nodiscard]] std::optional<Rect> take_pending_render_region() noexcept;
+  [[nodiscard]] SessionMemoryUsage memory_usage() const;
 
   void set_event_sink(EventSink sink) { event_sink_ = std::move(sink); }
   [[nodiscard]] CommandResult
@@ -512,7 +542,10 @@ public:
   [[nodiscard]] CommandResult end_preview();
   [[nodiscard]] CommandResult undo();
   [[nodiscard]] CommandResult redo();
-  [[nodiscard]] SaveResult encode_psd(bool large_document = false) const;
+  [[nodiscard]] SaveResult
+  encode_psd(bool large_document = false,
+             const CancellationToken *cancellation = nullptr,
+             const SaveOperationProgress *progress = nullptr) const;
   [[nodiscard]] RenderResult
   render(Rect region, const CancellationToken *cancellation = nullptr,
          const OperationProgress *progress = nullptr) const;

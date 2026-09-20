@@ -69,7 +69,17 @@ SaveBudgetExceeded::SaveBudgetExceeded(SaveBudgetDimension dimension)
     : std::length_error("PSD/PSB save budget exceeded"),
       dimension_(dimension) {}
 
+SaveCancelled::SaveCancelled() : std::runtime_error("PSD/PSB save cancelled") {}
+
 namespace {
+
+void report_save_progress(const WriteOptions& options, SavePhase phase,
+                          std::uint64_t logical_output_bytes = 0) {
+  if (options.progress &&
+      !options.progress(SaveProgress{phase, logical_output_bytes})) {
+    throw SaveCancelled();
+  }
+}
 
 void reset_parse_usage(ParseUsage* usage) {
   if (usage != nullptr) {
@@ -88,7 +98,8 @@ public:
   explicit SaveOutputBudgetTracker(const WriteOptions& options)
       : remaining_(options.budget.max_logical_output_bytes),
         usage_(options.usage != nullptr ? &options.usage->logical_output_bytes
-                                       : nullptr) {}
+                                       : nullptr),
+        progress_(&options.progress) {}
 
   static void before_write(void* context, std::size_t bytes) {
     static_cast<SaveOutputBudgetTracker*>(context)->charge_size(bytes);
@@ -103,13 +114,18 @@ private:
     }
     const auto bytes_u64 = static_cast<std::uint64_t>(bytes);
     if (bytes_u64 > remaining_ ||
-        (usage_ != nullptr &&
-         bytes_u64 > std::numeric_limits<std::uint64_t>::max() - *usage_)) {
+        bytes_u64 > std::numeric_limits<std::uint64_t>::max() - written_) {
       reject();
     }
+    const auto next_written = written_ + bytes_u64;
+    if (*progress_ &&
+        !(*progress_)(SaveProgress{SavePhase::Serializing, next_written})) {
+      throw SaveCancelled();
+    }
     remaining_ -= bytes_u64;
+    written_ = next_written;
     if (usage_ != nullptr) {
-      *usage_ += bytes_u64;
+      *usage_ = written_;
     }
   }
 
@@ -119,6 +135,8 @@ private:
 
   std::uint64_t remaining_;
   std::uint64_t* usage_;
+  const std::function<bool(const SaveProgress&)>* progress_;
+  std::uint64_t written_{0};
 };
 
 struct SaveBudgetTotal {
@@ -1910,6 +1928,7 @@ Document DocumentIo::read_file(const std::filesystem::path& path, ReadOptions op
 
 std::vector<std::uint8_t> DocumentIo::write_flat_rgb8(const Document& document, WriteOptions options) {
   reset_save_usage(options.usage);
+  report_save_progress(options, SavePhase::Started);
   check_write_dimensions(document, options.large_document);
   preflight_save(document, options, false);
   SaveLiveBudgetTracker tracked_live_budget(
@@ -1920,6 +1939,7 @@ std::vector<std::uint8_t> DocumentIo::write_flat_rgb8(const Document& document, 
           : nullptr);
 
   try {
+    report_save_progress(options, SavePhase::Compositing);
     auto composite = document_alpha_composite(document, tracked_live_budget);
     if (!composite.has_value()) {
       composite = merged_flatten_composite(document, tracked_live_budget);
@@ -1972,7 +1992,9 @@ std::vector<std::uint8_t> DocumentIo::write_flat_rgb8(const Document& document, 
                             tracked_live_budget);
     }
 
-    return std::move(writer).take_bytes();
+    auto bytes = std::move(writer).take_bytes();
+    report_save_progress(options, SavePhase::Complete, bytes.size());
+    return bytes;
   } catch (const SaveLiveBudgetSignal&) {
     throw SaveBudgetExceeded(SaveBudgetDimension::TrackedLiveBytes);
   }
@@ -1990,6 +2012,7 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
                                                   WriteOptions options,
                                                   SaveLiveBudgetTracker& tracked_live_budget) {
   check_write_dimensions(document, options.large_document);
+  report_save_progress(options, SavePhase::Normalizing);
   const auto workspace = save_workspace_census(document);
   auto normalization_owner = tracked_live_budget.reserve(
       workspace.normalization_owner_bytes);
@@ -2022,6 +2045,7 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
   };
   count_records(count_records, document.layers());
 
+  report_save_progress(options, SavePhase::Compositing);
   auto composite = merged_flatten_composite(document, tracked_live_budget);
 
   const bool merged_transparency_channel = composite.channel_name == "Transparency";
@@ -2042,6 +2066,7 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
 
   std::vector<EncodedLayer> encoded_layers;
   encoded_layers.reserve(document.layers().size());
+  report_save_progress(options, SavePhase::EncodingLayers);
   // Photoshop stores layer records in stack order from bottom to top. Patchy's
   // document model uses the same order, so write it directly instead of reversing.
   for (const auto& layer : document.layers()) {
@@ -2299,7 +2324,9 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
     write_rgb8_image_data(writer, composite.rgb, options.large_document,
                           tracked_live_budget);
   }
-  return std::move(writer).take_bytes();
+  auto bytes = std::move(writer).take_bytes();
+  report_save_progress(options, SavePhase::Complete, bytes.size());
+  return bytes;
 }
 
 }  // namespace
@@ -2307,6 +2334,7 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
 std::vector<std::uint8_t> DocumentIo::write_layered_rgb8(const Document& document,
                                                           WriteOptions options) {
   reset_save_usage(options.usage);
+  report_save_progress(options, SavePhase::Started);
   check_write_dimensions(document, options.large_document);
   preflight_save(document, options, true);
   SaveLiveBudgetTracker tracked_live_budget(

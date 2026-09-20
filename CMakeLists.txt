@@ -504,6 +504,22 @@ add_library(patchy_color
 target_link_libraries(patchy_color PUBLIC patchy_core PRIVATE patchy_lcms2)
 patchy_configure_target(patchy_color)
 
+# The canonical editing engine must remain usable by native, WASM, CLI, and
+# headless hosts without pulling Qt across the boundary. Keep this fail-closed:
+# both a direct/transitive target dependency and a Qt include in the engine
+# facade stop configuration on every platform.
+include(cmake/assert_qt_free_dependency_tree.cmake)
+patchy_assert_qt_free_dependency_tree(patchy_engine)
+foreach(engine_boundary_source
+    "${PROJECT_SOURCE_DIR}/src/engine/document_session.hpp"
+    "${PROJECT_SOURCE_DIR}/src/engine/document_session.cpp")
+  file(READ "${engine_boundary_source}" engine_boundary_contents)
+  if(engine_boundary_contents MATCHES "#[ \t]*include[ \t]*[<\"]Q")
+    message(FATAL_ERROR
+      "Qt-free engine boundary violated by a Qt include in ${engine_boundary_source}")
+  endif()
+endforeach()
+
 if(PATCHY_BUILD_APP)
   # Qt ships no PrintSupport (or Test need) for WebAssembly; requesting it
   # there would fail the whole find_package and silently skip the app target.
@@ -1511,6 +1527,13 @@ ${PATCHY_LUPDATE_MANIFEST_SOURCES}
 endif()
 
 if(PATCHY_BUILD_TESTS)
+  add_test(
+    NAME patchy_qt_free_engine_boundary_guard
+    COMMAND ${CMAKE_COMMAND}
+            -DPATCHY_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+            -DPATCHY_TEST_BINARY_DIR=${CMAKE_BINARY_DIR}/qt-free-boundary-negative
+            -P ${PROJECT_SOURCE_DIR}/tests/cmake/qt_free_boundary_guard_test.cmake
+  )
   # One binary, one TU per test group (tests/core/test_groups.hpp lists the groups;
   # main() concatenates the group vectors in a fixed order — never static self-registration).
   add_executable(patchy_core_tests

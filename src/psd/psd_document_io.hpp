@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -162,6 +163,26 @@ private:
   SaveBudgetDimension dimension_;
 };
 
+enum class SavePhase : std::uint8_t {
+  Started = 0,
+  Normalizing = 1,
+  Compositing = 2,
+  EncodingLayers = 3,
+  Serializing = 4,
+  Complete = 5,
+};
+
+struct SaveProgress {
+  SavePhase phase{SavePhase::Started};
+  // Exact admitted bytes once serialization starts; zero during earlier phases.
+  std::uint64_t logical_output_bytes{0};
+};
+
+class SaveCancelled final : public std::runtime_error {
+public:
+  SaveCancelled();
+};
+
 struct WriteOptions {
   bool large_document{false};
   SaveBudget budget{};
@@ -169,6 +190,10 @@ struct WriteOptions {
   // Preflight fields update only after their dimension is admitted; final
   // output bytes update incrementally as the stream is serialized.
   SaveUsage* usage{nullptr};
+  // Called at phase boundaries and before each output write is committed.
+  // Return false to cancel; the public write then throws SaveCancelled and
+  // never returns a partial byte vector.
+  std::function<bool(const SaveProgress&)> progress{};
 };
 
 class DocumentIo {
