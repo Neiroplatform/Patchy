@@ -270,6 +270,7 @@ struct AddVectorShapeLayer {
   VectorShapeContent content{};
   PatternStore patterns{};
   std::optional<LayerId> anchor_layer_id{};
+  std::optional<LayerMask> mask{};
 };
 
 struct UpdateVectorShapeLayer {

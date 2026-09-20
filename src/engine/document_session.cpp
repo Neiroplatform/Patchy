@@ -944,6 +944,9 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                   Rect::from_size(added_document.width(),
                                   added_document.height()),
                   &added_document.metadata().patterns);
+              if (concrete.mask.has_value()) {
+                layer.set_mask(*concrete.mask);
+              }
               affected_region = layer_effect_bounds(layer);
               insert_layer_after_anchor(added_document, std::move(layer),
                                         concrete.anchor_layer_id);

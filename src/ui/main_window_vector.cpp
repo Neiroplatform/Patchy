@@ -537,6 +537,7 @@ bool MainWindow::edit_active_shape_appearance(bool record_undo) {
   }
   const auto layer_id = *active;
   const Layer original_layer = *layer;
+  const PatternStore original_patterns = doc.metadata().patterns;
   ShapeAppearanceSettings initial{layer->vector_shape()->fill, layer->vector_shape()->stroke, {}};
   // Geometry is editable for single-live-shape layers whose every subpath
   // belongs to that origination group (the regeneration replaces the whole
@@ -601,27 +602,6 @@ bool MainWindow::edit_active_shape_appearance(bool record_undo) {
     }
     return content;
   };
-  const auto apply_settings = [this, layer_id,
-                               assemble_content](const ShapeAppearanceSettings& settings) {
-    auto& target_doc = document();
-    auto* target = target_doc.find_layer(layer_id);
-    if (target == nullptr || target->vector_shape() == nullptr) {
-      return;
-    }
-    auto content = assemble_content(settings, *target->vector_shape());
-    ensure_vector_fill_patterns(target_doc, content, pattern_library());
-    const auto old_effect_rect =
-        to_qrect(layer_bounds_with_effects(std::as_const(*target), std::as_const(*target).bounds()));
-    target->set_vector_shape(std::move(content));
-    target->metadata()[kLayerMetadataVectorRasterStatus] = kVectorRasterStatusPatchy;
-    update_vector_shape_raster(*target, Rect::from_size(target_doc.width(), target_doc.height()),
-                               &target_doc.metadata().patterns);
-    // Bounded: the appearance preview applies per coalesced worker result.
-    canvas_->document_changed_effect_bounds(old_effect_rect.united(
-        to_qrect(layer_bounds_with_effects(std::as_const(*target), std::as_const(*target).bounds()))));
-    refresh_layer_thumbnails();
-  };
-
   // The preview rasterizes on a background worker (pattern fills at small
   // scales can take seconds) with the canvas processing overlay; requests
   // coalesce while one is in flight. The layer's vector MODEL updates
@@ -706,9 +686,11 @@ bool MainWindow::edit_active_shape_appearance(bool record_undo) {
           Qt::QueuedConnection);
     });
   };
-  const auto restore_original_layer = [this, layer_id, original_layer] {
+  const auto restore_original_layer = [this, layer_id, original_layer,
+                                       original_patterns] {
     if (auto* target = document().find_layer(layer_id); target != nullptr) {
       *target = original_layer;
+      document().metadata().patterns = original_patterns;
       canvas_->document_changed();
       refresh_layer_thumbnails();
     }
@@ -752,6 +734,7 @@ bool MainWindow::edit_active_shape_appearance(bool record_undo) {
       preview_result = *target;
     }
   }
+  auto committed_patterns = document().metadata().patterns;
   restore_original_layer();
   preview_cleanup.dismiss();
   preview_edit_lock.release();
@@ -759,24 +742,28 @@ bool MainWindow::edit_active_shape_appearance(bool record_undo) {
     statusBar()->showMessage(tr("Cancelled shape appearance"));
     return false;
   }
+  auto committed_content =
+      preview_result.has_value() && preview_result->vector_shape() != nullptr
+          ? *preview_result->vector_shape()
+          : assemble_content(*accepted, *original_layer.vector_shape());
+  auto staged_document = document();
+  staged_document.metadata().patterns = std::move(committed_patterns);
+  ensure_vector_fill_patterns(staged_document, committed_content, pattern_library());
   if (record_undo) {
-    push_undo_snapshot(tr("Shape appearance"));
+    push_undo_snapshot(tr("Shape appearance"), false);
   }
-  if (preview_result.has_value()) {
-    if (auto* target = document().find_layer(layer_id); target != nullptr) {
-      *target = std::move(*preview_result);
-      mark_layer_vector_block_dirty(*target);
-      canvas_->document_changed();
-      refresh_layer_thumbnails();
-    }
-  } else {
-    // The drain timed out (still rendering after 60s): fall back to the
-    // synchronous apply so the commit is never stale.
-    apply_settings(*accepted);
-    if (auto* target = document().find_layer(layer_id); target != nullptr) {
-      mark_layer_vector_block_dirty(*target);
-    }
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::UpdateVectorShapeLayer{
+          layer_id, std::move(committed_content),
+          std::move(staged_document.metadata().patterns)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return false;
   }
+  canvas_->document_changed_effect_bounds(
+      result.affected_region.has_value() ? to_qrect(*result.affected_region)
+                                         : QRect{});
+  refresh_layer_thumbnails();
   refresh_layer_list();
   refresh_layer_controls();
   statusBar()->showMessage(tr("Updated the shape appearance"));
@@ -830,14 +817,39 @@ void MainWindow::create_fill_layer(const VectorFill& fill, const QString& name, 
   if (const auto selected_ids = selected_layer_ids(); !selected_ids.empty()) {
     anchor_id = selected_ids.front();
   }
-  push_undo_snapshot(std::move(label));
-  auto layer = build_fill_layer(fill, name);
-  const auto layer_id = layer.id();
-  insert_layer_after_anchor(doc, std::move(layer), anchor_id);
-  doc.set_active_layer(layer_id);
+  VectorShapeContent content;
+  if (canvas_ != nullptr && canvas_->panel_path_targeted()) {
+    if (const auto* path = resolved_panel_path(); path != nullptr && !path->empty()) {
+      content.path = *path;
+    }
+  }
+  content.fill = fill;
+  content.stroke.enabled = false;
+  auto staged_document = doc;
+  ensure_vector_fill_patterns(staged_document, content, pattern_library());
+  std::optional<LayerMask> mask;
+  const auto selection = canvas_->selected_document_region();
+  const auto selection_rect =
+      selection.boundingRect().intersected(QRect(0, 0, doc.width(), doc.height()));
+  if (!selection.isEmpty() && !selection_rect.isEmpty()) {
+    mask = LayerMask{to_core_rect(selection_rect),
+                     selection_mask_pixels(*canvas_, selection_rect), 0, false};
+  }
+  push_undo_snapshot(std::move(label), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::AddVectorShapeLayer{
+          name.toStdString(), std::move(content),
+          std::move(staged_document.metadata().patterns), anchor_id,
+          std::move(mask)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   refresh_layer_list();
   refresh_layer_controls();
-  canvas_->document_changed();
+  canvas_->document_changed_effect_bounds(
+      result.affected_region.has_value() ? to_qrect(*result.affected_region)
+                                         : QRect{});
   statusBar()->showMessage(tr("Created fill layer %1.").arg(name));
 }
 
@@ -1530,18 +1542,20 @@ bool MainWindow::apply_options_bar_appearance_to_active_shape() {
   update_vector_part_appearance(content, existing->fill, existing->stroke);
   const auto layer_id = layer->id();
   auto& doc = document();
-  push_undo_snapshot(tr("Shape appearance"));
-  auto* target = doc.find_layer(layer_id);
-  if (target == nullptr) {
+  auto staged_document = doc;
+  ensure_vector_fill_patterns(staged_document, content, pattern_library());
+  push_undo_snapshot(tr("Shape appearance"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::UpdateVectorShapeLayer{
+          layer_id, std::move(content),
+          std::move(staged_document.metadata().patterns)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
     return false;
   }
-  ensure_vector_fill_patterns(doc, content, pattern_library());
-  target->set_vector_shape(std::move(content));
-  target->metadata()[kLayerMetadataVectorRasterStatus] = kVectorRasterStatusPatchy;
-  mark_layer_vector_block_dirty(*target);
-  update_vector_shape_raster(*target, Rect::from_size(doc.width(), doc.height()),
-                             &doc.metadata().patterns);
-  canvas_->document_changed();
+  canvas_->document_changed_effect_bounds(
+      result.affected_region.has_value() ? to_qrect(*result.affected_region)
+                                         : QRect{});
   refresh_layer_thumbnails();
   return true;
 }
