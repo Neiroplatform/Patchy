@@ -9,6 +9,7 @@
 #include <vector>
 
 std::vector<patchy::test::TestCase> document_model_tests();
+std::vector<patchy::test::TestCase> document_session_tests();
 std::vector<patchy::test::TestCase> compositor_blend_if_tests();
 std::vector<patchy::test::TestCase> compositor_layer_styles_tests();
 std::vector<patchy::test::TestCase> gradients_interior_effects_tests();

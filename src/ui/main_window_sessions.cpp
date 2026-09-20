@@ -257,9 +257,8 @@ void MainWindow::add_document_session(Document document, QString title, QString 
   // per document, so entries must never leak across tabs.
   layer_thumbnail_cache_.clear();
   channel_thumbnail_cache_.clear();
-  auto session = std::make_unique<DocumentSession>();
+  auto session = std::make_unique<DocumentSession>(std::move(document));
   session->session_id = next_session_id_++;
-  session->document = std::move(document);
   if (session->document.guides().empty() && session->document.grid_settings().horizontal_cycle_32 == 576 &&
       session->document.grid_settings().vertical_cycle_32 == 576) {
     session->document.grid_settings().horizontal_cycle_32 = view_grid_spacing_32_;
@@ -1389,7 +1388,7 @@ bool MainWindow::maybe_save_session(DocumentSession& target_session) {
 }
 
 bool MainWindow::session_is_modified(const DocumentSession& target_session) const noexcept {
-  return target_session.revision != target_session.saved_revision;
+  return target_session.engine_session.dirty();
 }
 
 QString MainWindow::session_display_title(const DocumentSession& target_session) const {
@@ -1485,13 +1484,13 @@ void MainWindow::refresh_document_window_title() {
 }
 
 void MainWindow::set_session_saved(DocumentSession& target_session) {
-  target_session.saved_revision = target_session.revision;
+  target_session.engine_session.mark_saved();
   refresh_document_tab_titles();  update_undo_redo_actions();
   refresh_document_info();
 }
 
 void MainWindow::mark_session_modified(DocumentSession& target_session) {
-  ++target_session.revision;
+  target_session.engine_session.mark_external_modified();
   refresh_document_tab_titles();
   update_undo_redo_actions();
   refresh_document_info();

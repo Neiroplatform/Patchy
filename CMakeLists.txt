@@ -141,6 +141,11 @@ add_library(patchy_core
 )
 patchy_configure_target(patchy_core)
 
+add_library(patchy_engine
+  src/engine/document_session.cpp
+)
+patchy_configure_target(patchy_engine)
+
 add_library(patchy_render
   src/render/compositor.cpp
   src/render/layer_style_mask_ops.cpp
@@ -466,6 +471,8 @@ add_library(patchy_formats
 # PRIVATE too: af_document_io.cpp bakes Gaussian-blur layer effects through the calibrated
 # smart-filter blur (filters depends only on core, so no cycle).
 target_link_libraries(patchy_formats PUBLIC patchy_core patchy_render patchy_psd PRIVATE patchy_filters patchy_libraw)
+
+target_link_libraries(patchy_engine PUBLIC patchy_core PRIVATE patchy_psd patchy_formats)
 if(EMSCRIPTEN AND PATCHY_BUILD_APP)
   target_sources(patchy_formats PRIVATE src/formats/heif_document_io_wasm.cpp)
   target_compile_definitions(patchy_formats PRIVATE PATCHY_HEIF_WEBCODECS=1)
@@ -1170,6 +1177,7 @@ ${PATCHY_LUPDATE_MANIFEST_SOURCES}
       Qt6::Network
       Qt6::Qml
       patchy_core
+      patchy_engine
       patchy_render
       patchy_psd
       patchy_plugins
@@ -1517,6 +1525,7 @@ if(PATCHY_BUILD_TESTS)
     tests/core/compositor_blend_if_tests.cpp
     tests/core/compositor_layer_styles_tests.cpp
     tests/core/document_model_tests.cpp
+    tests/core/document_session_tests.cpp
     tests/core/document_ops_filters_tests.cpp
     tests/core/flat_formats_bmp_tests.cpp
     tests/core/flat_formats_misc_tests.cpp
@@ -1558,6 +1567,7 @@ if(PATCHY_BUILD_TESTS)
   target_include_directories(patchy_core_tests PRIVATE tests)
   target_link_libraries(patchy_core_tests PRIVATE
     patchy_core
+    patchy_engine
     patchy_render
     patchy_psd
     patchy_plugins

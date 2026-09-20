@@ -647,7 +647,7 @@ bool MainWindow::commit_smart_object_child_session(DocumentSession& child_sessio
   // operates on the active session).
   record_history_push(*parent,
                       DocumentSession::HistoryState{
-                          parent->document, parent->revision,
+                          parent->document, parent->engine_session.state_id(),
                           parent->canvas != nullptr ? parent->canvas->capture_selection_snapshot()
                                                     : CanvasWidget::SelectionSnapshot{},
                           {}, 0},
@@ -669,7 +669,7 @@ bool MainWindow::commit_smart_object_child_session(DocumentSession& child_sessio
     refresh_history_panel();
   }
 
-  child_session.saved_revision = child_session.revision;
+  child_session.engine_session.mark_saved();
   refresh_document_tab_titles();
   update_document_action_state();
   statusBar()->showMessage(tr("Applied smart object contents to %1").arg(parent->title));
@@ -844,7 +844,7 @@ void MainWindow::refresh_external_smart_object_after_save(DocumentSession& child
   // operates on the active session).
   record_history_push(*parent,
                       DocumentSession::HistoryState{
-                          parent->document, parent->revision,
+                          parent->document, parent->engine_session.state_id(),
                           parent->canvas != nullptr ? parent->canvas->capture_selection_snapshot()
                                                     : CanvasWidget::SelectionSnapshot{},
                           {}, 0},

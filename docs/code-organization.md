@@ -4,6 +4,12 @@ Read this before moving functions, adding members to the large UI classes, split
 
 ## MainWindow
 
+Canonical document state, dirty identity, revision and the first headless layer
+commands live in `engine::DocumentSession`; see [engine-session.md](engine-session.md).
+`MainWindow::DocumentSession` is the transitional Qt adapter for canvases,
+selection snapshots, panel state and file-dialog metadata. It references the
+engine-owned document and must not add another revision or saved-revision field.
+
 Vector-preserving merge planning, output preparation, and its dialog live in `ui/layer_merge.{hpp,cpp}`; `MainWindow::merge_down` retains command selection and the internal text-render callback. See [layer-merging.md](layer-merging.md).
 
 `MainWindow` is one class declared in `src/ui/main_window.hpp`, with its implementation split by area:

@@ -135,6 +135,7 @@ int main(int argc, char** argv) {
   std::vector<TestCase> tests;
   for (const auto& registration : {
            document_model_tests,
+           document_session_tests,
            compositor_blend_if_tests,
            compositor_layer_styles_tests,
            gradients_interior_effects_tests,

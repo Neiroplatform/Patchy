@@ -1706,13 +1706,11 @@ void MainWindow::reopen_document_session(DocumentSession& target_session) {
     finish_active_text_editor();
     layer_thumbnail_cache_.clear();
     channel_thumbnail_cache_.clear();
-    target_session.document = std::move(loaded->document);
+    target_session.engine_session.replace_external(std::move(loaded->document), true);
     initialize_session_history(target_session, tr("Reopen"));
     target_session.collapsed_layer_groups.clear();
     collect_initially_collapsed_layer_groups(target_session.document.layers(),
                                              target_session.collapsed_layer_groups);
-    ++target_session.revision;
-    target_session.saved_revision = target_session.revision;
     canvas_->set_document(&target_session.document);
     canvas_->fit_to_view();
     refresh_layer_list();

@@ -4,6 +4,7 @@
 #include "core/document.hpp"
 #include "core/smart_filter.hpp"
 #include "core/text_warp.hpp"
+#include "engine/document_session.hpp"
 #include "filters/filter_registry.hpp"
 #include "formats/format_registry.hpp"
 #include "plugins/plugin_host.hpp"
@@ -228,9 +229,17 @@ protected:
 
 private:
   struct DocumentSession {
+    explicit DocumentSession(Document initial_document)
+        : engine_session(std::move(initial_document)),
+          document(engine_session.mutable_document()) {}
+    DocumentSession(const DocumentSession&) = delete;
+    DocumentSession& operator=(const DocumentSession&) = delete;
+    DocumentSession(DocumentSession&&) = delete;
+    DocumentSession& operator=(DocumentSession&&) = delete;
+
     struct HistoryState {
       Document document;
-      std::int64_t revision{0};
+      std::uint64_t document_state_id{0};
       // Selection state at this point in history, so undo/redo restores the
       // selection alongside the pixels (and selection-only edits are undoable).
       CanvasWidget::SelectionSnapshot selection;
@@ -243,7 +252,8 @@ private:
       std::int64_t state_id{0};
     };
 
-    Document document;
+    patchy::engine::DocumentSession engine_session;
+    Document& document;
     QString title;
     QString path;
     std::optional<ImageSaveOptions> image_save_options;
@@ -285,8 +295,6 @@ private:
       std::vector<std::pair<LayerId, bool>> applied;
     };
     std::optional<VisibilityIsolation> visibility_isolation;
-    std::int64_t revision{0};
-    std::int64_t saved_revision{0};
     // True when the top undo entry is a coalescable selection move, so the next
     // move in the run merges into it instead of pushing a new entry.
     bool selection_move_coalescing{false};

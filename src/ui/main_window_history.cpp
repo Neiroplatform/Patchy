@@ -452,14 +452,13 @@ void MainWindow::rotate_history_state(DocumentSession& target_session, bool back
   auto& from = backward ? target_session.undo_stack : target_session.redo_stack;
   auto& to = backward ? target_session.redo_stack : target_session.undo_stack;
   // Braced-init evaluation is left to right, so the document moves out before
-  // revision/label are read; both history hops are moves (a copy here is a
+  // state identity/label are read; both history hops are moves (a copy here is a
   // full multi-hundred-MB Document duplication on large canvases).
   to.push_back(DocumentSession::HistoryState{
-      std::move(target_session.document), target_session.revision, std::move(live_selection),
+      std::move(target_session.document), target_session.engine_session.state_id(), std::move(live_selection),
       std::move(target_session.current_state_label), target_session.current_state_id});
   auto& restored = from.back();
-  target_session.document = std::move(restored.document);
-  target_session.revision = restored.revision;
+  target_session.engine_session.restore_external(std::move(restored.document), restored.document_state_id);
   live_selection = std::move(restored.selection);
   target_session.current_state_label = std::move(restored.label);
   target_session.current_state_id = restored.state_id;
@@ -580,7 +579,7 @@ void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString lab
   }
   const auto started = std::chrono::steady_clock::now();
   auto& active_session = target_session;
-  const auto snapshot_revision = active_session.revision;
+  const auto snapshot_state_id = active_session.engine_session.state_id();
   const auto make_snapshot = [&active_session] {
     if (const auto delay = undo_snapshot_test_delay_ms(); delay > 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(delay));
@@ -615,7 +614,7 @@ void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString lab
                                                              : CanvasWidget::SelectionSnapshot{};
   record_history_push(
       active_session,
-      DocumentSession::HistoryState{snapshot_future.get(), snapshot_revision, std::move(snapshot_selection), {}, 0},
+      DocumentSession::HistoryState{snapshot_future.get(), snapshot_state_id, std::move(snapshot_selection), {}, 0},
       label);
   mark_session_modified(active_session);
   // The History panel and status bar mirror the ACTIVE session; an edit landing
@@ -655,7 +654,7 @@ void MainWindow::push_selection_history(DocumentSession& target_session, QString
   // but the change still joins the undo/redo history.
   record_history_push(
       active_session,
-      DocumentSession::HistoryState{active_session.document, active_session.revision, std::move(before), {}, 0},
+      DocumentSession::HistoryState{active_session.document, active_session.engine_session.state_id(), std::move(before), {}, 0},
       label);
   active_session.selection_move_coalescing = coalesce;
   // Panel/status mirror the active session only (see push_undo_snapshot).

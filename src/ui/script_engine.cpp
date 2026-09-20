@@ -1191,7 +1191,7 @@ QJsonArray ScriptEngineHost::pause_history_state() const {
   QJsonArray state;
   for (const auto& session : window_.sessions_) {
     state.append(QJsonObject{{"id", QString::number(session->session_id)},
-      {"revision", QString::number(session->revision)},
+      {"revision", QString::number(session->engine_session.revision())},
       {"history", QString::number(session->current_state_id)}});
   }
   return state;

@@ -124,7 +124,7 @@ QJsonObject ScriptEngineHost::automation_state() const {
     QJsonObject selection{{"exists", has_selection(id)}};
     if (has_selection(id)) { selection["bounds"] = rect_json(selection_region(id).boundingRect()); }
     documents.append(QJsonObject{{"id", QString::number(id)}, {"name", session_title(id)},
-        {"revision", QString::number(window_.session_with_id(id)->revision)},
+        {"revision", QString::number(window_.session_with_id(id)->engine_session.revision())},
         {"historyStateId", QString::number(window_.session_with_id(id)->current_state_id)},
         {"path", session_file_path(id)}, {"width", doc->width()}, {"height", doc->height()},
         {"modified", session_modified(id)}, {"canUndo", session_can_undo(id)},
