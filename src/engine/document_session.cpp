@@ -33,6 +33,30 @@ bool rects_equal(Rect left, Rect right) {
          left.width == right.width && left.height == right.height;
 }
 
+bool rect_lists_equal(const std::vector<Rect> &left,
+                      const std::vector<Rect> &right) {
+  return left.size() == right.size() &&
+         std::equal(left.begin(), left.end(), right.begin(),
+                    [](Rect first, Rect second) {
+                      return rects_equal(first, second);
+                    });
+}
+
+bool selection_snapshots_equal(const SelectionSnapshot &left,
+                               const SelectionSnapshot &right) {
+  if (!rect_lists_equal(left.selection, right.selection) ||
+      !rect_lists_equal(left.display_region, right.display_region) ||
+      !rects_equal(left.mask_bounds, right.mask_bounds) ||
+      !pixel_buffers_equal(left.mask_alpha, right.mask_alpha) ||
+      left.quick_mask_pixels.has_value() !=
+          right.quick_mask_pixels.has_value()) {
+    return false;
+  }
+  return !left.quick_mask_pixels.has_value() ||
+         pixel_buffers_equal(*left.quick_mask_pixels,
+                             *right.quick_mask_pixels);
+}
+
 void restore_pixels_outside_rect_selection(
     PixelBuffer &filtered, const PixelBuffer &original, Rect bounds,
     const std::vector<Rect> &selection) {
@@ -139,7 +163,7 @@ OpenResult open_psd(std::span<const std::uint8_t> bytes) {
 }
 
 void DocumentSession::push_undo_state() {
-  undo_stack_.push_back(HistoryState{document_, state_id_});
+  undo_stack_.push_back(HistoryState{document_, selection_, state_id_});
   if (undo_stack_.size() > kMaxUndoStates) {
     undo_stack_.erase(undo_stack_.begin());
   }
@@ -176,13 +200,16 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                                             const FilterProgress *filter_progress) {
   LayerId layer_id = 0;
   bool changed = false;
+  bool affects_document = true;
   SessionError error{};
   std::optional<Rect> affected_region;
+  SessionEventKind event_kind = SessionEventKind::CommandApplied;
 
   try {
     std::visit(
-        [this, record_history, filter_progress, &layer_id, &changed, &error,
-         &affected_region](const auto &concrete) {
+        [this, record_history, filter_progress, &layer_id, &changed,
+         &affects_document, &error, &affected_region,
+         &event_kind](const auto &concrete) {
           using Command = std::decay_t<decltype(concrete)>;
           if constexpr (std::is_same_v<Command, RotateCanvas>) {
             if (!std::isfinite(concrete.clockwise_degrees)) {
@@ -209,6 +236,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             }
             prepare_mutation(record_history);
             document_ = std::move(rotated_document);
+            selection_ = {};
             changed = true;
             return;
           } else if constexpr (std::is_same_v<Command, ResizeImage> ||
@@ -233,6 +261,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             }
             prepare_mutation(record_history);
             document_ = std::move(resized_document);
+            selection_ = {};
             changed = true;
             return;
           } else if constexpr (std::is_same_v<Command, AddPixelLayer> ||
@@ -531,6 +560,53 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             affected_region =
                 unite_rect(old_render_bounds, layer_render_bounds(*layer));
             return;
+          } else if constexpr (std::is_same_v<Command, SetSelection>) {
+            const auto valid_rect = [this](Rect rect) {
+              return rect.width > 0 && rect.height > 0 && rect.x >= 0 &&
+                     rect.y >= 0 && rect.x <= document_.width() - rect.width &&
+                     rect.y <= document_.height() - rect.height;
+            };
+            if (!std::all_of(concrete.selection.selection.begin(),
+                             concrete.selection.selection.end(), valid_rect) ||
+                !std::all_of(concrete.selection.display_region.begin(),
+                             concrete.selection.display_region.end(),
+                             valid_rect)) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "selection rectangles must be inside the document");
+              return;
+            }
+            if (!concrete.selection.mask_alpha.empty() &&
+                (concrete.selection.mask_alpha.format() != PixelFormat::gray8() ||
+                 concrete.selection.mask_alpha.width() !=
+                     concrete.selection.mask_bounds.width ||
+                 concrete.selection.mask_alpha.height() !=
+                     concrete.selection.mask_bounds.height ||
+                 !valid_rect(concrete.selection.mask_bounds))) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "selection mask does not match its bounds");
+              return;
+            }
+            if (concrete.selection.quick_mask_pixels.has_value() &&
+                (!concrete.selection.quick_mask_pixels->empty()) &&
+                (concrete.selection.quick_mask_pixels->format() !=
+                     PixelFormat::gray8() ||
+                 concrete.selection.quick_mask_pixels->width() !=
+                     document_.width() ||
+                 concrete.selection.quick_mask_pixels->height() !=
+                     document_.height())) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "quick mask must cover the document");
+              return;
+            }
+            if (selection_snapshots_equal(selection_, concrete.selection)) {
+              return;
+            }
+            prepare_mutation(record_history);
+            selection_ = concrete.selection;
+            changed = true;
+            affects_document = false;
+            event_kind = SessionEventKind::SelectionChanged;
+            return;
           } else if constexpr (std::is_same_v<Command, SetLayersOpacity> ||
                                std::is_same_v<Command, SetLayersFillOpacity> ||
                                std::is_same_v<Command, SetLayersBlendMode>) {
@@ -652,9 +728,11 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
     return CommandResult{false, std::move(error)};
   }
   if (changed) {
-    state_id_ = next_state_id_++;
+    if (affects_document) {
+      state_id_ = next_state_id_++;
+    }
     ++revision_;
-    publish(SessionEventKind::CommandApplied, layer_id);
+    publish(event_kind, layer_id);
   }
   return CommandResult{changed, {}, layer_id, affected_region};
 }
@@ -685,10 +763,12 @@ CommandResult DocumentSession::restore(bool backward) {
                           backward ? "no undo state" : "no redo state")};
   }
 
-  destination.push_back(HistoryState{std::move(document_), state_id_});
+  destination.push_back(
+      HistoryState{std::move(document_), std::move(selection_), state_id_});
   auto restored = std::move(source.back());
   source.pop_back();
   document_ = std::move(restored.document);
+  selection_ = std::move(restored.selection);
   state_id_ = restored.state_id;
   ++revision_;
   publish(backward ? SessionEventKind::UndoApplied
@@ -771,8 +851,10 @@ void DocumentSession::mark_external_modified() {
 }
 
 void DocumentSession::restore_external(Document document,
-                                       std::uint64_t state_id) {
+                                       std::uint64_t state_id,
+                                       SelectionSnapshot selection) {
   document_ = std::move(document);
+  selection_ = std::move(selection);
   undo_stack_.clear();
   redo_stack_.clear();
   state_id_ = state_id;
@@ -782,6 +864,7 @@ void DocumentSession::restore_external(Document document,
 
 void DocumentSession::replace_external(Document document, bool saved) {
   document_ = std::move(document);
+  selection_ = {};
   undo_stack_.clear();
   redo_stack_.clear();
   state_id_ = next_state_id_++;

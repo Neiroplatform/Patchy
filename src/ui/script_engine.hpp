@@ -473,6 +473,10 @@ private:
   // The session's canvas (nullptr when the session is gone); MainWindow access
   // stays inside host members (the friend grant does not reach free helpers).
   [[nodiscard]] CanvasWidget* session_canvas(std::int64_t session_id) const;
+  // Commits a canvas-side scripting selection into the Qt-free engine state.
+  // Script selection setters deliberately keep their historical undo grouping;
+  // this only synchronizes the canonical value used by later edit snapshots.
+  void sync_canvas_selection(std::int64_t session_id);
 
   MainWindow& window_;
   std::unique_ptr<QJSEngine> engine_;

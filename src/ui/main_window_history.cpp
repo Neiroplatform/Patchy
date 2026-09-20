@@ -460,8 +460,10 @@ void MainWindow::rotate_history_state(DocumentSession& target_session, bool back
       std::move(target_session.document), target_session.engine_session.state_id(), std::move(live_selection),
       std::move(target_session.current_state_label), target_session.current_state_id});
   auto& restored = from.back();
-  target_session.engine_session.restore_external(std::move(restored.document), restored.document_state_id);
-  live_selection = std::move(restored.selection);
+  target_session.engine_session.restore_external(
+      std::move(restored.document), restored.document_state_id,
+      restored.selection);
+  live_selection = target_session.engine_session.selection();
   target_session.current_state_label = std::move(restored.label);
   target_session.current_state_id = restored.state_id;
   from.pop_back();
@@ -543,7 +545,7 @@ void MainWindow::undo() {
   if (active_session.undo_stack.empty()) {
     return;
   }
-  auto live_selection = canvas_->capture_engine_selection_snapshot();
+  auto live_selection = active_session.engine_session.selection();
   rotate_history_state(active_session, /*backward=*/true, live_selection);
   // The pre-undo document now sits intact at redo_stack.back(); the tail diffs
   // it against the restored document for the partial repaint.
@@ -561,7 +563,7 @@ void MainWindow::redo() {
   if (active_session.redo_stack.empty()) {
     return;
   }
-  auto live_selection = canvas_->capture_engine_selection_snapshot();
+  auto live_selection = active_session.engine_session.selection();
   rotate_history_state(active_session, /*backward=*/false, live_selection);
   apply_history_restore_tail(active_session, active_session.undo_stack.back().document,
                              std::move(live_selection), tr("Redo"));
@@ -609,13 +611,10 @@ void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString lab
   } else {
     snapshot_future.wait();
   }
-  // Capture the selection that is active right now (before the edit mutates the
-  // document) so undoing this edit also restores the selection it ran against.
-  // The snapshot comes from the session's OWN canvas: an edit fired by a
-  // non-active canvas must not record the active document's selection.
-  auto snapshot_selection = active_session.canvas != nullptr
-                                ? active_session.canvas->capture_engine_selection_snapshot()
-                                : patchy::engine::SelectionSnapshot{};
+  // Capture the session's canonical selection before the edit mutates the
+  // document, so undo restores the exact selection the operation ran against.
+  // A background edit reads its own engine session, never the active canvas.
+  auto snapshot_selection = active_session.engine_session.selection();
   record_history_push(
       active_session,
       DocumentSession::HistoryState{snapshot_future.get(), snapshot_state_id, std::move(snapshot_selection), {}, 0},
@@ -644,6 +643,15 @@ void MainWindow::push_selection_history(DocumentSession& target_session, QString
     finish_pending_layer_fill_opacity_edit();
   }
   auto& active_session = target_session;
+  if (active_session.canvas == nullptr) {
+    return;
+  }
+  const auto selection_result = active_session.engine_session.execute_external(
+      patchy::engine::SetSelection{
+          active_session.canvas->capture_engine_selection_snapshot()});
+  if (!selection_result) {
+    return;
+  }
   // A run of moves/nudges collapses into one undo step: once the first move has
   // pushed an entry holding the pre-run position, later moves leave the live
   // selection updated but add no new entry, so undo returns to where the run
@@ -750,7 +758,7 @@ void MainWindow::jump_to_history_state(std::int64_t state_id) {
     refresh_history_panel();
     return;
   }
-  auto live_selection = canvas_->capture_engine_selection_snapshot();
+  auto live_selection = active->engine_session.selection();
   for (std::size_t step = 0; step < steps; ++step) {
     rotate_history_state(*active, backward, live_selection);
   }

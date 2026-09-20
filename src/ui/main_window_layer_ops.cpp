@@ -987,6 +987,9 @@ bool MainWindow::paste_svg_from_clipboard() {
   // Photoshop drops the selection once the clipboard lands on its own layer;
   // the snapshot above keeps it for Undo.
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   for (const auto& resource : imported.metadata().patterns.patterns) {
     doc.metadata().patterns.adopt(resource);
   }
@@ -1063,6 +1066,9 @@ void MainWindow::paste_clipboard() {
 
     push_undo_snapshot(tr("Paste"));
     canvas_->clear_selection();
+    static_cast<void>(session().engine_session.execute_external(
+        patchy::engine::SetSelection{
+            canvas_->capture_engine_selection_snapshot()}));
     for (const auto& source : clipboard_->smart_object_sources) {
       doc.metadata().smart_objects.adopt(source);
     }
@@ -1121,6 +1127,9 @@ void MainWindow::paste_clipboard() {
   // The marquee that produced the copy must not stay live over the new layer
   // (Photoshop parity); Undo of the paste brings it back.
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   Layer pasted(document().allocate_layer_id(), tr("Pasted Layer").toStdString(), std::move(pixels));
   pasted.set_bounds(Rect{origin.x(), origin.y(), pasted.pixels().width(), pasted.pixels().height()});
   document().add_layer(std::move(pasted));
@@ -3575,6 +3584,9 @@ void MainWindow::crop_to_selection() {
   push_undo_snapshot(tr("Crop"));
   doc = std::move(cropped_document);
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -3612,6 +3624,9 @@ void MainWindow::commit_crop_rect(QRect rect, double angle_degrees) {
   doc = std::move(cropped_document);
   canvas_->cancel_crop_session();
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -3641,6 +3656,9 @@ void MainWindow::rotate_canvas_clockwise() {
   }
   refresh_document_tab_titles();
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -3668,6 +3686,9 @@ void MainWindow::rotate_canvas_counterclockwise() {
   }
   refresh_document_tab_titles();
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -3719,6 +3740,9 @@ void MainWindow::toggle_tile_seam_offset() {
     values[kTileSeamOffsetMetadataKey] = std::to_string(dx) + "," + std::to_string(dy);
   }
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();

@@ -648,9 +648,7 @@ bool MainWindow::commit_smart_object_child_session(DocumentSession& child_sessio
   record_history_push(*parent,
                       DocumentSession::HistoryState{
                           parent->document, parent->engine_session.state_id(),
-                          parent->canvas != nullptr
-                              ? parent->canvas->capture_engine_selection_snapshot()
-                              : patchy::engine::SelectionSnapshot{},
+                          parent->engine_session.selection(),
                           {}, 0},
                       tr("Edit Smart Object Contents"));
   parent->document = std::move(updated_document);
@@ -846,9 +844,7 @@ void MainWindow::refresh_external_smart_object_after_save(DocumentSession& child
   record_history_push(*parent,
                       DocumentSession::HistoryState{
                           parent->document, parent->engine_session.state_id(),
-                          parent->canvas != nullptr
-                              ? parent->canvas->capture_engine_selection_snapshot()
-                              : patchy::engine::SelectionSnapshot{},
+                          parent->engine_session.selection(),
                           {}, 0},
                       tr("Update Smart Object Content"));
   parent->document = std::move(updated_document);

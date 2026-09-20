@@ -66,6 +66,7 @@ void ScriptEngineHost::select_vector_path(std::int64_t session, const VectorPath
   canvas = session_canvas(session);
   if (!canvas) { script_vector::invalid("selection.target"); }
   canvas->apply_grayscale_to_selection(coverage);
+  sync_canvas_selection(session);
   note_pixels_changed(session, {});
 }
 VectorPath ScriptEngineHost::selection_vector_path(std::int64_t session, double tolerance) const {

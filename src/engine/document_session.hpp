@@ -39,6 +39,19 @@ struct SessionError {
   }
 };
 
+// Qt-free canonical selection value. Regions are stored as non-overlapping
+// document-space rectangles; an optional gray8 mask preserves soft edges.
+struct SelectionSnapshot {
+  std::vector<Rect> selection{};
+  std::vector<Rect> display_region{};
+  Rect mask_bounds{};
+  PixelBuffer mask_alpha{};
+  std::optional<PixelBuffer> quick_mask_pixels{};
+
+  [[nodiscard]] bool empty() const noexcept { return selection.empty(); }
+  [[nodiscard]] std::size_t retained_bytes() const noexcept;
+};
+
 struct SetLayerVisibility {
   LayerId layer_id{0};
   bool visible{true};
@@ -150,13 +163,17 @@ struct ApplyFilter {
   std::vector<Rect> selection{};
 };
 
+struct SetSelection {
+  SelectionSnapshot selection{};
+};
+
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
                  AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas,
                  RotateCanvas, SetLayersOpacity, SetLayersFillOpacity,
                  SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers,
-                 ReplaceLayerPixels, ApplyFilter>;
+                 ReplaceLayerPixels, ApplyFilter, SetSelection>;
 
 struct LayerInfo {
   LayerId id{0};
@@ -169,6 +186,7 @@ struct LayerInfo {
 
 enum class SessionEventKind {
   CommandApplied,
+  SelectionChanged,
   UndoApplied,
   RedoApplied,
   Saved,
@@ -218,19 +236,6 @@ struct RenderResult {
   [[nodiscard]] explicit operator bool() const noexcept { return !error; }
 };
 
-// Qt-free value carried by session/history boundaries. Regions are stored as
-// non-overlapping rectangles; an optional gray8 mask preserves soft edges.
-struct SelectionSnapshot {
-  std::vector<Rect> selection{};
-  std::vector<Rect> display_region{};
-  Rect mask_bounds{};
-  PixelBuffer mask_alpha{};
-  std::optional<PixelBuffer> quick_mask_pixels{};
-
-  [[nodiscard]] bool empty() const noexcept { return selection.empty(); }
-  [[nodiscard]] std::size_t retained_bytes() const noexcept;
-};
-
 class DocumentSession {
 public:
   using EventSink = std::function<void(const SessionEvent &)>;
@@ -244,6 +249,9 @@ public:
   [[nodiscard]] Document &mutable_document() noexcept { return document_; }
   [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
   [[nodiscard]] std::uint64_t state_id() const noexcept { return state_id_; }
+  [[nodiscard]] const SelectionSnapshot &selection() const noexcept {
+    return selection_;
+  }
   [[nodiscard]] bool dirty() const noexcept {
     return state_id_ != saved_state_id_;
   }
@@ -273,12 +281,14 @@ public:
   render(Rect region, const CancellationToken *cancellation = nullptr) const;
   void mark_saved();
   void mark_external_modified();
-  void restore_external(Document document, std::uint64_t state_id);
+  void restore_external(Document document, std::uint64_t state_id,
+                        SelectionSnapshot selection = {});
   void replace_external(Document document, bool saved);
 
 private:
   struct HistoryState {
     Document document;
+    SelectionSnapshot selection{};
     std::uint64_t state_id{0};
   };
 
@@ -293,6 +303,7 @@ private:
   [[nodiscard]] CommandResult restore(bool backward);
 
   Document document_;
+  SelectionSnapshot selection_{};
   std::vector<HistoryState> undo_stack_{};
   std::vector<HistoryState> redo_stack_{};
   std::uint64_t revision_{0};

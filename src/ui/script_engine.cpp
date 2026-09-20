@@ -1464,12 +1464,14 @@ CanvasWidget* ScriptEngineHost::session_canvas(std::int64_t session_id) const {
 void ScriptEngineHost::select_all(std::int64_t session_id) {
   if (auto* canvas = session_canvas(session_id)) {
     canvas->select_all();
+    sync_canvas_selection(session_id);
   }
 }
 
 void ScriptEngineHost::deselect(std::int64_t session_id) {
   if (auto* canvas = session_canvas(session_id)) {
     canvas->clear_selection();
+    sync_canvas_selection(session_id);
   }
 }
 
@@ -1486,6 +1488,20 @@ void ScriptEngineHost::select_region(std::int64_t session_id, const QRegion& reg
   snapshot.selection = region.intersected(QRect(0, 0, document->width(), document->height()));
   snapshot.display_region = snapshot.selection;
   canvas->apply_selection_snapshot(snapshot);
+  sync_canvas_selection(session_id);
+}
+
+void ScriptEngineHost::sync_canvas_selection(std::int64_t session_id) {
+  auto* session = window_.session_with_id(session_id);
+  if (session == nullptr || session->canvas == nullptr) {
+    return;
+  }
+  const auto result = session->engine_session.execute_external(
+      patchy::engine::SetSelection{
+          session->canvas->capture_engine_selection_snapshot()});
+  if (!result) {
+    throw_js_error(QString::fromStdString(result.error.message));
+  }
 }
 
 QRegion ScriptEngineHost::selection_region(std::int64_t session_id) const {

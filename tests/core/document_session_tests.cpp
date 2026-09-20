@@ -39,6 +39,7 @@ using patchy::engine::SetLayerVisibility;
 using patchy::engine::SetLayersBlendMode;
 using patchy::engine::SetLayersFillOpacity;
 using patchy::engine::SetLayersOpacity;
+using patchy::engine::SetSelection;
 using patchy::engine::UngroupLayers;
 using patchy::test::TestCase;
 
@@ -285,6 +286,74 @@ void engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes() {
   CHECK(snapshot.empty());
 }
 
+void engine_session_selection_is_canonical_undoable_and_not_dirty() {
+  DocumentSession session(make_session_document());
+  const auto initial_state_id = session.state_id();
+  const auto initial_revision = session.revision();
+  std::vector<SessionEvent> events;
+  session.set_event_sink(
+      [&events](const SessionEvent &event) { events.push_back(event); });
+
+  SelectionSnapshot selected;
+  selected.selection = {{0, 0, 1, 1}};
+  selected.display_region = selected.selection;
+  selected.mask_bounds = {0, 0, 1, 1};
+  selected.mask_alpha = PixelBuffer(1, 1, PixelFormat::gray8());
+  selected.mask_alpha.pixel(0, 0)[0] = 127;
+  selected.quick_mask_pixels = PixelBuffer(2, 2, PixelFormat::gray8());
+  selected.quick_mask_pixels->clear(255);
+
+  CHECK(static_cast<bool>(session.execute(SetSelection{selected})));
+  CHECK(session.selection().selection.size() == 1);
+  CHECK(session.selection().mask_alpha.pixel(0, 0)[0] == 127);
+  CHECK(session.selection().quick_mask_pixels.has_value());
+  CHECK(session.state_id() == initial_state_id);
+  CHECK(session.revision() == initial_revision + 1);
+  CHECK(!session.dirty());
+  CHECK(session.undo_size() == 1);
+  CHECK(events.back().kind == SessionEventKind::SelectionChanged);
+
+  const auto layer_id = session.document().layers().front().id();
+  CHECK(static_cast<bool>(session.execute(RenameLayer{layer_id, "Renamed"})));
+  CHECK(session.dirty());
+  CHECK(session.selection().selection.size() == 1);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(!session.dirty());
+  CHECK(session.document().layers().front().name() == "Layer 1");
+  CHECK(session.selection().selection.size() == 1);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.selection().empty());
+  CHECK(!session.dirty());
+  CHECK(static_cast<bool>(session.redo()));
+  CHECK(session.selection().selection.size() == 1);
+  CHECK(!session.dirty());
+
+  const auto revision_before_rejection = session.revision();
+  const auto undo_before_rejection = session.undo_size();
+  SelectionSnapshot outside;
+  outside.selection = {{1, 1, 2, 2}};
+  const auto rejected = session.execute(SetSelection{std::move(outside)});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_before_rejection);
+  CHECK(session.undo_size() == undo_before_rejection);
+  CHECK(session.selection().selection.size() == 1);
+
+  CHECK(static_cast<bool>(session.execute(ResizeCanvas{
+      3, 3, patchy::CanvasAnchor::Center, patchy::EditColor{}})));
+  CHECK(session.selection().empty());
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().width() == 2);
+  CHECK(session.selection().selection.size() == 1);
+
+  DocumentSession shell_session(make_session_document());
+  CHECK(static_cast<bool>(
+      shell_session.execute_external(SetSelection{std::move(selected)})));
+  CHECK(shell_session.selection().selection.size() == 1);
+  CHECK(shell_session.undo_size() == 0);
+  CHECK(!shell_session.dirty());
+}
+
 void engine_session_layer_editing_vertical_slice_is_atomic_and_undoable() {
   DocumentSession session(make_session_document());
   const auto original_id = session.document().layers().front().id();
@@ -418,6 +487,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_external_shell_adapter_preserves_state_identity},
       {"engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes",
        engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes},
+      {"engine_session_selection_is_canonical_undoable_and_not_dirty",
+       engine_session_selection_is_canonical_undoable_and_not_dirty},
       {"engine_session_layer_editing_vertical_slice_is_atomic_and_undoable",
        engine_session_layer_editing_vertical_slice_is_atomic_and_undoable},
       {"engine_session_filter_and_pixel_commands_share_atomic_history",

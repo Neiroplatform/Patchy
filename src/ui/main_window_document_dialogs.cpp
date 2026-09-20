@@ -1299,6 +1299,9 @@ void MainWindow::resize_image_dialog() {
     // way Photoshop's non-destructive Image Size leaves them.
     rerender_smart_object_previews();
     canvas_->clear_selection();
+    static_cast<void>(session().engine_session.execute_external(
+        patchy::engine::SetSelection{
+            canvas_->capture_engine_selection_snapshot()}));
     const auto previous_channel_target = canvas_->layer_edit_target();
     const auto previous_channel_id = canvas_->active_document_channel_id();
     const auto previous_channel_display = canvas_->mask_display_mode();
@@ -1347,6 +1350,9 @@ void MainWindow::resize_canvas_dialog() {
   }
   refresh_document_tab_titles();
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -1391,6 +1397,9 @@ void MainWindow::rotate_canvas_arbitrary() {
   // matrix, exactly as after Image Size.
   rerender_text_layers_through_transforms(session());
   canvas_->clear_selection();
+  static_cast<void>(session().engine_session.execute_external(
+      patchy::engine::SetSelection{
+          canvas_->capture_engine_selection_snapshot()}));
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
