@@ -38,8 +38,10 @@ typed editing commands.
 - undo and redo restore document state identities, so returning to the saved
   state clears dirty even after intervening edits;
 - `layers()` exposes a flat stable-ID projection for non-Qt clients;
-- `render` returns a bounded RGBA8 region tied to the session revision and
-  accepts a cancellation token;
+- `render` returns a bounded RGBA8 region tied to the session revision. The
+  compositor clips directly to that document-space region and allocates only
+  the region-sized RGBA8 output, including the document-alpha preservation
+  path; cancellation is checked before and after compositing;
 - `encode_psd` writes layered PSD bytes, while `mark_saved` is separate so a
   failed filesystem write cannot falsely clear dirty state;
 - errors cross the boundary as `SessionError`, not Qt dialogs or C++ pointers.
@@ -84,5 +86,4 @@ or a second dirty/revision counter is forbidden.
 - add command families for pixel transforms and remaining nondestructive
   filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;
-- replace full-document flattening in `render` with a region compositor;
 - keep the desktop shell and scripting API on the same command path.

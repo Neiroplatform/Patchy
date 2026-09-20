@@ -20,10 +20,15 @@ namespace {
 // to each formats TU rather than promoted into render/).
 class Rgba8FlattenTarget {
 public:
-  explicit Rgba8FlattenTarget(PixelBuffer& destination) : destination_(destination) {}
+  explicit Rgba8FlattenTarget(PixelBuffer& destination,
+                              std::int32_t origin_x = 0,
+                              std::int32_t origin_y = 0)
+      : destination_(destination), origin_x_(origin_x), origin_y_(origin_y) {}
 
   void composite_color(std::int32_t x, std::int32_t y, RgbColor color, float alpha, BlendMode mode) {
     alpha = clamp_unit(alpha);
+    x -= origin_x_;
+    y -= origin_y_;
     if (alpha <= 0.0F || x < 0 || y < 0 || x >= destination_.width() || y >= destination_.height()) {
       return;
     }
@@ -41,6 +46,8 @@ public:
   void composite_special_fill_color(std::int32_t x, std::int32_t y, RgbColor color,
                                     float source_coverage, float fill_opacity, float layer_opacity,
                                     BlendMode mode) {
+    x -= origin_x_;
+    y -= origin_y_;
     if (source_coverage <= 0.0F || fill_opacity <= 0.0F || layer_opacity <= 0.0F || x < 0 || y < 0 ||
         x >= destination_.width() || y >= destination_.height()) {
       return;
@@ -54,6 +61,8 @@ public:
   }
 
   [[nodiscard]] render_detail::CompositeSample sample_color(std::int32_t x, std::int32_t y) const noexcept {
+    x -= origin_x_;
+    y -= origin_y_;
     if (x < 0 || y < 0 || x >= destination_.width() || y >= destination_.height()) {
       return {};
     }
@@ -65,6 +74,8 @@ public:
   // Direct overwrite for render_detail::fade_toward_snapshot (pass-through
   // group opacity); source-over cannot reduce coverage.
   void store_color(std::int32_t x, std::int32_t y, RgbColor color, float alpha) {
+    x -= origin_x_;
+    y -= origin_y_;
     if (x < 0 || y < 0 || x >= destination_.width() || y >= destination_.height()) {
       return;
     }
@@ -77,6 +88,8 @@ public:
 
   void adjust_color(std::int32_t x, std::int32_t y, const AdjustmentSettings& settings, float amount) {
     amount = clamp_unit(amount);
+    x -= origin_x_;
+    y -= origin_y_;
     if (amount <= 0.0F || x < 0 || y < 0 || x >= destination_.width() || y >= destination_.height()) {
       return;
     }
@@ -92,6 +105,8 @@ public:
 
   void adjust_color(std::int32_t x, std::int32_t y, const AdjustmentLut& lut, float amount) {
     amount = clamp_unit(amount);
+    x -= origin_x_;
+    y -= origin_y_;
     if (amount <= 0.0F || x < 0 || y < 0 || x >= destination_.width() || y >= destination_.height()) {
       return;
     }
@@ -107,24 +122,39 @@ public:
 
 private:
   PixelBuffer& destination_;
+  std::int32_t origin_x_{0};
+  std::int32_t origin_y_{0};
 };
 
 }  // namespace
 
 PixelBuffer flatten_document_rgba8(const Document& document) {
+  return flatten_document_region_rgba8(
+      document, Rect::from_size(document.width(), document.height()));
+}
+
+PixelBuffer flatten_document_region_rgba8(const Document& document,
+                                          Rect region) {
   if (document.width() <= 0 || document.height() <= 0) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Cannot flatten an empty document"));
   }
+  const auto canvas = Rect::from_size(document.width(), document.height());
+  if (region.empty() || region.x < 0 || region.y < 0 ||
+      region.x > canvas.width - region.width ||
+      region.y > canvas.height - region.height) {
+    throw std::invalid_argument(
+        PATCHY_TRANSLATE_NOOP("QObject", "Flatten region is outside the document"));
+  }
   if (!render_detail::layers_have_rendered_blend_if(document.layers())) {
-    if (auto masked = document_alpha_rgba8(document); masked.has_value()) {
+    if (auto masked = document_alpha_rgba8(document, region);
+        masked.has_value()) {
       return std::move(*masked);
     }
   }
-  PixelBuffer output(document.width(), document.height(), PixelFormat::rgba8());
+  PixelBuffer output(region.width, region.height, PixelFormat::rgba8());
   output.clear(0);
-  Rgba8FlattenTarget target(output);
-  const auto canvas = Rect::from_size(document.width(), document.height());
-  render_detail::composite_layers(target, document.layers(), canvas, nullptr, true, nullptr,
+  Rgba8FlattenTarget target(output, region.x, region.y);
+  render_detail::composite_layers(target, document.layers(), region, nullptr, true, nullptr,
                                   &document.metadata().patterns);
   return output;
 }

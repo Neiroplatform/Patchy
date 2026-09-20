@@ -1,6 +1,7 @@
 #include "engine/document_session.hpp"
 
 #include "core/smart_filter.hpp"
+#include "core/layer_metadata.hpp"
 #include "psd/psd_document_io.hpp"
 #include "test_groups.hpp"
 #include "test_harness.hpp"
@@ -281,6 +282,8 @@ void engine_session_headless_psd_open_edit_save_reopen() {
 
 void engine_session_renders_bounded_rgba_regions_and_cancels() {
   DocumentSession session(make_session_document());
+  const auto full = session.render(patchy::Rect{0, 0, 2, 2});
+  CHECK(static_cast<bool>(full));
   const auto rendered = session.render(patchy::Rect{1, 0, 1, 2});
   CHECK(static_cast<bool>(rendered));
   CHECK(rendered.pixels.width() == 1);
@@ -289,6 +292,70 @@ void engine_session_renders_bounded_rgba_regions_and_cancels() {
   CHECK(rendered.pixels.pixel(0, 0)[1] == 34);
   CHECK(rendered.pixels.pixel(0, 0)[2] == 56);
   CHECK(rendered.pixels.pixel(0, 0)[3] == 255);
+  CHECK(std::equal(rendered.pixels.row(0).begin(),
+                   rendered.pixels.row(0).end(), full.pixels.pixel(1, 0)));
+  CHECK(std::equal(rendered.pixels.row(1).begin(),
+                   rendered.pixels.row(1).end(), full.pixels.pixel(1, 1)));
+
+  Document alpha_document(4, 3, PixelFormat::rgba8());
+  PixelBuffer alpha_source(4, 3, PixelFormat::rgba8());
+  for (std::int32_t y = 0; y < 3; ++y) {
+    for (std::int32_t x = 0; x < 4; ++x) {
+      auto *pixel = alpha_source.pixel(x, y);
+      pixel[0] = static_cast<std::uint8_t>(30 + x);
+      pixel[1] = static_cast<std::uint8_t>(60 + y);
+      pixel[2] = 90;
+      pixel[3] = 255;
+    }
+  }
+  const auto alpha_layer_id = alpha_document.allocate_layer_id();
+  patchy::Layer alpha_layer(alpha_layer_id, "Document alpha",
+                            std::move(alpha_source));
+  PixelBuffer alpha_mask(4, 3, PixelFormat::gray8());
+  *alpha_mask.pixel(1, 1) = 0;
+  *alpha_mask.pixel(2, 1) = 128;
+  alpha_layer.set_mask(
+      patchy::LayerMask{{0, 0, 4, 3}, std::move(alpha_mask), 0, false});
+  patchy::set_layer_mask_is_document_alpha(alpha_layer, true);
+  alpha_document.add_layer(std::move(alpha_layer));
+  DocumentSession alpha_session(std::move(alpha_document));
+  const auto alpha_region = alpha_session.render({1, 1, 2, 1});
+  CHECK(static_cast<bool>(alpha_region));
+  CHECK(alpha_region.pixels.pixel(0, 0)[0] == 31);
+  CHECK(alpha_region.pixels.pixel(0, 0)[1] == 61);
+  CHECK(alpha_region.pixels.pixel(0, 0)[3] == 0);
+  CHECK(alpha_region.pixels.pixel(1, 0)[3] == 128);
+
+  Document layered_document(6, 4, PixelFormat::rgba8());
+  PixelBuffer backdrop(6, 4, PixelFormat::rgba8());
+  for (std::int32_t y = 0; y < 4; ++y) {
+    for (std::int32_t x = 0; x < 6; ++x) {
+      auto *pixel = backdrop.pixel(x, y);
+      pixel[0] = static_cast<std::uint8_t>(80 + x * 10);
+      pixel[1] = static_cast<std::uint8_t>(100 + y * 15);
+      pixel[2] = 180;
+      pixel[3] = 255;
+    }
+  }
+  layered_document.add_pixel_layer("Backdrop", std::move(backdrop));
+  PixelBuffer overlay(4, 3, PixelFormat::rgba8());
+  overlay.clear(160);
+  const auto overlay_id = layered_document.allocate_layer_id();
+  patchy::Layer overlay_layer(overlay_id, "Overlay", std::move(overlay));
+  overlay_layer.set_bounds({1, 0, 4, 3});
+  overlay_layer.set_blend_mode(patchy::BlendMode::Multiply);
+  overlay_layer.set_opacity(0.75F);
+  layered_document.add_layer(std::move(overlay_layer));
+  DocumentSession layered_session(std::move(layered_document));
+  const auto layered_full = layered_session.render({0, 0, 6, 4});
+  const auto layered_region = layered_session.render({2, 1, 3, 2});
+  CHECK(static_cast<bool>(layered_full));
+  CHECK(static_cast<bool>(layered_region));
+  for (std::int32_t y = 0; y < 2; ++y) {
+    CHECK(std::equal(layered_region.pixels.row(y).begin(),
+                     layered_region.pixels.row(y).end(),
+                     layered_full.pixels.pixel(2, y + 1)));
+  }
 
   const auto outside = session.render(patchy::Rect{2, 0, 1, 1});
   CHECK(!static_cast<bool>(outside));

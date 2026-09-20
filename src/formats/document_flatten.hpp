@@ -13,6 +13,12 @@ namespace patchy {
 // becomes the alpha channel, matching the BMP/PNG export semantics.
 [[nodiscard]] PixelBuffer flatten_document_rgba8(const Document& document);
 
+// Flattened RGBA8 composite of one document-space region. The destination is
+// region-sized, so viewport/headless region rendering does not allocate a
+// full-canvas output buffer.
+[[nodiscard]] PixelBuffer flatten_document_region_rgba8(const Document& document,
+                                                        Rect region);
+
 struct IndexedFlattenResult {
   std::int32_t width{0};
   std::int32_t height{0};

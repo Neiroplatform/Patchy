@@ -19,6 +19,8 @@ namespace patchy {
 // shows an opaque Background plus a separate "Alpha 1" channel). Returns nullopt when the
 // document is not a single masked pixel layer.
 [[nodiscard]] std::optional<PixelBuffer> document_alpha_rgba8(const Document& document);
+[[nodiscard]] std::optional<PixelBuffer> document_alpha_rgba8(const Document& document,
+                                                              Rect region);
 
 [[nodiscard]] Rect outset_rect(Rect rect, int amount) noexcept;
 [[nodiscard]] Rect clipped_mask_bounds(Rect full_bounds, Rect draw_rect, int sample_padding) noexcept;

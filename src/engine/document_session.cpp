@@ -1587,21 +1587,13 @@ DocumentSession::render(Rect region,
         make_error(SessionErrorCode::Cancelled, "render cancelled")};
   }
   try {
-    const auto flattened = flatten_document_rgba8(document_);
+    auto output = flatten_document_region_rgba8(document_, region);
     if (cancellation != nullptr && cancellation->cancelled()) {
       return RenderResult{
           {},
           region,
           revision_,
           make_error(SessionErrorCode::Cancelled, "render cancelled")};
-    }
-    PixelBuffer output(region.width, region.height, PixelFormat::rgba8());
-    const auto row_bytes = static_cast<std::size_t>(region.width) * 4U;
-    for (std::int32_t row = 0; row < region.height; ++row) {
-      const auto source = flattened.row(region.y + row);
-      auto destination = output.row(row);
-      const auto source_offset = static_cast<std::size_t>(region.x) * 4U;
-      std::memcpy(destination.data(), source.data() + source_offset, row_bytes);
     }
     return RenderResult{std::move(output), region, revision_, {}};
   } catch (const std::exception &exception) {

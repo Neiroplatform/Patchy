@@ -90,6 +90,12 @@ int layer_style_falloff_radius(float size) noexcept {
 }  // namespace
 
 std::optional<PixelBuffer> document_alpha_rgba8(const Document& document) {
+  return document_alpha_rgba8(
+      document, Rect::from_size(document.width(), document.height()));
+}
+
+std::optional<PixelBuffer> document_alpha_rgba8(const Document& document,
+                                                Rect region) {
   if (document.layers().size() != 1) {
     return std::nullopt;
   }
@@ -105,6 +111,11 @@ std::optional<PixelBuffer> document_alpha_rgba8(const Document& document) {
   }
   const auto width = document.width();
   const auto height = document.height();
+  if (region.empty() || region.x < 0 || region.y < 0 ||
+      region.x > width - region.width ||
+      region.y > height - region.height) {
+    return std::nullopt;
+  }
   const PixelBuffer& source = layer.pixels();
   if (source.width() != width || source.height() != height) {
     return std::nullopt;
@@ -115,10 +126,10 @@ std::optional<PixelBuffer> document_alpha_rgba8(const Document& document) {
     return std::nullopt;
   }
 
-  PixelBuffer output(width, height, PixelFormat::rgba8());
-  for (std::int32_t y = 0; y < height; ++y) {
-    for (std::int32_t x = 0; x < width; ++x) {
-      const std::uint8_t* src = source.pixel(x, y);
+  PixelBuffer output(region.width, region.height, PixelFormat::rgba8());
+  for (std::int32_t y = 0; y < region.height; ++y) {
+    for (std::int32_t x = 0; x < region.width; ++x) {
+      const std::uint8_t* src = source.pixel(region.x + x, region.y + y);
       std::uint8_t* dst = output.pixel(x, y);
       dst[0] = src[0];
       dst[1] = src[1];
@@ -130,15 +141,16 @@ std::optional<PixelBuffer> document_alpha_rgba8(const Document& document) {
   const LayerMask& layer_mask = *mask;
   for (std::int32_t my = 0; my < layer_mask.pixels.height(); ++my) {
     const std::int32_t doc_y = layer_mask.bounds.y + my;
-    if (doc_y < 0 || doc_y >= height) {
+    if (doc_y < region.y || doc_y >= region.y + region.height) {
       continue;
     }
     for (std::int32_t mx = 0; mx < layer_mask.pixels.width(); ++mx) {
       const std::int32_t doc_x = layer_mask.bounds.x + mx;
-      if (doc_x < 0 || doc_x >= width) {
+      if (doc_x < region.x || doc_x >= region.x + region.width) {
         continue;
       }
-      output.pixel(doc_x, doc_y)[3] = layer_mask.pixels.pixel(mx, my)[0];
+      output.pixel(doc_x - region.x, doc_y - region.y)[3] =
+          layer_mask.pixels.pixel(mx, my)[0];
     }
   }
   return output;
