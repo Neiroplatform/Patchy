@@ -3510,6 +3510,33 @@ bool MainWindow::select_smart_filter_mask_via_engine(LayerId layer_id) {
   return true;
 }
 
+bool MainWindow::select_by_color_similarity_via_engine(
+    patchy::engine::SelectionSimilarityMode mode) {
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SelectByColorSimilarity{mode, canvas_->wand_tolerance()});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return false;
+  }
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
+  canvas_->set_selection_edges_visible(true);
+  return true;
+}
+
+bool MainWindow::select_vector_path_via_engine(
+    const VectorPath& path, double feather, bool antialias,
+    patchy::engine::SelectionCombineMode combine) {
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SelectVectorPath{path, feather, antialias, combine});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return false;
+  }
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
+  canvas_->set_selection_edges_visible(true);
+  return true;
+}
+
 void MainWindow::expand_selection_dialog() {
   if (!canvas_->has_selection()) {
     show_status_error(tr("Make a selection before expanding"));

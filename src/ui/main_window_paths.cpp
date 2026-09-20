@@ -351,9 +351,9 @@ void MainWindow::load_path_as_selection(int kind, DocumentPathId id) {
     show_status_error(tr("The path is empty"));
     return;
   }
-  const auto& doc = document();
-  const auto coverage = path_selection_coverage(*path, doc.width(), doc.height());
-  canvas_->replace_selection_from_grayscale(coverage, tr("Load path as selection"));
+  canvas_->run_selection_command(tr("Load path as selection"), [this, path] {
+    select_vector_path_via_engine(*path);
+  });
   statusBar()->showMessage(tr("Loaded %1 as a selection.").arg(path_name));
 }
 
@@ -977,11 +977,17 @@ void MainWindow::make_selection_from_path() {
     return;
   }
 
-  auto& doc = document();
-  const auto existing = selection_mask_pixels(*canvas_, QRect(0, 0, doc.width(), doc.height()));
-  auto coverage = make_path_selection_coverage(*path, doc.width(), doc.height(), feather->value(),
-      antialias->isChecked(), has_selection ? operation->currentIndex() : 0, &existing);
-  canvas_->replace_selection_from_grayscale(coverage, tr("Make selection from path"));
+  const auto combine = has_selection
+                           ? static_cast<patchy::engine::SelectionCombineMode>(
+                                 operation->currentIndex())
+                           : patchy::engine::SelectionCombineMode::Replace;
+  canvas_->run_selection_command(tr("Make selection from path"),
+                                 [this, path, feather_value = feather->value(),
+                                  antialias_value = antialias->isChecked(),
+                                  combine] {
+    select_vector_path_via_engine(*path, feather_value, antialias_value,
+                                  combine);
+  });
   statusBar()->showMessage(tr("Made a selection from the path"));
 }
 

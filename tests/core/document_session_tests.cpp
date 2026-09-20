@@ -41,6 +41,10 @@ using patchy::engine::SelectLayerAlpha;
 using patchy::engine::SelectLayerMask;
 using patchy::engine::SelectLayerVectorMask;
 using patchy::engine::SelectSmartFilterMask;
+using patchy::engine::SelectByColorSimilarity;
+using patchy::engine::SelectionSimilarityMode;
+using patchy::engine::SelectVectorPath;
+using patchy::engine::SelectionCombineMode;
 using patchy::engine::SetLayerBlendMode;
 using patchy::engine::SetLayerFillOpacity;
 using patchy::engine::SetLayerOpacity;
@@ -557,6 +561,69 @@ void engine_session_layer_derived_selection_preserves_soft_coverage() {
   CHECK(!session.dirty());
 }
 
+void engine_session_similarity_and_path_selection_are_canonical() {
+  Document document(8, 6, PixelFormat::rgba8());
+  PixelBuffer pixels(8, 6, PixelFormat::rgba8());
+  for (std::int32_t y = 0; y < 6; ++y) {
+    for (std::int32_t x = 0; x < 8; ++x) {
+      auto *pixel = pixels.pixel(x, y);
+      const bool red = x < 2 || (x >= 4 && x < 6);
+      pixel[0] = red ? 220U : 20U;
+      pixel[1] = red ? 20U : 80U;
+      pixel[2] = red ? 40U : 220U;
+      pixel[3] = 255U;
+    }
+  }
+  document.add_pixel_layer("Similarity", std::move(pixels));
+  DocumentSession session(std::move(document));
+  CHECK(static_cast<bool>(session.execute(
+      SetSelection{SelectionSnapshot{{{0, 0, 1, 1}}, {{0, 0, 1, 1}}}})));
+
+  const auto contains = [&session](std::int32_t x, std::int32_t y) {
+    return std::any_of(
+        session.selection().selection.begin(),
+        session.selection().selection.end(), [x, y](patchy::Rect rect) {
+          return x >= rect.x && y >= rect.y && x < rect.x + rect.width &&
+                 y < rect.y + rect.height;
+        });
+  };
+  CHECK(static_cast<bool>(session.execute(SelectByColorSimilarity{
+      SelectionSimilarityMode::Grow, 0})));
+  CHECK(contains(1, 5));
+  CHECK(!contains(4, 0));
+  CHECK(static_cast<bool>(session.execute(SelectByColorSimilarity{
+      SelectionSimilarityMode::Similar, 0})));
+  CHECK(contains(1, 5));
+  CHECK(contains(4, 0));
+  CHECK(!contains(7, 0));
+
+  const auto corner = [](double x, double y) {
+    patchy::PathAnchor anchor;
+    anchor.anchor_x = anchor.in_x = anchor.out_x = x;
+    anchor.anchor_y = anchor.in_y = anchor.out_y = y;
+    return anchor;
+  };
+  patchy::PathSubpath rectangle;
+  rectangle.anchors =
+      {corner(2, 1), corner(7, 1), corner(7, 5), corner(2, 5)};
+  patchy::VectorPath path;
+  path.subpaths.push_back(std::move(rectangle));
+  CHECK(static_cast<bool>(session.execute(SelectVectorPath{
+      path, 0.0, false, SelectionCombineMode::Replace})));
+  CHECK(!contains(0, 0));
+  CHECK(contains(4, 3));
+  CHECK(static_cast<bool>(session.execute(SelectVectorPath{
+      path, 2.0, true, SelectionCombineMode::Add})));
+  CHECK(!session.selection().mask_alpha.empty());
+  CHECK(!session.dirty());
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.selection().mask_alpha.empty());
+  const auto revision = session.revision();
+  CHECK(!static_cast<bool>(session.execute(SelectByColorSimilarity{
+      SelectionSimilarityMode::Similar, 256})));
+  CHECK(session.revision() == revision);
+}
+
 void engine_session_layer_editing_vertical_slice_is_atomic_and_undoable() {
   DocumentSession session(make_session_document());
   const auto original_id = session.document().layers().front().id();
@@ -698,6 +765,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_selection_operations_are_qt_free_and_undoable},
       {"engine_session_layer_derived_selection_preserves_soft_coverage",
        engine_session_layer_derived_selection_preserves_soft_coverage},
+      {"engine_session_similarity_and_path_selection_are_canonical",
+       engine_session_similarity_and_path_selection_are_canonical},
       {"engine_session_layer_editing_vertical_slice_is_atomic_and_undoable",
        engine_session_layer_editing_vertical_slice_is_atomic_and_undoable},
       {"engine_session_filter_and_pixel_commands_share_atomic_history",

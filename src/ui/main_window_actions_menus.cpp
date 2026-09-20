@@ -620,9 +620,15 @@ void MainWindow::build_menu_bar_actions(ActionBuildContext& ctx) {
   connect(quick_mask_action_, &QAction::triggered, this,
           [this] { toggle_quick_mask_mode(); });
   connect(grow_selection_action, &QAction::triggered, this,
-          [this] { canvas_->run_selection_command(tr("Grow Selection"), [this] { canvas_->grow_selection(); }); });
+          [this] { canvas_->run_selection_command(tr("Grow Selection"), [this] {
+            select_by_color_similarity_via_engine(
+                patchy::engine::SelectionSimilarityMode::Grow);
+          }); });
   connect(similar_selection_action, &QAction::triggered, this, [this] {
-    canvas_->run_selection_command(tr("Select Similar"), [this] { canvas_->select_similar_to_selection(); });
+    canvas_->run_selection_command(tr("Select Similar"), [this] {
+      select_by_color_similarity_via_engine(
+          patchy::engine::SelectionSimilarityMode::Similar);
+    });
   });
   connect(expand_selection_action, &QAction::triggered, this, [this] { expand_selection_dialog(); });
   connect(contract_selection_action, &QAction::triggered, this, [this] { contract_selection_dialog(); });

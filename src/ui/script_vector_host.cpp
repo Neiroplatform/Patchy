@@ -56,17 +56,25 @@ QJsonObject ScriptEngineHost::vector_target(std::int64_t session) const {
 }
 void ScriptEngineHost::select_vector_path(std::int64_t session, const VectorPath& path,
                                         double feather, bool antialias, const QString& operation) {
-  const auto& doc = script_vector::document(*this, session);
+  (void)script_vector::document(*this, session);
   auto* canvas = session_canvas(session);
   if (!canvas || canvas->quick_mask_active()) { script_vector::invalid("selection.target"); }
-  const auto existing = selection_mask_pixels(*canvas, QRect(0, 0, doc.width(), doc.height()));
-  const int op = canvas->has_selection() ? static_cast<int>(QStringList{"replace", "add", "subtract", "intersect"}.indexOf(operation)) : 0;
-  const auto coverage = make_path_selection_coverage(path, doc.width(), doc.height(), feather, antialias, op, &existing);
   (void)script_vector::writable(*this, session);
+  auto* target_session = window_.session_with_id(session);
+  if (target_session == nullptr) { script_vector::invalid("document.id"); }
+  const auto operation_index =
+      canvas->has_selection()
+          ? QStringList{"replace", "add", "subtract", "intersect"}.indexOf(
+                operation)
+          : 0;
+  const auto result = target_session->engine_session.execute_external(
+      patchy::engine::SelectVectorPath{
+          path, feather, antialias,
+          static_cast<patchy::engine::SelectionCombineMode>(operation_index)});
+  if (!result) { throw_js_error(QString::fromStdString(result.error.message)); return; }
   canvas = session_canvas(session);
   if (!canvas) { script_vector::invalid("selection.target"); }
-  canvas->apply_grayscale_to_selection(coverage);
-  sync_canvas_selection(session);
+  canvas->apply_engine_selection_snapshot(target_session->engine_session.selection());
   note_pixels_changed(session, {});
 }
 VectorPath ScriptEngineHost::selection_vector_path(std::int64_t session, double tolerance) const {

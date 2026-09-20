@@ -1034,6 +1034,12 @@ private:
   bool select_layer_mask_via_engine(LayerId layer_id);
   bool select_layer_vector_mask_via_engine(LayerId layer_id);
   bool select_smart_filter_mask_via_engine(LayerId layer_id);
+  bool select_by_color_similarity_via_engine(
+      patchy::engine::SelectionSimilarityMode mode);
+  bool select_vector_path_via_engine(
+      const VectorPath& path, double feather = 0.0, bool antialias = true,
+      patchy::engine::SelectionCombineMode combine =
+          patchy::engine::SelectionCombineMode::Replace);
   void apply_brush_tip_to_canvas(CanvasWidget* canvas);
   void import_brush_tips_from_abr();
   void open_brush_tip_manager();

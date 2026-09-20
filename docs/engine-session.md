@@ -28,6 +28,11 @@ typed editing commands.
   canonical layer state. Select > Load Layer Transparency, layer context-menu
   selection and Ctrl-clicks on content/raster-mask/vector-mask/Smart-Filter-mask
   thumbnails all execute these commands and project the same undoable snapshot;
+- `SelectByColorSimilarity` owns contiguous Grow and document-wide Similar
+  selection against the canonical flattened pixels, while `SelectVectorPath`
+  owns path rasterization, anti-aliasing, feather and replace/add/subtract/
+  intersect semantics. Desktop menu/Paths panel and scripting share these
+  commands;
 - every successful mutation gets a new state identity and a monotonic revision;
   rejected and no-op commands change neither;
 - undo and redo restore document state identities, so returning to the saved
@@ -71,9 +76,9 @@ or a second dirty/revision counter is forbidden.
 
 ## Remaining M2 boundary
 
-- move the remaining gesture-, grow/similar- and path-panel-derived selection
-  algorithms behind the engine boundary (committed ownership, core menu
-  morphology and all layer-thumbnail-derived selections are already there);
+- move the remaining in-flight gesture selection algorithms behind the engine
+  boundary (committed ownership, menu morphology, similarity, path and all
+  layer-thumbnail-derived selections are already there);
 - migrate remaining brush/pixel, vector, Smart Filter and adjustment mutations,
   plus history storage, to engine commands;
 - add command families for pixel transforms and remaining nondestructive

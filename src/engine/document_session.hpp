@@ -214,6 +214,22 @@ struct SelectSmartFilterMask {
   LayerId layer_id{0};
 };
 
+enum class SelectionSimilarityMode { Grow, Similar };
+
+struct SelectByColorSimilarity {
+  SelectionSimilarityMode mode{SelectionSimilarityMode::Grow};
+  std::int32_t tolerance{32};
+};
+
+enum class SelectionCombineMode { Replace, Add, Subtract, Intersect };
+
+struct SelectVectorPath {
+  VectorPath path{};
+  double feather{0.0};
+  bool antialias{true};
+  SelectionCombineMode combine{SelectionCombineMode::Replace};
+};
+
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
@@ -223,7 +239,8 @@ using DocumentCommand =
                  SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers,
                  ReplaceLayerPixels, ApplyFilter, SetSelection,
                  ModifySelection, SelectLayerAlpha, SelectLayerMask,
-                 SelectLayerVectorMask, SelectSmartFilterMask>;
+                 SelectLayerVectorMask, SelectSmartFilterMask,
+                 SelectByColorSimilarity, SelectVectorPath>;
 
 struct LayerInfo {
   LayerId id{0};

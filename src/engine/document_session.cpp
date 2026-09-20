@@ -3,10 +3,12 @@
 #include "formats/document_flatten.hpp"
 #include "core/layer_render_utils.hpp"
 #include "core/smart_object.hpp"
+#include "core/vector_raster.hpp"
 #include "psd/psd_document_io.hpp"
 #include "psd/psd_filter_effects.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -297,6 +299,90 @@ std::uint8_t pixel_alpha8(const PixelBuffer &pixels, std::int32_t x,
   std::memcpy(&value, source, sizeof(value));
   return static_cast<std::uint8_t>(
       std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));
+}
+
+PixelBuffer materialize_selection_alpha(const SelectionSnapshot &selection,
+                                        std::int32_t width,
+                                        std::int32_t height) {
+  PixelBuffer alpha(width, height, PixelFormat::gray8());
+  if (!selection.mask_alpha.empty() &&
+      selection.mask_alpha.format() == PixelFormat::gray8()) {
+    const auto copy = intersect_rect(selection.mask_bounds,
+                                     Rect::from_size(width, height));
+    for (std::int32_t y = 0; y < copy.height; ++y) {
+      std::copy_n(selection.mask_alpha.pixel(
+                      copy.x - selection.mask_bounds.x,
+                      copy.y + y - selection.mask_bounds.y),
+                  copy.width, alpha.pixel(copy.x, copy.y + y));
+    }
+    return alpha;
+  }
+  for (const auto rect : selection.selection) {
+    const auto clipped = intersect_rect(rect, Rect::from_size(width, height));
+    for (std::int32_t y = 0; y < clipped.height; ++y) {
+      std::fill_n(alpha.pixel(clipped.x, clipped.y + y), clipped.width, 255U);
+    }
+  }
+  return alpha;
+}
+
+void blur_selection_alpha(PixelBuffer &coverage, double feather) {
+  if (feather <= 0.0 || coverage.empty()) {
+    return;
+  }
+  const auto radius =
+      std::max(1, static_cast<std::int32_t>(std::lround(feather * 0.5)));
+  PixelBuffer scratch(coverage.width(), coverage.height(), PixelFormat::gray8());
+  for (int pass = 0; pass < 3; ++pass) {
+    for (std::int32_t y = 0; y < coverage.height(); ++y) {
+      std::int32_t sum = 0;
+      std::int32_t count = 0;
+      for (std::int32_t x = -radius; x <= radius; ++x) {
+        if (x >= 0 && x < coverage.width()) {
+          sum += *coverage.pixel(x, y);
+          ++count;
+        }
+      }
+      for (std::int32_t x = 0; x < coverage.width(); ++x) {
+        *scratch.pixel(x, y) =
+            static_cast<std::uint8_t>(sum / std::max(1, count));
+        const auto add_x = x + radius + 1;
+        const auto remove_x = x - radius;
+        if (add_x < coverage.width()) {
+          sum += *coverage.pixel(add_x, y);
+          ++count;
+        }
+        if (remove_x >= 0) {
+          sum -= *coverage.pixel(remove_x, y);
+          --count;
+        }
+      }
+    }
+    for (std::int32_t x = 0; x < coverage.width(); ++x) {
+      std::int32_t sum = 0;
+      std::int32_t count = 0;
+      for (std::int32_t y = -radius; y <= radius; ++y) {
+        if (y >= 0 && y < coverage.height()) {
+          sum += *scratch.pixel(x, y);
+          ++count;
+        }
+      }
+      for (std::int32_t y = 0; y < coverage.height(); ++y) {
+        *coverage.pixel(x, y) =
+            static_cast<std::uint8_t>(sum / std::max(1, count));
+        const auto add_y = y + radius + 1;
+        const auto remove_y = y - radius;
+        if (add_y < coverage.height()) {
+          sum += *scratch.pixel(x, add_y);
+          ++count;
+        }
+        if (remove_y >= 0) {
+          sum -= *scratch.pixel(x, remove_y);
+          --count;
+        }
+      }
+    }
+  }
 }
 
 void restore_pixels_outside_rect_selection(
@@ -862,6 +948,203 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             layer_id = concrete.layer_id;
             affected_region =
                 unite_rect(old_render_bounds, layer_render_bounds(*layer));
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                              SelectByColorSimilarity>) {
+            if (concrete.mode != SelectionSimilarityMode::Grow &&
+                concrete.mode != SelectionSimilarityMode::Similar) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "color similarity mode is invalid");
+              return;
+            }
+            if (selection_.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "color similarity requires a selection");
+              return;
+            }
+            if (concrete.tolerance < 0 || concrete.tolerance > 255) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "color similarity tolerance must be in [0, 255]");
+              return;
+            }
+            const auto width = document_.width();
+            const auto height = document_.height();
+            const auto flattened = flatten_document_rgba8(document_);
+            std::array<std::int64_t, 4> sum{};
+            std::int64_t sample_count = 0;
+            for (const auto rect : selection_.selection) {
+              const auto clipped =
+                  intersect_rect(rect, Rect::from_size(width, height));
+              for (std::int32_t y = clipped.y;
+                   y < clipped.y + clipped.height; ++y) {
+                for (std::int32_t x = clipped.x;
+                     x < clipped.x + clipped.width; ++x) {
+                  const auto *color = flattened.pixel(x, y);
+                  for (std::size_t channel = 0; channel < 4; ++channel) {
+                    sum[channel] += color[channel];
+                  }
+                  ++sample_count;
+                }
+              }
+            }
+            if (sample_count == 0) {
+              return;
+            }
+            std::array<std::int32_t, 4> target{};
+            for (std::size_t channel = 0; channel < 4; ++channel) {
+              target[channel] =
+                  static_cast<std::int32_t>(sum[channel] / sample_count);
+            }
+            const auto tolerance_squared =
+                concrete.tolerance * concrete.tolerance * 4;
+            const auto matches = [&](std::int32_t x, std::int32_t y) {
+              const auto *color = flattened.pixel(x, y);
+              std::int32_t distance = 0;
+              for (std::size_t channel = 0; channel < 4; ++channel) {
+                const auto delta = static_cast<std::int32_t>(color[channel]) -
+                                   target[channel];
+                distance += delta * delta;
+              }
+              return distance <= tolerance_squared;
+            };
+            PixelBuffer alpha(width, height, PixelFormat::gray8());
+            if (concrete.mode == SelectionSimilarityMode::Similar) {
+              for (std::int32_t y = 0; y < height; ++y) {
+                for (std::int32_t x = 0; x < width; ++x) {
+                  if (matches(x, y)) {
+                    *alpha.pixel(x, y) = 255U;
+                  }
+                }
+              }
+            } else {
+              std::vector<std::int32_t> queue;
+              queue.reserve(std::min<std::size_t>(
+                  static_cast<std::size_t>(width) *
+                      static_cast<std::size_t>(height),
+                  1'000'000U));
+              const auto mark = [&](std::int32_t x, std::int32_t y) {
+                auto *value = alpha.pixel(x, y);
+                if (*value != 0U) {
+                  return false;
+                }
+                *value = 255U;
+                queue.push_back(y * width + x);
+                return true;
+              };
+              for (const auto rect : selection_.selection) {
+                const auto clipped =
+                    intersect_rect(rect, Rect::from_size(width, height));
+                for (std::int32_t y = clipped.y;
+                     y < clipped.y + clipped.height; ++y) {
+                  for (std::int32_t x = clipped.x;
+                       x < clipped.x + clipped.width; ++x) {
+                    mark(x, y);
+                  }
+                }
+              }
+              for (std::size_t offset = 0; offset < queue.size(); ++offset) {
+                const auto x = queue[offset] % width;
+                const auto y = queue[offset] / width;
+                const auto maybe_mark = [&](std::int32_t next_x,
+                                            std::int32_t next_y) {
+                  if (*alpha.pixel(next_x, next_y) == 0U &&
+                      matches(next_x, next_y)) {
+                    mark(next_x, next_y);
+                  }
+                };
+                if (x + 1 < width) {
+                  maybe_mark(x + 1, y);
+                }
+                if (x > 0) {
+                  maybe_mark(x - 1, y);
+                }
+                if (y + 1 < height) {
+                  maybe_mark(x, y + 1);
+                }
+                if (y > 0) {
+                  maybe_mark(x, y - 1);
+                }
+              }
+            }
+            auto modified = selection_from_gray_mask(
+                std::move(alpha), Rect::from_size(width, height));
+            if (selection_snapshots_equal(selection_, modified)) {
+              return;
+            }
+            prepare_mutation(record_history);
+            selection_ = std::move(modified);
+            changed = true;
+            affects_document = false;
+            event_kind = SessionEventKind::SelectionChanged;
+            return;
+          } else if constexpr (std::is_same_v<Command, SelectVectorPath>) {
+            if (concrete.combine != SelectionCombineMode::Replace &&
+                concrete.combine != SelectionCombineMode::Add &&
+                concrete.combine != SelectionCombineMode::Subtract &&
+                concrete.combine != SelectionCombineMode::Intersect) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "selection combine mode is invalid");
+              return;
+            }
+            if (concrete.path.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "selection source path is empty");
+              return;
+            }
+            if (!std::isfinite(concrete.feather) || concrete.feather < 0.0 ||
+                concrete.feather > 250.0) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "selection feather must be in [0, 250]");
+              return;
+            }
+            const auto canvas =
+                Rect::from_size(document_.width(), document_.height());
+            const auto rasterized = rasterize_vector_path(
+                concrete.path, VectorRasterOptions{.clip = canvas});
+            PixelBuffer alpha(canvas.width, canvas.height,
+                              PixelFormat::gray8());
+            if (!rasterized.pixels.empty()) {
+              const auto copy = intersect_rect(rasterized.bounds, canvas);
+              for (std::int32_t y = 0; y < copy.height; ++y) {
+                std::copy_n(rasterized.pixels.pixel(
+                                copy.x - rasterized.bounds.x,
+                                copy.y + y - rasterized.bounds.y),
+                            copy.width, alpha.pixel(copy.x, copy.y + y));
+              }
+            }
+            blur_selection_alpha(alpha, concrete.feather);
+            if (!concrete.antialias) {
+              for (auto &value : alpha.data()) {
+                value = value >= 128U ? 255U : 0U;
+              }
+            }
+            if (concrete.combine != SelectionCombineMode::Replace) {
+              const auto existing = materialize_selection_alpha(
+                  selection_, canvas.width, canvas.height);
+              for (std::size_t index = 0; index < alpha.data().size(); ++index) {
+                auto &value = alpha.data()[index];
+                const auto current = existing.data()[index];
+                if (concrete.combine == SelectionCombineMode::Add) {
+                  value = std::max(value, current);
+                } else if (concrete.combine == SelectionCombineMode::Subtract) {
+                  value = static_cast<std::uint8_t>(
+                      (current * (255U - value)) / 255U);
+                } else {
+                  value = static_cast<std::uint8_t>(
+                      (current * value) / 255U);
+                }
+              }
+            }
+            auto modified =
+                selection_from_gray_mask(std::move(alpha), canvas);
+            if (selection_snapshots_equal(selection_, modified)) {
+              return;
+            }
+            prepare_mutation(record_history);
+            selection_ = std::move(modified);
+            changed = true;
+            affects_document = false;
+            event_kind = SessionEventKind::SelectionChanged;
             return;
           } else if constexpr (std::is_same_v<Command, SelectLayerAlpha> ||
                                std::is_same_v<Command, SelectLayerMask> ||
