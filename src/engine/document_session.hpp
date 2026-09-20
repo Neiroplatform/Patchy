@@ -6,6 +6,7 @@
 #include "filters/filter_registry.hpp"
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -230,6 +231,16 @@ struct SelectVectorPath {
   SelectionCombineMode combine{SelectionCombineMode::Replace};
 };
 
+enum class VectorTransformTarget { ShapeAndMask, VectorMaskOnly };
+
+struct TransformVectorLayers {
+  std::vector<LayerId> layer_ids{};
+  // Row-major 2x3 affine: x' = ax + cy + tx, y' = bx + dy + ty.
+  std::array<double, 6> matrix{1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+  double stroke_scale{1.0};
+  VectorTransformTarget target{VectorTransformTarget::ShapeAndMask};
+};
+
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
@@ -240,7 +251,8 @@ using DocumentCommand =
                  ReplaceLayerPixels, ApplyFilter, SetSelection,
                  ModifySelection, SelectLayerAlpha, SelectLayerMask,
                  SelectLayerVectorMask, SelectSmartFilterMask,
-                 SelectByColorSimilarity, SelectVectorPath>;
+                 SelectByColorSimilarity, SelectVectorPath,
+                 TransformVectorLayers>;
 
 struct LayerInfo {
   LayerId id{0};

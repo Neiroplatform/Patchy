@@ -185,7 +185,6 @@ void ScriptLayerObject::transformShape(const QJSValue& transform, const QJSValue
     const auto args = object(options, true); keys(args, {"strokeScale"});
     const auto stroke_scale = number(args, "strokeScale", 1, 0.0001, 10000);
     const auto& source = layer(host_, session_id_, layer_id_, true);
-    const auto& doc = document(host_, session_id_);
     std::vector<LayerId> ids;
     std::function<void(const Layer&)> validate = [&](const Layer& l) {
       (void)layer(host_, session_id_, l.id(), true);
@@ -205,18 +204,11 @@ void ScriptLayerObject::transformShape(const QJSValue& transform, const QJSValue
     };
     validate(source);
     if (ids.empty() || (m == std::array<double, 6>{1, 0, 0, 1, 0, 0} && stroke_scale == 1)) { return; }
-    auto staged = doc;
-    QRect dirty;
-    for (const auto id : ids) {
-      auto* l = staged.find_layer(id);
-      dirty |= to_qrect(layer_render_bounds(std::as_const(*l)));
-      transform_layer_vector_data(staged, *l, m, Rect::from_size(doc.width(), doc.height()), stroke_scale);
-      dirty |= to_qrect(layer_render_bounds(std::as_const(*l)));
-    }
-    auto& target = writable(host_, session_id_);
-    for (const auto id : ids) { (void)layer(host_, session_id_, id, true); }
-    target = std::move(staged);
-    host_.note_vector_changed(session_id_, dirty);
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::TransformVectorLayers{
+                         ids, m, stroke_scale,
+                         patchy::engine::VectorTransformTarget::ShapeAndMask});
+    if (!result) { invalid("layer.shape"); }
   });
 }
 QJSValue ScriptDocumentObject::listVectorResources() const {

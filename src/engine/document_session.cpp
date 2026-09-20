@@ -1,6 +1,7 @@
 #include "engine/document_session.hpp"
 
 #include "formats/document_flatten.hpp"
+#include "core/layer_metadata.hpp"
 #include "core/layer_render_utils.hpp"
 #include "core/smart_object.hpp"
 #include "core/vector_raster.hpp"
@@ -1076,6 +1077,81 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             changed = true;
             affects_document = false;
             event_kind = SessionEventKind::SelectionChanged;
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                TransformVectorLayers>) {
+            if (concrete.layer_ids.empty() ||
+                !std::all_of(concrete.matrix.begin(), concrete.matrix.end(),
+                             [](double value) { return std::isfinite(value); }) ||
+                !std::isfinite(concrete.stroke_scale) ||
+                concrete.stroke_scale <= 0.0 ||
+                concrete.stroke_scale > 10000.0) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "vector transform parameters are invalid");
+              return;
+            }
+            auto unique_ids = concrete.layer_ids;
+            std::sort(unique_ids.begin(), unique_ids.end());
+            if (std::adjacent_find(unique_ids.begin(), unique_ids.end()) !=
+                unique_ids.end()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "vector transform layer ids must be unique");
+              return;
+            }
+            for (const auto id : concrete.layer_ids) {
+              const auto *candidate = document_.find_layer(id);
+              if (candidate == nullptr) {
+                error = make_error(SessionErrorCode::LayerNotFound,
+                                   "vector transform layer does not exist");
+                return;
+              }
+              const bool supported =
+                  concrete.target == VectorTransformTarget::VectorMaskOnly
+                      ? candidate->vector_mask() != nullptr
+                      : candidate->vector_shape() != nullptr ||
+                            candidate->vector_mask() != nullptr;
+              if (!supported) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "layer has no requested vector data");
+                return;
+              }
+            }
+            const bool identity =
+                concrete.matrix ==
+                    std::array<double, 6>{1.0, 0.0, 0.0, 1.0, 0.0, 0.0} &&
+                concrete.stroke_scale == 1.0;
+            if (identity) {
+              return;
+            }
+            Rect affected{};
+            const auto canvas =
+                Rect::from_size(document_.width(), document_.height());
+            for (const auto id : concrete.layer_ids) {
+              affected = unite_rect(
+                  affected,
+                  layer_render_bounds(*document_.find_layer(id)));
+            }
+            auto transformed_document = document_;
+            for (const auto id : concrete.layer_ids) {
+              auto *target = transformed_document.find_layer(id);
+              if (concrete.target == VectorTransformTarget::VectorMaskOnly) {
+                auto mask = *target->vector_mask();
+                transform_vector_path(mask.path, concrete.matrix);
+                target->set_vector_mask(std::move(mask));
+                update_vector_mask_raster(*target, canvas);
+                mark_layer_vector_block_dirty(*target);
+              } else {
+                transform_layer_vector_data(transformed_document, *target,
+                                            concrete.matrix, canvas,
+                                            concrete.stroke_scale);
+              }
+              affected = unite_rect(affected, layer_render_bounds(*target));
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(transformed_document);
+            changed = true;
+            layer_id = concrete.layer_ids.front();
+            affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command, SelectVectorPath>) {
             if (concrete.combine != SelectionCombineMode::Replace &&

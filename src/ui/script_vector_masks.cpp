@@ -73,13 +73,13 @@ void ScriptLayerObject::transformVectorMask(const QJSValue& value) {
     const auto m = matrix(value);
     const auto& old = layer(host_, session_id_, layer_id_, true);
     if (!old.vector_mask()) { invalid("layer.vectorMask"); }
-    auto mask = *old.vector_mask(); validate_transformed_path(mask.path, m); transform_vector_path(mask.path, m);
-    if (mask.path == old.vector_mask()->path) { return; }
-    const auto& doc = document(host_, session_id_);
-    const auto before = to_qrect(layer_render_bounds(old)); auto prepared = old;
-    prepared.set_vector_mask(std::move(mask)); mark_layer_vector_block_dirty(prepared);
-    update_vector_mask_raster(prepared, Rect::from_size(doc.width(), doc.height()));
-    commit_mask(host_, session_id_, layer_id_, std::move(prepared), before, false);
+    validate_transformed_path(old.vector_mask()->path, m);
+    if (m == std::array<double, 6>{1, 0, 0, 1, 0, 0}) { return; }
+    const auto result = host_.execute_engine_command(
+        session_id_, patchy::engine::TransformVectorLayers{
+                         {layer_id_}, m, 1.0,
+                         patchy::engine::VectorTransformTarget::VectorMaskOnly});
+    if (!result) { invalid("layer.vectorMask"); }
   });
 }
 void ScriptLayerObject::rasterizeVectorMask() {

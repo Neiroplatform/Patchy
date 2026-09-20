@@ -33,6 +33,10 @@ typed editing commands.
   owns path rasterization, anti-aliasing, feather and replace/add/subtract/
   intersect semantics. Desktop menu/Paths panel and scripting share these
   commands;
+- `TransformVectorLayers` owns atomic Qt-free affine transforms for one or
+  several shape/vector-mask layers, including rerasterization, stroke scaling,
+  dirty bounds and undo. Scripting shape and vector-mask transforms use this
+  command instead of replacing the session document directly;
 - every successful mutation gets a new state identity and a monotonic revision;
   rejected and no-op commands change neither;
 - undo and redo restore document state identities, so returning to the saved
@@ -81,8 +85,8 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate remaining brush/pixel, vector, Smart Filter and adjustment mutations,
-  plus history storage, to engine commands;
+- migrate remaining brush/pixel, vector creation/edit, Smart Filter and
+  adjustment mutations, plus history storage, to engine commands;
 - add command families for pixel transforms and remaining nondestructive
   filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;

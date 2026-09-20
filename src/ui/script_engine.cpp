@@ -1136,7 +1136,15 @@ patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
       session->canvas->apply_engine_selection_snapshot(
           session->engine_session.selection());
     }
-    note_structure_changed(session_id);
+    if (std::holds_alternative<patchy::engine::TransformVectorLayers>(command)) {
+      note_vector_changed(
+          session_id,
+          result.affected_region.has_value()
+              ? to_qrect(*result.affected_region)
+              : QRect{});
+    } else {
+      note_structure_changed(session_id);
+    }
   }
   return result;
 }

@@ -2,6 +2,8 @@
 
 #include "core/smart_filter.hpp"
 #include "core/layer_metadata.hpp"
+#include "core/vector_raster.hpp"
+#include "core/vector_live_shapes.hpp"
 #include "psd/psd_document_io.hpp"
 #include "test_groups.hpp"
 #include "test_harness.hpp"
@@ -55,6 +57,8 @@ using patchy::engine::SetLayersFillOpacity;
 using patchy::engine::SetLayersOpacity;
 using patchy::engine::SetSelection;
 using patchy::engine::UngroupLayers;
+using patchy::engine::TransformVectorLayers;
+using patchy::engine::VectorTransformTarget;
 using patchy::engine::WrapOffsetDocument;
 using patchy::test::TestCase;
 
@@ -802,6 +806,60 @@ void engine_session_filter_and_pixel_commands_share_atomic_history() {
   CHECK(session.document().find_layer(layer_id)->bounds().x == 4);
 }
 
+void engine_session_vector_transforms_are_atomic_and_qt_free() {
+  Document document(32, 24, PixelFormat::rgba8());
+  PixelBuffer pixels(32, 24, PixelFormat::rgba8());
+  const auto layer_id = document.allocate_layer_id();
+  patchy::Layer layer(layer_id, "Vector mask", std::move(pixels));
+  patchy::LayerVectorMask mask;
+  patchy::LiveShapeParams rectangle;
+  rectangle.kind = patchy::LiveShapeKind::Rectangle;
+  rectangle.left = 4.0;
+  rectangle.top = 3.0;
+  rectangle.right = 14.0;
+  rectangle.bottom = 12.0;
+  mask.path.subpaths = patchy::generate_live_shape_subpaths(rectangle);
+  layer.set_vector_mask(std::move(mask));
+  patchy::update_vector_mask_raster(layer, {0, 0, 32, 24});
+  document.add_layer(std::move(layer));
+  DocumentSession session(std::move(document));
+
+  const auto original = session.document()
+                            .find_layer(layer_id)
+                            ->vector_mask()
+                            ->path.subpaths.front()
+                            .anchors.front();
+  const auto transformed = session.execute(TransformVectorLayers{
+      {layer_id}, {1.0, 0.0, 0.0, 1.0, 5.0, 2.0}, 1.0,
+      VectorTransformTarget::VectorMaskOnly});
+  CHECK(static_cast<bool>(transformed));
+  CHECK(transformed.affected_region.has_value());
+  const auto moved = session.document()
+                         .find_layer(layer_id)
+                         ->vector_mask()
+                         ->path.subpaths.front()
+                         .anchors.front();
+  CHECK(moved.anchor_x == original.anchor_x + 5.0);
+  CHECK(moved.anchor_y == original.anchor_y + 2.0);
+  CHECK(session.dirty());
+  CHECK(static_cast<bool>(session.undo()));
+  const auto restored = session.document()
+                            .find_layer(layer_id)
+                            ->vector_mask()
+                            ->path.subpaths.front()
+                            .anchors.front();
+  CHECK(restored == original);
+  CHECK(!session.dirty());
+
+  const auto revision = session.revision();
+  const auto rejected = session.execute(TransformVectorLayers{
+      {layer_id, layer_id}, {1.0, 0.0, 0.0, 1.0, 1.0, 1.0}, 1.0,
+      VectorTransformTarget::VectorMaskOnly});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -838,5 +896,7 @@ std::vector<TestCase> document_session_tests() {
        engine_session_layer_editing_vertical_slice_is_atomic_and_undoable},
       {"engine_session_filter_and_pixel_commands_share_atomic_history",
        engine_session_filter_and_pixel_commands_share_atomic_history},
+      {"engine_session_vector_transforms_are_atomic_and_qt_free",
+       engine_session_vector_transforms_are_atomic_and_qt_free},
   };
 }
