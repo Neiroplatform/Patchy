@@ -26,6 +26,7 @@ using patchy::engine::ApplyFilter;
 using patchy::engine::CancellationToken;
 using patchy::engine::CropDocument;
 using patchy::engine::CommitSmartFilterState;
+using patchy::engine::CommitPreviewedDocumentChannel;
 using patchy::engine::CommitPreviewedLayerStates;
 using patchy::engine::CommitVectorLayerStates;
 using patchy::engine::DocumentSession;
@@ -1338,6 +1339,55 @@ void engine_session_commits_prepared_smart_filter_state_atomically() {
   CHECK(session.revision() == revision);
 }
 
+void engine_session_commits_previewed_document_channel_atomically() {
+  auto document = make_session_document();
+  PixelBuffer pixels(2, 2, PixelFormat::gray8());
+  pixels.clear(0);
+  const auto channel_id = document.allocate_channel_id();
+  document.add_channel(patchy::DocumentChannel(
+      channel_id, "Alpha 1", patchy::DocumentChannelKind::Alpha,
+      std::move(pixels)));
+  DocumentSession session(std::move(document));
+  session.mark_saved();
+
+  auto *previewed = session.mutable_document().find_channel(channel_id);
+  CHECK(previewed != nullptr);
+  previewed->pixels().pixel(1, 0)[0] = 173;
+  const auto final_channel = *previewed;
+  const auto revision_before = session.revision();
+  const auto state_before = session.state_id();
+  const auto committed = session.execute_external(
+      CommitPreviewedDocumentChannel{channel_id, final_channel, {1, 0, 1, 1}});
+  CHECK(static_cast<bool>(committed));
+  CHECK(committed.changed);
+  CHECK(committed.affected_region.has_value());
+  CHECK(committed.affected_region->x == 1);
+  CHECK(committed.affected_region->width == 1);
+  CHECK(session.revision() == revision_before + 1);
+  CHECK(session.state_id() != state_before);
+  CHECK(session.dirty());
+  CHECK(session.document().find_channel(channel_id)->pixels().pixel(1, 0)[0] ==
+        173);
+
+  const auto encoded = session.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+  const auto reopened = open_psd(encoded.bytes);
+  CHECK(static_cast<bool>(reopened));
+  CHECK(reopened.session->document()
+            .find_channel(channel_id)
+            ->pixels()
+            .pixel(1, 0)[0] == 173);
+
+  auto invalid = final_channel;
+  invalid.set_pixels(PixelBuffer(1, 1, PixelFormat::gray8()));
+  const auto revision_after = session.revision();
+  const auto rejected = session.execute_external(
+      CommitPreviewedDocumentChannel{channel_id, std::move(invalid), {}});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_after);
+}
+
 void engine_session_adjustment_layer_family_is_atomic_and_round_trips() {
   DocumentSession session(make_session_document());
 
@@ -1499,6 +1549,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_commits_previewed_vector_layer_states_atomically},
       {"engine_session_commits_previewed_layer_states_atomically",
        engine_session_commits_previewed_layer_states_atomically},
+      {"engine_session_commits_previewed_document_channel_atomically",
+       engine_session_commits_previewed_document_channel_atomically},
       {"engine_session_commits_prepared_smart_filter_state_atomically",
        engine_session_commits_prepared_smart_filter_state_atomically},
       {"engine_session_adjustment_layer_family_is_atomic_and_round_trips",

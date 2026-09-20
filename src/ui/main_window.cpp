@@ -6869,6 +6869,30 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
       };
   canvas->set_transform_commit_callback(commit_previewed_layer_states);
   canvas->set_pixel_edit_commit_callback(commit_previewed_layer_states);
+  canvas->set_document_channel_history_callback([this, canvas](QString label) {
+    if (auto* owner = session_for_canvas(canvas); owner != nullptr) {
+      push_undo_snapshot(*owner, std::move(label), false);
+    }
+  });
+  canvas->set_document_channel_commit_callback(
+      [this, canvas](ChannelId channel_id, QRect affected_bounds) {
+        auto* owner = session_for_canvas(canvas);
+        const auto* channel = owner != nullptr
+                                  ? std::as_const(owner->document)
+                                        .find_channel(channel_id)
+                                  : nullptr;
+        if (owner == nullptr || channel == nullptr) {
+          return false;
+        }
+        const auto result = owner->engine_session.execute_external(
+            patchy::engine::CommitPreviewedDocumentChannel{
+                channel_id, *channel, to_core_rect(affected_bounds)});
+        if (!result) {
+          show_status_error(QString::fromStdString(result.error.message));
+          return false;
+        }
+        return true;
+      });
   canvas->set_smart_filter_mask_committed_callback(
       [this, canvas](LayerId layer_id, QString label, PixelBuffer pixels,
                      QRegion) {

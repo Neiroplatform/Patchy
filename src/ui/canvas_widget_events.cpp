@@ -3455,7 +3455,12 @@ bool CanvasWidget::begin_edit(QString label) {
       report_status_error(tr("Spot channels are read-only"));
       return false;
     }
-    if (before_edit_callback_) {
+    if (document_channel_history_callback_ &&
+        document_channel_commit_callback_) {
+      document_channel_history_callback_(label);
+      pending_document_channel_edit_id_ = channel->id();
+      pending_document_channel_edit_affected_bounds_ = {};
+    } else if (before_edit_callback_) {
       before_edit_callback_(label);
     }
     return true;

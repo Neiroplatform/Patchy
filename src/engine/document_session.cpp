@@ -1829,6 +1829,40 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command,
+                                                CommitPreviewedDocumentChannel>) {
+            const auto *current = document_.find_channel(concrete.channel_id);
+            const auto &pixels =
+                static_cast<const DocumentChannel &>(concrete.channel).pixels();
+            if (current == nullptr) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "previewed document channel does not exist");
+              return;
+            }
+            if (concrete.channel_id == 0 ||
+                concrete.channel.id() != concrete.channel_id ||
+                concrete.channel.kind() != current->kind() ||
+                concrete.channel.kind() != DocumentChannelKind::Alpha ||
+                pixels.empty() || pixels.format() != PixelFormat::gray8() ||
+                pixels.width() != document_.width() ||
+                pixels.height() != document_.height()) {
+              error = make_error(
+                  SessionErrorCode::InvalidArgument,
+                  "previewed document channel state is invalid");
+              return;
+            }
+            auto updated_document = document_;
+            *updated_document.find_channel(concrete.channel_id) =
+                concrete.channel;
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            affected_region = concrete.preview_affected_region.empty()
+                                  ? std::optional<Rect>{Rect::from_size(
+                                        document_.width(), document_.height())}
+                                  : std::optional<Rect>{
+                                        concrete.preview_affected_region};
+            return;
+          } else if constexpr (std::is_same_v<Command,
                                                 SetVectorMaskState>) {
             const auto *current = document_.find_layer(concrete.layer_id);
             if (current == nullptr) {

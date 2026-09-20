@@ -934,6 +934,10 @@ public:
   void set_pixel_edit_history_callback(std::function<void(QString)> callback);
   void set_pixel_edit_commit_callback(
       std::function<bool(std::vector<LayerId>, QRect)> callback);
+  void set_document_channel_history_callback(
+      std::function<void(QString)> callback);
+  void set_document_channel_commit_callback(
+      std::function<bool(ChannelId, QRect)> callback);
   // Invoked when a selection-only edit completes and actually changed the
   // selection, so the host can push an undo entry holding the pre-edit state.
   // `coalesce` marks a continuation of a move sequence (drag/nudge): consecutive
@@ -2412,6 +2416,10 @@ private:
       pixel_edit_commit_callback_;
   std::optional<LayerId> pending_pixel_edit_layer_id_;
   QRect pending_pixel_edit_affected_bounds_;
+  std::function<void(QString)> document_channel_history_callback_;
+  std::function<bool(ChannelId, QRect)> document_channel_commit_callback_;
+  std::optional<ChannelId> pending_document_channel_edit_id_;
+  QRect pending_document_channel_edit_affected_bounds_;
   std::function<void(QString, patchy::engine::SelectionSnapshot, bool)>
       selection_history_callback_;
   std::function<void()> quick_mask_changed_callback_;

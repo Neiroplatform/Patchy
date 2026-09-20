@@ -500,6 +500,8 @@ void ui_quick_mask_brush_gestures_edit_outside_selection_with_selection_history(
   canvas->set_brush_softness(0);
 
   const auto paint_at = [&](QPoint point, QColor color) {
+    const auto revision_before =
+        patchy::ui::MainWindowTestAccess::active_engine_revision(window);
     canvas->set_primary_color(color);
     const auto widget_point = canvas->widget_position_for_document_point(point);
     send_mouse(*canvas, QEvent::MouseButtonPress, widget_point, Qt::LeftButton,
@@ -507,6 +509,8 @@ void ui_quick_mask_brush_gestures_edit_outside_selection_with_selection_history(
     send_mouse(*canvas, QEvent::MouseButtonRelease, widget_point,
                Qt::LeftButton, Qt::NoButton);
     QApplication::processEvents();
+    CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+          revision_before + 1U);
   };
 
   const QPoint white_outside(16, 18);

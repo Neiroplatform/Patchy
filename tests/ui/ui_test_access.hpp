@@ -279,6 +279,10 @@ public:
     return window.session().engine_session.state_id();
   }
 
+  static std::uint64_t active_engine_revision(MainWindow& window) {
+    return window.session().engine_session.revision();
+  }
+
   static bool active_engine_preview_active(MainWindow& window) {
     return window.session().engine_session.preview_active();
   }

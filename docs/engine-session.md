@@ -63,9 +63,15 @@ typed editing commands.
   layer payloads, reports accumulated old/new dirty bounds and advances one
   engine state identity. Transform commits include linked mask riders; paint
   commits cover Brush/Eraser/Mixer/Pattern Stamp/Clone/Healing/local adjustment/
-  Smudge, Fill, Gradient, raster Shape, Spot Healing and Patch completion. Quick
-  Mask, document channels and Smart Filter masks retain their specialized
-  publication paths;
+  Smudge, Fill, Gradient, raster Shape, Spot Healing and Patch completion;
+- `CommitPreviewedDocumentChannel` is the matching atomic completion boundary
+  for saved alpha-channel gestures. Canvas keeps responsive brush/fill frames,
+  accumulates their bounded dirty union and records one transitional UI undo
+  snapshot without dirtying the session; release publishes the exact final
+  channel once after validating stable ID/kind and full-canvas gray8 geometry.
+  Quick Mask already completes through `SetSelection`, while Smart Filter mask
+  edits complete through `CommitSmartFilterState`; all three specialized paths
+  therefore advance exactly one canonical revision per accepted gesture;
 - `CommitSmartFilterState` atomically commits a UI-prepared supported Smart
   Filter stack or removal: modeled stack/mask state, regenerated SoLd/SoLE
   payloads, FEid/FXid cache store and rendered layer pixels share one validated
@@ -134,8 +140,8 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate the remaining specialized pixel/mask gestures and history storage to
-  engine commands;
+- migrate the remaining shell-owned history storage and non-gesture channel
+  CRUD to engine commands;
 - add command families for remaining nondestructive filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;
 - keep the desktop shell and scripting API on the same command path.

@@ -396,6 +396,17 @@ void CanvasWidget::notify_document_changed(DocumentChangeReason reason) {
           pixel_edit_commit_callback_({layer_id}, affected_bounds));
     }
   }
+  if (reason != DocumentChangeReason::BrushStrokePreview &&
+      pending_document_channel_edit_id_.has_value()) {
+    const auto channel_id = *pending_document_channel_edit_id_;
+    const auto affected_bounds = pending_document_channel_edit_affected_bounds_;
+    pending_document_channel_edit_id_.reset();
+    pending_document_channel_edit_affected_bounds_ = {};
+    if (document_channel_commit_callback_) {
+      static_cast<void>(
+          document_channel_commit_callback_(channel_id, affected_bounds));
+    }
+  }
   invalidate_vector_preview();
   if (document_changed_reason_callback_) {
     document_changed_reason_callback_(reason);
@@ -584,6 +595,12 @@ void CanvasWidget::active_edit_target_changed_impl(QRegion document_region, Docu
   document_region = document_region.intersected(canvas_rect);
   if (document_region.isEmpty() && !canvas_rect.isEmpty()) {
     document_region = QRegion(canvas_rect);
+  }
+  if (pending_document_channel_edit_id_.has_value() &&
+      !document_region.isEmpty()) {
+    pending_document_channel_edit_affected_bounds_ =
+        pending_document_channel_edit_affected_bounds_.united(
+            document_region.boundingRect());
   }
   if (const auto* channel = active_document_channel_const();
       channel != nullptr && !mask_display_image_.isNull() && mask_display_image_channel_ == channel->id()) {

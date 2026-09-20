@@ -1202,6 +1202,8 @@ void ui_smart_filter_mask_thumbnail_routes_edits_and_resyncs_undo() {
       smart_filter_record_body_copy(current_record());
   const auto undo_before_edit =
       patchy::ui::MainWindowTestAccess::active_session_undo_depth(window);
+  const auto revision_before_edit =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   CHECK(!canvas
              ->fill_smart_filter_mask(
                  QColor(Qt::black), QStringLiteral("Fill Smart Filter Mask"))
@@ -1218,6 +1220,8 @@ void ui_smart_filter_mask_thumbnail_routes_edits_and_resyncs_undo() {
   }));
   CHECK(patchy::ui::MainWindowTestAccess::active_session_undo_depth(window) ==
         undo_before_edit + 1U);
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_edit + 1U);
   CHECK(canvas->editing_smart_filter_mask());
   CHECK(std::all_of(canvas->smart_filter_mask_pixels().data().begin(),
                     canvas->smart_filter_mask_pixels().data().end(),

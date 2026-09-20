@@ -282,6 +282,8 @@ void CanvasWidget::set_document_internal(Document* document, bool preserve_frame
   clear_brush_stroke_tracking();
   pending_pixel_edit_layer_id_.reset();
   pending_pixel_edit_affected_bounds_ = {};
+  pending_document_channel_edit_id_.reset();
+  pending_document_channel_edit_affected_bounds_ = {};
   reset_brush_smoothing();
   reset_axis_constrained_stroke();
   deferred_wait_release_.reset();
@@ -1044,6 +1046,16 @@ void CanvasWidget::set_pixel_edit_history_callback(
 void CanvasWidget::set_pixel_edit_commit_callback(
     std::function<bool(std::vector<LayerId>, QRect)> callback) {
   pixel_edit_commit_callback_ = std::move(callback);
+}
+
+void CanvasWidget::set_document_channel_history_callback(
+    std::function<void(QString)> callback) {
+  document_channel_history_callback_ = std::move(callback);
+}
+
+void CanvasWidget::set_document_channel_commit_callback(
+    std::function<bool(ChannelId, QRect)> callback) {
+  document_channel_commit_callback_ = std::move(callback);
 }
 
 void CanvasWidget::set_selection_history_callback(

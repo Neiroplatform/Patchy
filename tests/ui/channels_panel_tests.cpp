@@ -379,15 +379,23 @@ void ui_channels_panel_targets_and_alpha_edits() {
   canvas->set_primary_color(Qt::white);
   use_solid_fill_settings(canvas);
   require_action_by_text(window, QStringLiteral("Brush"))->trigger();
+  const auto revision_before_brush =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   const auto brush_point = canvas->widget_position_for_document_point(QPoint(12, 12));
   send_mouse(*canvas, QEvent::MouseButtonPress, brush_point, Qt::LeftButton, Qt::LeftButton);
   send_mouse(*canvas, QEvent::MouseButtonRelease, brush_point, Qt::LeftButton, Qt::NoButton);
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_brush + 1U);
   CHECK(*static_cast<const patchy::Document&>(active_document).find_channel(alpha_id)->pixels().pixel(12, 12) > 0);
 
   const auto diagnostics_before = canvas->render_cache_diagnostics();
+  const auto revision_before_fill =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   require_action(window, "layerFillForegroundAction")->trigger();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_fill + 1U);
   const auto* filled_channel = static_cast<const patchy::Document&>(active_document).find_channel(alpha_id);
   CHECK(filled_channel != nullptr);
   CHECK(*filled_channel->pixels().pixel(12, 12) == 255);

@@ -316,6 +316,15 @@ struct CommitPreviewedLayerStates {
   Rect preview_affected_region{};
 };
 
+// Publishes one already-previewed saved-channel edit as a single canonical
+// engine mutation. Interactive frames may update the shared COW channel in the
+// Qt shell, but only this completion command advances session identity/dirty.
+struct CommitPreviewedDocumentChannel {
+  ChannelId channel_id{0};
+  DocumentChannel channel{};
+  Rect preview_affected_region{};
+};
+
 struct CommitSmartFilterState {
   LayerId layer_id{0};
   std::optional<SmartFilterStack> stack{};
@@ -342,6 +351,7 @@ using DocumentCommand =
                  RasterizeVectorMask, AddVectorShapeLayer,
                  UpdateVectorShapeLayer, CommitVectorLayerStates,
                  CommitPreviewedLayerStates,
+                 CommitPreviewedDocumentChannel,
                  CommitSmartFilterState>;
 
 struct LayerInfo {
