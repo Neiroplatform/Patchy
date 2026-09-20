@@ -363,16 +363,22 @@ void ui_merge_down_repeatedly_collapses_to_one_layer() {
   auto* layer_list = window.findChild<QListWidget*>(QStringLiteral("layerList"));
   CHECK(layer_list != nullptr);
   CHECK(layer_list->count() == 3);
+  const auto initial_revision =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
 
   require_action(window, "layerMergeDownAction")->trigger();
   QApplication::processEvents();
   CHECK(layer_list->count() == 2);
   CHECK(layer_list->item(0)->text() == QStringLiteral("Middle"));
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        initial_revision + 1);
 
   require_action(window, "layerMergeDownAction")->trigger();
   QApplication::processEvents();
   CHECK(layer_list->count() == 1);
   CHECK(layer_list->item(0)->text() == QStringLiteral("Bottom"));
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        initial_revision + 2);
 }
 
 void ui_merge_down_preserves_transparent_pixels() {

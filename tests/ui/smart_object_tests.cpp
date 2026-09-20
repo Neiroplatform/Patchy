@@ -1653,6 +1653,8 @@ void ui_smart_object_relink_and_embed_linked_work() {
   document.find_layer(layer_id)->set_name("so-relink-a");
   const auto uuid = patchy::smart_object_source_uuid(*document.find_layer(layer_id));
   const auto undo_depth_before = patchy::ui::MainWindowTestAccess::active_session_undo_depth(window);
+  const auto revision_before =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
 
   // Relink to a different-size file: paths rewrite, the quad rescales (E5 rule), the
   // element uuid stays, and the layer re-renders from the new target.
@@ -1688,6 +1690,8 @@ void ui_smart_object_relink_and_embed_linked_work() {
   const auto* px = pixels.pixel(pixels.width() / 2, pixels.height() / 2);
   CHECK(px != nullptr && px[2] > 150 && px[0] < 90);  // blue from the new target
   CHECK(patchy::ui::MainWindowTestAccess::active_session_undo_depth(window) == undo_depth_before + 1);
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before + 1);
   // E4 acceptance artifact: a Patchy-authored linked (liFE) element PS must resolve.
   patchy::psd::DocumentIo::write_layered_rgb8_file(
       document, std::filesystem::path("test-artifacts/ui_smart_object_relinked.psd"));
@@ -1706,6 +1710,8 @@ void ui_smart_object_relink_and_embed_linked_work() {
   CHECK(unlocked != nullptr);
   CHECK(patchy::smart_object_lock_reason(*unlocked).empty());
   CHECK(patchy::ui::MainWindowTestAccess::active_session_undo_depth(window) == undo_depth_before + 2);
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before + 2);
 
   // E4 acceptance artifact: the embed-linked output PS must open and resave clean.
   patchy::psd::DocumentIo::write_layered_rgb8_file(

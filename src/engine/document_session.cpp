@@ -2093,6 +2093,87 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command,
+                                                CommitPreparedDocumentState>) {
+            switch (concrete.kind) {
+            case PreparedDocumentMutationKind::Text:
+            case PreparedDocumentMutationKind::SmartObject:
+            case PreparedDocumentMutationKind::Path:
+            case PreparedDocumentMutationKind::MergeRasterize:
+              break;
+            default:
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "prepared document mutation kind is invalid");
+              return;
+            }
+            if (concrete.expected_state_id == 0 ||
+                concrete.expected_state_id != state_id_) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "prepared document state is stale");
+              return;
+            }
+            if (concrete.document.width() != document_.width() ||
+                concrete.document.height() != document_.height() ||
+                concrete.document.format() != document_.format()) {
+              error = make_error(
+                  SessionErrorCode::InvalidArgument,
+                  "prepared document state must preserve canvas geometry and format");
+              return;
+            }
+            std::set<LayerId> layer_ids;
+            const auto validate_layers = [&](const auto &self,
+                                             const std::vector<Layer> &layers)
+                -> bool {
+              for (const auto &layer : layers) {
+                if (layer.id() == 0 || !layer_ids.insert(layer.id()).second ||
+                    !self(self, layer.children())) {
+                  return false;
+                }
+              }
+              return true;
+            };
+            if (!validate_layers(validate_layers, concrete.document.layers()) ||
+                (concrete.document.active_layer_id().has_value() &&
+                 concrete.document.find_layer(
+                     *concrete.document.active_layer_id()) == nullptr)) {
+              error = make_error(
+                  SessionErrorCode::InvalidArgument,
+                  "prepared document state has invalid layer identity or topology");
+              return;
+            }
+            std::set<ChannelId> channel_ids;
+            for (const auto &channel : concrete.document.channels()) {
+              if (channel.id() == 0 ||
+                  !channel_ids.insert(channel.id()).second) {
+                error = make_error(
+                    SessionErrorCode::InvalidArgument,
+                    "prepared document state has invalid channel identity");
+                return;
+              }
+            }
+            std::set<DocumentPathId> path_ids;
+            std::size_t work_paths = 0;
+            std::size_t clipping_paths = 0;
+            for (const auto &path : concrete.document.paths()) {
+              work_paths += path.kind() == DocumentPathKind::Work ? 1U : 0U;
+              clipping_paths += path.is_clipping_path() ? 1U : 0U;
+              if (path.id() == 0 || !path_ids.insert(path.id()).second ||
+                  work_paths > 1U || clipping_paths > 1U) {
+                error = make_error(
+                    SessionErrorCode::InvalidArgument,
+                    "prepared document state has invalid path identity or role");
+                return;
+              }
+            }
+            prepare_mutation(record_history);
+            document_ = concrete.document;
+            changed = true;
+            affected_region = concrete.affected_region.empty()
+                                  ? Rect::from_size(document_.width(),
+                                                    document_.height())
+                                  : concrete.affected_region;
+            layer_id = document_.active_layer_id().value_or(0);
+            return;
+          } else if constexpr (std::is_same_v<Command,
                                                 CommitPreviewedDocumentChannel>) {
             const auto *current = document_.find_channel(concrete.channel_id);
             const auto &pixels =

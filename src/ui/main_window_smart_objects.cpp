@@ -614,6 +614,7 @@ bool MainWindow::commit_smart_object_child_session(DocumentSession& child_sessio
 
   const auto refreshed_source_uuid = generate_smart_object_uuid();
   updated.uuid = refreshed_source_uuid;
+  const auto expected_state_id = parent->engine_session.state_id();
   auto updated_document = parent->document;
   bool source_replaced = false;
   for (auto& block : updated_document.metadata().smart_objects.blocks) {
@@ -644,8 +645,16 @@ bool MainWindow::commit_smart_object_child_session(DocumentSession& child_sessio
   }
 
   // One engine-owned parent undo step for the whole background commit.
+  if (parent->engine_session.state_id() != expected_state_id) {
+    show_status_error(tr("The parent document changed while Smart Object contents were prepared."));
+    return false;
+  }
   push_undo_snapshot(*parent, tr("Edit Smart Object Contents"), false);
-  parent->document = std::move(updated_document);
+  if (!commit_prepared_document_state(
+          *parent, patchy::engine::PreparedDocumentMutationKind::SmartObject,
+          expected_state_id, std::move(updated_document))) {
+    return false;
+  }
   if (child_session.smart_object_link.has_value()) {
     child_session.smart_object_link->source_uuid_history.push_back(link.source_uuid);
     child_session.smart_object_link->source_uuid_history.push_back(refreshed_source_uuid);
@@ -655,7 +664,6 @@ bool MainWindow::commit_smart_object_child_session(DocumentSession& child_sessio
   if (parent->canvas != nullptr) {
     parent->canvas->document_changed();
   }
-  mark_session_modified(*parent);
   // The commit usually runs while the CHILD tab is active; the shared panel
   // mirrors the active session only, so refresh only if the parent is it.
   if (parent == active_session()) {
@@ -796,6 +804,7 @@ void MainWindow::refresh_external_smart_object_after_save(DocumentSession& child
           ? smart_object_source_dpi(probe)
           : 0.0;
 
+  const auto expected_state_id = parent->engine_session.state_id();
   auto updated_document = parent->document;
   auto* updated_source =
       updated_document.metadata().smart_objects.find(link.source_uuid);
@@ -834,12 +843,19 @@ void MainWindow::refresh_external_smart_object_after_save(DocumentSession& child
   }
 
   // One engine-owned parent undo step for the whole background refresh.
+  if (parent->engine_session.state_id() != expected_state_id) {
+    show_status_error(tr("The parent document changed while linked contents were prepared."));
+    return;
+  }
   push_undo_snapshot(*parent, tr("Update Smart Object Content"), false);
-  parent->document = std::move(updated_document);
+  if (!commit_prepared_document_state(
+          *parent, patchy::engine::PreparedDocumentMutationKind::SmartObject,
+          expected_state_id, std::move(updated_document))) {
+    return;
+  }
   if (parent->canvas != nullptr) {
     parent->canvas->document_changed();
   }
-  mark_session_modified(*parent);
   if (parent == active_session()) {
     refresh_history_panel();
   }
@@ -919,8 +935,11 @@ void MainWindow::update_smart_object_content() {
         tr("Could not rebuild the Smart Filter preview and cache"));
     return;
   }
-  push_undo_snapshot(tr("Update Smart Object Content"));
-  doc = std::move(updated_document);
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Update Smart Object Content"), false);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::SmartObject,
+      expected_state_id, std::move(updated_document));
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();
@@ -1100,8 +1119,11 @@ void MainWindow::relink_smart_object_contents_with_path(const QString& path) {
     return;
   }
   store.remove(uuid);
-  push_undo_snapshot(tr("Relink Smart Object"));
-  doc = std::move(updated_document);
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Relink Smart Object"), false);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::SmartObject,
+      expected_state_id, std::move(updated_document));
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();
@@ -1142,7 +1164,8 @@ void MainWindow::embed_linked_smart_object() {
   const auto filename = source->filename;
   const auto filetype = source->filetype;
 
-  push_undo_snapshot(tr("Embed Linked Smart Object"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Embed Linked Smart Object"), false);
   auto& store = doc.metadata().smart_objects;
   // Photoshop semantics (E13 capture): embedding assigns a FRESH element uuid in
   // lnk2 (liFD), leaves the emptied lnkE behind, clears the lock, and the per-layer
@@ -1171,6 +1194,9 @@ void MainWindow::embed_linked_smart_object() {
     }
   };
   unlock_layers(doc.layers());
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::SmartObject,
+      expected_state_id);
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();
@@ -1354,8 +1380,11 @@ void MainWindow::replace_smart_object_contents_with_path(const QString& path) {
     return;
   }
   store.remove(old_uuid);
-  push_undo_snapshot(tr("Replace Smart Object Contents"));
-  doc = std::move(updated_document);
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Replace Smart Object Contents"), false);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::SmartObject,
+      expected_state_id, std::move(updated_document));
 
   refresh_layer_list();
   refresh_layer_controls();
@@ -1519,8 +1548,11 @@ bool MainWindow::convert_layers_to_smart_object(const std::vector<LayerId>& sele
     }
   }
   doc.set_active_layer(top_id);
-  push_undo_snapshot(tr("Convert to Smart Object"));
-  target_document = std::move(doc);
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Convert to Smart Object"), false);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::SmartObject,
+      expected_state_id, std::move(doc));
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();
@@ -1587,8 +1619,11 @@ void MainWindow::new_smart_object_via_copy() {
   location->siblings->insert(location->siblings->begin() + static_cast<std::ptrdiff_t>(location->index) + 1,
                              std::move(*copy));
   doc.set_active_layer(copy_id);
-  push_undo_snapshot(tr("New Smart Object via Copy"));
-  target_document = std::move(doc);
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("New Smart Object via Copy"), false);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::SmartObject,
+      expected_state_id, std::move(doc));
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();
@@ -1691,8 +1726,11 @@ void MainWindow::place_embedded_file_with_path(const QString& path) {
   }
   auto& layer = doc.add_layer(std::move(placed_layer));
   doc.set_active_layer(layer.id());
-  push_undo_snapshot(tr("Place Embedded"));
-  target_document = std::move(doc);
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Place Embedded"), false);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::SmartObject,
+      expected_state_id, std::move(doc));
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();

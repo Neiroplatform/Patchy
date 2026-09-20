@@ -6838,6 +6838,9 @@ void MainWindow::configure_canvas(CanvasWidget* canvas) {
   });
   const auto commit_previewed_layer_states =
       [this, canvas](std::vector<LayerId> layer_ids, QRect affected_bounds) {
+        if (scripted_stroke_undo_suppressed_) {
+          return true; // Stroke Path publishes the complete multi-stroke result once.
+        }
         auto* owner = session_for_canvas(canvas);
         if (owner == nullptr || layer_ids.empty()) {
           return false;
@@ -8021,7 +8024,8 @@ void MainWindow::commit_text_editor(QTextEdit* editor, QPoint document_point, st
   if (text.trimmed().isEmpty()) {
     restore_hidden_text_layer();
     if (layer_id.has_value() && !layer_id_locks_image_pixels(*layer_id)) {
-      push_undo_snapshot(tr("Type"));
+      const auto expected_state_id = session().engine_session.state_id();
+      push_undo_snapshot(tr("Type"), false);
       if (auto* layer = document().find_layer(*layer_id); layer != nullptr) {
         auto& metadata = layer->metadata();
         metadata[kLayerMetadataText] = text.toStdString();
@@ -8034,6 +8038,9 @@ void MainWindow::commit_text_editor(QTextEdit* editor, QPoint document_point, st
         layer->set_pixels(PixelBuffer(1, 1, PixelFormat::rgba8()));
         layer->set_bounds(Rect{bounds.x, bounds.y, 1, 1});
       }
+      commit_prepared_document_state(
+          session(), patchy::engine::PreparedDocumentMutationKind::Text,
+          expected_state_id, to_core_rect(pre_commit_dirty));
       canvas_->document_changed_effect_bounds(pre_commit_dirty);
       refresh_layer_list();
       refresh_layer_controls();
@@ -8207,7 +8214,8 @@ void MainWindow::commit_text_editor(QTextEdit* editor, QPoint document_point, st
   }
   // The layer the commit ends up owning, so the final repaint can be bounded to it.
   std::optional<LayerId> committed_layer_id = layer_id;
-  push_undo_snapshot(tr("Type"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Type"), false);
   const auto name = text_layer_auto_name(settings.text);
   // A PSD-frame session rendered a document-space frame around raw-unit runs; persist the box
   // dims back in the runs' raw engine space so the stored runs + box + transform stay one
@@ -8291,6 +8299,18 @@ void MainWindow::commit_text_editor(QTextEdit* editor, QPoint document_point, st
     }
     document().add_layer(std::move(text_layer));
   }
+  auto committed_dirty = to_core_rect(pre_commit_dirty);
+  if (committed_layer_id.has_value()) {
+    if (const auto* committed =
+            std::as_const(document()).find_layer(*committed_layer_id);
+        committed != nullptr) {
+      committed_dirty = unite_rect(committed_dirty,
+                                   layer_render_bounds(*committed));
+    }
+  }
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Text,
+      expected_state_id, committed_dirty);
   refresh_layer_list();
   refresh_layer_controls();
   // Bounded, not a full recomposite (a full document_changed() here cost a whole recomposite
@@ -9117,7 +9137,8 @@ void MainWindow::request_warp_text_dialog() {
     refresh_layer_list();
     return;
   }
-  push_undo_snapshot(tr("Warp Text"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Warp Text"), false);
   bool applied = false;
   if (auto* target = document().find_layer(layer_id); target != nullptr) {
     applied = apply_text_warp_to_layer(*target, *result);
@@ -9125,6 +9146,9 @@ void MainWindow::request_warp_text_dialog() {
   if (!applied) {
     show_status_error(tr("Could not warp the text layer."));
   } else {
+    commit_prepared_document_state(
+        session(), patchy::engine::PreparedDocumentMutationKind::Text,
+        expected_state_id);
     statusBar()->showMessage(text_warp_is_identity(*result) ? tr("Removed text warp")
                                                             : tr("Warped text layer"));
   }
@@ -9524,7 +9548,10 @@ void MainWindow::rasterize_layer_ids(const std::vector<LayerId>& ids) {
     return;
   }
 
-  push_undo_snapshot(pending.size() == 1U ? tr("Rasterize layer") : tr("Rasterize layers"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(
+      pending.size() == 1U ? tr("Rasterize layer") : tr("Rasterize layers"),
+      false);
   Rect affected;
   for (auto& change : pending) {
     auto* layer = doc.find_layer(change.id);
@@ -9548,6 +9575,9 @@ void MainWindow::rasterize_layer_ids(const std::vector<LayerId>& ids) {
     }
     affected = unite_rect(affected, layer_render_bounds(*layer));
   }
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::MergeRasterize,
+      expected_state_id, affected);
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed(affected.empty() ? QRect() : to_qrect(affected));
@@ -9591,7 +9621,10 @@ void MainWindow::rasterize_active_layer_styles() {
     return;
   }
 
-  push_undo_snapshot(pending.size() == 1U ? tr("Rasterize layer style") : tr("Rasterize layer styles"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(pending.size() == 1U ? tr("Rasterize layer style")
+                                         : tr("Rasterize layer styles"),
+                     false);
   Rect affected;
   for (auto& change : pending) {
     auto* layer = doc.find_layer(change.id);
@@ -9615,6 +9648,9 @@ void MainWindow::rasterize_active_layer_styles() {
     strip_layer_vector_data(*layer);
     affected = unite_rect(affected, layer_render_bounds(*layer));
   }
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::MergeRasterize,
+      expected_state_id, affected);
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed(affected.empty() ? QRect() : to_qrect(affected));
@@ -9734,8 +9770,11 @@ void MainWindow::merge_down() {
     }
     if (active_session() == nullptr || active_session()->session_id != merging_session) { return; }
     merge_edit_lock.release();
-    push_undo_snapshot(tr("Merge down"));
-    doc = std::move(*prepared);
+    const auto expected_state_id = session().engine_session.state_id();
+    push_undo_snapshot(tr("Merge down"), false);
+    commit_prepared_document_state(
+        session(), patchy::engine::PreparedDocumentMutationKind::MergeRasterize,
+        expected_state_id, std::move(*prepared));
     if (canvas_ != nullptr) {
       canvas_->clear_path_edit_selection();
     }
@@ -9832,7 +9871,8 @@ void MainWindow::merge_down() {
   auto merged_pixels = pixels_from_image_rgba(image);
 
   merge_edit_lock.release();
-  push_undo_snapshot(tr("Merge down"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Merge down"), false);
   const auto target_location = find_layer_location(doc.layers(), target_id);
   if (!target_location.has_value()) {
     refresh_layer_list();
@@ -9873,6 +9913,9 @@ void MainWindow::merge_down() {
   }
   doc.set_active_layer(target_id);
   affected = unite_rect(affected, merge_bounds);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::MergeRasterize,
+      expected_state_id, affected);
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed(to_qrect(affected));

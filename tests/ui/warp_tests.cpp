@@ -631,6 +631,8 @@ void ui_warp_text_dialog_applies_and_undoes() {
   CHECK(same_rect(layer->bounds(), unwarped_bounds));
   CHECK(same_pixels(layer->pixels(), unwarped_pixels));
   CHECK(!patchy::text_warp_from_layer(*layer).has_value());
+  const auto revision_before_accept =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
 
   // OK applies the warp: metadata + taller bounds (arc bows the text upward).
   drove_dialog = false;
@@ -662,6 +664,8 @@ void ui_warp_text_dialog_applies_and_undoes() {
   CHECK(warp->value == 50.0);
   CHECK(warp->bounds_right - warp->bounds_left > 4.0);
   CHECK(warped_bounds.height > unwarped_bounds.height + 4);
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_accept + 1);
 
   // One undo step restores the unwarped layer; redo re-applies.
   require_action_by_text(window, QStringLiteral("Undo"))->trigger();

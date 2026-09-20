@@ -371,7 +371,8 @@ void MainWindow::duplicate_selected_path() {
   if (source == nullptr) {
     return;
   }
-  push_undo_snapshot(tr("Duplicate path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Duplicate path"), false);
   // "<name> copy", uniquified the Photoshop way (the shared layer-duplication
   // helper strips an existing " copy"/" copy N" stem first).
   std::set<std::string> existing;
@@ -382,6 +383,9 @@ void MainWindow::duplicate_selected_path() {
   DocumentPath created(doc.allocate_path_id(), name, DocumentPathKind::Saved, source->path());
   created.mark_dirty();  // authored copy: no original resource bytes to re-emit
   target_document_path_row(doc.add_path(std::move(created)).id());
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   statusBar()->showMessage(tr("Duplicated the path as %1.").arg(QString::fromStdString(name)));
 }
 
@@ -408,7 +412,8 @@ void MainWindow::reorder_paths_from_panel(std::vector<DocumentPathId> order) {
   if (order == current) {
     return;
   }
-  push_undo_snapshot(tr("Reorder paths"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Reorder paths"), false);
   std::vector<DocumentPath> reordered;
   reordered.reserve(paths.size());
   for (const auto id : order) {
@@ -423,6 +428,9 @@ void MainWindow::reorder_paths_from_panel(std::vector<DocumentPathId> order) {
     reordered.push_back(std::move(path));
   }
   paths = std::move(reordered);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   refresh_paths_panel();
   statusBar()->showMessage(tr("Reordered paths"));
 }
@@ -435,8 +443,12 @@ void MainWindow::rename_document_path(DocumentPathId id, const QString& name) {
     refresh_paths_panel();
     return;
   }
-  push_undo_snapshot(tr("Rename path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Rename path"), false);
   path->set_name(name.trimmed().toStdString());
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   refresh_paths_panel();
   statusBar()->showMessage(tr("Renamed the path to %1.").arg(name.trimmed()));
 }
@@ -460,7 +472,8 @@ void MainWindow::save_work_path_as_named() {
   if (work == nullptr) {
     return;
   }
-  push_undo_snapshot(tr("Save path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Save path"), false);
   const auto name = unique_saved_path_name();
   const auto saved_id = work->id();
   work->set_name(name.toStdString());
@@ -477,6 +490,9 @@ void MainWindow::save_work_path_as_named() {
     std::rotate(it, it + 1, paths.end());
   }
   target_document_path_row(saved_id);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   statusBar()->showMessage(tr("Saved the work path as %1.").arg(name));
   if (paths_panel_ != nullptr) {
     paths_panel_->begin_rename(*active_document_path_id_);  // let the user name it right away
@@ -488,12 +504,16 @@ void MainWindow::new_saved_path() {
     return;
   }
   auto& doc = document();
-  push_undo_snapshot(tr("New path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("New path"), false);
   const auto name = unique_saved_path_name();
   DocumentPath created(doc.allocate_path_id(), name.toStdString(), DocumentPathKind::Saved,
                        VectorPath{});
   created.mark_dirty();
   target_document_path_row(doc.add_path(std::move(created)).id());
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   statusBar()->showMessage(tr("Created %1. Draw into it with the Pen tool.").arg(name));
 }
 
@@ -513,11 +533,15 @@ void MainWindow::toggle_selected_path_clipping() {
     return;
   }
   const bool make_clipping = !target->is_clipping_path();
-  push_undo_snapshot(tr("Clipping path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Clipping path"), false);
   // At most one clipping path per document (resource 2999 names exactly one).
   for (auto& path : doc.paths()) {
     path.set_clipping_path(make_clipping && path.id() == row->id);
   }
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   refresh_paths_panel();
   statusBar()->showMessage(make_clipping
                                ? tr("Set %1 as the clipping path.").arg(row->name)
@@ -533,8 +557,12 @@ void MainWindow::delete_selected_path() {
     show_status_error(tr("Select a saved path or the work path to delete"));
     return;
   }
-  push_undo_snapshot(tr("Delete path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Delete path"), false);
   document().remove_path(row->id);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   active_document_path_id_.reset();
   if (canvas_ != nullptr) {
     canvas_->set_active_document_path(std::nullopt);
@@ -714,7 +742,8 @@ void MainWindow::fill_active_path() {
     }
   }
 
-  push_undo_snapshot(tr("Fill path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Fill path"), false);
   const auto coverage = path_selection_coverage(*path, doc.width(), doc.height());
   const auto color =
       contents->currentIndex() == 1 ? canvas_->secondary_color() : canvas_->primary_color();
@@ -802,6 +831,9 @@ void MainWindow::fill_active_path() {
       }
     }
   }
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   canvas_->document_changed();
   refresh_layer_thumbnails();
   statusBar()->showMessage(use_pattern ? tr("Filled the path with the pattern")
@@ -868,7 +900,8 @@ void MainWindow::stroke_active_path() {
   }
   // One history entry for the whole command; the per-stroke undo pushes from
   // the synthetic input below are suppressed.
-  push_undo_snapshot(tr("Stroke path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Stroke path"), false);
   scripted_stroke_undo_suppressed_ = true;
   const auto previous_tool = canvas_->tool();
   canvas_->set_tool(CanvasTool::Brush);
@@ -924,6 +957,9 @@ void MainWindow::stroke_active_path() {
   }
   canvas_->set_tool(previous_tool);
   scripted_stroke_undo_suppressed_ = false;
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   QApplication::processEvents();
   refresh_layer_thumbnails();
   statusBar()->showMessage(tr("Stroked the path with the current brush"));
@@ -1036,7 +1072,8 @@ void MainWindow::make_work_path_from_selection() {
     show_status_error(tr("The selection is too small to trace"));
     return;
   }
-  push_undo_snapshot(tr("Make work path"));
+  const auto expected_state_id = session().engine_session.state_id();
+  push_undo_snapshot(tr("Make work path"), false);
   auto& doc = document();
   DocumentPathId work_id = 0;
   if (auto* work = doc.work_path(); work != nullptr) {
@@ -1051,6 +1088,9 @@ void MainWindow::make_work_path_from_selection() {
     work_id = doc.add_path(std::move(created)).id();
   }
   target_document_path_row(work_id);
+  commit_prepared_document_state(
+      session(), patchy::engine::PreparedDocumentMutationKind::Path,
+      expected_state_id);
   statusBar()->showMessage(tr("Made a work path from the selection."));
 }
 

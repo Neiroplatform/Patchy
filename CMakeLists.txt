@@ -143,6 +143,7 @@ patchy_configure_target(patchy_core)
 
 add_library(patchy_engine
   src/engine/document_session.cpp
+  src/engine/host_protocol.cpp
 )
 patchy_configure_target(patchy_engine)
 
@@ -512,7 +513,9 @@ include(cmake/assert_qt_free_dependency_tree.cmake)
 patchy_assert_qt_free_dependency_tree(patchy_engine)
 foreach(engine_boundary_source
     "${PROJECT_SOURCE_DIR}/src/engine/document_session.hpp"
-    "${PROJECT_SOURCE_DIR}/src/engine/document_session.cpp")
+    "${PROJECT_SOURCE_DIR}/src/engine/document_session.cpp"
+    "${PROJECT_SOURCE_DIR}/src/engine/host_protocol.h"
+    "${PROJECT_SOURCE_DIR}/src/engine/host_protocol.cpp")
   file(READ "${engine_boundary_source}" engine_boundary_contents)
   if(engine_boundary_contents MATCHES "#[ \t]*include[ \t]*[<\"]Q")
     message(FATAL_ERROR

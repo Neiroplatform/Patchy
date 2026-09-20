@@ -95,6 +95,15 @@ typed editing commands.
   positions before committing one revision/history state. Desktop New, Save
   Selection, Rename, Reorder, Invert and Delete all use these commands, while
   PSD encode/reopen preserves the resulting names, order, kinds and pixels;
+- `CommitPreparedDocumentState` publishes operations whose final state spans
+  both the layer tree and document resources. It requires the exact state
+  identity from which the result was prepared, rejects stale async/dialog
+  completions, preserves canvas geometry/format, validates layer/channel/path
+  identities and constrains Work/Clipping Path roles before one atomic commit.
+  Desktop text completion, embedded/linked Smart Object lifecycle, saved/work
+  path CRUD plus Fill/Stroke Path, and merge/rasterize now finish through this
+  boundary. Stroke Path suppresses its per-substroke completion callbacks and
+  publishes the entire scripted stroke as one revision/history state;
 - `CommitSmartFilterState` atomically commits a UI-prepared supported Smart
   Filter stack or removal: modeled stack/mask state, regenerated SoLd/SoLE
   payloads, FEid/FXid cache store and rendered layer pixels share one validated
@@ -148,6 +157,16 @@ typed editing commands.
   clear dirty state;
 - errors cross the boundary as `SessionError`, not Qt dialogs or C++ pointers.
 
+`engine/host_protocol.h` is the first private pre-1.0 browser-host ABI. A host
+must negotiate `PATCHY_ENGINE_HOST_PROTOCOL_VERSION` before opening a session;
+opaque runtime/session handles, fixed-width command/event envelopes, inline
+diagnostics and explicitly released output buffers keep C++ objects and
+exceptions behind the boundary. Version 1 reports capabilities and exposes a
+flat layer projection, bounded RGBA render, layer-visibility command, undo,
+redo and layered PSD save. The core contract test executes the same
+`open → inspect → render → mutate → undo → redo → save → reopen` sequence in
+every native or wasm-core build, and the header is valid C11.
+
 The build recursively rejects any Qt target in `patchy_engine`'s dependency
 tree and rejects Qt includes in the public engine facade at configure time. A
 negative CMake fixture proves the guard fails closed, so native, Windows and
@@ -163,8 +182,9 @@ gesture release crosses `CommitPreparedSelection` with stale-result rejection.
 Qt history stacks retain presentation-only labels and stable row
 IDs at the matching engine indices. Direct shell mutations transfer their
 asynchronously captured pre-edit COW snapshot with
-`push_external_undo_state`, then use `mark_external_modified`; typed commands
-record or reuse the same engine history boundary.
+`push_external_undo_state`, then execute a typed completion command; the legacy
+`mark_external_modified` adapter remains only for command families outside this
+slice.
 Layer-panel create/group/ungroup/delete/reorder, visibility, lock, clipping,
 raster-mask lifecycle, layer-style final state, rename, opacity/fill/blend and
 flip workflows, plus canvas-resize/rotation, already execute through typed
@@ -181,8 +201,9 @@ global cross-session memory eviction and stress trimming all operate on the
 single engine-owned snapshot stacks. Partial repaint still diffs the pre-hop
 COW document against the restored canonical document. `execute_external`
 prevents transitional shell workflows that already transferred a snapshot from
-retaining a hidden duplicate. The remaining MainWindow mutations migrate by
-command family.
+retaining a hidden duplicate. Direct text, Smart Object, document-path and
+merge/rasterize completion no longer advances revision/dirty state directly in
+MainWindow; remaining unrelated shell mutations migrate by command family.
 
 New headless consumers must use typed commands. New Qt workflows should use
 typed commands when their operation is covered; adding new direct state owners
@@ -190,8 +211,9 @@ or a second dirty/revision counter is forbidden.
 
 ## Remaining M2 boundary
 
-- migrate the remaining direct text, Smart Object, path and merge/rasterize
-  commits by cohesive command family rather than adding a second state owner;
-- expose/version the same typed contract for the browser host and prove the
-  identical command scenario under the supported wasm-core/Qt-WASM toolchain;
-- keep the desktop shell and scripting API on the same command path.
+- run the versioned host sequence under the supported wasm-core/Qt-WASM
+  toolchain and compare its event/projection/output contract with native;
+- migrate remaining unrelated direct shell mutations by cohesive command
+  family while keeping desktop, scripting and browser hosts on one model;
+- complete Windows/WASM, corpus, Photoshop and independent review gates before
+  promoting this private ABI or the product gitlink.

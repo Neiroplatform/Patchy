@@ -364,6 +364,26 @@ struct CommitPreviewedDocumentChannel {
   Rect preview_affected_region{};
 };
 
+// Publishes a complete document prepared by a host-side operation whose
+// semantics span the layer tree and document resources (Smart Objects, paths,
+// merges and rasterization). The expected state identity prevents an async or
+// dialog-prepared result from replacing a newer canonical edit. Canvas-sized
+// geometry is deliberately immutable here; resize/crop/rotate retain their
+// narrower validated command families.
+enum class PreparedDocumentMutationKind : std::uint8_t {
+  Text,
+  SmartObject,
+  Path,
+  MergeRasterize,
+};
+
+struct CommitPreparedDocumentState {
+  PreparedDocumentMutationKind kind{PreparedDocumentMutationKind::SmartObject};
+  std::uint64_t expected_state_id{0};
+  Document document{};
+  Rect affected_region{};
+};
+
 // Saved-channel structure and metadata are canonical document state too. These
 // commands keep the desktop Channels panel and non-Qt engine consumers on the
 // same validation, history and revision boundary.
@@ -417,6 +437,7 @@ using DocumentCommand =
                  UpdateVectorShapeLayer, CommitVectorLayerStates,
                  CommitPreviewedLayerStates,
                  CommitPreviewedDocumentChannel,
+                 CommitPreparedDocumentState,
                  AddDocumentChannel, RemoveDocumentChannel,
                  RenameDocumentChannel, ReorderDocumentChannels,
                  InvertDocumentChannel,

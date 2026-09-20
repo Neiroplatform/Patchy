@@ -2229,8 +2229,12 @@ void ui_paths_panel_duplicate_and_reorder() {
   CHECK(paths_list->count() == 2);
   paths_list->setCurrentRow(0);  // "Path 1"
   QApplication::processEvents();
+  const auto duplicate_revision =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   window.findChild<QAction*>(QStringLiteral("pathDuplicateAction"))->trigger();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        duplicate_revision + 1);
   CHECK(document.paths().size() == 3);
   CHECK(document.paths().back().name() == "Path 1 copy");
   CHECK(document.paths().back().path().subpaths.size() == 1);
@@ -2424,8 +2428,12 @@ void ui_stroke_path_simulate_pressure_tapers() {
         ->setChecked(true);
     dialog->accept();
   });
+  const auto stroke_revision =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   window.findChild<QAction*>(QStringLiteral("pathStrokeAction"))->trigger();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        stroke_revision + 1);
 
   // The taper: thin near the ends, full brush width in the middle. The
   // startup document paints onto the transparent "Paint Layer" (the active

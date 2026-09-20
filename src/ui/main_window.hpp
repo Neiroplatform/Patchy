@@ -515,6 +515,15 @@ private:
   void rebuild_window_document_entries(QMenu* window_menu);
   void set_session_saved(DocumentSession& target_session);
   void mark_session_modified(DocumentSession& target_session);
+  bool commit_prepared_document_state(
+      DocumentSession& target_session,
+      patchy::engine::PreparedDocumentMutationKind kind,
+      std::uint64_t expected_state_id, Rect affected_region = {});
+  bool commit_prepared_document_state(
+      DocumentSession& target_session,
+      patchy::engine::PreparedDocumentMutationKind kind,
+      std::uint64_t expected_state_id, Document prepared_document,
+      Rect affected_region = {});
   [[nodiscard]] bool session_is_modified(const DocumentSession& target_session) const noexcept;
   // Display title shared by tab text and float-window titles: "Untitled" fallback
   // plus the modified '*' suffix.

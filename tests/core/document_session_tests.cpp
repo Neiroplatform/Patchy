@@ -1,4 +1,5 @@
 #include "engine/document_session.hpp"
+#include "engine/host_protocol.h"
 
 #include "core/smart_filter.hpp"
 #include "core/smart_object.hpp"
@@ -30,6 +31,7 @@ using patchy::engine::CommitSmartFilterState;
 using patchy::engine::CommitPreviewedDocumentChannel;
 using patchy::engine::CommitPreviewedLayerStates;
 using patchy::engine::CommitPreparedSelection;
+using patchy::engine::CommitPreparedDocumentState;
 using patchy::engine::CommitVectorLayerStates;
 using patchy::engine::DocumentSession;
 using patchy::engine::FlipAxis;
@@ -82,6 +84,7 @@ using patchy::engine::SetSelection;
 using patchy::engine::UngroupLayers;
 using patchy::engine::TransformVectorLayers;
 using patchy::engine::PreviewedLayerState;
+using patchy::engine::PreparedDocumentMutationKind;
 using patchy::engine::UpdateAdjustmentLayer;
 using patchy::engine::UpdateVectorShapeLayer;
 using patchy::engine::VectorTransformTarget;
@@ -2009,6 +2012,136 @@ void engine_session_adjustment_layer_family_is_atomic_and_round_trips() {
   CHECK(session.revision() == revision);
 }
 
+void engine_session_commits_prepared_document_state_with_stale_guard() {
+  DocumentSession session(make_session_document());
+  const auto original = session.document();
+  const auto original_state_id = session.state_id();
+  auto prepared = original;
+  prepared.metadata().values["patchy.test.prepared"] = "path";
+  prepared.find_layer(prepared.layers().front().id())->set_name("Prepared");
+
+  const auto committed = session.execute(CommitPreparedDocumentState{
+      PreparedDocumentMutationKind::Path, original_state_id, prepared,
+      {0, 0, 1, 1}});
+  CHECK(static_cast<bool>(committed));
+  CHECK(committed.changed);
+  CHECK(committed.affected_region.has_value());
+  CHECK(committed.affected_region->x == 0);
+  CHECK(committed.affected_region->y == 0);
+  CHECK(committed.affected_region->width == 1);
+  CHECK(committed.affected_region->height == 1);
+  CHECK(session.document().layers().front().name() == "Prepared");
+  CHECK(session.document().metadata().values.at("patchy.test.prepared") ==
+        "path");
+  CHECK(session.undo_size() == 1);
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().layers().front().name() == "Layer 1");
+  CHECK(!session.document().metadata().values.contains("patchy.test.prepared"));
+  CHECK(static_cast<bool>(session.redo()));
+  CHECK(session.document().layers().front().name() == "Prepared");
+
+  auto stale = session.document();
+  stale.find_layer(stale.layers().front().id())->set_name("Stale");
+  const auto revision_before_rejection = session.revision();
+  const auto rejected = session.execute(CommitPreparedDocumentState{
+      PreparedDocumentMutationKind::SmartObject, original_state_id,
+      std::move(stale), {}});
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision_before_rejection);
+  CHECK(session.document().layers().front().name() == "Prepared");
+
+  Document wrong_geometry(3, 2, PixelFormat::rgba8());
+  wrong_geometry.add_pixel_layer(
+      "Wrong", PixelBuffer(3, 2, PixelFormat::rgba8()));
+  const auto wrong = session.execute(CommitPreparedDocumentState{
+      PreparedDocumentMutationKind::MergeRasterize, session.state_id(),
+      std::move(wrong_geometry), {}});
+  CHECK(!static_cast<bool>(wrong));
+  CHECK(wrong.error.code == SessionErrorCode::InvalidArgument);
+}
+
+void engine_host_protocol_runs_versioned_native_wasm_sequence() {
+  patchy_engine_error error{};
+  patchy_engine_protocol_info info{};
+  info.struct_size = sizeof(info);
+  CHECK(patchy_engine_get_protocol_info(&info, &error) == 1);
+  CHECK(info.protocol_version == PATCHY_ENGINE_HOST_PROTOCOL_VERSION);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_BOUNDED_RENDER) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_PSD_SAVE) != 0);
+
+  auto *unsupported = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
+  CHECK(unsupported == nullptr);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_UNSUPPORTED_VERSION);
+
+  auto source = DocumentSession(make_session_document());
+  const auto encoded = source.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_open_psd(
+      runtime, encoded.bytes.data(), encoded.bytes.size(), &error);
+  CHECK(session != nullptr);
+  std::size_t layer_count = 0;
+  CHECK(patchy_engine_session_layer_count(session, &layer_count, &error) == 1);
+  CHECK(layer_count == 1);
+
+  patchy_engine_layer_projection layer{};
+  CHECK(patchy_engine_session_layer_at(session, 0, &layer, &error) == 1);
+  CHECK(layer.id != 0);
+  CHECK(layer.visible == 1);
+
+  patchy_engine_buffer initial_render{};
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_render(
+            session, {0, 0, 2, 2}, &initial_render, &event, &error) == 1);
+  CHECK(initial_render.size == 16);
+  const std::vector<std::uint8_t> initial_pixels(
+      initial_render.data, initial_render.data + initial_render.size);
+  patchy_engine_buffer_release(&initial_render);
+
+  patchy_engine_command command{};
+  command.struct_size = sizeof(command);
+  command.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  command.type = PATCHY_ENGINE_COMMAND_SET_LAYER_VISIBILITY;
+  command.payload.set_layer_visibility.layer_id = layer.id;
+  command.payload.set_layer_visibility.visible = 0;
+  CHECK(patchy_engine_session_execute(session, &command, &event, &error) == 1);
+  CHECK(event.changed == 1);
+  CHECK(event.dirty == 1);
+  const auto changed_revision = event.revision;
+
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(event.revision > changed_revision);
+  patchy_engine_buffer restored_render{};
+  CHECK(patchy_engine_session_render(
+            session, {0, 0, 2, 2}, &restored_render, &event, &error) == 1);
+  CHECK(std::vector<std::uint8_t>(restored_render.data,
+                                  restored_render.data + restored_render.size) ==
+        initial_pixels);
+  patchy_engine_buffer_release(&restored_render);
+
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  patchy_engine_buffer psd{};
+  CHECK(patchy_engine_session_save_psd(session, &psd, &event, &error) == 1);
+  CHECK(psd.size > 0);
+  auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
+                                                  &error);
+  CHECK(reopened != nullptr);
+  patchy_engine_layer_projection reopened_layer{};
+  CHECK(patchy_engine_session_layer_at(reopened, 0, &reopened_layer, &error) ==
+        1);
+  CHECK(reopened_layer.visible == 0);
+
+  patchy_engine_session_destroy(reopened);
+  patchy_engine_buffer_release(&psd);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -2075,5 +2208,9 @@ std::vector<TestCase> document_session_tests() {
        engine_session_commits_prepared_smart_filter_state_atomically},
       {"engine_session_adjustment_layer_family_is_atomic_and_round_trips",
        engine_session_adjustment_layer_family_is_atomic_and_round_trips},
+      {"engine_session_commits_prepared_document_state_with_stale_guard",
+       engine_session_commits_prepared_document_state_with_stale_guard},
+      {"engine_host_protocol_runs_versioned_native_wasm_sequence",
+       engine_host_protocol_runs_versioned_native_wasm_sequence},
   };
 }

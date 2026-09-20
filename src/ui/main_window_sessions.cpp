@@ -1496,6 +1496,36 @@ void MainWindow::mark_session_modified(DocumentSession& target_session) {
   refresh_document_info();
 }
 
+bool MainWindow::commit_prepared_document_state(
+    DocumentSession& target_session,
+    patchy::engine::PreparedDocumentMutationKind kind,
+    std::uint64_t expected_state_id, Rect affected_region) {
+  return commit_prepared_document_state(
+      target_session, kind, expected_state_id, target_session.document,
+      affected_region);
+}
+
+bool MainWindow::commit_prepared_document_state(
+    DocumentSession& target_session,
+    patchy::engine::PreparedDocumentMutationKind kind,
+    std::uint64_t expected_state_id, Document prepared_document,
+    Rect affected_region) {
+  const auto result = target_session.engine_session.execute_external(
+      patchy::engine::CommitPreparedDocumentState{
+          kind, expected_state_id, std::move(prepared_document),
+          affected_region});
+  if (!result) {
+    if (&target_session == active_session()) {
+      show_status_error(QString::fromStdString(result.error.message));
+    }
+    return false;
+  }
+  refresh_document_tab_titles();
+  update_undo_redo_actions();
+  refresh_document_info();
+  return true;
+}
+
 MainWindow::DocumentSession* MainWindow::session_for_canvas(CanvasWidget* canvas) noexcept {
   if (canvas == nullptr) {
     return nullptr;
