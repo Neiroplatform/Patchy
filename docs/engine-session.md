@@ -72,6 +72,13 @@ typed editing commands.
   Quick Mask already completes through `SetSelection`, while Smart Filter mask
   edits complete through `CommitSmartFilterState`; all three specialized paths
   therefore advance exactly one canonical revision per accepted gesture;
+- `AddDocumentChannel`, `RemoveDocumentChannel`, `RenameDocumentChannel`,
+  `ReorderDocumentChannels` and `InvertDocumentChannel` own the remaining
+  saved-channel lifecycle. They validate full-canvas gray8 payloads, channel
+  limits, editable Alpha targets, complete unique order and fixed Spot-channel
+  positions before committing one revision/history state. Desktop New, Save
+  Selection, Rename, Reorder, Invert and Delete all use these commands, while
+  PSD encode/reopen preserves the resulting names, order, kinds and pixels;
 - `CommitSmartFilterState` atomically commits a UI-prepared supported Smart
   Filter stack or removal: modeled stack/mask state, regenerated SoLd/SoLE
   payloads, FEid/FXid cache store and rendered layer pixels share one validated
@@ -140,8 +147,7 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate the remaining shell-owned history storage and non-gesture channel
-  CRUD to engine commands;
+- migrate the remaining shell-owned history storage to engine history;
 - add command families for remaining nondestructive filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;
 - keep the desktop shell and scripting API on the same command path.

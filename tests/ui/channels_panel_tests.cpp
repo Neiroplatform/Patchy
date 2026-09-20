@@ -415,8 +415,12 @@ void ui_channels_panel_targets_and_alpha_edits() {
   channels->setCurrentItem(require_layer_item(*channels, QStringLiteral("Alpha A")));
   QApplication::processEvents();
   const auto diagnostics_before_history = canvas->render_cache_diagnostics();
+  const auto revision_before_invert =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   require_action(window, "channelInvertAction")->trigger();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_invert + 1U);
   CHECK(*static_cast<const patchy::Document&>(active_document).find_channel(alpha_id)->pixels().pixel(12, 12) == 0);
   require_hotkey_action(window, QStringLiteral("edit.undo"))->trigger();
   QApplication::processEvents();
@@ -728,8 +732,12 @@ void ui_channels_soft_selection_crud_history_and_layer_exit() {
   }
   CHECK(soft_point.has_value());
   const auto saved_alpha = canvas->selection_alpha_at(*soft_point);
+  const auto revision_before_save =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   require_action(window, "channelSaveSelectionAction")->trigger();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_save + 1U);
   CHECK(active_document.channels().size() == 1);
   const auto first_id = active_document.channels().front().id();
   CHECK(*active_document.channels().front().pixels().pixel(soft_point->x(), soft_point->y()) == saved_alpha);
@@ -756,8 +764,12 @@ void ui_channels_soft_selection_crud_history_and_layer_exit() {
   QApplication::processEvents();
   CHECK(canvas->selection_alpha_at(*soft_point) == saved_alpha);
 
+  const auto revision_before_new =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   require_action(window, "channelNewAction")->trigger();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_new + 1U);
   CHECK(active_document.channels().size() == 2);
   const auto second_id = active_document.channels().back().id();
   CHECK(canvas->active_document_channel_id() == second_id);
@@ -770,8 +782,12 @@ void ui_channels_soft_selection_crud_history_and_layer_exit() {
     dialog->setTextValue(QStringLiteral("Custom Alpha"));
     dialog->accept();
   });
+  const auto revision_before_rename =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   require_action(window, "channelRenameAction")->trigger();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_rename + 1U);
   CHECK(rename_dialog_seen);
   CHECK(static_cast<const patchy::Document&>(active_document).find_channel(second_id)->name() == "Custom Alpha");
   require_hotkey_action(window, QStringLiteral("edit.undo"))->trigger();
@@ -784,9 +800,13 @@ void ui_channels_soft_selection_crud_history_and_layer_exit() {
   auto* custom_item = require_layer_item(*channels, QStringLiteral("Custom Alpha"));
   const auto custom_row = channels->row(custom_item);
   CHECK(custom_row > 4);
+  const auto revision_before_reorder =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   CHECK(channels->model()->moveRow(QModelIndex(), custom_row, QModelIndex(), 4));
   QApplication::processEvents();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_reorder + 1U);
   CHECK(active_document.channels().front().id() == second_id);
   require_hotkey_action(window, QStringLiteral("edit.undo"))->trigger();
   QApplication::processEvents();
@@ -795,8 +815,12 @@ void ui_channels_soft_selection_crud_history_and_layer_exit() {
   QApplication::processEvents();
   CHECK(active_document.channels().front().id() == second_id);
 
+  const auto revision_before_delete =
+      patchy::ui::MainWindowTestAccess::active_engine_revision(window);
   require_action(window, "channelDeleteAction")->trigger();
   QApplication::processEvents();
+  CHECK(patchy::ui::MainWindowTestAccess::active_engine_revision(window) ==
+        revision_before_delete + 1U);
   CHECK(active_document.channels().size() == 1);
   CHECK(canvas->layer_edit_target() == patchy::ui::CanvasWidget::LayerEditTarget::Content);
   require_hotkey_action(window, QStringLiteral("edit.undo"))->trigger();

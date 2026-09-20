@@ -1863,6 +1863,141 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                                         concrete.preview_affected_region};
             return;
           } else if constexpr (std::is_same_v<Command,
+                                                AddDocumentChannel>) {
+            const auto &pixels =
+                static_cast<const DocumentChannel &>(concrete.channel).pixels();
+            if (concrete.channel.id() == 0 ||
+                document_.find_channel(concrete.channel.id()) != nullptr ||
+                pixels.empty() || pixels.format() != PixelFormat::gray8() ||
+                pixels.width() != document_.width() ||
+                pixels.height() != document_.height() ||
+                document_.channels().size() >=
+                    document_.maximum_saved_channel_count()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "document channel state is invalid");
+              return;
+            }
+            auto updated_document = document_;
+            updated_document.add_channel(concrete.channel);
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                RemoveDocumentChannel>) {
+            const auto *current =
+                document_.find_channel(concrete.channel_id);
+            if (current == nullptr ||
+                current->kind() != DocumentChannelKind::Alpha) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "editable document channel does not exist");
+              return;
+            }
+            auto updated_document = document_;
+            updated_document.remove_channel(concrete.channel_id);
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                RenameDocumentChannel>) {
+            const auto *current =
+                document_.find_channel(concrete.channel_id);
+            if (current == nullptr ||
+                current->kind() != DocumentChannelKind::Alpha ||
+                concrete.name.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "editable document channel name is invalid");
+              return;
+            }
+            if (current->name() == concrete.name) {
+              return;
+            }
+            auto updated_document = document_;
+            updated_document.rename_channel(concrete.channel_id,
+                                            concrete.name);
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                ReorderDocumentChannels>) {
+            const auto &channels = document_.channels();
+            if (concrete.channel_ids.size() != channels.size()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "document channel order is incomplete");
+              return;
+            }
+            std::set<ChannelId> unique(concrete.channel_ids.begin(),
+                                       concrete.channel_ids.end());
+            if (unique.size() != concrete.channel_ids.size()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "document channel order contains duplicates");
+              return;
+            }
+            bool order_changed = false;
+            for (std::size_t index = 0; index < channels.size(); ++index) {
+              const auto *desired =
+                  document_.find_channel(concrete.channel_ids[index]);
+              if (desired == nullptr ||
+                  (channels[index].kind() == DocumentChannelKind::Spot &&
+                   channels[index].id() != concrete.channel_ids[index]) ||
+                  (desired->kind() == DocumentChannelKind::Spot &&
+                   desired->id() != channels[index].id())) {
+                error = make_error(
+                    SessionErrorCode::InvalidArgument,
+                    "spot channels must retain their document positions");
+                return;
+              }
+              order_changed =
+                  order_changed ||
+                  channels[index].id() != concrete.channel_ids[index];
+            }
+            if (!order_changed) {
+              return;
+            }
+            auto updated_document = document_;
+            for (std::size_t index = 0;
+                 index < concrete.channel_ids.size(); ++index) {
+              if (updated_document.channels()[index].id() !=
+                  concrete.channel_ids[index]) {
+                updated_document.reorder_channel(
+                    concrete.channel_ids[index], index);
+              }
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                InvertDocumentChannel>) {
+            const auto *current =
+                document_.find_channel(concrete.channel_id);
+            if (current == nullptr ||
+                current->kind() != DocumentChannelKind::Alpha) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "editable document channel does not exist");
+              return;
+            }
+            auto updated_document = document_;
+            auto bytes = updated_document
+                             .find_channel(concrete.channel_id)
+                             ->pixels()
+                             .data();
+            for (auto &value : bytes) {
+              value = static_cast<std::uint8_t>(255U - value);
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
+            return;
+          } else if constexpr (std::is_same_v<Command,
                                                 SetVectorMaskState>) {
             const auto *current = document_.find_layer(concrete.layer_id);
             if (current == nullptr) {

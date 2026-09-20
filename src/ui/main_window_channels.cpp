@@ -521,8 +521,14 @@ void MainWindow::create_alpha_channel() {
     pixels.clear(0);
     const auto id = doc.allocate_channel_id();
     const auto name = doc.next_alpha_channel_name();
-    push_undo_snapshot(tr("New channel"));
-    doc.add_channel(DocumentChannel(id, name, DocumentChannelKind::Alpha, std::move(pixels)));
+    push_undo_snapshot(tr("New channel"), false);
+    const auto result = session().engine_session.execute_external(
+        patchy::engine::AddDocumentChannel{DocumentChannel(
+            id, name, DocumentChannelKind::Alpha, std::move(pixels))});
+    if (!result) {
+      show_status_error(QString::fromStdString(result.error.message));
+      return;
+    }
     set_channel_edit_target(ChannelPanel::RowKind::Alpha, id, false, false);
     statusBar()->showMessage(tr("Created channel %1").arg(QString::fromStdString(name)));
   } catch (const std::exception& error) {
@@ -543,8 +549,14 @@ void MainWindow::save_selection_as_channel() {
     auto pixels = canvas_->selection_as_grayscale();
     const auto id = doc.allocate_channel_id();
     const auto name = doc.next_alpha_channel_name();
-    push_undo_snapshot(tr("Save selection as channel"));
-    doc.add_channel(DocumentChannel(id, name, DocumentChannelKind::Alpha, std::move(pixels)));
+    push_undo_snapshot(tr("Save selection as channel"), false);
+    const auto result = session().engine_session.execute_external(
+        patchy::engine::AddDocumentChannel{DocumentChannel(
+            id, name, DocumentChannelKind::Alpha, std::move(pixels))});
+    if (!result) {
+      show_status_error(QString::fromStdString(result.error.message));
+      return;
+    }
     set_channel_edit_target(ChannelPanel::RowKind::Alpha, id, false, false);
     statusBar()->showMessage(tr("Saved selection as %1").arg(QString::fromStdString(name)));
   } catch (const std::exception& error) {
@@ -657,8 +669,13 @@ void MainWindow::rename_active_channel() {
     return;
   }
   const auto id = channel->id();
-  push_undo_snapshot(tr("Rename channel"));
-  document().rename_channel(id, name.toStdString());
+  push_undo_snapshot(tr("Rename channel"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::RenameDocumentChannel{id, name.toStdString()});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   refresh_channel_panel();
   statusBar()->showMessage(tr("Renamed channel to %1").arg(name));
 }
@@ -668,11 +685,13 @@ void MainWindow::invert_active_channel() {
   if (channel == nullptr || channel->kind() != DocumentChannelKind::Alpha || canvas_ == nullptr) {
     return;
   }
-  push_undo_snapshot(tr("Invert channel"));
-  auto& pixels = channel->pixels();
-  auto bytes = pixels.data();
-  for (auto& value : bytes) {
-    value = static_cast<std::uint8_t>(255U - value);
+  const auto id = channel->id();
+  push_undo_snapshot(tr("Invert channel"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::InvertDocumentChannel{id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
   canvas_->grayscale_target_changed(QRect(0, 0, document().width(), document().height()));
   refresh_channel_panel();
@@ -686,8 +705,13 @@ void MainWindow::delete_active_channel() {
   }
   const auto id = channel->id();
   const auto name = QString::fromStdString(channel->name());
-  push_undo_snapshot(tr("Delete channel"));
-  document().remove_channel(id);
+  push_undo_snapshot(tr("Delete channel"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::RemoveDocumentChannel{id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   set_channel_edit_target(ChannelPanel::RowKind::Composite, 0, false, false);
   statusBar()->showMessage(tr("Deleted channel %1").arg(name));
 }
@@ -720,12 +744,13 @@ void MainWindow::reorder_channels_from_panel(std::vector<ChannelId> order) {
   if (!changed) {
     return;
   }
-  push_undo_snapshot(tr("Reorder channels"));
-  for (std::size_t index = 0; index < order.size(); ++index) {
-    const auto& channels = static_cast<const Document&>(doc).channels();
-    if (channels[index].id() != order[index]) {
-      doc.reorder_channel(order[index], index);
-    }
+  push_undo_snapshot(tr("Reorder channels"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::ReorderDocumentChannels{std::move(order)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    refresh_channel_panel();
+    return;
   }
   refresh_channel_panel();
   statusBar()->showMessage(tr("Reordered channels"));

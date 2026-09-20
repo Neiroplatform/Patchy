@@ -325,6 +325,30 @@ struct CommitPreviewedDocumentChannel {
   Rect preview_affected_region{};
 };
 
+// Saved-channel structure and metadata are canonical document state too. These
+// commands keep the desktop Channels panel and non-Qt engine consumers on the
+// same validation, history and revision boundary.
+struct AddDocumentChannel {
+  DocumentChannel channel{};
+};
+
+struct RemoveDocumentChannel {
+  ChannelId channel_id{0};
+};
+
+struct RenameDocumentChannel {
+  ChannelId channel_id{0};
+  std::string name{};
+};
+
+struct ReorderDocumentChannels {
+  std::vector<ChannelId> channel_ids{};
+};
+
+struct InvertDocumentChannel {
+  ChannelId channel_id{0};
+};
+
 struct CommitSmartFilterState {
   LayerId layer_id{0};
   std::optional<SmartFilterStack> stack{};
@@ -352,6 +376,9 @@ using DocumentCommand =
                  UpdateVectorShapeLayer, CommitVectorLayerStates,
                  CommitPreviewedLayerStates,
                  CommitPreviewedDocumentChannel,
+                 AddDocumentChannel, RemoveDocumentChannel,
+                 RenameDocumentChannel, ReorderDocumentChannels,
+                 InvertDocumentChannel,
                  CommitSmartFilterState>;
 
 struct LayerInfo {

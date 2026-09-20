@@ -20,6 +20,7 @@ using patchy::PixelBuffer;
 using patchy::PixelFormat;
 using patchy::engine::AddGroup;
 using patchy::engine::AddAdjustmentLayer;
+using patchy::engine::AddDocumentChannel;
 using patchy::engine::AddPixelLayer;
 using patchy::engine::AddVectorShapeLayer;
 using patchy::engine::ApplyFilter;
@@ -34,10 +35,14 @@ using patchy::engine::FlipAxis;
 using patchy::engine::FlipLayers;
 using patchy::engine::MoveLayers;
 using patchy::engine::ModifySelection;
+using patchy::engine::InvertDocumentChannel;
 using patchy::engine::open_psd;
 using patchy::engine::PlaceLayers;
 using patchy::engine::RemoveLayers;
+using patchy::engine::RemoveDocumentChannel;
 using patchy::engine::RenameLayer;
+using patchy::engine::RenameDocumentChannel;
+using patchy::engine::ReorderDocumentChannels;
 using patchy::engine::ReplaceLayerPixels;
 using patchy::engine::ResizeCanvas;
 using patchy::engine::ResizeImage;
@@ -1388,6 +1393,68 @@ void engine_session_commits_previewed_document_channel_atomically() {
   CHECK(session.revision() == revision_after);
 }
 
+void engine_session_owns_saved_channel_crud_history_and_round_trip() {
+  DocumentSession session(make_session_document());
+  session.mark_saved();
+  const auto make_channel = [](patchy::ChannelId id, std::string name,
+                               patchy::DocumentChannelKind kind,
+                               std::uint8_t value) {
+    PixelBuffer pixels(2, 2, PixelFormat::gray8());
+    pixels.clear(value);
+    return patchy::DocumentChannel(id, std::move(name), kind,
+                                   std::move(pixels));
+  };
+  const auto apply = [&session](const auto &command) {
+    const auto revision = session.revision();
+    const auto state = session.state_id();
+    const auto result = session.execute(command);
+    CHECK(static_cast<bool>(result));
+    CHECK(result.changed);
+    CHECK(session.revision() == revision + 1);
+    CHECK(session.state_id() != state);
+  };
+
+  apply(AddDocumentChannel{make_channel(
+      100, "Alpha 1", patchy::DocumentChannelKind::Alpha, 10)});
+  apply(AddDocumentChannel{make_channel(
+      101, "Alpha 2", patchy::DocumentChannelKind::Alpha, 30)});
+  apply(AddDocumentChannel{make_channel(
+      102, "Spot", patchy::DocumentChannelKind::Spot, 50)});
+  apply(RenameDocumentChannel{101, "Detail Mask"});
+  apply(ReorderDocumentChannels{{101, 100, 102}});
+  CHECK(session.document().channels().front().id() == 101);
+  apply(InvertDocumentChannel{101});
+  CHECK(session.document().find_channel(101)->pixels().pixel(0, 0)[0] == 225);
+  apply(RemoveDocumentChannel{100});
+  CHECK(session.document().find_channel(100) == nullptr);
+  CHECK(session.dirty());
+
+  const auto rejected_revision = session.revision();
+  const auto rejected_order =
+      session.execute(ReorderDocumentChannels{{102, 101}});
+  CHECK(!static_cast<bool>(rejected_order));
+  CHECK(rejected_order.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(!static_cast<bool>(session.execute(InvertDocumentChannel{102})));
+  CHECK(!static_cast<bool>(session.execute(RemoveDocumentChannel{102})));
+  CHECK(session.revision() == rejected_revision);
+
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_channel(100) != nullptr);
+  CHECK(static_cast<bool>(session.redo()));
+  CHECK(session.document().find_channel(100) == nullptr);
+
+  const auto encoded = session.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+  const auto reopened = open_psd(encoded.bytes);
+  CHECK(static_cast<bool>(reopened));
+  CHECK(reopened.session->document().channels().size() == 2);
+  CHECK(reopened.session->document().channels()[0].name() == "Detail Mask");
+  CHECK(reopened.session->document().channels()[0].pixels().pixel(0, 0)[0] ==
+        225);
+  CHECK(reopened.session->document().channels()[1].kind() ==
+        patchy::DocumentChannelKind::Spot);
+}
+
 void engine_session_adjustment_layer_family_is_atomic_and_round_trips() {
   DocumentSession session(make_session_document());
 
@@ -1551,6 +1618,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_commits_previewed_layer_states_atomically},
       {"engine_session_commits_previewed_document_channel_atomically",
        engine_session_commits_previewed_document_channel_atomically},
+      {"engine_session_owns_saved_channel_crud_history_and_round_trip",
+       engine_session_owns_saved_channel_crud_history_and_round_trip},
       {"engine_session_commits_prepared_smart_filter_state_atomically",
        engine_session_commits_prepared_smart_filter_state_atomically},
       {"engine_session_adjustment_layer_family_is_atomic_and_round_trips",
