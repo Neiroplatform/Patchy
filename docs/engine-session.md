@@ -7,7 +7,8 @@ identity, monotonic revision, dirty state and the first typed layer commands.
 ## Current contract
 
 - `open_psd` creates a session without `QApplication` or Qt types.
-- `execute` supports layer visibility, opacity, rename and tree moves.
+- `execute` supports layer visibility, opacity/fill/blend, rename,
+  add/remove/move lifecycle and image/canvas geometry.
 - every successful mutation gets a new state identity and a monotonic revision;
   rejected and no-op commands change neither;
 - undo and redo restore document state identities, so returning to the saved
@@ -39,7 +40,7 @@ or a second dirty/revision counter is forbidden.
 
 - move selection snapshots to a Qt-free representation;
 - migrate remaining MainWindow mutations and history storage to engine commands;
-- add command families for selection, transform, filters and document geometry;
+- add command families for pixel selection, transforms and filters;
 - add progress-aware cancellation inside long render/save operations;
 - replace full-document flattening in `render` with a region compositor;
 - keep the desktop shell and scripting API on the same command path.

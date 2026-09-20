@@ -70,70 +70,158 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
   bool changed = false;
   SessionError error{};
 
-  std::visit(
-      [this, record_history, &layer_id, &changed,
-       &error](const auto &concrete) {
-        using Command = std::decay_t<decltype(concrete)>;
-        if constexpr (std::is_same_v<Command, MoveLayers>) {
-          if (concrete.layer_ids_top_to_bottom.empty()) {
-            error = make_error(SessionErrorCode::InvalidArgument,
-                               "move requires at least one layer");
-            return;
-          }
-          auto moved_document = document_;
-          const LayerDropRequest request{concrete.layer_ids_top_to_bottom,
-                                         concrete.target_layer_id,
-                                         concrete.position, false};
-          if (!move_layers_for_drop(moved_document.layers(), request)) {
-            error = make_error(SessionErrorCode::InvalidArgument,
-                               "layer move is not valid");
-            return;
-          }
-          prepare_mutation(record_history);
-          document_ = std::move(moved_document);
-          changed = true;
-          layer_id = concrete.layer_ids_top_to_bottom.front();
-          return;
-        } else {
-          layer_id = concrete.layer_id;
-          auto *layer = document_.find_layer(concrete.layer_id);
-          if (layer == nullptr) {
-            error = make_error(SessionErrorCode::LayerNotFound,
-                               "layer does not exist");
-            return;
-          }
-
-          if constexpr (std::is_same_v<Command, SetLayerVisibility>) {
-            if (layer->visible() != concrete.visible) {
-              prepare_mutation(record_history);
-              layer = document_.find_layer(concrete.layer_id);
-              layer->set_visible(concrete.visible);
-              changed = true;
-            }
-          } else if constexpr (std::is_same_v<Command, SetLayerOpacity>) {
-            if (!std::isfinite(concrete.opacity) || concrete.opacity < 0.0F ||
-                concrete.opacity > 1.0F) {
+  try {
+    std::visit(
+        [this, record_history, &layer_id, &changed,
+         &error](const auto &concrete) {
+          using Command = std::decay_t<decltype(concrete)>;
+          if constexpr (std::is_same_v<Command, ResizeImage> ||
+                        std::is_same_v<Command, ResizeCanvas>) {
+            if (concrete.width <= 0 || concrete.height <= 0) {
               error = make_error(SessionErrorCode::InvalidArgument,
-                                 "opacity must be finite and in [0, 1]");
+                                 "document dimensions must be positive");
               return;
             }
-            if (layer->opacity() != concrete.opacity) {
-              prepare_mutation(record_history);
-              layer = document_.find_layer(concrete.layer_id);
-              layer->set_opacity(concrete.opacity);
-              changed = true;
+            if (concrete.width == document_.width() &&
+                concrete.height == document_.height()) {
+              return;
             }
-          } else if constexpr (std::is_same_v<Command, RenameLayer>) {
-            if (layer->name() != concrete.name) {
-              prepare_mutation(record_history);
-              layer = document_.find_layer(concrete.layer_id);
-              layer->set_name(concrete.name);
-              changed = true;
+            auto resized_document = document_;
+            if constexpr (std::is_same_v<Command, ResizeImage>) {
+              resize_image_and_layers(resized_document, concrete.width,
+                                      concrete.height);
+            } else {
+              resize_canvas_and_layers(resized_document, concrete.width,
+                                       concrete.height, concrete.anchor,
+                                       concrete.extension_color);
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(resized_document);
+            changed = true;
+            return;
+          } else if constexpr (std::is_same_v<Command, AddPixelLayer> ||
+                               std::is_same_v<Command, AddGroup>) {
+            auto added_document = document_;
+            if constexpr (std::is_same_v<Command, AddPixelLayer>) {
+              layer_id =
+                  added_document.add_pixel_layer(concrete.name, concrete.pixels)
+                      .id();
+            } else {
+              layer_id = added_document.allocate_layer_id();
+              added_document.add_layer(
+                  Layer(layer_id, concrete.name, LayerKind::Group));
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(added_document);
+            changed = true;
+            return;
+          } else if constexpr (std::is_same_v<Command, RemoveLayers>) {
+            if (concrete.layer_ids.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "remove requires at least one layer");
+              return;
+            }
+            for (const auto id : concrete.layer_ids) {
+              if (document_.find_layer(id) == nullptr) {
+                error = make_error(SessionErrorCode::LayerNotFound,
+                                   "removed layer does not exist");
+                return;
+              }
+            }
+            auto removed_document = document_;
+            const auto roots = root_drop_layer_ids(removed_document.layers(),
+                                                   concrete.layer_ids);
+            for (const auto id : roots) {
+              (void)removed_document.remove_layer(id);
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(removed_document);
+            changed = true;
+            layer_id = roots.front();
+            return;
+          } else if constexpr (std::is_same_v<Command, MoveLayers>) {
+            if (concrete.layer_ids_top_to_bottom.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "move requires at least one layer");
+              return;
+            }
+            auto moved_document = document_;
+            const LayerDropRequest request{concrete.layer_ids_top_to_bottom,
+                                           concrete.target_layer_id,
+                                           concrete.position, false};
+            if (!move_layers_for_drop(moved_document.layers(), request)) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "layer move is not valid");
+              return;
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(moved_document);
+            changed = true;
+            layer_id = concrete.layer_ids_top_to_bottom.front();
+            return;
+          } else {
+            layer_id = concrete.layer_id;
+            auto *layer = document_.find_layer(concrete.layer_id);
+            if (layer == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "layer does not exist");
+              return;
+            }
+
+            if constexpr (std::is_same_v<Command, SetLayerVisibility>) {
+              if (layer->visible() != concrete.visible) {
+                prepare_mutation(record_history);
+                layer = document_.find_layer(concrete.layer_id);
+                layer->set_visible(concrete.visible);
+                changed = true;
+              }
+            } else if constexpr (std::is_same_v<Command, SetLayerOpacity>) {
+              if (!std::isfinite(concrete.opacity) || concrete.opacity < 0.0F ||
+                  concrete.opacity > 1.0F) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "opacity must be finite and in [0, 1]");
+                return;
+              }
+              if (layer->opacity() != concrete.opacity) {
+                prepare_mutation(record_history);
+                layer = document_.find_layer(concrete.layer_id);
+                layer->set_opacity(concrete.opacity);
+                changed = true;
+              }
+            } else if constexpr (std::is_same_v<Command, SetLayerFillOpacity>) {
+              if (!std::isfinite(concrete.opacity) || concrete.opacity < 0.0F ||
+                  concrete.opacity > 1.0F) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "fill opacity must be finite and in [0, 1]");
+                return;
+              }
+              if (layer->fill_opacity() != concrete.opacity) {
+                prepare_mutation(record_history);
+                layer = document_.find_layer(concrete.layer_id);
+                layer->set_fill_opacity(concrete.opacity);
+                changed = true;
+              }
+            } else if constexpr (std::is_same_v<Command, SetLayerBlendMode>) {
+              if (layer->blend_mode() != concrete.blend_mode) {
+                prepare_mutation(record_history);
+                layer = document_.find_layer(concrete.layer_id);
+                layer->set_blend_mode(concrete.blend_mode);
+                changed = true;
+              }
+            } else if constexpr (std::is_same_v<Command, RenameLayer>) {
+              if (layer->name() != concrete.name) {
+                prepare_mutation(record_history);
+                layer = document_.find_layer(concrete.layer_id);
+                layer->set_name(concrete.name);
+                changed = true;
+              }
             }
           }
-        }
-      },
-      command);
+        },
+        command);
+  } catch (const std::exception &exception) {
+    error = make_error(SessionErrorCode::CommandFailed, exception.what());
+  }
 
   if (error) {
     return CommandResult{false, std::move(error)};
@@ -143,7 +231,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
     ++revision_;
     publish(SessionEventKind::CommandApplied, layer_id);
   }
-  return CommandResult{changed, {}};
+  return CommandResult{changed, {}, layer_id};
 }
 
 std::vector<LayerInfo> DocumentSession::layers() const {

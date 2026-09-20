@@ -2,6 +2,7 @@
 
 #include "core/document.hpp"
 #include "core/layer_tree.hpp"
+#include "core/pixel_tools.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -18,6 +19,7 @@ enum class SessionErrorCode {
   None,
   InvalidArgument,
   LayerNotFound,
+  CommandFailed,
   NoUndoState,
   NoRedoState,
   DecodeFailed,
@@ -50,6 +52,41 @@ struct RenameLayer {
   std::string name{};
 };
 
+struct SetLayerFillOpacity {
+  LayerId layer_id{0};
+  float opacity{1.0F};
+};
+
+struct SetLayerBlendMode {
+  LayerId layer_id{0};
+  BlendMode blend_mode{BlendMode::Normal};
+};
+
+struct AddPixelLayer {
+  std::string name{};
+  PixelBuffer pixels{};
+};
+
+struct AddGroup {
+  std::string name{};
+};
+
+struct RemoveLayers {
+  std::vector<LayerId> layer_ids{};
+};
+
+struct ResizeImage {
+  std::int32_t width{0};
+  std::int32_t height{0};
+};
+
+struct ResizeCanvas {
+  std::int32_t width{0};
+  std::int32_t height{0};
+  CanvasAnchor anchor{CanvasAnchor::Center};
+  EditColor extension_color{255, 255, 255, 255};
+};
+
 struct MoveLayers {
   std::vector<LayerId> layer_ids_top_to_bottom{};
   std::optional<LayerId> target_layer_id{};
@@ -57,7 +94,9 @@ struct MoveLayers {
 };
 
 using DocumentCommand =
-    std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer, MoveLayers>;
+    std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
+                 SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
+                 AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas>;
 
 struct LayerInfo {
   LayerId id{0};
@@ -86,6 +125,7 @@ struct SessionEvent {
 struct CommandResult {
   bool changed{false};
   SessionError error{};
+  LayerId affected_layer_id{0};
 
   [[nodiscard]] explicit operator bool() const noexcept { return !error; }
 };

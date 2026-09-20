@@ -12,14 +12,21 @@
 using patchy::Document;
 using patchy::PixelBuffer;
 using patchy::PixelFormat;
+using patchy::engine::AddGroup;
+using patchy::engine::AddPixelLayer;
 using patchy::engine::CancellationToken;
 using patchy::engine::DocumentSession;
 using patchy::engine::MoveLayers;
 using patchy::engine::open_psd;
+using patchy::engine::RemoveLayers;
 using patchy::engine::RenameLayer;
+using patchy::engine::ResizeCanvas;
+using patchy::engine::ResizeImage;
 using patchy::engine::SessionErrorCode;
 using patchy::engine::SessionEvent;
 using patchy::engine::SessionEventKind;
+using patchy::engine::SetLayerBlendMode;
+using patchy::engine::SetLayerFillOpacity;
 using patchy::engine::SetLayerOpacity;
 using patchy::engine::SetLayerVisibility;
 using patchy::test::TestCase;
@@ -115,6 +122,59 @@ void engine_session_projects_and_moves_layer_tree() {
   CHECK(projection[1].id == second_id);
 }
 
+void engine_session_layer_lifecycle_and_document_geometry_are_atomic() {
+  DocumentSession session(make_session_document());
+  const auto added_result = session.execute(AddGroup{"Added"});
+  CHECK(static_cast<bool>(added_result));
+  const auto added_id = added_result.affected_layer_id;
+  CHECK(added_id != 0);
+  CHECK(session.document().find_layer(added_id) != nullptr);
+  CHECK(session.document().active_layer_id() == added_id);
+  PixelBuffer added_pixels(2, 2, PixelFormat::rgba8());
+  added_pixels.clear(255);
+  const auto pixel_result =
+      session.execute(AddPixelLayer{"Added pixels", std::move(added_pixels)});
+  CHECK(static_cast<bool>(pixel_result));
+  CHECK(pixel_result.affected_layer_id != 0);
+  CHECK(
+      static_cast<bool>(session.execute(SetLayerFillOpacity{added_id, 0.25F})));
+  CHECK(static_cast<bool>(session.execute(
+      SetLayerBlendMode{added_id, patchy::BlendMode::Multiply})));
+  CHECK(static_cast<bool>(session.execute(ResizeImage{4, 3})));
+  CHECK(session.document().width() == 4);
+  CHECK(session.document().height() == 3);
+  CHECK(static_cast<bool>(session.execute(ResizeCanvas{
+      6, 5, patchy::CanvasAnchor::Center, patchy::EditColor{1, 2, 3, 255}})));
+  CHECK(session.document().width() == 6);
+  CHECK(session.document().height() == 5);
+  CHECK(static_cast<bool>(session.execute(
+      RemoveLayers{{added_id, pixel_result.affected_layer_id}})));
+  CHECK(session.document().find_layer(added_id) == nullptr);
+
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(added_id) != nullptr);
+  while (session.can_undo()) {
+    CHECK(static_cast<bool>(session.undo()));
+  }
+  CHECK(session.document().width() == 2);
+  CHECK(session.document().height() == 2);
+  CHECK(session.document().layers().size() == 1);
+  CHECK(!session.dirty());
+}
+
+void engine_session_rejects_non_atomic_lifecycle_commands() {
+  DocumentSession session(make_session_document());
+  const auto original_state = session.state_id();
+  const auto original_id = session.document().layers().front().id();
+
+  CHECK(
+      !static_cast<bool>(session.execute(RemoveLayers{{original_id, 999999}})));
+  CHECK(!static_cast<bool>(session.execute(ResizeImage{0, 10})));
+  CHECK(session.state_id() == original_state);
+  CHECK(session.undo_size() == 0);
+  CHECK(session.document().layers().size() == 1);
+}
+
 void engine_session_headless_psd_open_edit_save_reopen() {
   const auto source =
       patchy::psd::DocumentIo::write_layered_rgb8(make_session_document());
@@ -204,6 +264,10 @@ std::vector<TestCase> document_session_tests() {
        engine_session_rejects_invalid_commands_without_mutation},
       {"engine_session_projects_and_moves_layer_tree",
        engine_session_projects_and_moves_layer_tree},
+      {"engine_session_layer_lifecycle_and_document_geometry_are_atomic",
+       engine_session_layer_lifecycle_and_document_geometry_are_atomic},
+      {"engine_session_rejects_non_atomic_lifecycle_commands",
+       engine_session_rejects_non_atomic_lifecycle_commands},
       {"engine_session_headless_psd_open_edit_save_reopen",
        engine_session_headless_psd_open_edit_save_reopen},
       {"engine_session_renders_bounded_rgba_regions_and_cancels",
