@@ -3,6 +3,8 @@
 #include "core/document.hpp"
 #include "core/layer_tree.hpp"
 #include "core/pixel_tools.hpp"
+#include "core/smart_filter.hpp"
+#include "core/smart_filter_effects.hpp"
 #include "filters/filter_registry.hpp"
 
 #include <atomic>
@@ -13,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -241,6 +244,16 @@ struct TransformVectorLayers {
   VectorTransformTarget target{VectorTransformTarget::ShapeAndMask};
 };
 
+struct CommitSmartFilterState {
+  LayerId layer_id{0};
+  std::optional<SmartFilterStack> stack{};
+  PixelBuffer rendered_pixels{};
+  Rect rendered_bounds{};
+  std::vector<std::pair<std::size_t, std::vector<std::uint8_t>>>
+      regenerated_blocks{};
+  SmartFilterEffectsStore filter_effects{};
+};
+
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
@@ -252,7 +265,7 @@ using DocumentCommand =
                  ModifySelection, SelectLayerAlpha, SelectLayerMask,
                  SelectLayerVectorMask, SelectSmartFilterMask,
                  SelectByColorSimilarity, SelectVectorPath,
-                 TransformVectorLayers>;
+                 TransformVectorLayers, CommitSmartFilterState>;
 
 struct LayerInfo {
   LayerId id{0};

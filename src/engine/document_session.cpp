@@ -63,6 +63,89 @@ bool selection_snapshots_equal(const SelectionSnapshot &left,
                              *right.quick_mask_pixels);
 }
 
+bool smart_filter_stacks_equal(const SmartFilterStack &left,
+                               const SmartFilterStack &right) {
+  const auto entries_equal = [](const SmartFilterEntry &first,
+                                const SmartFilterEntry &second) {
+    return first.kind == second.kind &&
+           first.native_name == second.native_name &&
+           first.native_class_id == second.native_class_id &&
+           first.native_filter_id == second.native_filter_id &&
+           first.enabled == second.enabled &&
+           first.has_options == second.has_options &&
+           first.opacity == second.opacity &&
+           first.blend_mode == second.blend_mode &&
+           first.foreground == second.foreground &&
+           first.background == second.background &&
+           first.parameters == second.parameters;
+  };
+  return left.enabled == right.enabled &&
+         left.valid_at_position == right.valid_at_position &&
+         left.support == right.support &&
+         left.entries.size() == right.entries.size() &&
+         std::equal(left.entries.begin(), left.entries.end(),
+                    right.entries.begin(), entries_equal) &&
+         rects_equal(left.mask.bounds, right.mask.bounds) &&
+         pixel_buffers_equal(left.mask.pixels, right.mask.pixels) &&
+         left.mask.default_color == right.mask.default_color &&
+         left.mask.enabled == right.mask.enabled &&
+         left.mask.linked == right.mask.linked &&
+         left.mask.extend_with_white == right.mask.extend_with_white;
+}
+
+bool smart_filter_effects_equal(const SmartFilterEffectsStore &left,
+                                const SmartFilterEffectsStore &right) {
+  const auto bytes_equal = [](const auto &first, const auto &second) {
+    return first == second ||
+           (first != nullptr && second != nullptr && *first == *second);
+  };
+  const auto masks_equal = [&bytes_equal](const auto &first,
+                                          const auto &second) {
+    return rects_equal(first.bounds, second.bounds) &&
+           bytes_equal(first.samples, second.samples);
+  };
+  const auto records_equal = [&bytes_equal, &masks_equal](
+                                 const SmartFilterEffectsRecord &first,
+                                 const SmartFilterEffectsRecord &second) {
+    const bool mask_equal =
+        first.mask.has_value() == second.mask.has_value() &&
+        (!first.mask.has_value() || masks_equal(*first.mask, *second.mask));
+    return first.source_block_key == second.source_block_key &&
+           first.source_block_version == second.source_block_version &&
+           first.source_long_length == second.source_long_length &&
+           first.placed_uuid == second.placed_uuid &&
+           first.original_placed_uuid == second.original_placed_uuid &&
+           first.record_version == second.record_version &&
+           bytes_equal(first.raw_storage, second.raw_storage) &&
+           first.raw_body_offset == second.raw_body_offset &&
+           first.raw_body_length == second.raw_body_length &&
+           rects_equal(first.cache_bounds, second.cache_bounds) &&
+           first.cache_depth == second.cache_depth &&
+           first.cache_max_channels == second.cache_max_channels &&
+           first.cache_layout_valid == second.cache_layout_valid &&
+           first.mask_present == second.mask_present &&
+           first.mask_decoded == second.mask_decoded && mask_equal &&
+           first.data_supported == second.data_supported &&
+           first.association_unique == second.association_unique;
+  };
+  const auto blocks_equal = [&bytes_equal, &records_equal](
+                                const SmartFilterEffectsBlock &first,
+                                const SmartFilterEffectsBlock &second) {
+    return first.key == second.key &&
+           first.long_length == second.long_length &&
+           first.original_global_index == second.original_global_index &&
+           first.version == second.version &&
+           first.opaque == second.opaque &&
+           bytes_equal(first.original_payload, second.original_payload) &&
+           first.records.size() == second.records.size() &&
+           std::equal(first.records.begin(), first.records.end(),
+                      second.records.begin(), records_equal);
+  };
+  return left.blocks.size() == right.blocks.size() &&
+         std::equal(left.blocks.begin(), left.blocks.end(),
+                    right.blocks.begin(), blocks_equal);
+}
+
 using SelectionIntervals =
     std::vector<std::pair<std::int32_t, std::int32_t>>;
 using SelectionRows = std::vector<SelectionIntervals>;
@@ -1077,6 +1160,115 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             changed = true;
             affects_document = false;
             event_kind = SessionEventKind::SelectionChanged;
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                CommitSmartFilterState>) {
+            if (concrete.rendered_pixels.empty() ||
+                concrete.rendered_bounds.width !=
+                    concrete.rendered_pixels.width() ||
+                concrete.rendered_bounds.height !=
+                    concrete.rendered_pixels.height() ||
+                concrete.regenerated_blocks.empty()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "prepared Smart Filter state is incomplete");
+              return;
+            }
+            if (concrete.stack.has_value() &&
+                (concrete.stack->support !=
+                     SmartFilterStackSupport::Supported ||
+                 concrete.stack->entries.empty())) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "prepared Smart Filter stack is unsupported");
+              return;
+            }
+            const auto *current_layer =
+                document_.find_layer(concrete.layer_id);
+            if (current_layer == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "Smart Filter layer does not exist");
+              return;
+            }
+            if (!layer_is_smart_object(*current_layer)) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "Smart Filter state requires a Smart Object layer");
+              return;
+            }
+            std::vector<std::size_t> block_indexes;
+            block_indexes.reserve(concrete.regenerated_blocks.size());
+            for (const auto &[index, payload] : concrete.regenerated_blocks) {
+              static_cast<void>(payload);
+              block_indexes.push_back(index);
+            }
+            std::sort(block_indexes.begin(), block_indexes.end(),
+                      std::less<>{});
+            if (std::adjacent_find(block_indexes.begin(),
+                                   block_indexes.end()) !=
+                block_indexes.end()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "Smart Filter block indexes must be unique");
+              return;
+            }
+            const auto &current_blocks = current_layer->unknown_psd_blocks();
+            for (const auto &[index, payload] : concrete.regenerated_blocks) {
+              if (index >= current_blocks.size() ||
+                  (current_blocks[index].key != "SoLd" &&
+                   current_blocks[index].key != "SoLE") ||
+                  payload.empty()) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "prepared Smart Filter block is invalid");
+                return;
+              }
+            }
+            const auto *current_stack = current_layer->smart_filter_stack();
+            const bool stack_equal =
+                current_stack == nullptr
+                    ? !concrete.stack.has_value()
+                    : concrete.stack.has_value() &&
+                          smart_filter_stacks_equal(*current_stack,
+                                                   *concrete.stack);
+            const bool blocks_equal = std::all_of(
+                concrete.regenerated_blocks.begin(),
+                concrete.regenerated_blocks.end(),
+                [&current_blocks](const auto &replacement) {
+                  return current_blocks[replacement.first].payload ==
+                         replacement.second;
+                });
+            if (stack_equal && blocks_equal &&
+                smart_filter_effects_equal(
+                    document_.metadata().smart_filter_effects,
+                    concrete.filter_effects) &&
+                rects_equal(current_layer->bounds(),
+                            concrete.rendered_bounds) &&
+                pixel_buffers_equal(current_layer->pixels(),
+                                    concrete.rendered_pixels)) {
+              return;
+            }
+            auto updated_document = document_;
+            auto *updated_layer =
+                updated_document.find_layer(concrete.layer_id);
+            auto &updated_blocks = updated_layer->unknown_psd_blocks();
+            for (const auto &[index, payload] : concrete.regenerated_blocks) {
+              updated_blocks[index].payload = payload;
+            }
+            updated_document.metadata().smart_filter_effects =
+                concrete.filter_effects;
+            if (concrete.stack.has_value()) {
+              updated_layer->set_smart_filter_stack(*concrete.stack);
+            } else {
+              updated_layer->clear_smart_filter_stack();
+            }
+            updated_layer->set_pixels(concrete.rendered_pixels);
+            updated_layer->set_bounds(concrete.rendered_bounds);
+            mark_layer_smart_object_block_dirty(*updated_layer);
+            updated_layer->metadata()[kLayerMetadataSmartObjectRasterStatus] =
+                kSmartObjectRasterStatusPatchy;
+            const auto affected = unite_rect(current_layer->bounds(),
+                                             updated_layer->bounds());
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            layer_id = concrete.layer_id;
+            affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command,
                                                 TransformVectorLayers>) {

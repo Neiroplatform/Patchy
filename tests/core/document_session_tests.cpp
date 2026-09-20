@@ -1,6 +1,7 @@
 #include "engine/document_session.hpp"
 
 #include "core/smart_filter.hpp"
+#include "core/smart_object.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/vector_raster.hpp"
 #include "core/vector_live_shapes.hpp"
@@ -22,6 +23,7 @@ using patchy::engine::AddPixelLayer;
 using patchy::engine::ApplyFilter;
 using patchy::engine::CancellationToken;
 using patchy::engine::CropDocument;
+using patchy::engine::CommitSmartFilterState;
 using patchy::engine::DocumentSession;
 using patchy::engine::FlipAxis;
 using patchy::engine::FlipLayers;
@@ -860,6 +862,64 @@ void engine_session_vector_transforms_are_atomic_and_qt_free() {
   CHECK(session.revision() == revision);
 }
 
+void engine_session_commits_prepared_smart_filter_state_atomically() {
+  Document document(3, 2, PixelFormat::rgba8());
+  PixelBuffer pixels(3, 2, PixelFormat::rgba8());
+  pixels.clear(40);
+  const auto layer_id = document.allocate_layer_id();
+  patchy::Layer layer(layer_id, "Smart Object", std::move(pixels));
+  layer.metadata()[patchy::kLayerMetadataSmartObject] = "source-uuid";
+  layer.unknown_psd_blocks().push_back({"SoLd", {1, 2, 3}});
+  patchy::SmartFilterStack original_stack;
+  original_stack.support = patchy::SmartFilterStackSupport::Supported;
+  original_stack.entries.push_back(
+      patchy::SmartFilterEntry{.kind = patchy::SmartFilterKind::GaussianBlur,
+                               .parameters = patchy::GaussianBlurSmartFilter{2.0}});
+  layer.set_smart_filter_stack(original_stack);
+  document.add_layer(std::move(layer));
+  DocumentSession session(std::move(document));
+
+  auto updated_stack = original_stack;
+  updated_stack.enabled = false;
+  PixelBuffer rendered(3, 2, PixelFormat::rgba8());
+  rendered.clear(90);
+  CommitSmartFilterState command{
+      layer_id, updated_stack, rendered, {0, 0, 3, 2}, {{0, {4, 5, 6}}}, {}};
+  const auto committed = session.execute(command);
+  CHECK(static_cast<bool>(committed));
+  CHECK(committed.affected_region.has_value());
+  const auto *updated = session.document().find_layer(layer_id);
+  CHECK(updated != nullptr);
+  CHECK(updated->smart_filter_stack() != nullptr);
+  CHECK(!updated->smart_filter_stack()->enabled);
+  CHECK(updated->pixels().pixel(0, 0)[0] == 90);
+  CHECK(updated->unknown_psd_blocks().front().payload ==
+        std::vector<std::uint8_t>({4, 5, 6}));
+  CHECK(session.dirty());
+
+  const auto committed_revision = session.revision();
+  const auto no_op = session.execute(command);
+  CHECK(static_cast<bool>(no_op));
+  CHECK(!no_op.changed);
+  CHECK(session.revision() == committed_revision);
+
+  CHECK(static_cast<bool>(session.undo()));
+  const auto *restored = session.document().find_layer(layer_id);
+  CHECK(restored->smart_filter_stack()->enabled);
+  CHECK(restored->pixels().pixel(0, 0)[0] == 40);
+  CHECK(restored->unknown_psd_blocks().front().payload ==
+        std::vector<std::uint8_t>({1, 2, 3}));
+  CHECK(!session.dirty());
+
+  auto invalid = command;
+  invalid.regenerated_blocks.push_back({0, {7}});
+  const auto revision = session.revision();
+  const auto rejected = session.execute(invalid);
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -898,5 +958,7 @@ std::vector<TestCase> document_session_tests() {
        engine_session_filter_and_pixel_commands_share_atomic_history},
       {"engine_session_vector_transforms_are_atomic_and_qt_free",
        engine_session_vector_transforms_are_atomic_and_qt_free},
+      {"engine_session_commits_prepared_smart_filter_state_atomically",
+       engine_session_commits_prepared_smart_filter_state_atomically},
   };
 }

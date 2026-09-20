@@ -1216,32 +1216,26 @@ bool MainWindow::commit_smart_filter_stack_edit(
   }
 
   const auto old_bounds = layer->bounds();
-  push_undo_snapshot(target_session, undo_text);
-  layer = doc.find_layer(layer_id);
-  if (layer == nullptr) {
+  auto rendered_pixels = candidate.has_value()
+                             ? std::move(preview->rendered.pixels)
+                             : std::move(unfiltered_only->pixels);
+  const auto rendered_bounds = candidate.has_value()
+                                   ? preview->rendered.bounds
+                                   : unfiltered_only->bounds;
+  push_undo_snapshot(target_session, undo_text, false);
+  const auto committed = target_session.engine_session.execute_external(
+      patchy::engine::CommitSmartFilterState{
+          layer_id, std::move(candidate), std::move(rendered_pixels),
+          rendered_bounds, std::move(regenerated_blocks),
+          std::move(filter_effects)});
+  if (!committed) {
     return false;
   }
-  auto& mutable_blocks = layer->unknown_psd_blocks();
-  for (auto& [index, payload] : regenerated_blocks) {
-    if (index >= mutable_blocks.size()) {
-      return false;
-    }
-    mutable_blocks[index].payload = std::move(payload);
+  const auto* committed_layer = std::as_const(doc).find_layer(layer_id);
+  if (committed_layer == nullptr) {
+    return false;
   }
-  doc.metadata().smart_filter_effects = std::move(filter_effects);
-  if (candidate.has_value()) {
-    layer->set_smart_filter_stack(std::move(*candidate));
-    layer->set_pixels(std::move(preview->rendered.pixels));
-    layer->set_bounds(preview->rendered.bounds);
-  } else {
-    layer->clear_smart_filter_stack();
-    layer->set_pixels(std::move(unfiltered_only->pixels));
-    layer->set_bounds(unfiltered_only->bounds);
-  }
-  mark_layer_smart_object_block_dirty(*layer);
-  layer->metadata()[kLayerMetadataSmartObjectRasterStatus] =
-      kSmartObjectRasterStatusPatchy;
-  const auto new_bounds = layer->bounds();
+  const auto new_bounds = committed_layer->bounds();
   if (target_canvas == canvas_) {
     refresh_layer_list();
     refresh_layer_controls();
