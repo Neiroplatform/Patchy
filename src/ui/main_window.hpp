@@ -1078,12 +1078,13 @@ private:
                                              const std::vector<LayerId>& editable_ids);
   void undo();
   void redo();
-  void push_undo_snapshot(QString label);
+  void push_undo_snapshot(QString label, bool mark_modified = true);
   // Session-targeted overload: canvas edit callbacks resolve their OWNING session at
   // fire time, so an edit on a non-active canvas (or an async completion landing after
   // the active document changed) never snapshots the wrong document. The no-session
   // signature above means "the active session".
-  void push_undo_snapshot(DocumentSession& target_session, QString label);
+  void push_undo_snapshot(DocumentSession& target_session, QString label,
+                          bool mark_modified = true);
   // Push an undo entry for a selection-only edit, holding the pre-edit selection
   // `before` against the current (unchanged) document. When `coalesce` is true
   // and the previous entry was also a coalescing move, the new state merges into

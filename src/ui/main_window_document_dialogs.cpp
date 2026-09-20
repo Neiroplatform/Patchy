@@ -1336,8 +1336,16 @@ void MainWindow::resize_canvas_dialog() {
     return;
   }
 
-  push_undo_snapshot(tr("Canvas size"));
-  resize_canvas_and_layers(doc, settings->width, settings->height, settings->anchor, edit_color(settings->extension_color));
+  push_undo_snapshot(tr("Canvas size"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::ResizeCanvas{settings->width, settings->height,
+                                  settings->anchor,
+                                  edit_color(settings->extension_color)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  refresh_document_tab_titles();
   canvas_->clear_selection();
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();

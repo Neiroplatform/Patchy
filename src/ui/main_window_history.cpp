@@ -565,11 +565,12 @@ void MainWindow::redo() {
                              std::move(live_selection), tr("Redo"));
 }
 
-void MainWindow::push_undo_snapshot(QString label) {
-  push_undo_snapshot(session(), std::move(label));
+void MainWindow::push_undo_snapshot(QString label, bool mark_modified) {
+  push_undo_snapshot(session(), std::move(label), mark_modified);
 }
 
-void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString label) {
+void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString label,
+                                    bool mark_modified) {
   const bool target_is_active = &target_session == active_session();
   if (target_is_active) {
     // The pending layer-opacity edit belongs to the ACTIVE document; a snapshot
@@ -616,7 +617,9 @@ void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString lab
       active_session,
       DocumentSession::HistoryState{snapshot_future.get(), snapshot_state_id, std::move(snapshot_selection), {}, 0},
       label);
-  mark_session_modified(active_session);
+  if (mark_modified) {
+    mark_session_modified(active_session);
+  }
   // The History panel and status bar mirror the ACTIVE session; an edit landing
   // in a background session keeps its undo stack but must not inject its label
   // into the panel the user is looking at.

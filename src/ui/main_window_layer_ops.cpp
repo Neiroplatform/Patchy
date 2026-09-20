@@ -2134,8 +2134,14 @@ void MainWindow::rename_active_layer() {
     return;
   }
 
-  push_undo_snapshot(tr("Rename layer"));
-  layer->set_name(new_name->trimmed().toStdString());
+  push_undo_snapshot(tr("Rename layer"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::RenameLayer{layer->id(), new_name->trimmed().toStdString()});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  refresh_document_tab_titles();
   refresh_layer_list();
   refresh_layer_controls();
 }
@@ -2610,11 +2616,14 @@ void MainWindow::delete_layers(std::vector<LayerId> ids) {
   if (ids.empty()) {
     return;
   }
-  auto& doc = document();
-  push_undo_snapshot(tr("Delete layer"));
-  for (const auto id : ids) {
-    doc.remove_layer(id);
+  push_undo_snapshot(tr("Delete layer"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::RemoveLayers{ids});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
+  refresh_document_tab_titles();
   refresh_layer_list();
   refresh_layer_controls();
   canvas_->document_changed();
