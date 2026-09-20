@@ -1045,45 +1045,18 @@ void MainWindow::create_docks() {
     }
     const auto id = static_cast<LayerId>(item->data(kLayerIdRole).toULongLong());
     if (target == LayerCtrlClickTarget::MaskThumbnail) {
-      canvas_->select_layer_mask_pixels(id);
+      select_layer_mask_via_engine(id);
     } else if (target == LayerCtrlClickTarget::VectorMaskThumbnail) {
-      const auto* layer = std::as_const(document()).find_layer(id);
-      const auto* mask = layer != nullptr ? layer->vector_mask() : nullptr;
-      if (mask != nullptr) {
-        // Materialize the coverage cache onto the whole canvas (zero outside
-        // cache_bounds) so the selection matches the rendered mask.
-        PixelBuffer coverage(document().width(), document().height(), PixelFormat::gray8());
-        for (int y = 0; y < coverage.height(); ++y) {
-          for (int x = 0; x < coverage.width(); ++x) {
-            const auto local_x = x - mask->cache_bounds.x;
-            const auto local_y = y - mask->cache_bounds.y;
-            std::uint8_t value = 0;
-            if (!mask->cache.empty() && local_x >= 0 && local_y >= 0 &&
-                local_x < mask->cache.width() && local_y < mask->cache.height()) {
-              value = *mask->cache.pixel(local_x, local_y);
-            }
-            *coverage.pixel(x, y) = value;
-          }
-        }
-        canvas_->replace_selection_from_grayscale(coverage, tr("Load vector mask selection"));
+      if (select_layer_vector_mask_via_engine(id)) {
         statusBar()->showMessage(tr("Loaded the vector mask as a selection"));
       }
     } else if (target == LayerCtrlClickTarget::SmartFilterMaskThumbnail) {
-      const auto* layer = std::as_const(document()).find_layer(id);
-      const auto* stack = layer != nullptr ? layer->smart_filter_stack() : nullptr;
-      const auto pixels = stack != nullptr
-                              ? materialize_smart_filter_mask(
-                                    stack->mask, document().width(),
-                                    document().height())
-                              : std::nullopt;
-      if (pixels.has_value()) {
-        canvas_->replace_selection_from_grayscale(
-            *pixels, tr("Load Smart Filter mask selection"));
+      if (select_smart_filter_mask_via_engine(id)) {
         statusBar()->showMessage(
             tr("Loaded the Smart Filter mask as a selection"));
       }
     } else {
-      canvas_->select_layer_opaque_pixels(id);
+      select_layer_alpha_via_engine(id);
     }
   });
   layer_list->set_thumbnail_click_callback([this](QListWidgetItem* item, LayerCtrlClickTarget target,

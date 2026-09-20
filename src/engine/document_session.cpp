@@ -4,6 +4,7 @@
 #include "core/layer_render_utils.hpp"
 #include "core/smart_object.hpp"
 #include "psd/psd_document_io.hpp"
+#include "psd/psd_filter_effects.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -227,6 +228,75 @@ SelectionRows subtract_rows(const SelectionRows &left,
     }
   }
   return result;
+}
+
+std::vector<Rect> rects_from_gray_mask(const PixelBuffer &mask, Rect bounds,
+                                       std::uint8_t minimum_alpha) {
+  SelectionRows rows(static_cast<std::size_t>(mask.height()));
+  for (std::int32_t y = 0; y < mask.height(); ++y) {
+    const auto source = mask.row(y);
+    auto &intervals = rows[static_cast<std::size_t>(y)];
+    std::int32_t start = -1;
+    for (std::int32_t x = 0; x <= mask.width(); ++x) {
+      const bool selected =
+          x < mask.width() && source[static_cast<std::size_t>(x)] >= minimum_alpha;
+      if (selected && start < 0) {
+        start = x;
+      } else if (!selected && start >= 0) {
+        intervals.emplace_back(start, x);
+        start = -1;
+      }
+    }
+  }
+  auto rects = rects_from_rows(rows);
+  for (auto &rect : rects) {
+    rect.x += bounds.x;
+    rect.y += bounds.y;
+  }
+  return rects;
+}
+
+SelectionSnapshot selection_from_gray_mask(PixelBuffer alpha, Rect bounds) {
+  SelectionSnapshot result;
+  if (alpha.empty()) {
+    return result;
+  }
+  result.selection = rects_from_gray_mask(alpha, bounds, 1U);
+  result.display_region = rects_from_gray_mask(alpha, bounds, 128U);
+  const bool partial = std::any_of(alpha.data().begin(), alpha.data().end(),
+                                   [](std::uint8_t value) {
+                                     return value != 0U && value != 255U;
+                                   });
+  if (partial && !result.selection.empty()) {
+    result.mask_bounds = bounds;
+    result.mask_alpha = std::move(alpha);
+  }
+  return result;
+}
+
+std::uint8_t pixel_alpha8(const PixelBuffer &pixels, std::int32_t x,
+                          std::int32_t y) {
+  const auto format = pixels.format();
+  const auto alpha_channel = format.channels == 2 ? 1U : 3U;
+  if (format.channels != 2 && format.channels < 4) {
+    return 255U;
+  }
+  const auto channel_bytes = bytes_per_channel(format.bit_depth);
+  const auto *source =
+      pixels.pixel(x, y) + static_cast<std::size_t>(alpha_channel) * channel_bytes;
+  if (format.bit_depth == BitDepth::UInt8) {
+    return source[0];
+  }
+  if (format.bit_depth == BitDepth::UInt16) {
+    std::uint16_t value = 0;
+    std::memcpy(&value, source, sizeof(value));
+    return static_cast<std::uint8_t>(
+        (static_cast<std::uint32_t>(value) + 128U) / 257U);
+  }
+  float value = 0.0F;
+  std::memcpy(&value, source, sizeof(value));
+  return static_cast<std::uint8_t>(
+      std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));
 }
 
 void restore_pixels_outside_rect_selection(
@@ -792,6 +862,134 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             layer_id = concrete.layer_id;
             affected_region =
                 unite_rect(old_render_bounds, layer_render_bounds(*layer));
+            return;
+          } else if constexpr (std::is_same_v<Command, SelectLayerAlpha> ||
+                               std::is_same_v<Command, SelectLayerMask> ||
+                               std::is_same_v<Command, SelectLayerVectorMask> ||
+                               std::is_same_v<Command, SelectSmartFilterMask>) {
+            const auto *layer = document_.find_layer(concrete.layer_id);
+            if (layer == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "selection source layer does not exist");
+              return;
+            }
+            SelectionSnapshot modified;
+            if constexpr (std::is_same_v<Command, SelectLayerAlpha>) {
+              if (layer->kind() != LayerKind::Pixel) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "selection alpha source must be a pixel layer");
+                return;
+              }
+              const auto bounds = intersect_rect(
+                  layer->bounds(),
+                  Rect::from_size(document_.width(), document_.height()));
+              if (!bounds.empty() && !layer->pixels().empty()) {
+                PixelBuffer alpha(bounds.width, bounds.height,
+                                  PixelFormat::gray8());
+                for (std::int32_t y = 0; y < bounds.height; ++y) {
+                  for (std::int32_t x = 0; x < bounds.width; ++x) {
+                    *alpha.pixel(x, y) = pixel_alpha8(
+                        layer->pixels(), bounds.x + x - layer->bounds().x,
+                        bounds.y + y - layer->bounds().y);
+                  }
+                }
+                modified = selection_from_gray_mask(std::move(alpha), bounds);
+              }
+            } else if constexpr (std::is_same_v<Command, SelectLayerMask>) {
+              if (!layer->mask().has_value()) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "selection source layer has no mask");
+                return;
+              }
+              const auto &mask = *layer->mask();
+              const auto canvas =
+                  Rect::from_size(document_.width(), document_.height());
+              const auto bounds = mask.default_color != 0U
+                                      ? canvas
+                                      : intersect_rect(mask.bounds, canvas);
+              if (!bounds.empty()) {
+                PixelBuffer alpha(bounds.width, bounds.height,
+                                  PixelFormat::gray8());
+                alpha.clear(mask.default_color);
+                if (!mask.pixels.empty() &&
+                    mask.pixels.format() == PixelFormat::gray8()) {
+                  const auto copy = intersect_rect(mask.bounds, bounds);
+                  for (std::int32_t y = 0; y < copy.height; ++y) {
+                    const auto *source = mask.pixels.pixel(
+                        copy.x - mask.bounds.x, copy.y + y - mask.bounds.y);
+                    auto *destination = alpha.pixel(
+                        copy.x - bounds.x, copy.y + y - bounds.y);
+                    std::copy_n(source, copy.width, destination);
+                  }
+                }
+                modified = selection_from_gray_mask(std::move(alpha), bounds);
+              }
+            } else if constexpr (std::is_same_v<Command,
+                                                SelectLayerVectorMask>) {
+              const auto *mask = layer->vector_mask();
+              if (mask == nullptr || mask->cache.empty() ||
+                  mask->cache.format() != PixelFormat::gray8()) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "selection source layer has no rasterized vector mask");
+                return;
+              }
+              const auto bounds = intersect_rect(
+                  mask->cache_bounds,
+                  Rect::from_size(document_.width(), document_.height()));
+              if (!bounds.empty()) {
+                PixelBuffer alpha(bounds.width, bounds.height,
+                                  PixelFormat::gray8());
+                const auto source_x = bounds.x - mask->cache_bounds.x;
+                const auto source_y = bounds.y - mask->cache_bounds.y;
+                for (std::int32_t y = 0; y < bounds.height; ++y) {
+                  std::copy_n(mask->cache.pixel(source_x, source_y + y),
+                              bounds.width, alpha.pixel(0, y));
+                }
+                modified = selection_from_gray_mask(std::move(alpha), bounds);
+              }
+            } else {
+              const auto *stack = layer->smart_filter_stack();
+              if (stack == nullptr || stack->mask.pixels.empty() ||
+                  stack->mask.pixels.format() != PixelFormat::gray8() ||
+                  stack->mask.bounds.width != stack->mask.pixels.width() ||
+                  stack->mask.bounds.height != stack->mask.pixels.height()) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "selection source layer has no editable Smart Filter mask");
+                return;
+              }
+              const auto canvas =
+                  Rect::from_size(document_.width(), document_.height());
+              const auto pixel_count =
+                  static_cast<std::uint64_t>(document_.width()) *
+                  static_cast<std::uint64_t>(document_.height());
+              if (pixel_count > psd::kMaximumEditableSmartFilterMaskPixels) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "Smart Filter mask exceeds the editable pixel limit");
+                return;
+              }
+              PixelBuffer alpha(canvas.width, canvas.height,
+                                PixelFormat::gray8());
+              alpha.clear(stack->mask.extend_with_white
+                              ? 255U
+                              : stack->mask.default_color);
+              const auto copy = intersect_rect(stack->mask.bounds, canvas);
+              for (std::int32_t y = 0; y < copy.height; ++y) {
+                std::copy_n(
+                    stack->mask.pixels.pixel(copy.x - stack->mask.bounds.x,
+                                             copy.y + y - stack->mask.bounds.y),
+                    copy.width, alpha.pixel(copy.x, copy.y + y));
+              }
+              modified = selection_from_gray_mask(std::move(alpha), canvas);
+            }
+            if (selection_snapshots_equal(selection_, modified)) {
+              return;
+            }
+            prepare_mutation(record_history);
+            selection_ = std::move(modified);
+            changed = true;
+            affects_document = false;
+            event_kind = SessionEventKind::SelectionChanged;
+            layer_id = concrete.layer_id;
             return;
           } else if constexpr (std::is_same_v<Command, ModifySelection>) {
             const bool morphology =

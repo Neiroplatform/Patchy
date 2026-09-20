@@ -629,7 +629,11 @@ void MainWindow::build_menu_bar_actions(ActionBuildContext& ctx) {
   connect(border_selection_action, &QAction::triggered, this, [this] { border_selection_dialog(); });
   connect(layer_transparency_action, &QAction::triggered, this, [this] {
     canvas_->run_selection_command(tr("Load Layer Transparency"),
-                                   [this] { canvas_->select_active_layer_opaque_pixels(); });
+                                   [this] {
+      if (const auto active = document().active_layer_id(); active.has_value()) {
+        select_layer_alpha_via_engine(*active);
+      }
+    });
   });
   connect(stroke_selection_action, &QAction::triggered, this, [this] { stroke_selection(); });
   for (auto* action : {select_all_action, clear_selection_action, reselect_action, inverse_selection_action,

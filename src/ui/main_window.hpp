@@ -1030,6 +1030,10 @@ private:
   bool apply_engine_selection_operation(
       patchy::engine::SelectionOperation operation,
       std::int32_t pixels = 0);
+  bool select_layer_alpha_via_engine(LayerId layer_id);
+  bool select_layer_mask_via_engine(LayerId layer_id);
+  bool select_layer_vector_mask_via_engine(LayerId layer_id);
+  bool select_smart_filter_mask_via_engine(LayerId layer_id);
   void apply_brush_tip_to_canvas(CanvasWidget* canvas);
   void import_brush_tips_from_abr();
   void open_brush_tip_manager();

@@ -198,6 +198,22 @@ struct ModifySelection {
   std::int32_t pixels{0};
 };
 
+struct SelectLayerAlpha {
+  LayerId layer_id{0};
+};
+
+struct SelectLayerMask {
+  LayerId layer_id{0};
+};
+
+struct SelectLayerVectorMask {
+  LayerId layer_id{0};
+};
+
+struct SelectSmartFilterMask {
+  LayerId layer_id{0};
+};
+
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
@@ -206,7 +222,8 @@ using DocumentCommand =
                  SetLayersOpacity, SetLayersFillOpacity,
                  SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers,
                  ReplaceLayerPixels, ApplyFilter, SetSelection,
-                 ModifySelection>;
+                 ModifySelection, SelectLayerAlpha, SelectLayerMask,
+                 SelectLayerVectorMask, SelectSmartFilterMask>;
 
 struct LayerInfo {
   LayerId id{0};

@@ -503,6 +503,19 @@ void ui_vector_mask_from_current_path_masks_layer() {
   CHECK(row != nullptr);
   CHECK(row->findChild<QLabel*>(QStringLiteral("layerVectorMaskThumbnail")) != nullptr);
 
+  // Ctrl-click projects the cached vector coverage through the canonical
+  // engine selection state without changing the active mask edit target.
+  canvas->clear_selection();
+  click_layer_row_thumbnail(*layer_list, QStringLiteral("Red"),
+                            QStringLiteral("layerVectorMaskThumbnail"),
+                            Qt::ControlModifier);
+  CHECK(canvas->has_selection());
+  const auto vector_selection = canvas->selection_as_grayscale();
+  CHECK(*vector_selection.pixel(100, 150) > 0);
+  CHECK(*vector_selection.pixel(300, 150) == 0);
+  CHECK(canvas->layer_edit_target() ==
+        patchy::ui::CanvasWidget::LayerEditTarget::VectorMask);
+
   // The pen extends the mask path while the vector-mask target is active.
   canvas->set_tool(patchy::ui::CanvasTool::Pen);
   pen_click(*canvas, QPoint(250, 50));

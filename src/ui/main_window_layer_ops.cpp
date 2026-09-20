@@ -2973,7 +2973,7 @@ void MainWindow::show_layer_context_menu(QPoint position) {
   } else if (chosen == all_lock_action) {
     set_active_layer_lock_all(all_lock_action->isChecked());
   } else if (chosen == select_opaque_action && active_layer != nullptr && canvas_ != nullptr) {
-    canvas_->select_layer_opaque_pixels(active_layer->id());
+    select_layer_alpha_via_engine(active_layer->id());
   } else if (chosen == add_mask_action) {
     add_layer_mask();
   } else if (chosen == edit_mask_action) {
@@ -3459,6 +3459,54 @@ bool MainWindow::apply_engine_selection_operation(
       operation == patchy::engine::SelectionOperation::Clear) {
     canvas_->set_selection_edges_visible(true);
   }
+  return true;
+}
+
+bool MainWindow::select_layer_alpha_via_engine(LayerId layer_id) {
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SelectLayerAlpha{layer_id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return false;
+  }
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
+  canvas_->set_selection_edges_visible(true);
+  return true;
+}
+
+bool MainWindow::select_layer_mask_via_engine(LayerId layer_id) {
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SelectLayerMask{layer_id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return false;
+  }
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
+  canvas_->set_selection_edges_visible(true);
+  return true;
+}
+
+bool MainWindow::select_layer_vector_mask_via_engine(LayerId layer_id) {
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SelectLayerVectorMask{layer_id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return false;
+  }
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
+  canvas_->set_selection_edges_visible(true);
+  return true;
+}
+
+bool MainWindow::select_smart_filter_mask_via_engine(LayerId layer_id) {
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::SelectSmartFilterMask{layer_id});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return false;
+  }
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
+  canvas_->set_selection_edges_visible(true);
   return true;
 }
 

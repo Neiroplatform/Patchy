@@ -1,5 +1,6 @@
 #include "engine/document_session.hpp"
 
+#include "core/smart_filter.hpp"
 #include "psd/psd_document_io.hpp"
 #include "test_groups.hpp"
 #include "test_harness.hpp"
@@ -36,6 +37,10 @@ using patchy::engine::SessionEvent;
 using patchy::engine::SessionEventKind;
 using patchy::engine::SelectionSnapshot;
 using patchy::engine::SelectionOperation;
+using patchy::engine::SelectLayerAlpha;
+using patchy::engine::SelectLayerMask;
+using patchy::engine::SelectLayerVectorMask;
+using patchy::engine::SelectSmartFilterMask;
 using patchy::engine::SetLayerBlendMode;
 using patchy::engine::SetLayerFillOpacity;
 using patchy::engine::SetLayerOpacity;
@@ -477,6 +482,81 @@ void engine_session_selection_operations_are_qt_free_and_undoable() {
   CHECK(morphology.revision() == revision);
 }
 
+void engine_session_layer_derived_selection_preserves_soft_coverage() {
+  Document document(4, 3, PixelFormat::rgba8());
+  PixelBuffer pixels(2, 2, PixelFormat::rgba8());
+  pixels.pixel(0, 0)[3] = 0;
+  pixels.pixel(1, 0)[3] = 64;
+  pixels.pixel(0, 1)[3] = 255;
+  pixels.pixel(1, 1)[3] = 255;
+  const auto layer_id = document.allocate_layer_id();
+  patchy::Layer layer(layer_id, "Alpha source", std::move(pixels));
+  layer.set_bounds({1, 1, 2, 2});
+  PixelBuffer mask(2, 2, PixelFormat::gray8());
+  *mask.pixel(0, 0) = 0;
+  *mask.pixel(1, 0) = 128;
+  *mask.pixel(0, 1) = 255;
+  *mask.pixel(1, 1) = 255;
+  layer.set_mask(patchy::LayerMask{{0, 0, 2, 2}, std::move(mask), 0, false});
+  patchy::LayerVectorMask vector_mask;
+  vector_mask.cache_bounds = {2, 0, 2, 1};
+  vector_mask.cache = PixelBuffer(2, 1, PixelFormat::gray8());
+  *vector_mask.cache.pixel(0, 0) = 32;
+  *vector_mask.cache.pixel(1, 0) = 255;
+  layer.set_vector_mask(std::move(vector_mask));
+  patchy::SmartFilterStack smart_filters;
+  smart_filters.mask.bounds = {0, 2, 2, 1};
+  smart_filters.mask.pixels = PixelBuffer(2, 1, PixelFormat::gray8());
+  *smart_filters.mask.pixels.pixel(0, 0) = 255;
+  *smart_filters.mask.pixels.pixel(1, 0) = 32;
+  smart_filters.mask.default_color = 0;
+  smart_filters.mask.extend_with_white = false;
+  layer.set_smart_filter_stack(std::move(smart_filters));
+  document.add_layer(std::move(layer));
+  DocumentSession session(std::move(document));
+
+  CHECK(static_cast<bool>(session.execute(SelectLayerAlpha{layer_id})));
+  CHECK(session.selection().mask_bounds.x == 1);
+  CHECK(session.selection().mask_bounds.y == 1);
+  CHECK(session.selection().mask_alpha.pixel(1, 0)[0] == 64);
+  const auto contains = [](const std::vector<patchy::Rect> &rects,
+                           std::int32_t x, std::int32_t y) {
+    return std::any_of(rects.begin(), rects.end(), [x, y](patchy::Rect rect) {
+      return x >= rect.x && y >= rect.y && x < rect.x + rect.width &&
+             y < rect.y + rect.height;
+    });
+  };
+  CHECK(!contains(session.selection().selection, 1, 1));
+  CHECK(contains(session.selection().selection, 2, 1));
+  CHECK(!contains(session.selection().display_region, 2, 1));
+  CHECK(contains(session.selection().display_region, 1, 2));
+  CHECK(!session.dirty());
+
+  CHECK(static_cast<bool>(session.execute(SelectLayerMask{layer_id})));
+  CHECK(session.selection().mask_bounds.x == 0);
+  CHECK(session.selection().mask_alpha.pixel(1, 0)[0] == 128);
+  CHECK(contains(session.selection().selection, 1, 0));
+  CHECK(contains(session.selection().display_region, 1, 0));
+
+  CHECK(static_cast<bool>(session.execute(SelectLayerVectorMask{layer_id})));
+  CHECK(session.selection().mask_bounds.x == 2);
+  CHECK(session.selection().mask_bounds.y == 0);
+  CHECK(session.selection().mask_alpha.pixel(0, 0)[0] == 32);
+  CHECK(contains(session.selection().selection, 2, 0));
+  CHECK(!contains(session.selection().display_region, 2, 0));
+  CHECK(contains(session.selection().display_region, 3, 0));
+
+  CHECK(static_cast<bool>(session.execute(SelectSmartFilterMask{layer_id})));
+  CHECK(session.selection().mask_bounds.x == 0);
+  CHECK(session.selection().mask_bounds.y == 0);
+  CHECK(session.selection().mask_alpha.pixel(1, 2)[0] == 32);
+  CHECK(contains(session.selection().display_region, 0, 2));
+  CHECK(!contains(session.selection().display_region, 1, 2));
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.selection().mask_bounds.x == 2);
+  CHECK(!session.dirty());
+}
+
 void engine_session_layer_editing_vertical_slice_is_atomic_and_undoable() {
   DocumentSession session(make_session_document());
   const auto original_id = session.document().layers().front().id();
@@ -616,6 +696,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_selection_is_canonical_undoable_and_not_dirty},
       {"engine_session_selection_operations_are_qt_free_and_undoable",
        engine_session_selection_operations_are_qt_free_and_undoable},
+      {"engine_session_layer_derived_selection_preserves_soft_coverage",
+       engine_session_layer_derived_selection_preserves_soft_coverage},
       {"engine_session_layer_editing_vertical_slice_is_atomic_and_undoable",
        engine_session_layer_editing_vertical_slice_is_atomic_and_undoable},
       {"engine_session_filter_and_pixel_commands_share_atomic_history",
