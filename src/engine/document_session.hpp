@@ -135,6 +135,23 @@ struct RotateCanvas {
   EditColor extension_color{255, 255, 255, 255};
 };
 
+struct CropDocument {
+  Rect crop{};
+  double clockwise_degrees{0.0};
+  EditColor extension_color{255, 255, 255, 255};
+  // Script/API crops retain their historical clamp-to-canvas contract, while
+  // the interactive crop tool may deliberately extend beyond the canvas.
+  bool clip_to_canvas{false};
+};
+
+struct WrapOffsetDocument {
+  std::int32_t dx{0};
+  std::int32_t dy{0};
+  // The tile-preview parity marker is committed atomically with the pixels.
+  // A missing value removes the marker after shifting back.
+  std::optional<std::string> seam_offset_metadata{};
+};
+
 struct MoveLayers {
   std::vector<LayerId> layer_ids_top_to_bottom{};
   std::optional<LayerId> target_layer_id{};
@@ -171,7 +188,8 @@ using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
                  AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas,
-                 RotateCanvas, SetLayersOpacity, SetLayersFillOpacity,
+                 RotateCanvas, CropDocument, WrapOffsetDocument,
+                 SetLayersOpacity, SetLayersFillOpacity,
                  SetLayersBlendMode, UngroupLayers, FlipLayers, PlaceLayers,
                  ReplaceLayerPixels, ApplyFilter, SetSelection>;
 

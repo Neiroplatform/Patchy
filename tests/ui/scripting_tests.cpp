@@ -2582,6 +2582,11 @@ void ui_script_geometry_rgb_fill_and_empty_text_regressions() {
     check(text.text === '', 'empty text must commit');
     var pixels = new Uint8Array(text.getPixels().data);
     for (var i=3;i<pixels.length;i+=4) check(pixels[i] === 0, 'empty text has no ink');
+    doc.selection.selectRect(1, 1, 3, 2);
+    check(doc.selection.exists, 'crop precondition selection');
+    doc.crop(0, 0, 4, 3);
+    check(doc.width === 4 && doc.height === 3, 'engine crop dimensions');
+    check(!doc.selection.exists, 'engine crop must clear canonical selection');
   )JS")));
 }
 

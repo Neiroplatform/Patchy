@@ -1126,6 +1126,16 @@ patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
   }
   auto result = session->engine_session.execute_external(command);
   if (result) {
+    const bool resets_selection =
+        std::holds_alternative<patchy::engine::ResizeImage>(command) ||
+        std::holds_alternative<patchy::engine::ResizeCanvas>(command) ||
+        std::holds_alternative<patchy::engine::RotateCanvas>(command) ||
+        std::holds_alternative<patchy::engine::CropDocument>(command) ||
+        std::holds_alternative<patchy::engine::WrapOffsetDocument>(command);
+    if (resets_selection && session->canvas != nullptr) {
+      session->canvas->apply_engine_selection_snapshot(
+          session->engine_session.selection());
+    }
     note_structure_changed(session_id);
   }
   return result;

@@ -10,9 +10,12 @@ typed editing commands.
 - `open_psd` creates a session without `QApplication` or Qt types.
 - `execute` supports singular and atomic multi-layer visibility,
   opacity/fill/blend, rename, add/remove/group/ungroup/reorder/flip lifecycle,
-  image/canvas geometry, atomic pixel replacement and parameterized destructive
-  filters. Filter commands accept Qt-free document-space selection rectangles,
-  report dirty bounds and reject cancellation without changing history.
+  image/canvas geometry, clipped or expanding/rotated crop, wrap-offset seam
+  transforms, atomic pixel replacement and parameterized destructive filters.
+  Crop and wrap commands reset committed selection atomically, while seam
+  parity metadata travels with the same undoable document mutation. Filter
+  commands accept Qt-free document-space selection rectangles, report dirty
+  bounds and reject cancellation without changing history.
 - `SetSelection` commits a Qt-free region/mask/Quick Mask snapshot. Selection
   changes advance revision and participate in undo/redo, but retain the current
   document state identity and therefore do not make the file dirty;
@@ -41,8 +44,10 @@ Layer-panel create/group/ungroup/delete/reorder, visibility, rename,
 opacity/fill/blend and flip workflows, plus canvas-resize/rotation, already
 execute through typed engine commands. The scripting API shares those commands
 for core layer add/remove/group/reorder, principal layer properties and
-destructive filters. Desktop destructive-filter and Auto All commits cross the
-same typed pixel boundary after their existing preview/progress workflow. Selection
+destructive filters. Desktop crop-to-selection, expanding/rotated crop and tile
+seam shifting, plus scripted crop, now share typed geometry commands and the
+canonical selection reset. Desktop destructive-filter and Auto All commits
+cross the same typed pixel boundary after their existing preview/progress workflow. Selection
 snapshots cross the desktop history boundary as a Qt-free engine value with
 explicit retained-byte accounting. Undo, redo, history jumps, background smart
 object commits and script selection setters all restore or read the same engine

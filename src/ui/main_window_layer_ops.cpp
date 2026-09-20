@@ -3577,16 +3577,16 @@ void MainWindow::crop_to_selection() {
   }
 
   auto& doc = document();
-  auto cropped_document = doc;
-  if (!patchy::crop_document(cropped_document, to_core_rect(*selection))) {
+  push_undo_snapshot(tr("Crop"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::CropDocument{to_core_rect(*selection), 0.0,
+                                   edit_color(canvas_->secondary_color()),
+                                   true});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
     return;
   }
-  push_undo_snapshot(tr("Crop"));
-  doc = std::move(cropped_document);
-  canvas_->clear_selection();
-  static_cast<void>(session().engine_session.execute_external(
-      patchy::engine::SetSelection{
-          canvas_->capture_engine_selection_snapshot()}));
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -3612,21 +3612,20 @@ void MainWindow::commit_crop_rect(QRect rect, double angle_degrees) {
   }
 
   auto& doc = document();
-  auto cropped_document = doc;
   // The rect may extend past the canvas; the expansion fills with the
   // background color under a "Background" layer, transparent elsewhere. A
   // rotated box straightens on commit.
-  if (!patchy::crop_document(cropped_document, to_core_rect(rect), angle_degrees,
-                             edit_color(canvas_->secondary_color()))) {
+  push_undo_snapshot(tr("Crop"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::CropDocument{to_core_rect(rect), angle_degrees,
+                                   edit_color(canvas_->secondary_color()),
+                                   false});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
     return;
   }
-  push_undo_snapshot(tr("Crop"));
-  doc = std::move(cropped_document);
   canvas_->cancel_crop_session();
-  canvas_->clear_selection();
-  static_cast<void>(session().engine_session.execute_external(
-      patchy::engine::SetSelection{
-          canvas_->capture_engine_selection_snapshot()}));
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -3732,17 +3731,19 @@ void MainWindow::toggle_tile_seam_offset() {
     show_status_error(tr("Document too small to shift seams"));
     return;
   }
-  push_undo_snapshot(tr("Shift seams"));
-  patchy::wrap_offset_document(doc, dx, dy);
-  if (shifting_back) {
-    values.erase(kTileSeamOffsetMetadataKey);
-  } else {
-    values[kTileSeamOffsetMetadataKey] = std::to_string(dx) + "," + std::to_string(dy);
+  push_undo_snapshot(tr("Shift seams"), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::WrapOffsetDocument{
+          dx, dy,
+          shifting_back
+              ? std::nullopt
+              : std::optional<std::string>{std::to_string(dx) + "," +
+                                           std::to_string(dy)}});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
   }
-  canvas_->clear_selection();
-  static_cast<void>(session().engine_session.execute_external(
-      patchy::engine::SetSelection{
-          canvas_->capture_engine_selection_snapshot()}));
+  canvas_->apply_engine_selection_snapshot(session().engine_session.selection());
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();

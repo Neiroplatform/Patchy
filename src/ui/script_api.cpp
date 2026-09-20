@@ -1453,15 +1453,17 @@ void ScriptDocumentObject::crop(int x, int y, int width, int height) {
     host_.throw_js_error(ScriptEngineHost::tr("crop needs a positive size."));
     return;
   }
-  auto* document = write_document();
-  if (document == nullptr) {
+  if (read_document() == nullptr) {
     return;
   }
-  if (!crop_document(*document, Rect{x, y, width, height})) {
-    host_.throw_js_error(ScriptEngineHost::tr("crop rectangle is outside the canvas."));
+  const auto result = host_.execute_engine_command(
+      session_id_, patchy::engine::CropDocument{
+                       Rect{x, y, width, height}, 0.0,
+                       EditColor{255, 255, 255, 255}, true});
+  if (!result) {
+    host_.throw_js_error(QString::fromStdString(result.error.message));
     return;
   }
-  host_.note_structure_changed(session_id_);
 }
 
 bool ScriptDocumentObject::saveAs(const QString& path) {

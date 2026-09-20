@@ -17,6 +17,8 @@ namespace patchy::engine {
 
 namespace {
 
+constexpr auto kTileSeamOffsetMetadataKey = "patchy.tile.seamOffset";
+
 SessionError make_error(SessionErrorCode code, std::string message) {
   return SessionError{code, std::move(message)};
 }
@@ -211,7 +213,68 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
          &affects_document, &error, &affected_region,
          &event_kind](const auto &concrete) {
           using Command = std::decay_t<decltype(concrete)>;
-          if constexpr (std::is_same_v<Command, RotateCanvas>) {
+          if constexpr (std::is_same_v<Command, CropDocument>) {
+            if (concrete.crop.width <= 0 || concrete.crop.height <= 0 ||
+                !std::isfinite(concrete.clockwise_degrees)) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "crop rectangle and angle must be valid");
+              return;
+            }
+            auto crop = concrete.crop;
+            if (concrete.clip_to_canvas) {
+              crop = intersect_rect(
+                  crop, Rect::from_size(document_.width(), document_.height()));
+              if (crop.empty()) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "crop rectangle is outside the canvas");
+                return;
+              }
+            }
+            if (crop.x == 0 && crop.y == 0 &&
+                crop.width == document_.width() &&
+                crop.height == document_.height() &&
+                std::abs(concrete.clockwise_degrees) < 0.01) {
+              return;
+            }
+            auto cropped_document = document_;
+            if (!crop_document(cropped_document, crop,
+                               concrete.clockwise_degrees,
+                               concrete.extension_color)) {
+              error = make_error(SessionErrorCode::CommandFailed,
+                                 "document crop failed");
+              return;
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(cropped_document);
+            selection_ = {};
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
+            changed = true;
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                               WrapOffsetDocument>) {
+            if (concrete.dx == 0 && concrete.dy == 0) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "wrap offset must move the document");
+              return;
+            }
+            auto shifted_document = document_;
+            wrap_offset_document(shifted_document, concrete.dx, concrete.dy);
+            auto &metadata = shifted_document.metadata().values;
+            if (concrete.seam_offset_metadata.has_value()) {
+              metadata[kTileSeamOffsetMetadataKey] =
+                  *concrete.seam_offset_metadata;
+            } else {
+              metadata.erase(kTileSeamOffsetMetadataKey);
+            }
+            prepare_mutation(record_history);
+            document_ = std::move(shifted_document);
+            selection_ = {};
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
+            changed = true;
+            return;
+          } else if constexpr (std::is_same_v<Command, RotateCanvas>) {
             if (!std::isfinite(concrete.clockwise_degrees)) {
               error = make_error(SessionErrorCode::InvalidArgument,
                                  "rotation must be finite");

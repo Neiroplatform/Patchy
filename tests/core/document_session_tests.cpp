@@ -16,6 +16,7 @@ using patchy::engine::AddGroup;
 using patchy::engine::AddPixelLayer;
 using patchy::engine::ApplyFilter;
 using patchy::engine::CancellationToken;
+using patchy::engine::CropDocument;
 using patchy::engine::DocumentSession;
 using patchy::engine::FlipAxis;
 using patchy::engine::FlipLayers;
@@ -41,6 +42,7 @@ using patchy::engine::SetLayersFillOpacity;
 using patchy::engine::SetLayersOpacity;
 using patchy::engine::SetSelection;
 using patchy::engine::UngroupLayers;
+using patchy::engine::WrapOffsetDocument;
 using patchy::test::TestCase;
 
 namespace {
@@ -178,6 +180,47 @@ void engine_session_layer_lifecycle_and_document_geometry_are_atomic() {
   CHECK(!session.dirty());
 }
 
+void engine_session_crop_and_wrap_geometry_are_atomic_and_restore_selection() {
+  DocumentSession session(make_session_document());
+  SelectionSnapshot selected;
+  selected.selection = {{1, 1, 1, 1}};
+  selected.display_region = selected.selection;
+  CHECK(static_cast<bool>(session.execute(SetSelection{selected})));
+  session.mark_saved();
+
+  const auto cropped = session.execute(CropDocument{
+      {-1, 0, 4, 3}, 0.0, patchy::EditColor{9, 8, 7, 255}, false});
+  CHECK(static_cast<bool>(cropped));
+  CHECK(cropped.affected_region.has_value());
+  CHECK(session.document().width() == 4);
+  CHECK(session.document().height() == 3);
+  CHECK(session.selection().empty());
+  CHECK(session.dirty());
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().width() == 2);
+  CHECK(session.document().height() == 2);
+  CHECK(session.selection().selection.size() == 1);
+  CHECK(!session.dirty());
+  CHECK(static_cast<bool>(session.redo()));
+  CHECK(session.document().width() == 4);
+  CHECK(session.selection().empty());
+
+  CHECK(static_cast<bool>(session.execute(
+      WrapOffsetDocument{2, 1, std::string{"2,1"}})));
+  CHECK(session.document().metadata().values.at("patchy.tile.seamOffset") ==
+        "2,1");
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(!session.document().metadata().values.contains(
+      "patchy.tile.seamOffset"));
+  CHECK(static_cast<bool>(session.redo()));
+  CHECK(session.document().metadata().values.at("patchy.tile.seamOffset") ==
+        "2,1");
+  CHECK(static_cast<bool>(session.execute(
+      WrapOffsetDocument{-2, -1, std::nullopt})));
+  CHECK(!session.document().metadata().values.contains(
+      "patchy.tile.seamOffset"));
+}
+
 void engine_session_rejects_non_atomic_lifecycle_commands() {
   DocumentSession session(make_session_document());
   const auto original_state = session.state_id();
@@ -188,6 +231,10 @@ void engine_session_rejects_non_atomic_lifecycle_commands() {
   CHECK(!static_cast<bool>(session.execute(ResizeImage{0, 10})));
   CHECK(!static_cast<bool>(session.execute(
       RotateCanvas{std::nan(""), patchy::EditColor{}})));
+  CHECK(!static_cast<bool>(session.execute(CropDocument{
+      {20, 20, 2, 2}, 0.0, patchy::EditColor{}, true})));
+  CHECK(!static_cast<bool>(
+      session.execute(WrapOffsetDocument{0, 0, std::nullopt})));
   CHECK(session.state_id() == original_state);
   CHECK(session.undo_size() == 0);
   CHECK(session.document().layers().size() == 1);
@@ -477,6 +524,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_projects_and_moves_layer_tree},
       {"engine_session_layer_lifecycle_and_document_geometry_are_atomic",
        engine_session_layer_lifecycle_and_document_geometry_are_atomic},
+      {"engine_session_crop_and_wrap_geometry_are_atomic_and_restore_selection",
+       engine_session_crop_and_wrap_geometry_are_atomic_and_restore_selection},
       {"engine_session_rejects_non_atomic_lifecycle_commands",
        engine_session_rejects_non_atomic_lifecycle_commands},
       {"engine_session_headless_psd_open_edit_save_reopen",
