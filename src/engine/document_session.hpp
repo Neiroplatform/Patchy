@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document.hpp"
+#include "core/adjustment_layer.hpp"
 #include "core/layer_tree.hpp"
 #include "core/pixel_tools.hpp"
 #include "core/smart_filter.hpp"
@@ -100,6 +101,17 @@ struct AddPixelLayer {
   std::string name{};
   PixelBuffer pixels{};
   std::optional<LayerId> anchor_layer_id{};
+};
+
+struct AddAdjustmentLayer {
+  std::string name{};
+  AdjustmentSettings settings{};
+  std::optional<LayerMask> mask{};
+};
+
+struct UpdateAdjustmentLayer {
+  LayerId layer_id{0};
+  AdjustmentSettings settings{};
 };
 
 struct AddGroup {
@@ -257,6 +269,7 @@ struct CommitSmartFilterState {
 using DocumentCommand =
     std::variant<SetLayerVisibility, SetLayerOpacity, RenameLayer,
                  SetLayerFillOpacity, SetLayerBlendMode, AddPixelLayer,
+                 AddAdjustmentLayer, UpdateAdjustmentLayer,
                  AddGroup, RemoveLayers, MoveLayers, ResizeImage, ResizeCanvas,
                  RotateCanvas, CropDocument, WrapOffsetDocument,
                  SetLayersOpacity, SetLayersFillOpacity,

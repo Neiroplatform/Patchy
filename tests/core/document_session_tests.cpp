@@ -19,6 +19,7 @@ using patchy::Document;
 using patchy::PixelBuffer;
 using patchy::PixelFormat;
 using patchy::engine::AddGroup;
+using patchy::engine::AddAdjustmentLayer;
 using patchy::engine::AddPixelLayer;
 using patchy::engine::ApplyFilter;
 using patchy::engine::CancellationToken;
@@ -60,6 +61,7 @@ using patchy::engine::SetLayersOpacity;
 using patchy::engine::SetSelection;
 using patchy::engine::UngroupLayers;
 using patchy::engine::TransformVectorLayers;
+using patchy::engine::UpdateAdjustmentLayer;
 using patchy::engine::VectorTransformTarget;
 using patchy::engine::WrapOffsetDocument;
 using patchy::test::TestCase;
@@ -920,6 +922,119 @@ void engine_session_commits_prepared_smart_filter_state_atomically() {
   CHECK(session.revision() == revision);
 }
 
+void engine_session_adjustment_layer_family_is_atomic_and_round_trips() {
+  DocumentSession session(make_session_document());
+
+  std::vector<patchy::AdjustmentSettings> settings(8);
+  settings[0].kind = patchy::AdjustmentKind::Levels;
+  settings[0].levels.black_input = 12;
+  settings[1].kind = patchy::AdjustmentKind::Curves;
+  settings[1].curves.rgb = {{0, 4}, {128, 150}, {255, 250}};
+  settings[2].kind = patchy::AdjustmentKind::HueSaturation;
+  settings[2].hue_saturation.hue_shift = 17;
+  settings[3].kind = patchy::AdjustmentKind::ColorBalance;
+  settings[3].color_balance.cyan_red = 21;
+  settings[4].kind = patchy::AdjustmentKind::Invert;
+  settings[5].kind = patchy::AdjustmentKind::Posterize;
+  settings[5].posterize.levels = 9;
+  settings[6].kind = patchy::AdjustmentKind::Threshold;
+  settings[6].threshold.level = 143;
+  settings[7].kind = patchy::AdjustmentKind::BrightnessContrast;
+  settings[7].brightness_contrast.brightness = 24;
+  settings[7].brightness_contrast.contrast = -12;
+
+  patchy::LayerMask selection_mask;
+  selection_mask.bounds = {0, 0, 1, 2};
+  selection_mask.pixels = PixelBuffer(1, 2, PixelFormat::gray8());
+  selection_mask.pixels.clear(190);
+  std::vector<patchy::LayerId> ids;
+  for (std::size_t index = 0; index < settings.size(); ++index) {
+    const auto added = session.execute(AddAdjustmentLayer{
+        "Adjustment " + std::to_string(index), settings[index],
+        index == 0 ? std::optional<patchy::LayerMask>{selection_mask}
+                   : std::nullopt});
+    CHECK(static_cast<bool>(added));
+    CHECK(added.affected_layer_id != 0);
+    CHECK(added.affected_region.has_value());
+    ids.push_back(added.affected_layer_id);
+    const auto *layer = session.document().find_layer(ids.back());
+    CHECK(layer != nullptr);
+    CHECK(layer->kind() == patchy::LayerKind::Adjustment);
+    CHECK(layer->bounds().width == session.document().width());
+    const auto decoded = patchy::adjustment_settings_from_layer(*layer);
+    CHECK(decoded.has_value());
+    CHECK(decoded->kind == settings[index].kind);
+  }
+  CHECK(session.document().find_layer(ids.front())->mask().has_value());
+  CHECK(session.document().active_layer_id() == ids.back());
+
+  auto updated_settings = settings;
+  updated_settings[0].levels.black_input = 32;
+  updated_settings[1].curves.rgb[1].output = 177;
+  updated_settings[2].hue_saturation.hue_shift = 31;
+  updated_settings[3].color_balance.cyan_red = 33;
+  updated_settings[5].posterize.levels = 12;
+  updated_settings[6].threshold.level = 180;
+  updated_settings[7].brightness_contrast.brightness = 31;
+  std::size_t changed_updates = 0;
+  for (std::size_t index = 0; index < updated_settings.size(); ++index) {
+    const auto edited = session.execute(
+        UpdateAdjustmentLayer{ids[index], updated_settings[index]});
+    CHECK(static_cast<bool>(edited));
+    const bool editable_kind =
+        updated_settings[index].kind != patchy::AdjustmentKind::Invert;
+    CHECK(edited.changed == editable_kind);
+    if (editable_kind) {
+      CHECK(edited.affected_region.has_value());
+      ++changed_updates;
+    }
+    const auto edited_revision = session.revision();
+    const auto no_op = session.execute(
+        UpdateAdjustmentLayer{ids[index], updated_settings[index]});
+    CHECK(static_cast<bool>(no_op));
+    CHECK(!no_op.changed);
+    CHECK(session.revision() == edited_revision);
+  }
+  auto decoded = patchy::adjustment_settings_from_layer(
+      *session.document().find_layer(ids.front()));
+  CHECK(decoded.has_value());
+  CHECK(decoded->levels.black_input == 32);
+  CHECK(changed_updates == 7);
+  for (std::size_t index = 0; index < changed_updates; ++index) {
+    CHECK(static_cast<bool>(session.undo()));
+  }
+  decoded = patchy::adjustment_settings_from_layer(
+      *session.document().find_layer(ids.front()));
+  CHECK(decoded.has_value());
+  CHECK(decoded->levels.black_input == 12);
+
+  const auto encoded = session.encode_psd();
+  CHECK(static_cast<bool>(encoded));
+  const auto reopened = open_psd(encoded.bytes);
+  CHECK(static_cast<bool>(reopened));
+  for (std::size_t index = 0; index < ids.size(); ++index) {
+    const auto *layer = reopened.session->document().find_layer(ids[index]);
+    CHECK(layer != nullptr);
+    const auto round_tripped = patchy::adjustment_settings_from_layer(*layer);
+    CHECK(round_tripped.has_value());
+    CHECK(round_tripped->kind == settings[index].kind);
+  }
+
+  const auto revision = session.revision();
+  const auto pixel_id = session.document().layers().front().id();
+  const auto wrong_kind =
+      session.execute(UpdateAdjustmentLayer{pixel_id, settings.front()});
+  CHECK(!static_cast<bool>(wrong_kind));
+  CHECK(wrong_kind.error.code == SessionErrorCode::InvalidArgument);
+  auto invalid_mask = selection_mask;
+  invalid_mask.bounds = {0, 0, 2, 2};
+  const auto invalid_add = session.execute(AddAdjustmentLayer{
+      "Invalid", settings.front(), std::move(invalid_mask)});
+  CHECK(!static_cast<bool>(invalid_add));
+  CHECK(invalid_add.error.code == SessionErrorCode::InvalidArgument);
+  CHECK(session.revision() == revision);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -960,5 +1075,7 @@ std::vector<TestCase> document_session_tests() {
        engine_session_vector_transforms_are_atomic_and_qt_free},
       {"engine_session_commits_prepared_smart_filter_state_atomically",
        engine_session_commits_prepared_smart_filter_state_atomically},
+      {"engine_session_adjustment_layer_family_is_atomic_and_round_trips",
+       engine_session_adjustment_layer_family_is_atomic_and_round_trips},
   };
 }

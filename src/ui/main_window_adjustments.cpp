@@ -289,6 +289,19 @@ QColor curves_sample_before_layer(const Document& document, LayerId layer_id, QP
   return image.isNull() ? QColor{} : image.pixelColor(0, 0);
 }
 
+std::optional<LayerMask> adjustment_mask_from_selection(const Document& document,
+                                                        const CanvasWidget& canvas) {
+  const auto selection = canvas.selected_document_region();
+  const auto selection_rect =
+      selection.boundingRect().intersected(
+          QRect(0, 0, document.width(), document.height()));
+  if (selection.isEmpty() || selection_rect.isEmpty()) {
+    return std::nullopt;
+  }
+  return LayerMask{to_core_rect(selection_rect),
+                   selection_mask_pixels(canvas, selection_rect), 0, false};
+}
+
 }  // namespace
 
 void MainWindow::populate_new_adjustment_layer_menu(QMenu* menu, const QString& object_name_prefix) {
@@ -584,11 +597,9 @@ Layer MainWindow::build_adjustment_layer(QString label, const AdjustmentSettings
   Layer layer(doc.allocate_layer_id(), label.toStdString(), LayerKind::Adjustment);
   layer.set_bounds(Rect::from_size(doc.width(), doc.height()));
   configure_adjustment_layer(layer, settings);
-
-  const auto selection = canvas_->selected_document_region();
-  const auto selection_rect = selection.boundingRect().intersected(QRect(0, 0, doc.width(), doc.height()));
-  if (!selection.isEmpty() && !selection_rect.isEmpty()) {
-    layer.set_mask(LayerMask{to_core_rect(selection_rect), selection_mask_pixels(*canvas_, selection_rect), 0, false});
+  if (auto mask = adjustment_mask_from_selection(doc, *canvas_);
+      mask.has_value()) {
+    layer.set_mask(std::move(*mask));
   }
   return layer;
 }
@@ -644,11 +655,16 @@ void MainWindow::create_adjustment_layer(QString label, const AdjustmentSettings
     return;
   }
 
-  auto& doc = document();
-  push_undo_snapshot(tr("%1 adjustment layer").arg(label));
-  auto layer = build_adjustment_layer(label, settings);
-
-  doc.add_layer(std::move(layer));
+  auto mask = adjustment_mask_from_selection(std::as_const(document()),
+                                             *canvas_);
+  push_undo_snapshot(tr("%1 adjustment layer").arg(label), false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::AddAdjustmentLayer{
+          label.toStdString(), settings, std::move(mask)});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
   refresh_layer_list();
   refresh_layer_controls();
   refresh_document_info();
@@ -897,8 +913,20 @@ void MainWindow::edit_active_adjustment_layer() {
     return;
   }
 
-  push_undo_snapshot(tr("Edit %1 adjustment").arg(localized_adjustment_display_name(original_settings->kind)));
-  apply_settings(*accepted_settings);
+  push_undo_snapshot(
+      tr("Edit %1 adjustment")
+          .arg(localized_adjustment_display_name(original_settings->kind)),
+      false);
+  const auto result = session().engine_session.execute_external(
+      patchy::engine::UpdateAdjustmentLayer{layer_id, *accepted_settings});
+  if (!result) {
+    show_status_error(QString::fromStdString(result.error.message));
+    return;
+  }
+  if (canvas_ != nullptr) {
+    canvas_->document_changed();
+    refresh_layer_thumbnails();
+  }
   refresh_layer_list();
   refresh_layer_controls();
   refresh_document_info();

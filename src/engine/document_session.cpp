@@ -63,6 +63,87 @@ bool selection_snapshots_equal(const SelectionSnapshot &left,
                              *right.quick_mask_pixels);
 }
 
+bool adjustment_settings_equal(const AdjustmentSettings &left,
+                               const AdjustmentSettings &right) {
+  if (left.kind != right.kind) {
+    return false;
+  }
+  const auto records_equal = [](const LevelsRecord &first,
+                                const LevelsRecord &second) {
+    return first.black_input == second.black_input &&
+           first.white_input == second.white_input &&
+           first.gamma_percent == second.gamma_percent &&
+           first.black_output == second.black_output &&
+           first.white_output == second.white_output;
+  };
+  const auto levels_equal = [&records_equal](const LevelsAdjustment &first,
+                                              const LevelsAdjustment &second) {
+    return first.channel == second.channel &&
+           records_equal(levels_master_record(first),
+                         levels_master_record(second)) &&
+           records_equal(first.red, second.red) &&
+           records_equal(first.green, second.green) &&
+           records_equal(first.blue, second.blue);
+  };
+  switch (left.kind) {
+  case AdjustmentKind::Levels:
+    return levels_equal(left.levels, right.levels);
+  case AdjustmentKind::Curves:
+    return left.curves == right.curves;
+  case AdjustmentKind::HueSaturation:
+    return left.hue_saturation.hue_shift ==
+               right.hue_saturation.hue_shift &&
+           left.hue_saturation.saturation_delta ==
+               right.hue_saturation.saturation_delta &&
+           left.hue_saturation.lightness_delta ==
+               right.hue_saturation.lightness_delta &&
+           left.hue_saturation.colorize == right.hue_saturation.colorize &&
+           left.hue_saturation.colorize_hue ==
+               right.hue_saturation.colorize_hue &&
+           left.hue_saturation.colorize_saturation ==
+               right.hue_saturation.colorize_saturation &&
+           left.hue_saturation.colorize_lightness ==
+               right.hue_saturation.colorize_lightness &&
+           left.hue_saturation.bands == right.hue_saturation.bands;
+  case AdjustmentKind::ColorBalance:
+    return left.color_balance.cyan_red == right.color_balance.cyan_red &&
+           left.color_balance.magenta_green ==
+               right.color_balance.magenta_green &&
+           left.color_balance.yellow_blue == right.color_balance.yellow_blue;
+  case AdjustmentKind::Invert:
+    return true;
+  case AdjustmentKind::Posterize:
+    return left.posterize.levels == right.posterize.levels;
+  case AdjustmentKind::Threshold:
+    return left.threshold.level == right.threshold.level;
+  case AdjustmentKind::BrightnessContrast:
+    return left.brightness_contrast.brightness ==
+               right.brightness_contrast.brightness &&
+           left.brightness_contrast.contrast ==
+               right.brightness_contrast.contrast &&
+           left.brightness_contrast.use_legacy ==
+               right.brightness_contrast.use_legacy;
+  }
+  return false;
+}
+
+std::optional<AdjustmentSettings>
+normalized_adjustment_settings(const AdjustmentSettings &settings) {
+  Layer scratch(1, "Adjustment", LayerKind::Adjustment);
+  configure_adjustment_layer(scratch, settings);
+  return adjustment_settings_from_layer(scratch);
+}
+
+bool valid_adjustment_mask(const LayerMask &mask, const Document &document) {
+  return mask.bounds.width > 0 && mask.bounds.height > 0 &&
+         mask.bounds.x >= 0 && mask.bounds.y >= 0 &&
+         mask.bounds.x <= document.width() - mask.bounds.width &&
+         mask.bounds.y <= document.height() - mask.bounds.height &&
+         mask.pixels.format() == PixelFormat::gray8() &&
+         mask.pixels.width() == mask.bounds.width &&
+         mask.pixels.height() == mask.bounds.height;
+}
+
 bool smart_filter_stacks_equal(const SmartFilterStack &left,
                                const SmartFilterStack &right) {
   const auto entries_equal = [](const SmartFilterEntry &first,
@@ -738,6 +819,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             changed = true;
             return;
           } else if constexpr (std::is_same_v<Command, AddPixelLayer> ||
+                               std::is_same_v<Command, AddAdjustmentLayer> ||
                                std::is_same_v<Command, AddGroup>) {
             auto added_document = document_;
             if constexpr (std::is_same_v<Command, AddPixelLayer>) {
@@ -747,6 +829,28 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                   Layer(layer_id, concrete.name, concrete.pixels),
                   concrete.anchor_layer_id);
               added_document.set_active_layer(layer_id);
+            } else if constexpr (std::is_same_v<Command,
+                                                AddAdjustmentLayer>) {
+              if (concrete.name.empty() ||
+                  (concrete.mask.has_value() &&
+                   !valid_adjustment_mask(*concrete.mask, document_)) ||
+                  !normalized_adjustment_settings(concrete.settings)
+                       .has_value()) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "adjustment layer state is invalid");
+                return;
+              }
+              layer_id = added_document.allocate_layer_id();
+              Layer layer(layer_id, concrete.name, LayerKind::Adjustment);
+              layer.set_bounds(Rect::from_size(added_document.width(),
+                                               added_document.height()));
+              configure_adjustment_layer(layer, concrete.settings);
+              if (concrete.mask.has_value()) {
+                layer.set_mask(*concrete.mask);
+              }
+              added_document.add_layer(std::move(layer));
+              affected_region = Rect::from_size(added_document.width(),
+                                                added_document.height());
             } else {
               const auto roots = root_drop_layer_ids(
                   added_document.layers(),
@@ -786,6 +890,41 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             prepare_mutation(record_history);
             document_ = std::move(added_document);
             changed = true;
+            return;
+          } else if constexpr (std::is_same_v<Command,
+                                                UpdateAdjustmentLayer>) {
+            const auto *current = document_.find_layer(concrete.layer_id);
+            if (current == nullptr) {
+              error = make_error(SessionErrorCode::LayerNotFound,
+                                 "adjustment layer does not exist");
+              return;
+            }
+            if (current->kind() != LayerKind::Adjustment) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "target is not an adjustment layer");
+              return;
+            }
+            const auto normalized =
+                normalized_adjustment_settings(concrete.settings);
+            if (!normalized.has_value()) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "adjustment settings are invalid");
+              return;
+            }
+            const auto existing = adjustment_settings_from_layer(*current);
+            if (existing.has_value() &&
+                adjustment_settings_equal(*existing, *normalized)) {
+              return;
+            }
+            auto updated_document = document_;
+            configure_adjustment_layer(
+                *updated_document.find_layer(concrete.layer_id), *normalized);
+            prepare_mutation(record_history);
+            document_ = std::move(updated_document);
+            changed = true;
+            layer_id = concrete.layer_id;
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
             return;
           } else if constexpr (std::is_same_v<Command, UngroupLayers>) {
             if (concrete.group_ids.empty()) {

@@ -42,6 +42,12 @@ typed editing commands.
   payloads, FEid/FXid cache store and rendered layer pixels share one validated
   state identity, dirty region and undo step. Desktop add/edit/toggle/mask/
   duplicate/reorder/delete flows use this boundary after preview preparation;
+- `AddAdjustmentLayer` and `UpdateAdjustmentLayer` own creation and final
+  edits for all eight supported nondestructive adjustment kinds. Engine-side
+  layer-ID allocation, optional selection mask, native payload regeneration,
+  full-canvas dirty bounds, semantic no-op detection, undo and PSD reopen all
+  share one Qt-free command family. Dialog previews remain a transient shell
+  projection and final desktop commits use this boundary;
 - every successful mutation gets a new state identity and a monotonic revision;
   rejected and no-op commands change neither;
 - undo and redo restore document state identities, so returning to the saved
@@ -90,9 +96,9 @@ or a second dirty/revision counter is forbidden.
 - move the remaining in-flight gesture selection algorithms behind the engine
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
-- migrate remaining brush/pixel, vector creation/edit, Smart Filter preview
-  preparation and adjustment mutations, plus history storage, to engine
-  commands;
+- migrate remaining brush/pixel, vector creation/edit and Smart Filter preview
+  preparation, plus transient adjustment previews and history storage, to
+  engine commands;
 - add command families for pixel transforms and remaining nondestructive
   filters/adjustments;
 - add progress-aware cancellation inside long render/save operations;
