@@ -101,13 +101,23 @@ typed editing commands.
   renders and cancellation;
 - every successful mutation gets a new state identity and a monotonic revision;
   rejected and no-op commands change neither;
+- render-affecting commands publish their exact `affected_region` and coalesce
+  it into one session-owned pending render region until the consumer takes it.
+  Consecutive disjoint edits therefore schedule one union, while metadata-only
+  renames/channel operations and transient preview events do not enqueue a
+  canonical repaint. Document geometry, complex layer-tree placement,
+  external replacement and undo/redo conservatively invalidate the complete
+  current canvas;
 - undo and redo restore document state identities, so returning to the saved
   state clears dirty even after intervening edits;
 - `layers()` exposes a flat stable-ID projection for non-Qt clients;
 - `render` returns a bounded RGBA8 region tied to the session revision. The
   compositor clips directly to that document-space region and allocates only
   the region-sized RGBA8 output, including the document-alpha preservation
-  path; cancellation is checked before and after compositing;
+  path. Callers can request monotonic row progress; progressive rendering runs
+  in bounded horizontal bands, preserves byte-for-byte parity with one-shot
+  compositing and checks cancellation between bands. Callback cancellation
+  returns no partial pixel buffer and never changes document state;
 - `encode_psd` writes layered PSD bytes, while `mark_saved` is separate so a
   failed filesystem write cannot falsely clear dirty state;
 - errors cross the boundary as `SessionError`, not Qt dialogs or C++ pointers.
@@ -151,5 +161,6 @@ or a second dirty/revision counter is forbidden.
   boundary (committed ownership, menu morphology, similarity, path and all
   layer-thumbnail-derived selections are already there);
 - add command families for remaining nondestructive filters/adjustments;
-- add progress-aware cancellation inside long render/save operations;
+- add progress-aware cancellation inside long save operations (render is now
+  banded and cancellable);
 - keep the desktop shell and scripting API on the same command path.

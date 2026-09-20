@@ -784,10 +784,40 @@ void DocumentSession::prepare_mutation(bool record_history) {
   }
 }
 
-void DocumentSession::publish(SessionEventKind kind, LayerId layer_id) {
+void DocumentSession::publish(SessionEventKind kind, LayerId layer_id,
+                              std::optional<Rect> affected_region) {
   if (event_sink_) {
-    event_sink_(SessionEvent{kind, revision_, state_id_, dirty(), layer_id});
+    event_sink_(SessionEvent{kind, revision_, state_id_, dirty(), layer_id,
+                             affected_region});
   }
+}
+
+void DocumentSession::schedule_render(
+    std::optional<Rect> affected_region) noexcept {
+  if (!affected_region.has_value() || affected_region->empty()) {
+    return;
+  }
+  const auto canvas = Rect::from_size(document_.width(), document_.height());
+  const auto clipped = intersect_rect(*affected_region, canvas);
+  if (clipped.empty()) {
+    return;
+  }
+  if (pending_render_region_.has_value()) {
+    const auto clipped_pending = intersect_rect(*pending_render_region_, canvas);
+    pending_render_region_ = clipped_pending.empty()
+                                 ? std::optional<Rect>{}
+                                 : std::optional<Rect>{clipped_pending};
+  }
+  pending_render_region_ = pending_render_region_.has_value()
+                               ? unite_rect(*pending_render_region_,
+                                            clipped)
+                               : std::optional<Rect>{clipped};
+}
+
+std::optional<Rect> DocumentSession::take_pending_render_region() noexcept {
+  auto region = pending_render_region_;
+  pending_render_region_.reset();
+  return region;
 }
 
 CommandResult DocumentSession::execute(const DocumentCommand &command,
@@ -829,11 +859,11 @@ CommandResult DocumentSession::update_preview(Rect affected_region,
         false, make_error(SessionErrorCode::InvalidArgument,
                           "no transient preview is active")};
   }
-  publish(SessionEventKind::PreviewUpdated, layer_id);
-  return CommandResult{true, {}, layer_id,
-                       affected_region.empty()
-                           ? std::nullopt
-                           : std::optional<Rect>{affected_region}};
+  const auto region = affected_region.empty()
+                          ? std::nullopt
+                          : std::optional<Rect>{affected_region};
+  publish(SessionEventKind::PreviewUpdated, layer_id, region);
+  return CommandResult{true, {}, layer_id, region};
 }
 
 CommandResult DocumentSession::end_preview() {
@@ -953,6 +983,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             prepare_mutation(record_history);
             document_ = std::move(rotated_document);
             selection_ = {};
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
             changed = true;
             return;
           } else if constexpr (std::is_same_v<Command, ResizeImage> ||
@@ -978,6 +1010,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             prepare_mutation(record_history);
             document_ = std::move(resized_document);
             selection_ = {};
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
             changed = true;
             return;
           } else if constexpr (std::is_same_v<Command, AddPixelLayer> ||
@@ -992,6 +1026,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                   Layer(layer_id, concrete.name, concrete.pixels),
                   concrete.anchor_layer_id);
               added_document.set_active_layer(layer_id);
+              affected_region = layer_effect_bounds(
+                  *added_document.find_layer(layer_id));
             } else if constexpr (std::is_same_v<Command,
                                                 AddVectorShapeLayer>) {
               if (concrete.name.empty()) {
@@ -1147,6 +1183,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             }
             prepare_mutation(record_history);
             document_ = std::move(ungrouped_document);
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
             changed = true;
             return;
           } else if constexpr (std::is_same_v<Command, FlipLayers>) {
@@ -1187,6 +1225,11 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                 return;
               }
             }
+            Rect affected{};
+            for (const auto id : concrete.layer_ids) {
+              affected = unite_rect(
+                  affected, layer_effect_bounds(*document_.find_layer(id)));
+            }
             auto removed_document = document_;
             const auto roots = root_drop_layer_ids(removed_document.layers(),
                                                    concrete.layer_ids);
@@ -1197,6 +1240,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             document_ = std::move(removed_document);
             changed = true;
             layer_id = roots.front();
+            affected_region = affected;
             return;
           } else if constexpr (std::is_same_v<Command, MoveLayers>) {
             if (concrete.layer_ids_top_to_bottom.empty()) {
@@ -1217,6 +1261,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             document_ = std::move(moved_document);
             changed = true;
             layer_id = concrete.layer_ids_top_to_bottom.front();
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
             return;
           } else if constexpr (std::is_same_v<Command, PlaceLayers>) {
             if (concrete.layer_ids_bottom_to_top.empty()) {
@@ -1275,6 +1321,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             document_ = std::move(placed_document);
             changed = true;
             layer_id = concrete.layer_ids_bottom_to_top.front();
+            affected_region =
+                Rect::from_size(document_.width(), document_.height());
             return;
           } else if constexpr (std::is_same_v<Command, ReplaceLayerPixels>) {
             const auto *current = document_.find_layer(concrete.layer_id);
@@ -2470,6 +2518,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
 
             if constexpr (std::is_same_v<Command, SetLayerVisibility>) {
               if (layer->visible() != concrete.visible) {
+                affected_region = layer_effect_bounds(*layer);
                 prepare_mutation(record_history);
                 layer = document_.find_layer(concrete.layer_id);
                 layer->set_visible(concrete.visible);
@@ -2483,6 +2532,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                 return;
               }
               if (layer->opacity() != concrete.opacity) {
+                affected_region = layer_effect_bounds(*layer);
                 prepare_mutation(record_history);
                 layer = document_.find_layer(concrete.layer_id);
                 layer->set_opacity(concrete.opacity);
@@ -2496,6 +2546,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                 return;
               }
               if (layer->fill_opacity() != concrete.opacity) {
+                affected_region = layer_effect_bounds(*layer);
                 prepare_mutation(record_history);
                 layer = document_.find_layer(concrete.layer_id);
                 layer->set_fill_opacity(concrete.opacity);
@@ -2503,6 +2554,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
               }
             } else if constexpr (std::is_same_v<Command, SetLayerBlendMode>) {
               if (layer->blend_mode() != concrete.blend_mode) {
+                affected_region = layer_effect_bounds(*layer);
                 prepare_mutation(record_history);
                 layer = document_.find_layer(concrete.layer_id);
                 layer->set_blend_mode(concrete.blend_mode);
@@ -2531,9 +2583,10 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
   if (changed) {
     if (affects_document) {
       state_id_ = next_state_id_++;
+      schedule_render(affected_region);
     }
     ++revision_;
-    publish(event_kind, layer_id);
+    publish(event_kind, layer_id, affected_region);
   }
   return CommandResult{changed, {}, layer_id, affected_region};
 }
@@ -2572,9 +2625,13 @@ CommandResult DocumentSession::restore(bool backward) {
   selection_ = std::move(restored.selection);
   state_id_ = restored.state_id;
   ++revision_;
+  const auto affected_region =
+      std::optional<Rect>{Rect::from_size(document_.width(), document_.height())};
+  schedule_render(affected_region);
   publish(backward ? SessionEventKind::UndoApplied
-                   : SessionEventKind::RedoApplied);
-  return CommandResult{true, {}};
+                   : SessionEventKind::RedoApplied,
+          0, affected_region);
+  return CommandResult{true, {}, 0, affected_region};
 }
 
 CommandResult DocumentSession::undo() {
@@ -2613,8 +2670,8 @@ SaveResult DocumentSession::encode_psd(bool large_document) const {
 }
 
 RenderResult
-DocumentSession::render(Rect region,
-                        const CancellationToken *cancellation) const {
+DocumentSession::render(Rect region, const CancellationToken *cancellation,
+                        const OperationProgress *progress) const {
   if (region.width <= 0 || region.height <= 0 || region.x < 0 || region.y < 0 ||
       region.x > document_.width() - region.width ||
       region.y > document_.height() - region.height) {
@@ -2624,7 +2681,10 @@ DocumentSession::render(Rect region,
                         make_error(SessionErrorCode::InvalidArgument,
                                    "render region is outside the document")};
   }
-  if (cancellation != nullptr && cancellation->cancelled()) {
+  const auto cancelled = [cancellation]() {
+    return cancellation != nullptr && cancellation->cancelled();
+  };
+  if (cancelled()) {
     return RenderResult{
         {},
         region,
@@ -2632,13 +2692,46 @@ DocumentSession::render(Rect region,
         make_error(SessionErrorCode::Cancelled, "render cancelled")};
   }
   try {
-    auto output = flatten_document_region_rgba8(document_, region);
-    if (cancellation != nullptr && cancellation->cancelled()) {
+    if (progress == nullptr && cancellation == nullptr) {
+      return RenderResult{flatten_document_region_rgba8(document_, region),
+                          region, revision_, {}};
+    }
+
+    constexpr std::int32_t kRenderBandRows = 64;
+    PixelBuffer output(region.width, region.height, PixelFormat::rgba8());
+    const auto report_progress = [progress, &cancelled](std::int32_t completed,
+                                                        std::int32_t total) {
+      return !cancelled() &&
+             (progress == nullptr || !progress->update ||
+              progress->update(completed, total));
+    };
+    if (!report_progress(0, region.height)) {
       return RenderResult{
           {},
           region,
           revision_,
           make_error(SessionErrorCode::Cancelled, "render cancelled")};
+    }
+
+    for (std::int32_t output_y = 0; output_y < region.height;
+         output_y += kRenderBandRows) {
+      const auto band_height =
+          std::min(kRenderBandRows, region.height - output_y);
+      const Rect band{region.x, region.y + output_y, region.width,
+                      band_height};
+      const auto band_pixels = flatten_document_region_rgba8(document_, band);
+      for (std::int32_t row = 0; row < band_height; ++row) {
+        const auto source = band_pixels.row(row);
+        auto destination = output.row(output_y + row);
+        std::copy(source.begin(), source.end(), destination.begin());
+      }
+      if (!report_progress(output_y + band_height, region.height)) {
+        return RenderResult{
+            {},
+            region,
+            revision_,
+            make_error(SessionErrorCode::Cancelled, "render cancelled")};
+      }
     }
     return RenderResult{std::move(output), region, revision_, {}};
   } catch (const std::exception &exception) {
@@ -2659,7 +2752,10 @@ void DocumentSession::mark_external_modified() {
   redo_stack_.clear();
   state_id_ = next_state_id_++;
   ++revision_;
-  publish(SessionEventKind::CommandApplied);
+  const auto affected_region =
+      std::optional<Rect>{Rect::from_size(document_.width(), document_.height())};
+  schedule_render(affected_region);
+  publish(SessionEventKind::CommandApplied, 0, affected_region);
 }
 
 void DocumentSession::push_external_undo_state(
@@ -2707,6 +2803,7 @@ void DocumentSession::restore_external(Document document,
   state_id_ = state_id;
   next_state_id_ = std::max(next_state_id_, state_id + 1U);
   ++revision_;
+  schedule_render(Rect::from_size(document_.width(), document_.height()));
 }
 
 void DocumentSession::replace_external(Document document, bool saved) {
@@ -2720,6 +2817,7 @@ void DocumentSession::replace_external(Document document, bool saved) {
   if (saved) {
     saved_state_id_ = state_id_;
   }
+  schedule_render(Rect::from_size(document_.width(), document_.height()));
 }
 
 } // namespace patchy::engine

@@ -36,6 +36,7 @@ using patchy::engine::FlipLayers;
 using patchy::engine::MoveLayers;
 using patchy::engine::ModifySelection;
 using patchy::engine::InvertDocumentChannel;
+using patchy::engine::OperationProgress;
 using patchy::engine::open_psd;
 using patchy::engine::PlaceLayers;
 using patchy::engine::RemoveLayers;
@@ -460,6 +461,139 @@ void engine_session_renders_bounded_rgba_regions_and_cancels() {
       session.render(patchy::Rect{0, 0, 2, 2}, &cancellation);
   CHECK(!static_cast<bool>(cancelled));
   CHECK(cancelled.error.code == SessionErrorCode::Cancelled);
+
+  Document tall_document(8, 130, PixelFormat::rgba8());
+  PixelBuffer tall_pixels(8, 130, PixelFormat::rgba8());
+  for (std::int32_t y = 0; y < tall_pixels.height(); ++y) {
+    for (std::int32_t x = 0; x < tall_pixels.width(); ++x) {
+      auto *pixel = tall_pixels.pixel(x, y);
+      pixel[0] = static_cast<std::uint8_t>((x * 19 + y) % 256);
+      pixel[1] = static_cast<std::uint8_t>((x + y * 3) % 256);
+      pixel[2] = static_cast<std::uint8_t>((x * 7 + y * 5) % 256);
+      pixel[3] = 255;
+    }
+  }
+  tall_document.add_pixel_layer("Tall", std::move(tall_pixels));
+  DocumentSession tall_session(std::move(tall_document));
+  const auto one_shot = tall_session.render({0, 0, 8, 130});
+  CHECK(static_cast<bool>(one_shot));
+  std::vector<std::int32_t> progress_rows;
+  const OperationProgress progress{
+      [&progress_rows](std::int32_t completed, std::int32_t) {
+        progress_rows.push_back(completed);
+        return true;
+      }};
+  const auto progressive =
+      tall_session.render({0, 0, 8, 130}, nullptr, &progress);
+  CHECK(static_cast<bool>(progressive));
+  CHECK(progressive.pixels.data().size() == one_shot.pixels.data().size());
+  CHECK(std::equal(progressive.pixels.data().begin(),
+                   progressive.pixels.data().end(),
+                   one_shot.pixels.data().begin()));
+  CHECK(progress_rows.size() == 4U);
+  CHECK(progress_rows.front() == 0);
+  CHECK(progress_rows.back() == 130);
+  CHECK(std::is_sorted(progress_rows.begin(), progress_rows.end()));
+
+  const OperationProgress cancel_after_first_band{
+      [](std::int32_t completed, std::int32_t) { return completed < 64; }};
+  const auto progress_cancelled =
+      tall_session.render({0, 0, 8, 130}, nullptr,
+                          &cancel_after_first_band);
+  CHECK(!static_cast<bool>(progress_cancelled));
+  CHECK(progress_cancelled.error.code == SessionErrorCode::Cancelled);
+  CHECK(progress_cancelled.pixels.empty());
+}
+
+void engine_session_coalesces_dirty_render_regions_and_publishes_them() {
+  Document document(12, 10, PixelFormat::rgba8());
+  PixelBuffer first_pixels(2, 3, PixelFormat::rgba8());
+  first_pixels.clear(80);
+  const auto first_id = document.allocate_layer_id();
+  patchy::Layer first(first_id, "First", std::move(first_pixels));
+  first.set_bounds({1, 1, 2, 3});
+  document.add_layer(std::move(first));
+  PixelBuffer second_pixels(3, 2, PixelFormat::rgba8());
+  second_pixels.clear(160);
+  const auto second_id = document.allocate_layer_id();
+  patchy::Layer second(second_id, "Second", std::move(second_pixels));
+  second.set_bounds({7, 6, 3, 2});
+  document.add_layer(std::move(second));
+
+  DocumentSession session(std::move(document));
+  std::vector<SessionEvent> events;
+  session.set_event_sink(
+      [&events](const SessionEvent &event) { events.push_back(event); });
+  CHECK(!session.pending_render_region().has_value());
+
+  const auto first_result = session.execute(SetLayerOpacity{first_id, 0.5F});
+  CHECK(static_cast<bool>(first_result));
+  CHECK(first_result.affected_region.has_value());
+  CHECK(events.back().affected_region.has_value());
+  CHECK(events.back().affected_region->x == first_result.affected_region->x);
+  CHECK(events.back().affected_region->y == first_result.affected_region->y);
+  CHECK(events.back().affected_region->width ==
+        first_result.affected_region->width);
+  CHECK(events.back().affected_region->height ==
+        first_result.affected_region->height);
+  const auto second_result =
+      session.execute(SetLayerVisibility{second_id, false});
+  CHECK(static_cast<bool>(second_result));
+  CHECK(second_result.affected_region.has_value());
+  CHECK(events.back().affected_region.has_value());
+  CHECK(events.back().affected_region->x == second_result.affected_region->x);
+  CHECK(events.back().affected_region->y == second_result.affected_region->y);
+  CHECK(events.back().affected_region->width ==
+        second_result.affected_region->width);
+  CHECK(events.back().affected_region->height ==
+        second_result.affected_region->height);
+
+  const auto pending = session.pending_render_region();
+  CHECK(pending.has_value());
+  CHECK(pending->x == 1);
+  CHECK(pending->y == 1);
+  CHECK(pending->width == 9);
+  CHECK(pending->height == 7);
+  const auto taken = session.take_pending_render_region();
+  CHECK(taken.has_value());
+  CHECK(taken->x == pending->x);
+  CHECK(taken->y == pending->y);
+  CHECK(taken->width == pending->width);
+  CHECK(taken->height == pending->height);
+  CHECK(!session.pending_render_region().has_value());
+
+  CHECK(static_cast<bool>(session.execute(RenameLayer{first_id, "Renamed"})));
+  CHECK(!session.pending_render_region().has_value());
+  CHECK(!events.back().affected_region.has_value());
+
+  CHECK(static_cast<bool>(session.begin_preview()));
+  CHECK(static_cast<bool>(session.update_preview({3, 2, 4, 5}, first_id)));
+  CHECK(events.back().affected_region.has_value());
+  CHECK(events.back().affected_region->x == 3);
+  CHECK(!session.pending_render_region().has_value());
+  CHECK(static_cast<bool>(session.end_preview()));
+
+  const auto undone = session.undo();
+  CHECK(static_cast<bool>(undone));
+  CHECK(undone.affected_region.has_value());
+  CHECK(undone.affected_region->x == 0);
+  CHECK(undone.affected_region->y == 0);
+  CHECK(undone.affected_region->width == 12);
+  CHECK(undone.affected_region->height == 10);
+  const auto undo_pending = session.pending_render_region();
+  CHECK(undo_pending.has_value());
+  CHECK(undo_pending->x == undone.affected_region->x);
+  CHECK(undo_pending->y == undone.affected_region->y);
+  CHECK(undo_pending->width == undone.affected_region->width);
+  CHECK(undo_pending->height == undone.affected_region->height);
+
+  session.replace_external(make_session_document(), true);
+  const auto replaced_pending = session.pending_render_region();
+  CHECK(replaced_pending.has_value());
+  CHECK(replaced_pending->x == 0);
+  CHECK(replaced_pending->y == 0);
+  CHECK(replaced_pending->width == 2);
+  CHECK(replaced_pending->height == 2);
 }
 
 void engine_session_external_shell_adapter_preserves_state_identity() {
@@ -1607,6 +1741,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_headless_psd_open_edit_save_reopen},
       {"engine_session_renders_bounded_rgba_regions_and_cancels",
        engine_session_renders_bounded_rgba_regions_and_cancels},
+      {"engine_session_coalesces_dirty_render_regions_and_publishes_them",
+       engine_session_coalesces_dirty_render_regions_and_publishes_them},
       {"engine_session_external_shell_adapter_preserves_state_identity",
        engine_session_external_shell_adapter_preserves_state_identity},
       {"engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes",

@@ -407,6 +407,7 @@ struct SessionEvent {
   std::uint64_t state_id{0};
   bool dirty{false};
   LayerId layer_id{0};
+  std::optional<Rect> affected_region{};
 };
 
 struct CommandResult {
@@ -434,6 +435,11 @@ public:
 
 private:
   std::atomic_bool cancelled_{false};
+};
+
+struct OperationProgress {
+  // Return false to cancel. completed/total are monotonic work rows.
+  std::function<bool(std::int32_t completed, std::int32_t total)> update{};
 };
 
 struct RenderResult {
@@ -482,6 +488,10 @@ public:
   [[nodiscard]] bool preview_active() const noexcept {
     return preview_state_.has_value();
   }
+  [[nodiscard]] std::optional<Rect> pending_render_region() const noexcept {
+    return pending_render_region_;
+  }
+  [[nodiscard]] std::optional<Rect> take_pending_render_region() noexcept;
 
   void set_event_sink(EventSink sink) { event_sink_ = std::move(sink); }
   [[nodiscard]] CommandResult
@@ -504,7 +514,8 @@ public:
   [[nodiscard]] CommandResult redo();
   [[nodiscard]] SaveResult encode_psd(bool large_document = false) const;
   [[nodiscard]] RenderResult
-  render(Rect region, const CancellationToken *cancellation = nullptr) const;
+  render(Rect region, const CancellationToken *cancellation = nullptr,
+         const OperationProgress *progress = nullptr) const;
   void mark_saved();
   void mark_external_modified();
   // Transitional shell edits capture their pre-edit COW snapshot asynchronously
@@ -536,7 +547,9 @@ private:
 
   void push_undo_state();
   void prepare_mutation(bool record_history);
-  void publish(SessionEventKind kind, LayerId layer_id = 0);
+  void publish(SessionEventKind kind, LayerId layer_id = 0,
+               std::optional<Rect> affected_region = std::nullopt);
+  void schedule_render(std::optional<Rect> affected_region) noexcept;
   [[nodiscard]] CommandResult execute_impl(const DocumentCommand &command,
                                            bool record_history,
                                            const FilterProgress *filter_progress);
@@ -553,6 +566,7 @@ private:
   FilterRegistry filter_registry_{};
   EventSink event_sink_{};
   std::optional<PreviewState> preview_state_{};
+  std::optional<Rect> pending_render_region_{};
 };
 
 struct OpenResult {
