@@ -176,7 +176,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE |
     PATCHY_ENGINE_CAP_PSB_SAVE_AS |
     PATCHY_ENGINE_CAP_LAYER_MASK_STROKE |
-    PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING;
+    PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING |
+    PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -293,6 +294,37 @@ bool expected_state(const patchy_engine_session *session,
     return false;
   }
   return true;
+}
+
+bool copy_layer_ids(const std::uint64_t *source, std::size_t count,
+                    std::vector<patchy::LayerId> &destination,
+                    patchy_engine_error *error) {
+  if (source == nullptr || count == 0U || count > 256U) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "layer batch requires 1 through 256 ids");
+    return false;
+  }
+  try {
+    std::set<patchy::LayerId> unique;
+    destination.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      const auto id = source[index];
+      if (id == 0U || !unique.insert(id).second) {
+        fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+             "layer batch ids must be non-zero and unique");
+        return false;
+      }
+      destination.push_back(id);
+    }
+    return true;
+  } catch (const std::bad_alloc &) {
+    fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+         "could not allocate layer batch ids");
+  } catch (...) {
+    fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+         "unknown layer batch allocation failure");
+  }
+  return false;
 }
 
 bool transferable_layer_tree(const patchy::Layer &layer,
@@ -4314,6 +4346,234 @@ int patchy_engine_session_group_layer(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown group-layer failure");
+  }
+}
+
+int patchy_engine_session_edit_layers(
+    patchy_engine_session *session,
+    const patchy_engine_layer_batch_edit *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) ||
+      input->property > PATCHY_ENGINE_LAYER_BATCH_LOCKS) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and a complete layer batch edit are required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::vector<patchy::LayerId> layer_ids;
+  if (!copy_layer_ids(input->layer_ids, input->layer_count, layer_ids, error)) {
+    return 0;
+  }
+  try {
+    CommandResult result;
+    switch (input->property) {
+    case PATCHY_ENGINE_LAYER_BATCH_VISIBILITY:
+      if (input->value > 1U) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "batch visibility must be zero or one");
+      }
+      result = session->value->execute(patchy::engine::SetLayersVisibility{
+          std::move(layer_ids), input->value != 0U});
+      break;
+    case PATCHY_ENGINE_LAYER_BATCH_OPACITY:
+      result = session->value->execute(patchy::engine::SetLayersOpacity{
+          std::move(layer_ids), input->opacity});
+      break;
+    case PATCHY_ENGINE_LAYER_BATCH_FILL_OPACITY:
+      result = session->value->execute(patchy::engine::SetLayersFillOpacity{
+          std::move(layer_ids), input->opacity});
+      break;
+    case PATCHY_ENGINE_LAYER_BATCH_BLEND_MODE:
+      if (input->value >
+          static_cast<std::uint32_t>(patchy::BlendMode::Dissolve)) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "batch blend mode is unsupported");
+      }
+      result = session->value->execute(patchy::engine::SetLayersBlendMode{
+          std::move(layer_ids),
+          static_cast<patchy::BlendMode>(input->value)});
+      break;
+    case PATCHY_ENGINE_LAYER_BATCH_LOCKS: {
+      if ((input->value & ~patchy::kLayerLockAll) != 0U) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "batch layer lock flags are unsupported");
+      }
+      std::vector<patchy::engine::LayerLockState> layers;
+      layers.reserve(layer_ids.size());
+      for (const auto id : layer_ids) {
+        layers.push_back({id, input->value});
+      }
+      result = session->value->execute(
+          patchy::engine::SetLayerLockStates{std::move(layers)});
+      break;
+    }
+    default:
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "batch layer property is unsupported");
+    }
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer batch edit");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer batch edit failure");
+  }
+}
+
+int patchy_engine_session_remove_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->reserved != 0U) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and a complete layer batch are required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::vector<patchy::LayerId> layer_ids;
+  if (!copy_layer_ids(input->layer_ids, input->layer_count, layer_ids, error)) {
+    return 0;
+  }
+  try {
+    auto result = session->value->execute(
+        patchy::engine::RemoveLayers{std::move(layer_ids)});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer removal");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer removal failure");
+  }
+}
+
+int patchy_engine_session_move_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    std::uint64_t target_layer_id, std::uint32_t position,
+    std::uint8_t has_target_layer, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->reserved != 0U ||
+      position > PATCHY_ENGINE_DROP_ON_VIEWPORT || has_target_layer > 1U ||
+      (has_target_layer != 0U && target_layer_id == 0U)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer batch move input is invalid");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::vector<patchy::LayerId> layer_ids;
+  if (!copy_layer_ids(input->layer_ids, input->layer_count, layer_ids, error)) {
+    return 0;
+  }
+  try {
+    auto result = session->value->execute(patchy::engine::MoveLayers{
+        std::move(layer_ids), has_target_layer != 0U
+                                  ? std::optional<patchy::LayerId>{target_layer_id}
+                                  : std::nullopt,
+        static_cast<patchy::LayerDropPosition>(position)});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer move");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer move failure");
+  }
+}
+
+int patchy_engine_session_group_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    const char *name, std::size_t name_size, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->reserved != 0U) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and a complete layer batch are required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::vector<patchy::LayerId> layer_ids;
+  std::string group_name;
+  if (!copy_layer_ids(input->layer_ids, input->layer_count, layer_ids, error) ||
+      !copy_command_text(name, name_size, 256U, group_name, error)) {
+    return 0;
+  }
+  try {
+    auto result = session->value->execute(
+        patchy::engine::AddGroup{std::move(group_name), std::move(layer_ids)});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer group");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer group failure");
+  }
+}
+
+int patchy_engine_session_ungroup_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->reserved != 0U) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and a complete layer batch are required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::vector<patchy::LayerId> layer_ids;
+  if (!copy_layer_ids(input->layer_ids, input->layer_count, layer_ids, error)) {
+    return 0;
+  }
+  try {
+    auto result = session->value->execute(
+        patchy::engine::UngroupLayers{std::move(layer_ids)});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer ungroup");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer ungroup failure");
   }
 }
 

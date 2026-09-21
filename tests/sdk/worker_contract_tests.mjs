@@ -97,9 +97,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
     "client.copyLayerToDocument",
-    "client.setLayerVisibility",
-    "client.moveLayer", "client.addPixelLayer", "client.groupLayer", "client.removeLayer",
-    "client.renameLayer", "client.setLayerOpacity", "client.setLayerBlendMode",
+    "client.editLayers", "client.moveLayers", "client.addPixelLayer",
+    "client.groupLayers", "client.ungroupLayers", "client.removeLayers",
+    "client.renameLayer",
     "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
     "client.cropDocument", "client.invertLayer",
     "client.setSelection", "client.setSelectionMask", "client.quickSelect", "client.magneticLasso",
@@ -117,7 +117,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.addAdjustment", "client.updateAdjustment", "client.addSmartObject",
     "client.replaceSmartObject", "client.openSmartObjectContents", "client.applyFilter",
     "client.saveSmartObjectContents", "client.setSmartFilter",
-    "client.setLayerFillOpacity", "client.setLayerLocks", "client.setLayerClipping",
+    "client.setLayerClipping",
     "client.setLayerStylePreset", "client.setEssentialLayerStyle",
     "client.invertSelection", "client.expandSelection", "client.contractSelection",
     "client.borderSelection", "client.growSelection", "client.selectSimilar",
@@ -174,6 +174,13 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /navigator\.clipboard/);
   assert.match(script, /application\/x-patchy-layer/);
   assert.match(script, /draggable = true/);
+  assert.match(html, /aria-multiselectable="true"/);
+  assert.match(script, /event\.shiftKey && layerSelectionAnchorId != null/);
+  assert.match(script, /event\.metaKey \|\| event\.ctrlKey/);
+  assert.match(script, /selectedLayerIdsTopToBottom\(\{ rootsOnly: true \}\)/);
+  assert.match(script, /client\.moveLayers\(ids, layer\.id, position\)/);
+  assert.match(script, /client\.editLayers\(ids, 0/);
+  assert.match(script, /selectedLayerIds = new Set\(\[\.\.\.selectedLayerIds\][\s\S]*if \(!selectedLayerIds\.size\)/);
   assert.match(script, /fullSelectionMask\(\)/);
   assert.match(html, /image\/svg\+xml/);
   assert.match(html, /SVG \(flattened\)/);
@@ -192,6 +199,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "quickSelect(", "magneticLasso(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel(",
+    "editLayers(", "moveLayers(", "groupLayers(", "removeLayers(",
     "TextStyleRun", "TextParagraphRun"]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
@@ -355,7 +363,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 36n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 37n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -708,11 +716,34 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_evict_oldest_undo(session, evicted) { heap[evicted] = 1; return 1; },
     _patchy_engine_buffer_release() { released++; },
     _patchy_engine_session_move_layer() { return 1; },
+    _patchy_engine_session_edit_layers(session, input) {
+      assert.equal(view.getUint32(input, true), 40);
+      assert.equal(view.getUint32(input + 4, true), 1);
+      assert.equal(view.getBigUint64(input + 8, true), 9n);
+      assert.equal(view.getBigUint64(input + 16, true), 4n);
+      const ids = view.getUint32(input + 24, true);
+      assert.deepEqual([view.getBigUint64(ids, true), view.getBigUint64(ids + 8, true)], [8n, 7n]);
+      assert.equal(view.getUint32(input + 28, true), 2);
+      assert.ok(Math.abs(view.getFloat32(input + 32, true) - .5) < .001);
+      return 1;
+    },
+    _patchy_engine_session_remove_layers(session, input) {
+      assert.equal(view.getUint32(input, true), 32); return 1;
+    },
+    _patchy_engine_session_move_layers(session, input, target, position, hasTarget) {
+      assert.deepEqual([target, position, hasTarget], [9n, 1, 1]); return 1;
+    },
+    _patchy_engine_session_group_layers(session, input, name, nameSize) {
+      assert.equal(new TextDecoder().decode(heap.subarray(name, name + nameSize)), "Batch"); return 1;
+    },
+    _patchy_engine_session_ungroup_layers(session, input) {
+      assert.equal(view.getUint32(input + 28, true), 1); return 1;
+    },
     _patchy_engine_session_undo() { return 1; },
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 36n) - 1n);
+  assert.equal(engine.capabilities, (1n << 37n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -745,6 +776,22 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.equal(engine.evictOldestUndo(session), true);
   assert.deepEqual(Array.from(engine.smartObjectBytes(session, 7n)), [56, 66, 80, 83, 1, 2]);
   engine.setLayerVisibility(session, snapshot, 7n, false);
+  engine.editLayers(session, snapshot, [8n, 7n], 1, { opacity: .5 });
+  engine.moveLayers(session, snapshot, [8n, 7n], 9n, 1);
+  engine.groupLayers(session, snapshot, [8n, 7n], "Batch");
+  engine.ungroupLayers(session, snapshot, [9n]);
+  engine.removeLayers(session, snapshot, [8n, 7n]);
+  assert.throws(() => engine.editLayers(session, snapshot, [7n, 7n], 0,
+    { value: 1 }), /non-zero and unique/);
+  assert.throws(() => engine.editLayers(session, snapshot,
+    Array.from({ length: 257 }, (_, index) => BigInt(index + 1)), 0,
+    { value: 1 }), /1 through 256/);
+  assert.throws(() => engine.editLayers(session, snapshot, [7n], 4,
+    { value: 2 ** 32 }), /supported multi-layer property/);
+  assert.throws(() => engine.moveLayers(session, snapshot, [7n], -1n, 1),
+    /valid target layer id/);
+  assert.throws(() => engine.removeLayers(session, snapshot, [1n << 64n]),
+    /non-zero and unique/);
   engine.setLayerOpacity(session, snapshot, 7n, 0.5);
   engine.setLayerFillOpacity(session, snapshot, 7n, 0.75);
   engine.setLayerLocks(session, snapshot, 7n, 7);
@@ -938,6 +985,9 @@ test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsup
       styleRuns: [{ start: 0, length: 2, font: "Arial", sizePixels: 12,
         color: [1, 2, 3] }] }),
   (error) => error instanceof Error && error.code === 2 && /Rich text authoring/.test(error.message));
+  assert.throws(() => engine.editLayers(
+    99, { stateId: 1n, revision: 1n }, [1n], 0, { value: 1 }),
+  (error) => error instanceof Error && error.code === 2 && /Multi-layer authoring/.test(error.message));
   engine.dispose();
 });
 
@@ -970,8 +1020,19 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
       calls.push(["visibility", before.revision, layerId, next]);
       visible = next; revision++;
     },
+    editLayers(session, before, layerIds, property, input) {
+      calls.push(["editLayers", layerIds, property, input]);
+      if (property === 0) visible = input.value !== 0;
+      revision++;
+    },
+    removeLayers(session, before, layerIds) { calls.push(["removeLayers", layerIds]); revision++; },
+    groupLayers(session, before, layerIds, name) { calls.push(["groupLayers", layerIds, name]); revision++; },
+    ungroupLayers(session, before, layerIds) { calls.push(["ungroupLayers", layerIds]); revision++; },
     moveLayer(session, before, layerId, target, position) {
       calls.push(["move", before.revision, layerId, target, position]); revision++;
+    },
+    moveLayers(session, before, layerIds, target, position) {
+      calls.push(["moveLayers", before.revision, layerIds, target, position]); revision++;
     },
     setLayerOpacity(session, before, layerId, opacity) { calls.push(["opacity", layerId, opacity]); revision++; },
     setLayerFillOpacity(session, before, layerId, opacity) { calls.push(["fillOpacity", layerId, opacity]); revision++; },
@@ -1069,6 +1130,12 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await assert.rejects(host.dispatch({ method: "layerThumbnail", layerId: "7",
     maximumEdge: 2, expectedStateId: "0", expectedRevision: "1" }), /stale/);
   assert.equal((await host.dispatch({ method: "setLayerVisibility", layerId: "7", visible: false })).layers[0].visible, false);
+  assert.equal((await host.dispatch({ method: "editLayers", layerIds: ["7", "8"],
+    property: 0, opacity: 0, value: 1 })).layers[0].visible, true);
+  await host.dispatch({ method: "moveLayers", layerIds: ["8", "7"], targetLayerId: null, position: 3 });
+  await host.dispatch({ method: "groupLayers", layerIds: ["8", "7"], name: "Batch" });
+  await host.dispatch({ method: "ungroupLayers", layerIds: ["9"] });
+  await host.dispatch({ method: "removeLayers", layerIds: ["8", "7"] });
   await host.dispatch({ method: "moveLayer", layerId: "7", targetLayerId: null, position: 3 });
   await host.dispatch({ method: "setLayerOpacity", layerId: "7", opacity: 0.5 });
   await host.dispatch({ method: "setLayerFillOpacity", layerId: "7", opacity: 0.75 });
@@ -1178,7 +1245,13 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   assert.equal(await host.dispatch({ method: "close" }), null);
   host.dispose();
   assert.deepEqual(calls[1], ["visibility", 1n, 7n, false]);
-  assert.deepEqual(calls[2], ["move", 2n, 7n, null, 3]);
+  assert.deepEqual(calls[2], ["editLayers", [7n, 8n], 0,
+    { opacity: 0, value: 1 }]);
+  assert.deepEqual(calls[3], ["moveLayers", 3n, [8n, 7n], null, 3]);
+  assert.deepEqual(calls[4], ["groupLayers", [8n, 7n], "Batch"]);
+  assert.deepEqual(calls[5], ["ungroupLayers", [9n]]);
+  assert.deepEqual(calls[6], ["removeLayers", [8n, 7n]]);
+  assert.deepEqual(calls[7], ["move", 7n, 7n, null, 3]);
   assert.ok(calls.some(([name]) => name === "save"));
 });
 

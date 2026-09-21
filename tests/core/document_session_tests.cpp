@@ -2152,6 +2152,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_WARP) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_PSB_SAVE_AS) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_MASK_STROKE) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -2546,6 +2547,190 @@ void engine_host_protocol_authors_layers_and_document_geometry() {
 
   patchy_engine_session_destroy(reopened);
   patchy_engine_buffer_release(&psd);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
+void engine_host_protocol_batches_layer_authoring_atomically() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 4, 3, &error);
+  CHECK(session != nullptr);
+  const auto project = [&]() {
+    patchy_engine_document_projection document{};
+    document.struct_size = sizeof(document);
+    CHECK(patchy_engine_session_document(session, &document, &error) == 1);
+    return document;
+  };
+  const auto add = [&](const char *name, std::uint8_t red) {
+    const auto before = project();
+    patchy_engine_command command{};
+    command.struct_size = sizeof(command);
+    command.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+    command.type = PATCHY_ENGINE_COMMAND_ADD_SOLID_LAYER;
+    command.expected_state_id = before.state_id;
+    command.expected_revision = before.revision;
+    command.payload.add_solid_layer.name_size =
+        static_cast<std::uint32_t>(std::strlen(name));
+    std::memcpy(command.payload.add_solid_layer.name, name,
+                command.payload.add_solid_layer.name_size);
+    command.payload.add_solid_layer.red = red;
+    command.payload.add_solid_layer.alpha = 255;
+    patchy_engine_event event{};
+    CHECK(patchy_engine_session_execute(session, &command, &event, &error) ==
+          1);
+    return event.affected_layer_id;
+  };
+  const auto base_id = add("Base", 20);
+  const auto upper_id = add("Upper", 80);
+  const auto anchor_id = add("Anchor", 160);
+  std::array<std::uint64_t, 2> ids{upper_id, base_id};
+  patchy_engine_event event{};
+
+  const auto before_edit = project();
+  patchy_engine_layer_batch_edit edit{};
+  edit.struct_size = sizeof(edit);
+  edit.property = PATCHY_ENGINE_LAYER_BATCH_OPACITY;
+  edit.expected_state_id = before_edit.state_id;
+  edit.expected_revision = before_edit.revision;
+  edit.layer_ids = ids.data();
+  edit.layer_count = ids.size();
+  edit.opacity = 0.42F;
+  CHECK(patchy_engine_session_edit_layers(session, &edit, &event, &error) ==
+        1);
+  CHECK(event.revision == before_edit.revision + 1U);
+  for (std::size_t index = 0; index < 2; ++index) {
+    patchy_engine_layer_projection layer{};
+    CHECK(patchy_engine_session_layer_at(session, index, &layer, &error) == 1);
+    CHECK(std::abs(layer.opacity - 0.42F) < 0.001F);
+  }
+  edit.expected_state_id = before_edit.state_id;
+  edit.expected_revision = before_edit.revision;
+  CHECK(patchy_engine_session_edit_layers(session, &edit, &event, &error) ==
+        0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+
+  auto before = project();
+  edit.expected_state_id = before.state_id;
+  edit.expected_revision = before.revision;
+  edit.property = PATCHY_ENGINE_LAYER_BATCH_LOCKS;
+  edit.value = PATCHY_ENGINE_LAYER_LOCK_ALL;
+  CHECK(patchy_engine_session_edit_layers(session, &edit, &event, &error) ==
+        1);
+
+  before = project();
+  edit.expected_state_id = before.state_id;
+  edit.expected_revision = before.revision;
+  edit.property = PATCHY_ENGINE_LAYER_BATCH_VISIBILITY;
+  edit.value = 0;
+  CHECK(patchy_engine_session_edit_layers(session, &edit, &event, &error) ==
+        1);
+  CHECK(event.revision == before.revision + 1U);
+
+  before = project();
+  edit.expected_state_id = before.state_id;
+  edit.expected_revision = before.revision;
+  edit.property = PATCHY_ENGINE_LAYER_BATCH_FILL_OPACITY;
+  edit.opacity = 0.64F;
+  CHECK(patchy_engine_session_edit_layers(session, &edit, &event, &error) ==
+        1);
+
+  before = project();
+  edit.expected_state_id = before.state_id;
+  edit.expected_revision = before.revision;
+  edit.property = PATCHY_ENGINE_LAYER_BATCH_BLEND_MODE;
+  edit.value = PATCHY_ENGINE_BLEND_MULTIPLY;
+  CHECK(patchy_engine_session_edit_layers(session, &edit, &event, &error) ==
+        1);
+
+  before = project();
+  patchy_engine_layer_batch batch{};
+  batch.struct_size = sizeof(batch);
+  batch.expected_state_id = before.state_id;
+  batch.expected_revision = before.revision;
+  batch.layer_ids = ids.data();
+  batch.layer_count = ids.size();
+  constexpr char group_name[] = "Batch group";
+  CHECK(patchy_engine_session_group_layers(
+            session, &batch, group_name, sizeof(group_name) - 1U, &event,
+            &error) == 1);
+  const auto group_id = event.affected_layer_id;
+  CHECK(group_id != 0U);
+  CHECK(project().layer_count == 4U);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(project().layer_count == 3U);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  CHECK(project().layer_count == 4U);
+
+  before = project();
+  std::array<std::uint64_t, 1> groups{group_id};
+  batch.expected_state_id = before.state_id;
+  batch.expected_revision = before.revision;
+  batch.layer_ids = groups.data();
+  batch.layer_count = groups.size();
+  CHECK(patchy_engine_session_ungroup_layers(session, &batch, &event, &error) ==
+        1);
+  CHECK(project().layer_count == 3U);
+
+  before = project();
+  batch.expected_state_id = before.state_id;
+  batch.expected_revision = before.revision;
+  batch.layer_ids = ids.data();
+  batch.layer_count = ids.size();
+  CHECK(patchy_engine_session_move_layers(
+            session, &batch, anchor_id, PATCHY_ENGINE_DROP_ABOVE_ITEM, 1,
+            &event, &error) == 1);
+  CHECK(event.revision == before.revision + 1U);
+
+  patchy_engine_buffer psd{};
+  CHECK(patchy_engine_session_save_psd(session, &psd, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
+                                                  &error);
+  CHECK(reopened != nullptr);
+  bool saw_base = false;
+  bool saw_upper = false;
+  for (std::size_t index = 0; index < 3; ++index) {
+    patchy_engine_layer_projection layer{};
+    CHECK(patchy_engine_session_layer_at(reopened, index, &layer, &error) == 1);
+    const auto name = std::string(layer.name, layer.name_size);
+    if (name == "Base" || name == "Upper") {
+      CHECK(std::abs(layer.opacity - 0.42F) < 0.001F);
+      CHECK(std::abs(layer.fill_opacity - 0.64F) < 0.001F);
+      CHECK(layer.visible == 0U);
+      CHECK(layer.blend_mode == PATCHY_ENGINE_BLEND_MULTIPLY);
+      CHECK(layer.lock_flags == PATCHY_ENGINE_LAYER_LOCK_ALL);
+      saw_base = saw_base || name == "Base";
+      saw_upper = saw_upper || name == "Upper";
+    }
+  }
+  CHECK(saw_base);
+  CHECK(saw_upper);
+  patchy_engine_session_destroy(reopened);
+  patchy_engine_buffer_release(&psd);
+
+  before = project();
+  batch.expected_state_id = before.state_id;
+  batch.expected_revision = before.revision;
+  CHECK(patchy_engine_session_remove_layers(session, &batch, &event, &error) ==
+        1);
+  CHECK(project().layer_count == 1U);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(project().layer_count == 3U);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  CHECK(project().layer_count == 1U);
+
+  std::array<std::uint64_t, 2> duplicate_ids{anchor_id, anchor_id};
+  before = project();
+  batch.expected_state_id = before.state_id;
+  batch.expected_revision = before.revision;
+  batch.layer_ids = duplicate_ids.data();
+  CHECK(patchy_engine_session_remove_layers(session, &batch, &event, &error) ==
+        0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  CHECK(project().state_id == before.state_id);
+
   patchy_engine_session_destroy(session);
   patchy_engine_runtime_destroy(runtime);
 }
@@ -5455,6 +5640,8 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_runs_versioned_native_wasm_sequence},
       {"engine_host_protocol_authors_layers_and_document_geometry",
        engine_host_protocol_authors_layers_and_document_geometry},
+      {"engine_host_protocol_batches_layer_authoring_atomically",
+       engine_host_protocol_batches_layer_authoring_atomically},
       {"engine_host_protocol_authors_pixels_channels_and_selection",
        engine_host_protocol_authors_pixels_channels_and_selection},
       {"engine_host_protocol_runs_mask_filter_async_lifecycle",

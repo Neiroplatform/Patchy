@@ -50,6 +50,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_PSB_SAVE_AS = UINT64_C(1) << 33,
   PATCHY_ENGINE_CAP_LAYER_MASK_STROKE = UINT64_C(1) << 34,
   PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING = UINT64_C(1) << 35,
+  PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING = UINT64_C(1) << 36,
 };
 
 enum patchy_engine_error_code {
@@ -99,6 +100,34 @@ typedef struct patchy_engine_layer_transform {
   /* top-left, top-right, bottom-right, bottom-left document-space x/y pairs */
   double quad[8];
 } patchy_engine_layer_transform;
+
+enum patchy_engine_layer_batch_property {
+  PATCHY_ENGINE_LAYER_BATCH_VISIBILITY = 0,
+  PATCHY_ENGINE_LAYER_BATCH_OPACITY = 1,
+  PATCHY_ENGINE_LAYER_BATCH_FILL_OPACITY = 2,
+  PATCHY_ENGINE_LAYER_BATCH_BLEND_MODE = 3,
+  PATCHY_ENGINE_LAYER_BATCH_LOCKS = 4,
+};
+
+typedef struct patchy_engine_layer_batch {
+  uint32_t struct_size;
+  uint32_t reserved;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const uint64_t *layer_ids;
+  size_t layer_count;
+} patchy_engine_layer_batch;
+
+typedef struct patchy_engine_layer_batch_edit {
+  uint32_t struct_size;
+  uint32_t property;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const uint64_t *layer_ids;
+  size_t layer_count;
+  float opacity;
+  uint32_t value;
+} patchy_engine_layer_batch_edit;
 
 typedef int (*patchy_engine_transform_progress_fn)(int32_t completed_rows,
                                                    int32_t total_rows,
@@ -1389,6 +1418,24 @@ int patchy_engine_session_group_layer(
     uint64_t expected_revision, uint64_t layer_id, const char *name,
     size_t name_size, patchy_engine_event *event,
     patchy_engine_error *error);
+int patchy_engine_session_edit_layers(
+    patchy_engine_session *session,
+    const patchy_engine_layer_batch_edit *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_remove_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_move_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    uint64_t target_layer_id, uint32_t position, uint8_t has_target_layer,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_group_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    const char *name, size_t name_size, patchy_engine_event *event,
+    patchy_engine_error *error);
+int patchy_engine_session_ungroup_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_copy_layer(
     patchy_engine_session *target, uint64_t expected_target_state_id,
     uint64_t expected_target_revision, const patchy_engine_session *source,

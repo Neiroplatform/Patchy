@@ -154,6 +154,20 @@ export class PatchyWorkerClient {
   setLayerVisibility(layerId, visible) {
     return this.#request("setLayerVisibility", { layerId: String(layerId), visible });
   }
+  editLayers(layerIds, property, { opacity = 0, value = 0 } = {}) {
+    return this.#request("editLayers", {
+      layerIds: layerIds.map(String), property, opacity, value,
+    });
+  }
+  removeLayers(layerIds) {
+    return this.#request("removeLayers", { layerIds: layerIds.map(String) });
+  }
+  groupLayers(layerIds, name = "Group") {
+    return this.#request("groupLayers", { layerIds: layerIds.map(String), name });
+  }
+  ungroupLayers(layerIds) {
+    return this.#request("ungroupLayers", { layerIds: layerIds.map(String) });
+  }
   setLayerOpacity(layerId, opacity) {
     return this.#request("setLayerOpacity", { layerId: String(layerId), opacity });
   }
@@ -324,6 +338,13 @@ export class PatchyWorkerClient {
   moveLayer(layerId, targetLayerId, position) {
     return this.#request("moveLayer", {
       layerId: String(layerId),
+      targetLayerId: targetLayerId == null ? null : String(targetLayerId),
+      position,
+    });
+  }
+  moveLayers(layerIds, targetLayerId, position) {
+    return this.#request("moveLayers", {
+      layerIds: layerIds.map(String),
       targetLayerId: targetLayerId == null ? null : String(targetLayerId),
       position,
     });

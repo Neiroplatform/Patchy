@@ -301,6 +301,24 @@ export class PatchyWorkerHost {
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
           message.visible);
         return this.#snapshot();
+      case "editLayers":
+        this.#engine.editLayers(this.#requireSession(), this.#snapshot(),
+          message.layerIds.map(BigInt), message.property, {
+            opacity: message.opacity, value: message.value,
+          });
+        return this.#snapshot();
+      case "removeLayers":
+        this.#engine.removeLayers(this.#requireSession(), this.#snapshot(),
+          message.layerIds.map(BigInt));
+        return this.#snapshot();
+      case "groupLayers":
+        this.#engine.groupLayers(this.#requireSession(), this.#snapshot(),
+          message.layerIds.map(BigInt), message.name);
+        return this.#snapshot();
+      case "ungroupLayers":
+        this.#engine.ungroupLayers(this.#requireSession(), this.#snapshot(),
+          message.layerIds.map(BigInt));
+        return this.#snapshot();
       case "setLayerOpacity":
         this.#engine.setLayerOpacity(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
@@ -577,6 +595,12 @@ export class PatchyWorkerHost {
       case "moveLayer":
         this.#engine.moveLayer(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          message.targetLayerId == null ? null : BigInt(message.targetLayerId),
+          message.position);
+        return this.#snapshot();
+      case "moveLayers":
+        this.#engine.moveLayers(this.#requireSession(), this.#snapshot(),
+          message.layerIds.map(BigInt),
           message.targetLayerId == null ? null : BigInt(message.targetLayerId),
           message.position);
         return this.#snapshot();

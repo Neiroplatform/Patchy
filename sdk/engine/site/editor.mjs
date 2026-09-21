@@ -14,6 +14,8 @@ const canvas = $("documentCanvas");
 const context = canvas.getContext("2d", { alpha: true });
 let snapshot = null;
 let selectedLayerId = null;
+let selectedLayerIds = new Set();
+let layerSelectionAnchorId = null;
 let selectedChannelId = null;
 let selectedPathId = null;
 let documentName = "Untitled.psd";
@@ -118,6 +120,58 @@ function selectedLayer() {
   return snapshot?.layers.find((layer) => layer.id === selectedLayerId) || null;
 }
 
+function selectedLayers() {
+  if (!snapshot) return [];
+  return snapshot.layers.filter((layer) => selectedLayerIds.has(layer.id));
+}
+
+function setSingleLayerSelection(layerId) {
+  selectedLayerId = layerId ?? null;
+  selectedLayerIds = layerId == null ? new Set() : new Set([layerId]);
+  layerSelectionAnchorId = layerId ?? null;
+}
+
+function clearLayerSelection() { setSingleLayerSelection(null); }
+
+function selectedLayerIdsTopToBottom({ rootsOnly = false } = {}) {
+  if (!snapshot) return [];
+  const ordered = [...snapshot.layers].reverse()
+    .filter((layer) => selectedLayerIds.has(layer.id));
+  if (!rootsOnly) return ordered.map((layer) => layer.id);
+  const byId = new Map(snapshot.layers.map((layer) => [layer.id, layer]));
+  return ordered.filter((layer) => {
+    let parentId = layer.parentId;
+    while (parentId && parentId !== 0n) {
+      if (selectedLayerIds.has(parentId)) return false;
+      parentId = byId.get(parentId)?.parentId ?? 0n;
+    }
+    return true;
+  }).map((layer) => layer.id);
+}
+
+function selectLayerFromEvent(layer, event, displayLayers) {
+  if (event.shiftKey && layerSelectionAnchorId != null) {
+    const anchor = displayLayers.findIndex((item) => item.id === layerSelectionAnchorId);
+    const target = displayLayers.findIndex((item) => item.id === layer.id);
+    if (anchor >= 0 && target >= 0) {
+      const [first, last] = anchor < target ? [anchor, target] : [target, anchor];
+      selectedLayerIds = new Set(displayLayers.slice(first, last + 1).map((item) => item.id));
+      selectedLayerId = layer.id;
+      return;
+    }
+  }
+  if (event.metaKey || event.ctrlKey) {
+    const next = new Set(selectedLayerIds);
+    if (next.has(layer.id) && next.size > 1) next.delete(layer.id);
+    else next.add(layer.id);
+    selectedLayerIds = next;
+    selectedLayerId = next.has(layer.id) ? layer.id : [...next].at(-1) ?? null;
+    layerSelectionAnchorId = selectedLayerId;
+    return;
+  }
+  setSingleLayerSelection(layer.id);
+}
+
 function selectedChannel() { return snapshot?.channels.find((item) => item.id === selectedChannelId) || null; }
 function selectedPath() { return snapshot?.paths.find((item) => item.id === selectedPathId) || null; }
 
@@ -210,6 +264,8 @@ function setBusy(active, title = "Working", detail = "The engine is updating the
 
 function updateControls() {
   const layer = selectedLayer();
+  const layers = selectedLayers();
+  const single = layers.length === 1;
   $("saveButton").disabled = busy || !snapshot;
   $("saveFormatSelect").disabled = busy || !snapshot;
   if (snapshot) {
@@ -229,34 +285,34 @@ function updateControls() {
   $("recoveryButton").disabled = busy;
   $("memoryBudgetSelect").disabled = busy;
   $("importLayerButton").disabled = busy || !snapshot;
-  $("groupLayerButton").disabled = busy || !layer;
-  $("ungroupLayerButton").disabled = busy || layer?.kind !== 1;
-  $("removeLayerButton").disabled = busy || !layer;
-  $("invertLayerButton").disabled = busy || layer?.kind !== 0;
-  $("filterLayerButton").disabled = busy || layer?.kind !== 0;
+  $("groupLayerButton").disabled = busy || !layers.length;
+  $("ungroupLayerButton").disabled = busy || !layers.length || layers.some((item) => item.kind !== 1);
+  $("removeLayerButton").disabled = busy || !layers.length;
+  $("invertLayerButton").disabled = busy || !single || layer?.kind !== 0;
+  $("filterLayerButton").disabled = busy || !single || layer?.kind !== 0;
   $("textLayerButton").disabled = busy || !snapshot;
-  $("textLayerButton").textContent = layer?.kind === 3 ? "Edit text" : "Add text";
-  $("layerTransformButton").disabled = busy || ![0, 3, 5].includes(layer?.kind) ||
+  $("textLayerButton").textContent = single && layer?.kind === 3 ? "Edit text" : "Add text";
+  $("layerTransformButton").disabled = busy || !single || ![0, 3, 5].includes(layer?.kind) ||
     Boolean(layer?.mask && !layer.mask.linked) || Boolean(layer?.vectorMask);
-  $("layerWarpButton").disabled = busy || ![0, 3, 5].includes(layer?.kind) ||
+  $("layerWarpButton").disabled = busy || !single || ![0, 3, 5].includes(layer?.kind) ||
     Boolean(layer?.vectorMask) || Boolean(layer?.mask && !layer.mask.linked);
   $("shapeLayerButton").disabled = busy || !snapshot;
   $("adjustmentLayerButton").disabled = busy || !snapshot;
   $("smartObjectButton").disabled = busy || !snapshot;
   $("smartObjectButton").textContent = layer?.kind === 5 ? "Replace Smart Object" : "Place Smart Object";
-  $("openSmartObjectButton").disabled = busy || layer?.kind !== 5 ||
+  $("openSmartObjectButton").disabled = busy || !single || layer?.kind !== 5 ||
     !layer?.smartObject?.contentsEditable;
-  $("smartFilterButton").disabled = busy || layer?.kind !== 5 || !layer?.smartObject?.editable;
+  $("smartFilterButton").disabled = busy || !single || layer?.kind !== 5 || !layer?.smartObject?.editable;
   const hasVectorMaskSource = Boolean(selectedPath()?.subpaths?.length || snapshot?.selection?.length);
-  $("createVectorMaskButton").disabled = busy || !layer || layer.kind === 1 ||
+  $("createVectorMaskButton").disabled = busy || !single || !layer || layer.kind === 1 ||
     layer.kind === 4 || !hasVectorMaskSource;
-  $("createMaskButton").disabled = busy || layer?.kind !== 0 || Boolean(layer?.mask);
-  $("toggleMaskButton").disabled = busy || !layer?.mask;
+  $("createMaskButton").disabled = busy || !single || layer?.kind !== 0 || Boolean(layer?.mask);
+  $("toggleMaskButton").disabled = busy || !single || !layer?.mask;
   $("toggleMaskButton").textContent = layer?.mask?.disabled ? "Enable mask" : "Disable mask";
-  $("linkMaskButton").disabled = busy || !layer?.mask;
+  $("linkMaskButton").disabled = busy || !single || !layer?.mask;
   $("linkMaskButton").textContent = layer?.mask?.linked === false ? "Link mask" : "Unlink mask";
-  $("invertMaskButton").disabled = busy || !layer?.mask;
-  $("removeMaskButton").disabled = busy || !layer?.mask;
+  $("invertMaskButton").disabled = busy || !single || !layer?.mask;
+  $("removeMaskButton").disabled = busy || !single || !layer?.mask;
   const canPaintMask = Boolean(layer?.mask && !layer.mask.disabled &&
     (canvasTool === "brush" || canvasTool === "eraser"));
   $("paintTargetSelect").disabled = busy || !canPaintMask;
@@ -266,21 +322,21 @@ function updateControls() {
   $("transformButton").disabled = busy || !snapshot;
   $("selectAllButton").disabled = busy || !snapshot;
   $("clearSelectionButton").disabled = busy || !snapshot?.selection?.length;
-  $("layerNameInput").disabled = busy || !layer;
-  $("layerOpacityInput").disabled = busy || !layer;
-  $("layerFillInput").disabled = busy || !layer;
-  $("layerBlendSelect").disabled = busy || !layer;
-  $("layerClipInput").disabled = busy || !layer;
-  $("layerLockInput").disabled = busy || !layer;
-  $("layerStyleSelect").disabled = busy || !layer;
-  $("applyLayerStyleButton").disabled = busy || !layer;
-  $("editLayerStyleButton").disabled = busy || !layer;
+  $("layerNameInput").disabled = busy || !single;
+  $("layerOpacityInput").disabled = busy || !layers.length;
+  $("layerFillInput").disabled = busy || !layers.length || layers.some((item) => item.kind === 1);
+  $("layerBlendSelect").disabled = busy || !layers.length;
+  $("layerClipInput").disabled = busy || !single;
+  $("layerLockInput").disabled = busy || !layers.length;
+  $("layerStyleSelect").disabled = busy || !single;
+  $("applyLayerStyleButton").disabled = busy || !single;
+  $("editLayerStyleButton").disabled = busy || !single;
   for (const id of ["invertSelectionButton", "expandSelectionButton", "contractSelectionButton",
     "borderSelectionButton", "growSelectionButton", "similarSelectionButton",
     "smoothSelectionButton", "featherSelectionButton", "saveChannelButton", "savePathButton"]) {
     $(id).disabled = busy || !snapshot?.selection?.length;
   }
-  $("rasterizeLayerButton").disabled = busy || ![3, 4, 5].includes(layer?.kind);
+  $("rasterizeLayerButton").disabled = busy || !single || ![3, 4, 5].includes(layer?.kind);
   $("mergeVisibleButton").disabled = busy || !snapshot?.layers?.length;
   for (const id of ["channelRenameButton", "channelInvertButton", "channelUpButton",
     "channelDownButton", "channelDeleteButton"]) $(id).disabled = busy || !selectedChannel();
@@ -536,7 +592,7 @@ async function recoverEngineAfterCrash() {
         checkpointStates.set(item.documentId, "confirmed");
         documentSaveFormats.set(item.documentId, item.format);
       }
-      selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+      clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
       layerClipboard = null; draggedLayer = null;
       await acceptSnapshot(result.activeSnapshot);
       automaticRecoveryEnabled = true;
@@ -626,7 +682,7 @@ async function restoreWorkspace(id) {
     workspaceIds.set(next.documentId, id);
     checkpointStates.set(next.documentId, "confirmed");
     documentSaveFormats.set(next.documentId, recovered.manifest.format || "psd");
-    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
   } catch (error) { showError("Could not recover workspace", error); }
   finally { setBusy(false); }
@@ -792,10 +848,12 @@ function renderLayers() {
     const row = document.createElement("div");
     row.className = "layer-row";
     row.draggable = true;
-    row.setAttribute("role", "listitem");
+    row.setAttribute("role", "option");
     row.setAttribute("aria-setsize", String(layers.length));
     row.setAttribute("aria-posinset", String(index + 1));
-    row.dataset.active = String(selectedLayerId === layer.id);
+    row.dataset.active = String(selectedLayerIds.has(layer.id));
+    row.dataset.layerId = String(layer.id);
+    row.setAttribute("aria-selected", String(selectedLayerIds.has(layer.id)));
     row.style.paddingLeft = `${5 + layerDepth(layer, byId) * 12}px`;
     row.innerHTML = `
       <button class="visibility-button" type="button" aria-label="${layer.visible ? "Hide" : "Show"} ${escapeHtml(layer.name)}">${layer.visible ? "◉" : "○"}</button>
@@ -806,24 +864,50 @@ function renderLayers() {
     row.querySelector(".layer-name").textContent = layer.name || "Unnamed layer";
     row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}${layer.adjustment ? ` · ${adjustmentName(layer.adjustment.kind)}` : ""}${layer.smartObject ? ` · ${layer.smartObject.filename}` : ""}`;
     row.querySelector(".layer-select-button").setAttribute("aria-label", `Select ${layer.name || "unnamed layer"}`);
-    row.querySelector(".layer-select-button").addEventListener("click", () => {
-      selectedLayerId = layer.id;
+    row.querySelector(".layer-select-button").addEventListener("click", (event) => {
+      selectLayerFromEvent(layer, event, layers);
       renderLayers();
       renderLayerProperties();
     });
     row.addEventListener("dragstart", (event) => {
+      if (!selectedLayerIds.has(layer.id)) setSingleLayerSelection(layer.id);
       draggedLayer = captureLayerReference(layer);
       event.dataTransfer?.setData("application/x-patchy-layer", String(layer.id));
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
     });
     row.addEventListener("dragend", () => { draggedLayer = null; });
-    row.querySelector(".visibility-button").addEventListener("click", () =>
-      mutate("Updating layer", async () => client.setLayerVisibility(layer.id, !layer.visible)));
+    row.addEventListener("dragover", (event) => {
+      if (draggedLayer?.sourceDocumentId !== snapshot?.documentId) return;
+      event.preventDefault();
+      row.dataset.dropTarget = event.offsetY < row.clientHeight / 2 ? "above" : "below";
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    });
+    row.addEventListener("dragleave", () => { delete row.dataset.dropTarget; });
+    row.addEventListener("drop", (event) => {
+      if (draggedLayer?.sourceDocumentId !== snapshot?.documentId) return;
+      event.preventDefault(); event.stopPropagation(); delete row.dataset.dropTarget;
+      const ids = selectedLayerIdsTopToBottom({ rootsOnly: true });
+      if (!ids.length || ids.includes(layer.id)) return;
+      const position = event.offsetY < row.clientHeight / 2 ? 1 : 2;
+      mutate("Moving layers", () => client.moveLayers(ids, layer.id, position));
+      draggedLayer = null;
+    });
+    row.querySelector(".visibility-button").addEventListener("click", () => {
+      const ids = selectedLayerIds.has(layer.id) ? selectedLayerIdsTopToBottom() : [layer.id];
+      mutate(ids.length > 1 ? "Updating layers" : "Updating layer",
+        () => client.editLayers(ids, 0, { value: layer.visible ? 0 : 1 }));
+    });
     const reorder = async (direction) => {
-      const target = layers[index + direction];
+      const ids = selectedLayerIds.has(layer.id)
+        ? selectedLayerIdsTopToBottom({ rootsOnly: true }) : [layer.id];
+      let targetIndex = index + direction;
+      while (targetIndex >= 0 && targetIndex < layers.length &&
+             ids.includes(layers[targetIndex].id)) targetIndex += direction;
+      const target = layers[targetIndex];
       if (!target) return;
       const position = direction < 0 ? 1 : 2;
-      await mutate("Moving layer", () => client.moveLayer(layer.id, target.id, position));
+      await mutate(ids.length > 1 ? "Moving layers" : "Moving layer",
+        () => client.moveLayers(ids, target.id, position));
     };
     row.querySelectorAll(".reorder-button")[0].addEventListener("click", () => reorder(-1));
     row.querySelectorAll(".reorder-button")[1].addEventListener("click", () => reorder(1));
@@ -841,13 +925,19 @@ function renderLayers() {
 
 function renderLayerProperties() {
   const layer = selectedLayer();
-  $("layerNameInput").value = layer?.name || "";
+  const layers = selectedLayers();
+  const mixed = (property) => layers.length > 1 &&
+    layers.some((item) => item[property] !== layers[0][property]);
+  $("propertiesTitle").textContent = layers.length > 1
+    ? `${layers.length} selected layers` : "Selected layer";
+  $("layerNameInput").value = layers.length === 1 ? layer?.name || "" : "";
   $("layerOpacityInput").value = layer ? String(Math.round(layer.opacity * 100)) : "100";
-  $("layerOpacityOutput").textContent = `${$("layerOpacityInput").value}%`;
+  $("layerOpacityOutput").textContent = mixed("opacity") ? "Mixed" : `${$("layerOpacityInput").value}%`;
   $("layerFillInput").value = layer ? String(Math.round(layer.fillOpacity * 100)) : "100";
-  $("layerFillOutput").textContent = `${$("layerFillInput").value}%`;
+  $("layerFillOutput").textContent = mixed("fillOpacity") ? "Mixed" : `${$("layerFillInput").value}%`;
   $("layerClipInput").checked = Boolean(layer?.clipped);
-  $("layerLockInput").checked = Boolean(layer?.lockFlags);
+  $("layerLockInput").checked = Boolean(layer?.lockFlags) && !mixed("lockFlags");
+  $("layerLockInput").indeterminate = mixed("lockFlags");
   const blendSelect = $("layerBlendSelect");
   blendSelect.querySelectorAll("[data-current-mode]").forEach((option) => option.remove());
   if (layer && !blendModes.has(layer.blendMode)) {
@@ -1448,7 +1538,7 @@ function canvasPointUnclamped(event) {
 
 async function acceptSnapshot(next, rerender = true) {
   if (!next) {
-    snapshot = null; selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    snapshot = null; clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     renderedDocument = null;
     $("emptyState").hidden = false; setSessionState("ready", "Engine ready");
     renderLayers(); renderLayerProperties(); renderStructure(); renderMetadata(); renderDocumentTabs(); renderHistory();
@@ -1461,8 +1551,15 @@ async function acceptSnapshot(next, rerender = true) {
     documentSaveFormats.set(snapshot.documentId,
       documentName.toLowerCase().endsWith(".psb") ? "psb" : "psd");
   }
-  if (selectedLayerId == null || !snapshot.layers.some((layer) => layer.id === selectedLayerId)) {
-    selectedLayerId = snapshot.activeLayerId || snapshot.layers.at(-1)?.id || null;
+  const liveLayerIds = new Set(snapshot.layers.map((layer) => layer.id));
+  selectedLayerIds = new Set([...selectedLayerIds].filter((id) => liveLayerIds.has(id)));
+  if (!selectedLayerIds.size) {
+    setSingleLayerSelection(snapshot.activeLayerId || snapshot.layers.at(-1)?.id || null);
+  } else if (selectedLayerId == null || !selectedLayerIds.has(selectedLayerId)) {
+    selectedLayerId = [...selectedLayerIds].at(-1) ?? null;
+  }
+  if (layerSelectionAnchorId == null || !liveLayerIds.has(layerSelectionAnchorId)) {
+    layerSelectionAnchorId = selectedLayerId;
   }
   if (!snapshot.channels.some((item) => item.id === selectedChannelId)) selectedChannelId = null;
   if (!snapshot.paths.some((item) => item.id === selectedPathId)) selectedPathId = null;
@@ -1483,7 +1580,7 @@ async function activateDocumentTab(documentId) {
   clearError(); setBusy(true, "Switching document", "Activating its canonical Worker session");
   try {
     const next = await client.activateDocument(documentId);
-    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
   } catch (error) { showError("Could not switch document", error); }
   finally { setBusy(false); }
@@ -1498,7 +1595,7 @@ async function closeDocumentTab(documentTab) {
   clearError(); setBusy(true, "Closing document", "Releasing its canonical Worker session");
   try {
     if (snapshot?.documentId === documentTab.id) {
-      selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+      clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     }
     await checkpointQueues.get(documentTab.id)?.whenIdle();
     const next = await client.closeDocument(documentTab.id);
@@ -1547,7 +1644,7 @@ async function openFile(file) {
     ensureMemorySafe(header, file.name || "Document");
     const next = await client.openBlob(file, file.name || "Document.psd");
     documentSaveFormats.set(next.documentId, header.version === 2 ? "psb" : "psd");
-    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
   } catch (error) { showError("Could not open document", error); }
@@ -1561,7 +1658,7 @@ async function newDocument() {
   try {
     ensureMemorySafe({ width: 1600, height: 1000 }, "New document");
     const next = await client.create(1600, 1000, "Untitled.psd");
-    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
   } catch (error) { showError("Could not create document", error); }
@@ -1581,7 +1678,7 @@ async function saveDocument() {
       const before = snapshot;
       const next = await client.saveSmartObjectContents(snapshot.documentId);
       recordHistoryMutation(before, next, "Applying Smart Object contents");
-      selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+      clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
       await acceptSnapshot(next);
       scheduleCheckpoint(next);
       return;
@@ -1599,7 +1696,7 @@ async function openSmartObjectContents() {
   setBusy(true, "Opening Smart Object contents", "Creating a linked canonical Worker session");
   try {
     const next = await client.openSmartObjectContents(layer.id);
-    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
   } catch (error) { showError("Could not open Smart Object contents", error); }
   finally { setBusy(false); }
@@ -1714,13 +1811,13 @@ async function transferLayerReference(reference, targetDocumentId) {
     let target = snapshot;
     if (target.documentId !== targetDocumentId) {
       target = await client.activateDocument(targetDocumentId);
-      selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+      clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     }
     const next = await client.copyLayerToDocument({ ...reference,
       targetDocumentId, expectedTargetStateId: target.stateId,
       expectedTargetRevision: target.revision });
     recordHistoryMutation(target, next, "Copying editable layer");
-    selectedLayerId = next.activeLayerId;
+    setSingleLayerSelection(next.activeLayerId);
     await acceptSnapshot(next); scheduleCheckpoint(next);
   } catch (error) { showError("Could not copy editable layer", error); }
   finally { setBusy(false); }
@@ -2773,16 +2870,18 @@ $("dismissErrorButton").addEventListener("click", clearError);
 $("importLayerButton").addEventListener("click", () => { if (!busy && snapshot) $("imageInput").click(); });
 $("imageInput").addEventListener("change", () => { importPixelLayer($("imageInput").files[0]); $("imageInput").value = ""; });
 $("removeLayerButton").addEventListener("click", () => {
-  const layer = selectedLayer();
-  if (layer) mutate("Deleting layer", () => client.removeLayer(layer.id));
+  const ids = selectedLayerIdsTopToBottom({ rootsOnly: true });
+  if (ids.length) mutate(ids.length > 1 ? "Deleting layers" : "Deleting layer",
+    () => client.removeLayers(ids));
 });
 $("groupLayerButton").addEventListener("click", () => {
-  const layer = selectedLayer();
-  if (layer) mutate("Grouping layer", () => client.groupLayer(layer.id, "Group"));
+  const ids = selectedLayerIdsTopToBottom({ rootsOnly: true });
+  if (ids.length) mutate(ids.length > 1 ? "Grouping layers" : "Grouping layer",
+    () => client.groupLayers(ids, "Group"));
 });
 $("ungroupLayerButton").addEventListener("click", () => {
-  const layer = selectedLayer();
-  if (layer?.kind === 1) mutate("Ungrouping layers", () => client.ungroup(layer.id));
+  const ids = selectedLayers().filter((layer) => layer.kind === 1).map((layer) => layer.id);
+  if (ids.length) mutate("Ungrouping layers", () => client.ungroupLayers(ids));
 });
 $("invertLayerButton").addEventListener("click", invertSelectedLayer);
 $("filterKindInput").addEventListener("change", renderFilterParameters);
@@ -2982,25 +3081,26 @@ $("layerOpacityInput").addEventListener("input", () => {
   $("layerOpacityOutput").textContent = `${$("layerOpacityInput").value}%`;
 });
 $("layerOpacityInput").addEventListener("change", () => {
-  const layer = selectedLayer();
-  if (layer) mutate("Changing opacity", () => client.setLayerOpacity(layer.id, Number($("layerOpacityInput").value) / 100));
+  const ids = selectedLayerIdsTopToBottom();
+  if (ids.length) mutate("Changing opacity", () => client.editLayers(ids, 1,
+    { opacity: Number($("layerOpacityInput").value) / 100 }));
 });
 $("layerFillInput").addEventListener("input", () => {
   $("layerFillOutput").textContent = `${$("layerFillInput").value}%`;
 });
 $("layerFillInput").addEventListener("change", () => {
-  const layer = selectedLayer();
-  if (layer) mutate("Changing fill opacity", () => client.setLayerFillOpacity(layer.id,
-    Number($("layerFillInput").value) / 100));
+  const ids = selectedLayerIdsTopToBottom();
+  if (ids.length) mutate("Changing fill opacity", () => client.editLayers(ids, 2,
+    { opacity: Number($("layerFillInput").value) / 100 }));
 });
 $("layerClipInput").addEventListener("change", () => {
   const layer = selectedLayer();
   if (layer) mutate("Changing clipping", () => client.setLayerClipping(layer.id, $("layerClipInput").checked));
 });
 $("layerLockInput").addEventListener("change", () => {
-  const layer = selectedLayer();
-  if (layer) mutate("Changing layer lock", () => client.setLayerLocks(layer.id,
-    $("layerLockInput").checked ? 7 : 0));
+  const ids = selectedLayerIdsTopToBottom();
+  if (ids.length) mutate("Changing layer lock", () => client.editLayers(ids, 4,
+    { value: $("layerLockInput").checked ? 7 : 0 }));
 });
 $("applyLayerStyleButton").addEventListener("click", () => {
   const layer = selectedLayer();
@@ -3095,8 +3195,9 @@ $("pathAnchorApplyButton").addEventListener("click", () => {
     name: path.name, kind: path.kind, clipping: path.clipping, path: { subpaths } }));
 });
 $("layerBlendSelect").addEventListener("change", () => {
-  const layer = selectedLayer();
-  if (layer) mutate("Changing blend mode", () => client.setLayerBlendMode(layer.id, Number($("layerBlendSelect").value)));
+  const ids = selectedLayerIdsTopToBottom();
+  if (ids.length) mutate("Changing blend mode", () => client.editLayers(ids, 3,
+    { value: Number($("layerBlendSelect").value) }));
 });
 $("togglePanelsButton").addEventListener("click", () => {
   const hidden = shell.classList.toggle("panels-hidden");

@@ -41,9 +41,14 @@ const LAYER_TRANSFORM_SIZE = 80;
 const RASTER_STROKE_SIZE = 48;
 const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
+const LAYER_BATCH_SIZE = 32;
+const LAYER_BATCH_EDIT_SIZE = 40;
 const CAP_PSB_SAVE_AS = 1n << 33n;
 const CAP_LAYER_MASK_STROKE = 1n << 34n;
 const CAP_RICH_TEXT_AUTHORING = 1n << 35n;
+const CAP_MULTI_LAYER_AUTHORING = 1n << 36n;
+const UINT32_MAX = 0xffff_ffff;
+const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -180,6 +185,62 @@ export class EmscriptenPatchyEngine {
       this.#module._patchy_engine_session_set_layer_visibility(
         session, snapshot.stateId, snapshot.revision, layerId,
         visible ? 1 : 0, event, error));
+  }
+
+  editLayers(session, snapshot, layerIds, property, { opacity = 0, value = 0 } = {}) {
+    const symbol = "_patchy_engine_session_edit_layers";
+    if (!(this.#capabilities & CAP_MULTI_LAYER_AUTHORING) ||
+        typeof this.#module[symbol] !== "function") {
+      throw new PatchyEngineError(2, "Multi-layer authoring is unavailable");
+    }
+    if (!Number.isInteger(property) || property < 0 || property > 4 ||
+        !Number.isFinite(opacity) || !Number.isInteger(value) ||
+        value < 0 || value > UINT32_MAX) {
+      throw new TypeError("A supported multi-layer property is required");
+    }
+    return this.#layerBatch(session, snapshot, layerIds, LAYER_BATCH_EDIT_SIZE,
+      (view) => {
+        view.setUint32(4, property, true);
+        view.setFloat32(32, opacity, true);
+        view.setUint32(36, value, true);
+      }, (input, event, error) => this.#module[symbol](session, input, event, error));
+  }
+
+  removeLayers(session, snapshot, layerIds) {
+    return this.#multiLayerMutation("_patchy_engine_session_remove_layers",
+      session, snapshot, layerIds);
+  }
+
+  moveLayers(session, snapshot, layerIds, targetLayerId, position) {
+    if (!Number.isInteger(position) || position < 0 || position > 3) {
+      throw new TypeError("A supported layer drop position is required");
+    }
+    const target = targetLayerId == null ? 0n : BigInt(targetLayerId);
+    if (targetLayerId != null && (target <= 0n || target > UINT64_MAX)) {
+      throw new TypeError("A valid target layer id is required");
+    }
+    return this.#multiLayerMutation("_patchy_engine_session_move_layers",
+      session, snapshot, layerIds, (input, event, error) =>
+        this.#module._patchy_engine_session_move_layers(
+          session, input, target, position,
+          targetLayerId == null ? 0 : 1, event, error));
+  }
+
+  groupLayers(session, snapshot, layerIds, name) {
+    const bytes = this.#text(name);
+    const namePointer = this.#alloc(bytes.byteLength || 1);
+    try {
+      this.#module.HEAPU8.set(bytes, namePointer);
+      return this.#multiLayerMutation("_patchy_engine_session_group_layers",
+        session, snapshot, layerIds, (input, event, error) =>
+          this.#module._patchy_engine_session_group_layers(
+            session, input, namePointer, bytes.byteLength, event, error));
+    } finally { this.#module._free(namePointer); }
+  }
+
+  ungroupLayers(session, snapshot, layerIds) {
+    return this.#multiLayerMutation("_patchy_engine_session_ungroup_layers",
+      session, snapshot, layerIds);
   }
 
   setLayerOpacity(session, snapshot, layerId, opacity) {
@@ -1698,6 +1759,43 @@ export class EmscriptenPatchyEngine {
     } finally {
       this.#module._free(command);
     }
+  }
+
+  #layerBatch(session, snapshot, layerIds, size, write, call) {
+    if (!Array.isArray(layerIds) || layerIds.length < 1 || layerIds.length > 256) {
+      throw new RangeError("Layer batches require 1 through 256 ids");
+    }
+    const ids = layerIds.map((value) => BigInt(value));
+    if (ids.some((id) => id <= 0n || id > UINT64_MAX) ||
+        new Set(ids.map(String)).size !== ids.length) {
+      throw new TypeError("Layer batch ids must be non-zero and unique");
+    }
+    const idsPointer = this.#alloc(ids.length * 8);
+    const input = this.#alloc(size);
+    try {
+      const idsView = this.#view(idsPointer, ids.length * 8);
+      ids.forEach((id, index) => idsView.setBigUint64(index * 8, id, true));
+      const view = this.#view(input, size);
+      view.setUint32(0, size, true);
+      view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true);
+      view.setUint32(24, idsPointer, true);
+      view.setUint32(28, ids.length, true);
+      write?.(view);
+      return this.#mutation((event, error) => call(input, event, error));
+    } finally {
+      this.#module._free(input);
+      this.#module._free(idsPointer);
+    }
+  }
+
+  #multiLayerMutation(symbol, session, snapshot, layerIds, call) {
+    if (!(this.#capabilities & CAP_MULTI_LAYER_AUTHORING) ||
+        typeof this.#module[symbol] !== "function") {
+      throw new PatchyEngineError(2, "Multi-layer authoring is unavailable");
+    }
+    return this.#layerBatch(session, snapshot, layerIds, LAYER_BATCH_SIZE, null,
+      call ?? ((input, event, error) => this.#module[symbol](session, input, event, error)));
   }
 
   #pixelLayerMutation(symbol, session, snapshot, input) {

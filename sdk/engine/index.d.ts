@@ -148,6 +148,11 @@ export class PatchyWorkerClient {
   closeDocument(documentId: number): Promise<DocumentProjection | null>;
   setMemoryBudget(documentBytes: number, globalBytes: number): Promise<DocumentProjection>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;
+  editLayers(layerIds: bigint[], property: 0 | 1 | 2 | 3 | 4,
+    input?: { opacity?: number; value?: number }): Promise<DocumentProjection>;
+  removeLayers(layerIds: bigint[]): Promise<DocumentProjection>;
+  groupLayers(layerIds: bigint[], name?: string): Promise<DocumentProjection>;
+  ungroupLayers(layerIds: bigint[]): Promise<DocumentProjection>;
   setLayerOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;
   setLayerFillOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;
   setLayerLocks(layerId: bigint, lockFlags: number): Promise<DocumentProjection>;
@@ -236,6 +241,8 @@ export class PatchyWorkerClient {
   setSmartFilter(layerId: bigint, input: SmartFilterInput): Promise<DocumentProjection>;
   moveLayer(layerId: bigint, targetLayerId: bigint | null,
             position: number): Promise<DocumentProjection>;
+  moveLayers(layerIds: bigint[], targetLayerId: bigint | null,
+             position: number): Promise<DocumentProjection>;
   undo(): Promise<DocumentProjection>;
   redo(): Promise<DocumentProjection>;
   historyTravel(steps: number, expectedStateId: bigint,
