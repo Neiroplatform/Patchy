@@ -2150,6 +2150,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_STROKE) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_FILL) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_WARP) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_PSB_SAVE_AS) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -3208,6 +3209,29 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
             session, save_callback, &save_state, nullptr, &psd, &event,
             &error) == 1);
   CHECK(save_state.calls > 0);
+  CHECK(psd.size > 6);
+  CHECK(psd.data[4] == 0);
+  CHECK(psd.data[5] == 1);
+  patchy_engine_buffer psd_as{};
+  CHECK(patchy_engine_session_save_psd_as(session, 0, &psd_as, &event,
+                                          &error) == 1);
+  CHECK(psd_as.size == psd.size);
+  CHECK(std::equal(psd_as.data, psd_as.data + psd_as.size, psd.data));
+  patchy_engine_buffer psb{};
+  CHECK(patchy_engine_session_save_psd_as(session, 1, &psb, &event,
+                                          &error) == 1);
+  CHECK(psb.size > 6);
+  CHECK(psb.data[4] == 0);
+  CHECK(psb.data[5] == 2);
+  auto *reopened_psb = patchy_engine_session_open_psd(
+      runtime, psb.data, psb.size, &error);
+  CHECK(reopened_psb != nullptr);
+  patchy_engine_session_destroy(reopened_psb);
+  patchy_engine_buffer invalid_format{};
+  CHECK(patchy_engine_session_save_psd_as(session, 2, &invalid_format,
+                                          &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  CHECK(invalid_format.data == nullptr);
   auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
                                                   &error);
   CHECK(reopened != nullptr);
@@ -3229,6 +3253,8 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
 
   patchy_engine_buffer_release(&reopened_render);
   patchy_engine_session_destroy(reopened);
+  patchy_engine_buffer_release(&psb);
+  patchy_engine_buffer_release(&psd_as);
   patchy_engine_buffer_release(&psd);
   patchy_engine_buffer_release(&rendered);
   patchy_engine_session_destroy(session);

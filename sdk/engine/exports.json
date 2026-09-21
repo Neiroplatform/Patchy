@@ -73,5 +73,6 @@
   "_patchy_engine_session_evict_oldest_undo",
   "_patchy_engine_session_render_region",
   "_patchy_engine_session_save_psd",
+  "_patchy_engine_session_save_psd_as",
   "_patchy_engine_buffer_release"
 ]

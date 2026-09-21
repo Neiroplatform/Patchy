@@ -30,6 +30,7 @@ export async function recoverWorkerSession({
         documentId: next.documentId,
         workspaceId: document.workspaceId,
         confirmedAtCrash: document.confirmed !== false,
+        format: recovery.manifest.format || "psd",
         manifest: recovery.manifest,
         snapshot: next,
       };

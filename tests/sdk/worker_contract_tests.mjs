@@ -30,7 +30,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const nodeServer = await readFile(new URL("scripts/wasm/serve.mjs", root), "utf8");
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
-    "exportFormatSelect", "exportButton", "copyPixelsButton", "pastePixelsButton", "paintPresetSelect",
+    "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "pastePixelsButton", "paintPresetSelect",
     "importLayerButton", "groupLayerButton", "removeLayerButton", "layerNameInput",
     "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
     "documentDialog", "resizeImageButton", "resizeCanvasButton", "rotateLeftButton",
@@ -134,6 +134,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /new FontFace/);
   assert.match(script, /cleanupRecoveryWorkspaces/);
   assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
+  assert.match(script, /documentSaveFormats\.set\(next\.documentId, header\.version === 2 \? "psb" : "psd"\)/);
+  assert.match(script, /updateControls\(\); scheduleCheckpoint\(snapshot\);/);
+  assert.match(script, /encodeFlatDocument\(\{ rgba/);
   assert.match(script, /const commandRegistry = new Map\(\)/);
   assert.match(script, /registerCommand\("selection\.all"/);
   assert.match(script, /registerCommand\("tool\.clone"/);
@@ -245,6 +248,11 @@ test("Worker PSD output Blob validates encoded bytes and retains no Uint8Array f
   assert.equal(blob.type, "image/vnd.adobe.photoshop");
   assert.equal(blob.size, encoded.byteLength);
   assert.deepEqual([...new Uint8Array(await blob.slice(0, 4).arrayBuffer())], [56, 66, 80, 83]);
+  const encodedPsb = new Uint8Array(40);
+  encodedPsb.set(psdHeader({ version: 2, width: 2, height: 3 }));
+  assert.equal(createPsdBlob(encodedPsb, "psb").size, encodedPsb.byteLength);
+  assert.throws(() => createPsdBlob(encoded, "psb"), /unexpected header version/);
+  assert.throws(() => createPsdBlob(encodedPsb, "psd"), /unexpected header version/);
   assert.throws(() => createPsdBlob(new Uint8Array(26)), /not a PSD/);
 });
 
@@ -300,6 +308,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   let destroyed = 0;
   let callback = null;
   let projectedLayerKind = 3;
+  const saveFormats = [];
   const callbackReturns = [];
   const commandTypes = [];
   const alloc = (size) => { const at = next; next += (size + 7) & ~7; return at; };
@@ -310,7 +319,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 28n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 34n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -598,7 +607,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       const data = alloc(24); heap.fill(17, data, data + 24);
       view.setUint32(output, data, true); view.setUint32(output + 4, 24, true); return 1;
     },
-    _patchy_engine_session_save_psd(session, output) {
+    _patchy_engine_session_save_psd_as(session, largeDocument, output) {
+      saveFormats.push(largeDocument);
       const data = alloc(4); heap.set([56, 66, 80, 83], data);
       view.setUint32(output, data, true); view.setUint32(output + 4, 4, true); return 1;
     },
@@ -619,7 +629,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 28n) - 1n);
+  assert.equal(engine.capabilities, (1n << 34n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -760,9 +770,40 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
-  assert.equal(released, 8);
+  assert.deepEqual(Array.from(engine.save(session, { largeDocument: true })), [56, 66, 80, 83]);
+  assert.deepEqual(saveFormats, [0, 1]);
+  assert.equal(released, 9);
   engine.dispose();
   assert.equal(destroyed, 2);
+});
+
+test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsupported PSB", () => {
+  const memory = new ArrayBuffer(4096); const heap = new Uint8Array(memory);
+  const view = new DataView(memory); let next = 512; let releases = 0;
+  const alloc = (size) => { const at = next; next += (size + 7) & ~7; return at; };
+  const module = {
+    HEAPU8: heap, _malloc: alloc, _free() {},
+    _patchy_engine_get_protocol_info(info) {
+      view.setUint32(info + 4, 1, true);
+      view.setBigUint64(info + 8, 1n << 4n, true);
+      return 1;
+    },
+    _patchy_engine_runtime_create() { return 7; },
+    _patchy_engine_runtime_destroy() {},
+    _patchy_engine_session_save_psd(session, output) {
+      assert.equal(session, 99);
+      const data = alloc(6); heap.set([56, 66, 80, 83, 0, 1], data);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 6, true);
+      return 1;
+    },
+    _patchy_engine_buffer_release() { releases++; },
+  };
+  const engine = new EmscriptenPatchyEngine(module);
+  assert.deepEqual([...engine.save(99)], [56, 66, 80, 83, 0, 1]);
+  assert.equal(releases, 1);
+  assert.throws(() => engine.save(99, { largeDocument: true }),
+    (error) => error instanceof Error && error.code === 2 && /PSB Save As/.test(error.message));
+  engine.dispose();
 });
 
 function projection(revision, visible = true, mask = null, selection = []) {
@@ -1213,7 +1254,7 @@ test("Smart Object contents open once and save back as one stale-guarded parent 
   const parentProjection = () => ({ ...projection(revisions.get(1)), width: 3, height: 2,
     layers: [{ ...projection(1).layers[0],
       ...(parentHasSmartObject ? { kind: 5, name: "embedded",
-        smartObject: { sourceKind: 0, filename: "embedded.psd", filetype: "8BPS",
+        smartObject: { sourceKind: 0, filename: "embedded.psb", filetype: "8BPB",
           sourceSize: 128n, editable: true } } : { smartObject: null }) }] });
   const childProjection = () => ({ ...projection(revisions.get(2)), width: 3, height: 2 });
   const engine = {
@@ -1222,7 +1263,7 @@ test("Smart Object contents open once and save back as one stale-guarded parent 
     open(bytes) { assert.deepEqual(Array.from(bytes), [56, 66, 80, 83]); return 2; },
     snapshot(session) { return session === 1 ? parentProjection() : childProjection(); },
     addSmartObject(session, before, input) {
-      assert.equal(session, 1); assert.equal(input.filetype, "8BPS");
+      assert.equal(session, 1); assert.equal(input.filetype, "8BPB");
       assert.equal(input.rgba.byteLength, 24); parentHasSmartObject = true;
       revisions.set(1, revisions.get(1) + 1);
     },
@@ -1233,11 +1274,14 @@ test("Smart Object contents open once and save back as one stale-guarded parent 
       assert.equal(session, 2); assert.deepEqual(region, { x: 0, y: 0, width: 3, height: 2 });
       return new Uint8Array(24).fill(17);
     },
-    save(session) { assert.equal(session, 2); return new Uint8Array([56, 66, 80, 83, 0, 1]); },
+    save(session, options) {
+      assert.equal(session, 2); assert.deepEqual(options, { largeDocument: true });
+      return new Uint8Array([56, 66, 80, 83, 0, 2]);
+    },
     replaceSmartObject(session, before, layerId, input) {
       assert.equal(session, 1); assert.equal(before.stateId, BigInt(revisions.get(1)));
       assert.equal(before.revision, BigInt(revisions.get(1)));
-      assert.equal(layerId, 7n); assert.equal(input.filetype, "8BPS");
+      assert.equal(layerId, 7n); assert.equal(input.filetype, "8BPB");
       assert.equal(input.rgba.byteLength, 24);
       assert.equal(input.sourceBytes.byteLength, replacements === 0 ? 4 : 6);
       replacements++; revisions.set(1, revisions.get(1) + 1);
@@ -1248,11 +1292,11 @@ test("Smart Object contents open once and save back as one stale-guarded parent 
   const parent = await host.dispatch({ method: "create", width: 3, height: 2, name: "Parent.psd" });
   const placed = await host.dispatch({ method: "addPsdSmartObject",
     bytes: new Uint8Array([56, 66, 80, 83]).buffer,
-    name: "embedded", filename: "embedded.psd", filetype: "8BPS" });
+    name: "embedded", filename: "embedded.psb", filetype: "8BPB" });
   assert.equal(placed.layers[0].smartObject.contentsEditable, true);
   const replaced = await host.dispatch({ method: "addPsdSmartObject", layerId: "7",
     bytes: new Uint8Array([56, 66, 80, 83]).buffer,
-    name: "embedded", filename: "embedded.psd", filetype: "8BPS" });
+    name: "embedded", filename: "embedded.psb", filetype: "8BPB" });
   assert.equal(replaced.layers.length, 1);
   assert.equal(replaced.layers[0].smartObject.contentsEditable, true);
   const child = await host.dispatch({ method: "openSmartObjectContents", layerId: "7" });
@@ -1262,7 +1306,7 @@ test("Smart Object contents open once and save back as one stale-guarded parent 
   await assert.rejects(
     host.dispatch({ method: "addPsdSmartObject", layerId: "7",
       bytes: new Uint8Array([56, 66, 80, 83]).buffer,
-      name: "replacement", filename: "replacement.psd", filetype: "8BPS" }),
+      name: "replacement", filename: "replacement.psb", filetype: "8BPB" }),
     /Close the open Smart Object contents/);
   const reopened = await host.dispatch({ method: "openSmartObjectContents", layerId: "7" });
   assert.equal(reopened.documentId, child.documentId);
@@ -1418,11 +1462,13 @@ test("client receives Worker-native PSD Blobs without byte transfer lists", asyn
   const worker = new FakeWorker(); const client = new PatchyWorkerClient(worker);
   const saved = client.saveBlob();
   assert.equal(worker.sent[0].message.method, "saveBlob");
+  assert.equal(worker.sent[0].message.format, "psd");
   worker.reply({ id: 1, ok: true, value: new Blob([psdHeader()]) });
   assert.ok((await saved) instanceof Blob);
-  const documentSaved = client.saveDocumentBlob(17);
+  const documentSaved = client.saveDocumentBlob(17, "psb");
   assert.equal(worker.sent[1].message.method, "saveDocumentBlob");
   assert.equal(worker.sent[1].message.documentId, 17);
+  assert.equal(worker.sent[1].message.format, "psb");
   worker.reply({ id: 2, ok: true, value: new Blob([psdHeader()]) });
   assert.equal((await documentSaved).size, 26);
 });
@@ -1470,9 +1516,10 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   assert.equal(Atomics.load(new Int32Array(filterMessage.cancellation), 0), 1);
   worker.reply({ id: 5, ok: true, value: projection(3) });
   await filter.promise;
-  const savedDocument = client.saveDocument(23);
+  const savedDocument = client.saveDocument(23, "psb");
   assert.equal(worker.sent[5].message.method, "saveDocument");
   assert.equal(worker.sent[5].message.documentId, 23);
+  assert.equal(worker.sent[5].message.format, "psb");
   worker.reply({ id: 6, ok: true, value: new Uint8Array([56, 66, 80, 83]) });
   assert.equal((await savedDocument).byteLength, 4);
   const pending = client.save();

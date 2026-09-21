@@ -47,6 +47,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_RASTER_FILL = UINT64_C(1) << 30,
   PATCHY_ENGINE_CAP_LAYER_WARP = UINT64_C(1) << 31,
   PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE = UINT64_C(1) << 32,
+  PATCHY_ENGINE_CAP_PSB_SAVE_AS = UINT64_C(1) << 33,
 };
 
 enum patchy_engine_error_code {
@@ -1406,6 +1407,11 @@ int patchy_engine_session_save_psd(patchy_engine_session *session,
                                    patchy_engine_buffer *psd,
                                    patchy_engine_event *event,
                                    patchy_engine_error *error);
+int patchy_engine_session_save_psd_as(patchy_engine_session *session,
+                                      uint8_t large_document,
+                                      patchy_engine_buffer *psd,
+                                      patchy_engine_event *event,
+                                      patchy_engine_error *error);
 int patchy_engine_session_save_psd_with_progress(
     patchy_engine_session *session, patchy_engine_save_progress_fn progress,
     void *progress_user_data, patchy_engine_cancellation *cancellation,

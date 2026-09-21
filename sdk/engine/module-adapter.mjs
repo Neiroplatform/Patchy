@@ -39,6 +39,7 @@ const LAYER_TRANSFORM_SIZE = 80;
 const RASTER_STROKE_SIZE = 48;
 const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
+const CAP_PSB_SAVE_AS = 1n << 33n;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -1309,10 +1310,18 @@ export class EmscriptenPatchyEngine {
         buffer, event, error));
   }
 
-  save(session) {
-    return this.#bufferCall((buffer, event, error) =>
-      this.#module._patchy_engine_session_save_psd(
-        session, buffer, event, error));
+  save(session, { largeDocument = false } = {}) {
+    if (typeof largeDocument !== "boolean") {
+      throw new TypeError("PSD large-document selection must be boolean");
+    }
+    const saveAs = this.#module._patchy_engine_session_save_psd_as;
+    if (largeDocument && (!(this.#capabilities & CAP_PSB_SAVE_AS) || typeof saveAs !== "function")) {
+      throw new PatchyEngineError(2, "Patchy engine does not support PSB Save As");
+    }
+    return this.#bufferCall((buffer, event, error) => largeDocument ||
+      ((this.#capabilities & CAP_PSB_SAVE_AS) && typeof saveAs === "function")
+      ? saveAs(session, Number(largeDocument), buffer, event, error)
+      : this.#module._patchy_engine_session_save_psd(session, buffer, event, error));
   }
 
   close(session) {

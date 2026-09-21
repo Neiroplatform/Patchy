@@ -241,7 +241,9 @@ export class PatchyWorkerHost {
         const rgba = this.#engine.render(child.session, {
           x: 0, y: 0, width: childBefore.width, height: childBefore.height,
         });
-        const sourceBytes = this.#engine.save(child.session);
+        const sourceBytes = this.#engine.save(child.session, {
+          largeDocument: link.filetype === "8BPB",
+        });
         const childAfter = this.#engine.snapshot(child.session);
         child.dirty = childAfter.dirty; child.revision = childAfter.revision;
         this.#engine.replaceSmartObject(parent.session, {
@@ -587,11 +589,12 @@ export class PatchyWorkerHost {
         return this.#snapshot();
       case "render":
         return this.#engine.render(this.#requireSession(), message.region);
-      case "save": return this.#engine.save(this.#requireSession());
+      case "save": return this.#engine.save(
+        this.#requireSession(), layeredSaveOptions(message.format));
       case "saveDocument": {
         const record = this.#sessions.get(Number(message.documentId));
         if (!record) throw new Error("Patchy document does not exist");
-        return this.#engine.save(record.session);
+        return this.#engine.save(record.session, layeredSaveOptions(message.format));
       }
       case "close": return this.#closeDocument(this.#activeDocumentId);
       default: throw new TypeError(`Unknown Patchy worker method: ${message.method}`);
@@ -707,6 +710,13 @@ export class PatchyWorkerHost {
     change(mask);
     this.#engine.setLayerMask(this.#requireSession(), before, id, mask);
   }
+}
+
+function layeredSaveOptions(format = "psd") {
+  if (format !== "psd" && format !== "psb") {
+    throw new TypeError("Layered save format must be psd or psb");
+  }
+  return { largeDocument: format === "psb" };
 }
 
 function selectionMask(snapshot) {

@@ -52,9 +52,10 @@ self.onmessage = async ({ data }) => {
     if (method === "saveBlob" || method === "saveDocumentBlob") {
       const bytes = await host.dispatch({
         method: method === "saveBlob" ? "save" : "saveDocument",
+        format: payload.format,
         ...(method === "saveDocumentBlob" ? { documentId: payload.documentId } : {}),
       });
-      self.postMessage({ id, ok: true, value: createPsdBlob(bytes) });
+      self.postMessage({ id, ok: true, value: createPsdBlob(bytes, payload.format) });
       return;
     }
     if (method === "renderFrame") {

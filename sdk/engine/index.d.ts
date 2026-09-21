@@ -239,10 +239,10 @@ export class PatchyWorkerClient {
     CancellableOperation<DocumentProjection>;
   render(region: Rect): Promise<Uint8Array>;
   renderFrame(region: Rect): Promise<RenderFrame>;
-  save(): Promise<Uint8Array>;
-  saveDocument(documentId: number): Promise<Uint8Array>;
-  saveBlob(): Promise<Blob>;
-  saveDocumentBlob(documentId: number): Promise<Blob>;
+  save(format?: "psd" | "psb"): Promise<Uint8Array>;
+  saveDocument(documentId: number, format?: "psd" | "psb"): Promise<Uint8Array>;
+  saveBlob(format?: "psd" | "psb"): Promise<Blob>;
+  saveDocumentBlob(documentId: number, format?: "psd" | "psb"): Promise<Blob>;
   close(): Promise<null>;
   terminate(): void;
 }

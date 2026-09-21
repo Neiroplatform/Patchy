@@ -7,6 +7,13 @@ function transferableInput(bytes, transferOwnership) {
   return bytes.slice();
 }
 
+function saveFormat(format) {
+  if (format !== "psd" && format !== "psb") {
+    throw new TypeError("Save format must be psd or psb");
+  }
+  return format;
+}
+
 export class PatchyWorkerClient {
   #worker;
   #nextId = 1;
@@ -327,11 +334,13 @@ export class PatchyWorkerClient {
   }
   render(region) { return this.#request("render", { region }); }
   renderFrame(region) { return this.#request("renderFrame", { region }); }
-  save() { return this.#request("save"); }
-  saveDocument(documentId) { return this.#request("saveDocument", { documentId }); }
-  saveBlob() { return this.#request("saveBlob"); }
-  saveDocumentBlob(documentId) {
-    return this.#request("saveDocumentBlob", { documentId });
+  save(format = "psd") { return this.#request("save", { format: saveFormat(format) }); }
+  saveDocument(documentId, format = "psd") {
+    return this.#request("saveDocument", { documentId, format: saveFormat(format) });
+  }
+  saveBlob(format = "psd") { return this.#request("saveBlob", { format: saveFormat(format) }); }
+  saveDocumentBlob(documentId, format = "psd") {
+    return this.#request("saveDocumentBlob", { documentId, format: saveFormat(format) });
   }
   close() { return this.#request("close"); }
 

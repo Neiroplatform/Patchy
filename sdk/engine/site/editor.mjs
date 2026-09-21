@@ -2,6 +2,7 @@ import { PatchyWorkerClient } from "./engine/client.mjs";
 import { recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "./engine/memory-policy.mjs";
+import { encodeFlatDocument } from "./engine/flat-export.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -61,6 +62,7 @@ let frameTransport = "waiting";
 let layerWindowFrame = 0;
 const layerThumbnailCache = new Map();
 const documentHistoryLabels = new Map();
+const documentSaveFormats = new Map();
 const LAYER_ROW_HEIGHT = 48;
 const LAYER_OVERSCAN = 5;
 const MAX_LAYER_THUMBNAILS = 256;
@@ -201,6 +203,12 @@ function setBusy(active, title = "Working", detail = "The engine is updating the
 function updateControls() {
   const layer = selectedLayer();
   $("saveButton").disabled = busy || !snapshot;
+  $("saveFormatSelect").disabled = busy || !snapshot;
+  if (snapshot) {
+    const format = documentSaveFormats.get(snapshot.documentId) || "psd";
+    $("saveFormatSelect").value = format;
+    $("saveButton").querySelector(".download-label").textContent = `Download ${format.toUpperCase()}`;
+  }
   $("exportFormatSelect").disabled = busy || !snapshot;
   $("exportButton").disabled = busy || !snapshot;
   $("copyPixelsButton").disabled = busy || !snapshot;
@@ -506,10 +514,11 @@ async function recoverEngineAfterCrash() {
       const historyBytes = Number($("memoryBudgetSelect").value) * MIB;
       await client.setMemoryBudget(historyBytes, Math.min(3 * 1024 * MIB, historyBytes * 3));
       workspaceIds.clear(); checkpointStates.clear(); checkpointQueues.clear();
-      documentHistoryLabels.clear();
+      documentHistoryLabels.clear(); documentSaveFormats.clear();
       for (const item of result.restored) {
         workspaceIds.set(item.documentId, item.workspaceId);
         checkpointStates.set(item.documentId, "confirmed");
+        documentSaveFormats.set(item.documentId, item.format);
       }
       selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
       layerClipboard = null; draggedLayer = null;
@@ -541,10 +550,10 @@ function scheduleCheckpoint(next) {
   let queue = checkpointQueues.get(next.documentId);
   if (!queue) {
     queue = new PatchyCheckpointQueue({
-      save: (checkpoint) => client.saveDocument(checkpoint.documentId),
+      save: (checkpoint) => client.saveDocument(checkpoint.documentId, checkpoint.format),
       write: (checkpoint, bytes) => workspaceStore.checkpoint({ id: workspaceId,
         name: checkpoint.documentName, revision: checkpoint.revision,
-        dirty: checkpoint.dirty, bytes }),
+        dirty: checkpoint.dirty, format: checkpoint.format, bytes }),
       onState: (state, checkpoint, value) => {
         checkpointStates.set(next.documentId, state);
         if (state === "confirmed") {
@@ -557,7 +566,8 @@ function scheduleCheckpoint(next) {
     });
     checkpointQueues.set(next.documentId, queue);
   }
-  return queue.schedule(next);
+  return queue.schedule({ ...next,
+    format: documentSaveFormats.get(next.documentId) || "psd" });
 }
 
 function formatBytes(bytes) {
@@ -599,6 +609,7 @@ async function restoreWorkspace(id) {
       { transferOwnership: true });
     workspaceIds.set(next.documentId, id);
     checkpointStates.set(next.documentId, "confirmed");
+    documentSaveFormats.set(next.documentId, recovered.manifest.format || "psd");
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
   } catch (error) { showError("Could not recover workspace", error); }
@@ -1429,6 +1440,10 @@ async function acceptSnapshot(next, rerender = true) {
   }
   snapshot = next;
   documentName = snapshot.documentName || documentName;
+  if (!documentSaveFormats.has(snapshot.documentId)) {
+    documentSaveFormats.set(snapshot.documentId,
+      documentName.toLowerCase().endsWith(".psb") ? "psb" : "psd");
+  }
   if (selectedLayerId == null || !snapshot.layers.some((layer) => layer.id === selectedLayerId)) {
     selectedLayerId = snapshot.activeLayerId || snapshot.layers.at(-1)?.id || null;
   }
@@ -1471,6 +1486,7 @@ async function closeDocumentTab(documentTab) {
     await checkpointQueues.get(documentTab.id)?.whenIdle();
     const next = await client.closeDocument(documentTab.id);
     workspaceIds.delete(documentTab.id); checkpointStates.delete(documentTab.id);
+    documentSaveFormats.delete(documentTab.id);
     checkpointQueues.delete(documentTab.id);
     documentHistoryLabels.delete(documentTab.id);
     await acceptSnapshot(next);
@@ -1513,6 +1529,7 @@ async function openFile(file) {
     const header = await client.inspectBlob(file);
     ensureMemorySafe(header, file.name || "Document");
     const next = await client.openBlob(file, file.name || "Document.psd");
+    documentSaveFormats.set(next.documentId, header.version === 2 ? "psb" : "psd");
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
@@ -1539,7 +1556,8 @@ async function saveDocument() {
   clearError();
   const activeTab = snapshot.documents.find((item) => item.active);
   const applyingContents = activeTab?.smartObjectParentId != null;
-  setBusy(true, applyingContents ? "Applying Smart Object contents" : "Encoding PSD",
+  const format = documentSaveFormats.get(snapshot.documentId) || "psd";
+  setBusy(true, applyingContents ? "Applying Smart Object contents" : `Encoding ${format.toUpperCase()}`,
     applyingContents ? "Committing one guarded parent revision" : "Preparing a local browser download");
   try {
     if (applyingContents) {
@@ -1551,10 +1569,9 @@ async function saveDocument() {
       scheduleCheckpoint(next);
       return;
     }
-    const blob = await client.saveBlob();
-    downloadBlob(blob,
-      documentName.toLowerCase().endsWith(".psd") ? documentName : `${documentName}.psd`);
-  } catch (error) { showError("Could not encode PSD", error); }
+    const blob = await client.saveBlob(format);
+    downloadBlob(blob, `${exportBaseName()}.${format}`);
+  } catch (error) { showError("Could not encode layered document", error); }
   finally { setBusy(false); }
 }
 
@@ -1580,7 +1597,8 @@ function downloadBlob(blob, filename) {
 
 function canvasBlob(source, type, quality) {
   return new Promise((resolve, reject) => source.toBlob(
-    (blob) => blob ? resolve(blob) : reject(new Error(`Browser could not encode ${type}`)), type, quality));
+    (blob) => blob?.type === type ? resolve(blob) : reject(new Error(`Browser could not encode ${type}`)),
+    type, quality));
 }
 
 function exportBaseName() {
@@ -1592,16 +1610,14 @@ async function exportDocument() {
   clearError(); setBusy(true, "Exporting document", "Encoding the rendered composite locally");
   try {
     const format = $("exportFormatSelect").value;
-    if (format === "svg") {
-      const dataUrl = canvas.toDataURL("image/png");
-      const svgNamespace = "http" + "://www.w3.org/2000/svg";
-      const svg = `<svg xmlns="${svgNamespace}" width="${canvas.width}" height="${canvas.height}" viewBox="0 0 ${canvas.width} ${canvas.height}"><title>${escapeHtml(exportBaseName())}</title><image width="100%" height="100%" href="${dataUrl}"/></svg>`;
-      downloadBlob(new Blob([svg], { type: "image/svg+xml" }), `${exportBaseName()}.svg`);
-    } else {
-      const type = `image/${format}`;
-      const blob = await canvasBlob(canvas, type, format === "jpeg" ? .92 : undefined);
-      downloadBlob(blob, `${exportBaseName()}.${format === "jpeg" ? "jpg" : format}`);
+    const rgba = await client.render({ x: 0, y: 0, width: snapshot.width, height: snapshot.height });
+    const expectedBytes = snapshot.width * snapshot.height * 4;
+    if (!(rgba instanceof Uint8Array) || rgba.byteLength !== expectedBytes) {
+      throw new Error("Engine returned an incomplete flattened export");
     }
+    const blob = await encodeFlatDocument({ rgba, width: snapshot.width, height: snapshot.height,
+      format, title: exportBaseName() });
+    downloadBlob(blob, `${exportBaseName()}.${format === "jpeg" ? "jpg" : format}`);
   } catch (error) { showError("Could not export document", error); }
   finally { setBusy(false); }
 }
@@ -2496,6 +2512,11 @@ for (const [id, command] of commandRegistry) {
 }
 
 $("emptyOpenButton").addEventListener("click", openPicker);
+$("saveFormatSelect").addEventListener("change", () => {
+  if (!snapshot) return;
+  documentSaveFormats.set(snapshot.documentId, $("saveFormatSelect").value);
+  updateControls(); scheduleCheckpoint(snapshot);
+});
 $("fileInput").addEventListener("change", () => { openFile($("fileInput").files[0]); $("fileInput").value = ""; });
 $("dismissErrorButton").addEventListener("click", clearError);
 $("importLayerButton").addEventListener("click", () => { if (!busy && snapshot) $("imageInput").click(); });

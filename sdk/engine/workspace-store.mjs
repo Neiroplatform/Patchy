@@ -76,10 +76,14 @@ export class PatchyWorkspaceStore {
     try { await this.#root(true); return true; } catch { return false; }
   }
 
-  async checkpoint({ id, name, revision, dirty = true, bytes }) {
+  async checkpoint({ id, name, revision, dirty = true, format = "psd", bytes }) {
     validateId(id);
     if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
       throw new TypeError("Workspace checkpoint requires non-empty PSD bytes");
+    }
+    const encodedFormat = layeredFormat(bytes);
+    if (format !== encodedFormat) {
+      throw new Error("Workspace format does not match encoded PSD/PSB bytes");
     }
     const workspace = await this.#workspace(id, true);
     const manifests = await this.#manifestCandidates(workspace, id, false);
@@ -100,6 +104,7 @@ export class PatchyWorkspaceStore {
       version: MANIFEST_VERSION,
       id,
       name: normalizeName(name),
+      format: encodedFormat,
       generation,
       slot: slotIndex === 0 ? "a" : "b",
       revision: String(revision),
@@ -274,7 +279,7 @@ export class PatchyWorkspaceStore {
     for (const name of MANIFEST_FILES) {
       try {
         const manifest = JSON.parse(new TextDecoder().decode(await readBytes(workspace, name)));
-        if (validManifest(manifest, id)) result.push(manifest);
+        if (validManifest(manifest, id)) result.push({ ...manifest, format: manifest.format || "psd" });
       } catch { /* A torn or absent generation is not recoverable. */ }
     }
     if (!validate) return result;
@@ -326,10 +331,20 @@ function normalizeName(name) {
   return (value || "Recovered.psd").slice(0, 256);
 }
 
+function layeredFormat(bytes) {
+  if (bytes.byteLength < 6 || bytes[0] !== 56 || bytes[1] !== 66 ||
+      bytes[2] !== 80 || bytes[3] !== 83 || bytes[4] !== 0 ||
+      (bytes[5] !== 1 && bytes[5] !== 2)) {
+    throw new TypeError("Workspace checkpoint requires encoded PSD or PSB bytes");
+  }
+  return bytes[5] === 2 ? "psb" : "psd";
+}
+
 function validManifest(value, id) {
   return value?.version === MANIFEST_VERSION && value.id === id &&
     Number.isSafeInteger(value.generation) && value.generation > 0 &&
     (value.slot === "a" || value.slot === "b") &&
+    (value.format === undefined || value.format === "psd" || value.format === "psb") &&
     typeof value.revision === "string" && typeof value.name === "string" &&
     Number.isSafeInteger(value.snapshotSize) && value.snapshotSize > 0 &&
     /^[0-9a-f]{64}$/.test(value.snapshotSha256) &&

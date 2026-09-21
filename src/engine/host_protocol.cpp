@@ -172,7 +172,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_RASTER_STROKE |
     PATCHY_ENGINE_CAP_RASTER_FILL |
     PATCHY_ENGINE_CAP_LAYER_WARP |
-    PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE;
+    PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE |
+    PATCHY_ENGINE_CAP_PSB_SAVE_AS;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -4584,6 +4585,38 @@ int patchy_engine_session_save_psd(patchy_engine_session *session,
                                    patchy_engine_error *error) {
   return patchy_engine_session_save_psd_with_progress(
       session, nullptr, nullptr, nullptr, psd, event, error);
+}
+
+int patchy_engine_session_save_psd_as(patchy_engine_session *session,
+                                      std::uint8_t large_document,
+                                      patchy_engine_buffer *psd,
+                                      patchy_engine_event *event,
+                                      patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || psd == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and save output are required");
+  }
+  if (large_document > 1) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "large-document flag must be zero or one");
+  }
+  try {
+    const auto saved = session->value->encode_psd(large_document != 0);
+    if (!saved) {
+      return fail(error, saved.error);
+    }
+    if (!copy_buffer(saved.bytes, psd, error)) {
+      return 0;
+    }
+    publish_event(*session->value, CommandResult{}, event);
+    return 1;
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown save failure");
+  }
 }
 
 int patchy_engine_session_save_psd_with_progress(

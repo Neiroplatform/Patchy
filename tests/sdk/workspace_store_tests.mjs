@@ -59,6 +59,10 @@ function fixture(options = {}) {
   return { root, store };
 }
 
+function layeredBytes(marker, format = "psd") {
+  return new Uint8Array([56, 66, 80, 83, 0, format === "psb" ? 2 : 1, marker]);
+}
+
 test("availability provisions the versioned origin-private root", async () => {
   const { root, store } = fixture();
   assert.equal(await store.available(), true);
@@ -105,24 +109,37 @@ test("checkpoint queue reports write failure without rejecting its idle barrier"
 test("alternating generations restore the newest digest-valid PSD", async () => {
   const { store } = fixture();
   const first = await store.checkpoint({ id: "document-1", name: "One.psd", revision: 1n,
-    bytes: new Uint8Array([56, 66, 80, 83, 1]) });
+    bytes: layeredBytes(1) });
   const second = await store.checkpoint({ id: "document-1", name: "One.psd", revision: 2n,
-    bytes: new Uint8Array([56, 66, 80, 83, 2, 2]) });
+    bytes: layeredBytes(2) });
   assert.equal(first.slot, "a"); assert.equal(second.slot, "b");
   const restored = await store.restore("document-1");
   assert.equal(restored.manifest.generation, 2);
-  assert.deepEqual([...restored.bytes], [56, 66, 80, 83, 2, 2]);
+  assert.deepEqual([...restored.bytes], [...layeredBytes(2)]);
   assert.deepEqual((await store.list()).map((item) => item.id), ["document-1"]);
+});
+
+test("PSB recovery format is bound to encoded bytes rather than the document suffix", async () => {
+  const { store } = fixture();
+  const manifest = await store.checkpoint({ id: "renamed-psb", name: "Renamed.psd",
+    revision: 4n, format: "psb", bytes: layeredBytes(7, "psb") });
+  assert.equal(manifest.name, "Renamed.psd");
+  assert.equal(manifest.format, "psb");
+  const restored = await store.restore("renamed-psb");
+  assert.equal(restored.manifest.format, "psb");
+  assert.equal(restored.bytes[5], 2);
+  await assert.rejects(store.checkpoint({ id: "mismatch", name: "Wrong.psd",
+    revision: 1n, format: "psd", bytes: layeredBytes(8, "psb") }), /does not match/);
 });
 
 test("a failed next snapshot retains the prior complete generation", async () => {
   const failures = {}; const { root, store } = fixture();
   root.failures = failures;
   await store.checkpoint({ id: "safe", name: "Safe.psd", revision: 1n,
-    bytes: new Uint8Array([56, 66, 80, 83, 1]) });
+    bytes: layeredBytes(1) });
   failures.write = "snapshot-b.psd";
   await assert.rejects(store.checkpoint({ id: "safe", name: "Safe.psd", revision: 2n,
-    bytes: new Uint8Array([56, 66, 80, 83, 2]) }), /write failed/);
+    bytes: layeredBytes(2) }), /write failed/);
   const restored = await store.restore("safe");
   assert.equal(restored.manifest.generation, 1);
   assert.equal(restored.bytes.at(-1), 1);
@@ -134,10 +151,10 @@ test("an interruption before snapshot write retains the prior generation", async
     if (interrupt) throw new Error("simulated crash before snapshot");
   } } });
   await store.checkpoint({ id: "safe", name: "Safe.psd", revision: 1n,
-    bytes: new Uint8Array([56, 66, 80, 83, 1]) });
+    bytes: layeredBytes(1) });
   interrupt = true;
   await assert.rejects(store.checkpoint({ id: "safe", name: "Safe.psd", revision: 2n,
-    bytes: new Uint8Array([56, 66, 80, 83, 2]) }), /before snapshot/);
+    bytes: layeredBytes(2) }), /before snapshot/);
   assert.equal((await store.restore("safe")).manifest.generation, 1);
 });
 
@@ -147,10 +164,10 @@ test("a failure before manifest publication does not confirm the new slot", asyn
     if (rejectManifest) throw new Error("simulated crash before manifest");
   } } });
   await store.checkpoint({ id: "safe", name: "Safe.psd", revision: 1n,
-    bytes: new Uint8Array([56, 66, 80, 83, 1]) });
+    bytes: layeredBytes(1) });
   rejectManifest = true;
   await assert.rejects(store.checkpoint({ id: "safe", name: "Safe.psd", revision: 2n,
-    bytes: new Uint8Array([56, 66, 80, 83, 2]) }), /simulated crash/);
+    bytes: layeredBytes(2) }), /simulated crash/);
   const restored = await store.restore("safe");
   assert.equal(restored.manifest.generation, 1);
 });
@@ -161,10 +178,10 @@ test("an interruption after manifest publication leaves the new generation recov
     if (interrupt) throw new Error("simulated crash after manifest");
   } } });
   await store.checkpoint({ id: "safe", name: "Safe.psd", revision: 1n,
-    bytes: new Uint8Array([56, 66, 80, 83, 1]) });
+    bytes: layeredBytes(1) });
   interrupt = true;
   await assert.rejects(store.checkpoint({ id: "safe", name: "Safe.psd", revision: 2n,
-    bytes: new Uint8Array([56, 66, 80, 83, 2]) }), /after manifest/);
+    bytes: layeredBytes(2) }), /after manifest/);
   const restored = await store.restore("safe");
   assert.equal(restored.manifest.generation, 2);
   assert.equal(restored.bytes.at(-1), 2);
@@ -181,10 +198,10 @@ test("corrupt newest bytes fall back and workspace removal is isolated", async (
   const { root, store } = fixture();
   for (const id of ["first", "second"]) {
     await store.checkpoint({ id, name: `${id}.psd`, revision: 1n,
-      bytes: new Uint8Array([56, 66, 80, 83, id.length]) });
+      bytes: layeredBytes(id.length) });
   }
   await store.checkpoint({ id: "first", name: "first.psd", revision: 2n,
-    bytes: new Uint8Array([56, 66, 80, 83, 9]) });
+    bytes: layeredBytes(9) });
   const base = await root.getDirectoryHandle("patchy-workspaces-v1");
   const first = await base.getDirectoryHandle("first");
   first.files.set("snapshot-b.psd", new Uint8Array([0]));
@@ -253,7 +270,7 @@ test("explicit cleanup keeps newest recovery items and protects open workspaces"
   const { store } = fixture();
   for (const id of ["oldest", "protected", "newer", "newest"]) {
     await store.checkpoint({ id, name: `${id}.psd`, revision: 1n,
-      bytes: new Uint8Array([56, 66, 80, 83, id.length]) });
+      bytes: layeredBytes(id.length) });
   }
   const removed = await store.cleanup({ protectedIds: ["protected"], keepNewest: 2 });
   assert.deepEqual(removed.map((item) => item.id), ["oldest"]);

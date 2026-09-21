@@ -58,11 +58,16 @@ export async function inspectPsdBlob(blob, maximumBytes = MAX_BROWSER_SOURCE_BYT
   return parsePsdHeader(new Uint8Array(header), size);
 }
 
-export function createPsdBlob(bytes) {
+export function createPsdBlob(bytes, format = "psd") {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength < PSD_HEADER_BYTES) {
     throw new TypeError("PSD Blob output requires complete encoded bytes");
   }
-  parsePsdHeader(bytes.subarray(0, PSD_HEADER_BYTES), bytes.byteLength);
+  if (format !== "psd" && format !== "psb") throw new TypeError("PSD Blob format is invalid");
+  const header = parsePsdHeader(bytes.subarray(0, PSD_HEADER_BYTES), bytes.byteLength);
+  const expectedVersion = format === "psb" ? 2 : 1;
+  if (header.version !== expectedVersion) {
+    throw new Error(`Encoded ${format.toUpperCase()} has an unexpected header version`);
+  }
   return new Blob([bytes], { type: "image/vnd.adobe.photoshop" });
 }
 

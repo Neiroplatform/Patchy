@@ -18,8 +18,9 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
   };
   const store = { async restore(id) {
     if (id === "broken") throw new Error("digest mismatch");
-    return { manifest: { id, name: `${id}.psd`, revision: "9" },
-      bytes: new Uint8Array([56, 66, 80, 83, id.length]) };
+    const format = id === "active" ? "psb" : "psd";
+    return { manifest: { id, name: `${id}.psd`, revision: "9", format },
+      bytes: new Uint8Array([56, 66, 80, 83, 0, format === "psb" ? 2 : 1, id.length]) };
   } };
   const result = await recoverWorkerSession({ createClient: () => client,
     moduleUrl: "engine.mjs", workspaceStore: store, documents: [
@@ -35,6 +36,7 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
   assert.deepEqual(result.failed.map((item) => item.workspaceId), ["broken"]);
   assert.equal(result.activeSnapshot.documentId, 101);
   assert.equal(result.restored[1].confirmedAtCrash, false);
+  assert.equal(result.restored[1].format, "psb");
   assert.deepEqual(calls.map((item) => item[0]), ["initialize", "open", "open", "open", "activate"]);
   assert.ok(calls.filter((item) => item[0] === "open").every((item) => item[3] === true));
 });
