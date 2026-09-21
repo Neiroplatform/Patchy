@@ -291,6 +291,45 @@ export class EmscriptenPatchyEngine {
         session, layerId, buffer, error));
   }
 
+  replacePixelLayerAndMask(session, snapshot, layerId, input, mask) {
+    const name = this.#text(input.name);
+    const expected = input.width * input.height * 4;
+    if (!(input.rgba instanceof Uint8Array) || input.rgba.byteLength !== expected ||
+        !(mask.gray instanceof Uint8Array) || mask.gray.byteLength !== mask.width * mask.height) {
+      throw new TypeError("Complete linked layer and mask pixels are required");
+    }
+    this.#rect(input.bounds); this.#rect(mask.bounds);
+    const pointers = [input.rgba, name, mask.gray].map((bytes) => this.#alloc(bytes.byteLength || 1));
+    const pixelValue = this.#alloc(PIXEL_LAYER_INPUT_SIZE);
+    const maskValue = this.#alloc(LAYER_MASK_INPUT_SIZE);
+    try {
+      [input.rgba, name, mask.gray].forEach((bytes, index) => this.#module.HEAPU8.set(bytes, pointers[index]));
+      const pixels = this.#view(pixelValue, PIXEL_LAYER_INPUT_SIZE);
+      pixels.setUint32(0, PIXEL_LAYER_INPUT_SIZE, true); pixels.setBigUint64(8, snapshot.stateId, true);
+      pixels.setBigUint64(16, snapshot.revision, true); pixels.setBigUint64(24, layerId, true);
+      pixels.setInt32(32, input.bounds.x, true); pixels.setInt32(36, input.bounds.y, true);
+      pixels.setInt32(40, input.bounds.width, true); pixels.setInt32(44, input.bounds.height, true);
+      pixels.setInt32(48, input.width, true); pixels.setInt32(52, input.height, true);
+      pixels.setUint32(56, pointers[0], true); pixels.setUint32(60, input.rgba.byteLength, true);
+      pixels.setUint32(64, pointers[1], true); pixels.setUint32(68, name.byteLength, true);
+      const value = this.#view(maskValue, LAYER_MASK_INPUT_SIZE);
+      value.setUint32(0, LAYER_MASK_INPUT_SIZE, true); value.setBigUint64(8, snapshot.stateId, true);
+      value.setBigUint64(16, snapshot.revision, true); value.setBigUint64(24, layerId, true);
+      value.setInt32(32, mask.bounds.x, true); value.setInt32(36, mask.bounds.y, true);
+      value.setInt32(40, mask.bounds.width, true); value.setInt32(44, mask.bounds.height, true);
+      value.setInt32(48, mask.width, true); value.setInt32(52, mask.height, true);
+      value.setUint32(56, pointers[2], true); value.setUint32(60, mask.gray.byteLength, true);
+      value.setUint8(64, mask.defaultColor ?? 0); value.setUint8(65, mask.disabled ? 1 : 0);
+      value.setUint8(66, 1); value.setUint8(67, 1);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_replace_rgba8_layer_and_mask(
+          session, pixelValue, maskValue, event, error));
+    } finally {
+      this.#module._free(maskValue); this.#module._free(pixelValue);
+      pointers.forEach((pointer) => this.#module._free(pointer));
+    }
+  }
+
   applyFilter(session, snapshot, layerId, filterId, cancellation, onProgress) {
     const filter = this.#text(filterId, "Filter identifiers", 128);
     if (filter.byteLength === 0) throw new TypeError("Filter identifier is required");
@@ -425,6 +464,16 @@ export class EmscriptenPatchyEngine {
   }
 
   addVectorShape(session, snapshot, input) {
+    return this.#vectorShapeMutation(
+      "_patchy_engine_session_add_vector_shape", session, snapshot, null, input);
+  }
+
+  updateVectorShape(session, snapshot, layerId, input) {
+    return this.#vectorShapeMutation(
+      "_patchy_engine_session_update_vector_shape", session, snapshot, layerId, input);
+  }
+
+  #vectorShapeMutation(symbol, session, snapshot, layerId, input) {
     const name = this.#text(input.name);
     const path = this.#path(input.path);
     const value = this.#alloc(VECTOR_SHAPE_INPUT_SIZE);
@@ -446,8 +495,9 @@ export class EmscriptenPatchyEngine {
         throw new TypeError("Shape stroke width must be finite and non-negative");
       }
       view.setFloat64(56, input.strokeWidth, true);
-      return this.#mutation((event, error) =>
-        this.#module._patchy_engine_session_add_vector_shape(session, value, event, error));
+      return this.#mutation((event, error) => layerId == null
+        ? this.#module[symbol](session, value, event, error)
+        : this.#module[symbol](session, layerId, value, event, error));
     } finally {
       this.#releasePath(path); this.#module._free(namePointer); this.#module._free(value);
     }

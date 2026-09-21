@@ -242,6 +242,10 @@ undo/redo, render and layered PSD save. Canonical document state never enters
 the UI process. Filter cancellation is a main-thread `SharedArrayBuffer`
 flag sampled by the C progress callback while the Worker is synchronously in
 Wasm, so cancellation remains responsive without concurrent session access.
+The same one-owner path now covers selection-aware solid/gradient fills,
+one-gesture Clone/Heal commits, numeric rectangle-anchor shape edits and an
+atomic RGBA8 plus linked raster-mask transform. Unlinked or unsupported masked
+transforms still fail closed.
 
 The `wasm-sdk` preset builds a no-entry ES module named `patchy-engine.mjs`.
 Its checked export manifest contains only allocator functions and the C ABI

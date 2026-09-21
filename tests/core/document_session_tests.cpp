@@ -3326,6 +3326,86 @@ void engine_host_protocol_authors_nondestructive_workflow() {
   CHECK(projected_mask.density == 210);
   CHECK(projected_mask.unlinked == 1);
 
+  const auto before_linked_transform = project();
+  patchy_engine_layer_mask_input linked_mask{};
+  linked_mask.struct_size = sizeof(linked_mask);
+  linked_mask.expected_state_id = before_linked_transform.state_id;
+  linked_mask.expected_revision = before_linked_transform.revision;
+  linked_mask.layer_id = pixel_id;
+  linked_mask.bounds = {1, 0, 4, 4};
+  linked_mask.width = 4;
+  linked_mask.height = 4;
+  std::array<std::uint8_t, 16> linked_gray{};
+  linked_gray.fill(200);
+  linked_mask.gray = linked_gray.data();
+  linked_mask.gray_size = linked_gray.size();
+  linked_mask.default_color = 0;
+  linked_mask.linked = 1;
+  linked_mask.has_mask = 1;
+  patchy_engine_pixel_layer_input linked_pixels = add;
+  linked_pixels.expected_state_id = before_linked_transform.state_id;
+  linked_pixels.expected_revision = before_linked_transform.revision;
+  linked_pixels.layer_id = pixel_id;
+  linked_pixels.bounds = {1, 0, 4, 4};
+  CHECK(patchy_engine_session_replace_rgba8_layer_and_mask(
+            session, &linked_pixels, &linked_mask, &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  vector_mask.has_mask = 0;
+  const auto before_vector_remove = project();
+  vector_mask.expected_state_id = before_vector_remove.state_id;
+  vector_mask.expected_revision = before_vector_remove.revision;
+  CHECK(patchy_engine_session_set_vector_mask(
+            session, &vector_mask, &event, &error) == 1);
+  const auto before_raster_mask = project();
+  linked_mask.expected_state_id = before_raster_mask.state_id;
+  linked_mask.expected_revision = before_raster_mask.revision;
+  CHECK(patchy_engine_session_set_layer_mask(
+            session, &linked_mask, &event, &error) == 1);
+  const auto before_atomic_transform = project();
+  linked_pixels.expected_state_id = before_atomic_transform.state_id;
+  linked_pixels.expected_revision = before_atomic_transform.revision;
+  linked_mask.expected_state_id = before_atomic_transform.state_id;
+  linked_mask.expected_revision = before_atomic_transform.revision;
+  CHECK(patchy_engine_session_replace_rgba8_layer_and_mask(
+            session, &linked_pixels, &linked_mask, &event, &error) == 1);
+  const auto before_vector_restore = project();
+  vector_mask.expected_state_id = before_vector_restore.state_id;
+  vector_mask.expected_revision = before_vector_restore.revision;
+  vector_mask.has_mask = 1;
+  CHECK(patchy_engine_session_set_vector_mask(
+            session, &vector_mask, &event, &error) == 1);
+
+  const auto before_shape = project();
+  patchy_engine_vector_shape_input shape{};
+  shape.struct_size = sizeof(shape);
+  shape.expected_state_id = before_shape.state_id;
+  shape.expected_revision = before_shape.revision;
+  shape.name = "Browser shape";
+  shape.name_size = std::strlen(shape.name);
+  shape.path = {&subpath, 1, anchors, 4};
+  shape.fill_red = 30;
+  shape.fill_green = 120;
+  shape.fill_blue = 220;
+  shape.stroke_enabled = 1;
+  shape.stroke_width = 2.0;
+  CHECK(patchy_engine_session_add_vector_shape(
+            session, &shape, &event, &error) == 1);
+  const auto shape_id = event.affected_layer_id;
+  const patchy_engine_path_anchor moved_anchors[] = {
+      {1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0},
+      {4.0, 0.0, 4.0, 0.0, 4.0, 0.0, 0},
+      {4.0, 3.0, 4.0, 3.0, 4.0, 3.0, 0},
+      {1.0, 3.0, 1.0, 3.0, 1.0, 3.0, 0},
+  };
+  const auto before_shape_update = project();
+  shape.expected_state_id = before_shape_update.state_id;
+  shape.expected_revision = before_shape_update.revision;
+  shape.path = {&subpath, 1, moved_anchors, 4};
+  CHECK(patchy_engine_session_update_vector_shape(
+            session, shape_id, &shape, &event, &error) == 1);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+
   const patchy_engine_curve_point curve[] = {{0, 10}, {128, 170}, {255, 245}};
   const auto before_adjustment = project();
   patchy_engine_adjustment_input adjustment{};

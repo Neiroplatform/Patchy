@@ -104,6 +104,9 @@ export class PatchyWorkerHost {
       case "layerPixels":
         return this.#engine.layerPixels(
           this.#requireSession(), BigInt(message.layerId));
+      case "layerMaskPixels":
+        return this.#engine.layerMaskPixels(
+          this.#requireSession(), BigInt(message.layerId));
       case "replacePixelLayer": {
         const before = this.#snapshot();
         const layer = before.layers.find((candidate) => candidate.id === BigInt(message.layerId));
@@ -112,6 +115,15 @@ export class PatchyWorkerHost {
           name: message.name ?? layer.name, width: message.width, height: message.height,
           bounds: message.bounds, rgba: new Uint8Array(message.rgba),
         });
+        return this.#snapshot();
+      }
+      case "replacePixelLayerAndMask": {
+        const before = this.#snapshot();
+        const layer = before.layers.find((candidate) => candidate.id === BigInt(message.layerId));
+        if (!layer?.mask?.linked) throw new Error("Editable linked raster mask does not exist");
+        this.#engine.replacePixelLayerAndMask(this.#requireSession(), before, layer.id,
+          { ...message.input, rgba: new Uint8Array(message.input.rgba) },
+          { ...message.mask, gray: new Uint8Array(message.mask.gray) });
         return this.#snapshot();
       }
       case "addTextLayer":
@@ -133,6 +145,10 @@ export class PatchyWorkerHost {
         return this.#snapshot();
       case "addVectorShape":
         this.#engine.addVectorShape(this.#requireSession(), this.#snapshot(), message.input);
+        return this.#snapshot();
+      case "updateVectorShape":
+        this.#engine.updateVectorShape(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.input);
         return this.#snapshot();
       case "setVectorMask":
         this.#engine.setVectorMask(this.#requireSession(), this.#snapshot(),

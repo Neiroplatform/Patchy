@@ -51,13 +51,19 @@ export class PatchyWorkerClient {
   addPixelLayer(input: { name: string; width: number; height: number;
     bounds: Rect; rgba: Uint8Array }): Promise<DocumentProjection>;
   layerPixels(layerId: bigint): Promise<Uint8Array>;
+  layerMaskPixels(layerId: bigint): Promise<Uint8Array>;
   replacePixelLayer(layerId: bigint, input: { name: string; width: number;
     height: number; bounds: Rect; rgba: Uint8Array }): Promise<DocumentProjection>;
+  replacePixelLayerAndMask(layerId: bigint,
+    input: { name: string; width: number; height: number; bounds: Rect; rgba: Uint8Array },
+    mask: { width: number; height: number; bounds: Rect; gray: Uint8Array;
+      defaultColor: number; disabled: boolean }): Promise<DocumentProjection>;
   addTextLayer(input: TextLayerInput): Promise<DocumentProjection>;
   updateTextLayer(layerId: bigint, input: TextLayerInput): Promise<DocumentProjection>;
   addAdjustment(input: AdjustmentInput): Promise<DocumentProjection>;
   updateAdjustment(layerId: bigint, input: AdjustmentInput): Promise<DocumentProjection>;
   addVectorShape(input: VectorShapeInput): Promise<DocumentProjection>;
+  updateVectorShape(layerId: bigint, input: VectorShapeInput): Promise<DocumentProjection>;
   setVectorMask(layerId: bigint, input: VectorMaskInput | null): Promise<DocumentProjection>;
   addSmartObject(input: SmartObjectInput): Promise<DocumentProjection>;
   replaceSmartObject(layerId: bigint, input: SmartObjectInput): Promise<DocumentProjection>;

@@ -76,11 +76,18 @@ export class PatchyWorkerClient {
     }, [owned.buffer]);
   }
   layerPixels(layerId) { return this.#request("layerPixels", { layerId: String(layerId) }); }
+  layerMaskPixels(layerId) { return this.#request("layerMaskPixels", { layerId: String(layerId) }); }
   replacePixelLayer(layerId, { name, width, height, bounds, rgba }) {
     const owned = rgba.slice();
     return this.#request("replacePixelLayer", {
       layerId: String(layerId), name, width, height, bounds, rgba: owned.buffer,
     }, [owned.buffer]);
+  }
+  replacePixelLayerAndMask(layerId, input, mask) {
+    const rgba = input.rgba.slice(); const gray = mask.gray.slice();
+    return this.#request("replacePixelLayerAndMask", { layerId: String(layerId),
+      input: { ...input, rgba: rgba.buffer }, mask: { ...mask, gray: gray.buffer } },
+    [rgba.buffer, gray.buffer]);
   }
   addTextLayer(input) { return this.#textLayerRequest("addTextLayer", null, input); }
   updateTextLayer(layerId, input) {
@@ -91,6 +98,9 @@ export class PatchyWorkerClient {
     return this.#request("updateAdjustment", { layerId: String(layerId), input });
   }
   addVectorShape(input) { return this.#request("addVectorShape", { input }); }
+  updateVectorShape(layerId, input) {
+    return this.#request("updateVectorShape", { layerId: String(layerId), input });
+  }
   setVectorMask(layerId, input) {
     return this.#request("setVectorMask", { layerId: String(layerId), input });
   }

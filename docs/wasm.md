@@ -75,8 +75,8 @@ It has BigInt IDs and a 256 MB–4 GB heap. It
 opens/drops PSD, authors documents/layers/editable text, renders and downloads.
 One registry drives toolbar/keys; canvas tools cover geometry, zoom/pan,
 marquee, masks, move/transform, brush/eraser and text. The inspector authors
-shapes/vector masks, adjustments, embedded Smart Object place/replace and five
-Smart Filters through the sole Worker owner. Masked transforms fail closed.
+shapes/vector masks, adjustments, Smart Objects and five Smart Filters. Fill,
+gradient, clone/heal and linked-mask transforms also commit through that owner.
 Assets stay local and failures explicit.
 
 `client.mjs` owns correlation/crash state, `worker.mjs` the runtime/session,

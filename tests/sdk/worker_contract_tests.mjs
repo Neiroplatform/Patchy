@@ -35,6 +35,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton",
     "textDialog", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
     "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "smartFilterButton",
+    "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
     "createVectorMaskButton", "smartObjectInput", "shapeDialog", "commitShapeButton",
     "adjustmentDialog", "commitAdjustmentButton", "smartFilterDialog", "commitSmartFilterButton",
     "undoButton", "redoButton", "saveButton", "errorBanner"]) {
@@ -47,8 +48,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.cropDocument", "client.invertLayer",
     "client.setSelection", "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
-    "client.layerPixels", "client.replacePixelLayer", "client.addTextLayer",
+    "client.layerPixels", "client.layerMaskPixels", "client.replacePixelLayer",
+    "client.replacePixelLayerAndMask", "client.addTextLayer",
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
+    "client.updateVectorShape",
     "client.addAdjustment", "client.updateAdjustment", "client.addSmartObject",
     "client.replaceSmartObject", "client.setSmartFilter",
     "client.undo", "client.redo", "client.render", "client.save"]) {
@@ -59,6 +62,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
   assert.match(script, /const commandRegistry = new Map\(\)/);
   assert.match(script, /registerCommand\("selection\.all"/);
+  assert.match(script, /registerCommand\("tool\.clone"/);
+  assert.match(script, /registerCommand\("tool\.gradient"/);
   assert.doesNotMatch(`${html}\n${css}\n${script}`, /https?:\/\//);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 560px\)/);
@@ -204,6 +209,10 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_replace_rgba8_layer(session, input) {
       assert.equal(view.getBigUint64(input + 24, true), 7n); return 1;
     },
+    _patchy_engine_session_replace_rgba8_layer_and_mask(session, input, maskInput) {
+      assert.equal(view.getBigUint64(input + 24, true), 7n);
+      assert.equal(view.getBigUint64(maskInput + 24, true), 7n); return 1;
+    },
     _patchy_engine_session_add_text_layer(session, input) {
       assert.equal(view.getUint32(input, true), 96);
       assert.equal(view.getFloat64(input + 80, true), 12); return 1;
@@ -216,6 +225,9 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     },
     _patchy_engine_session_add_vector_shape(session, input) {
       assert.equal(view.getUint32(input, true), 64); assert.equal(view.getUint32(input + 36, true), 1); return 1;
+    },
+    _patchy_engine_session_update_vector_shape(session, layerId, input) {
+      assert.equal(layerId, 7n); assert.equal(view.getUint32(input + 36, true), 1); return 1;
     },
     _patchy_engine_session_set_vector_mask(session, input) {
       assert.equal(view.getBigUint64(input + 24, true), 7n); assert.equal(heap[input + 61], 1); return 1;
@@ -268,6 +280,11 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(Array.from(engine.layerPixels(session, 7n)), [1, 2, 3, 4]);
   engine.replacePixelLayer(session, snapshot, 7n, { name: "Layer", width: 1, height: 1,
     bounds: { x: 1, y: 1, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) });
+  engine.replacePixelLayerAndMask(session, snapshot, 7n,
+    { name: "Layer", width: 1, height: 1, bounds: { x: 1, y: 1, width: 1, height: 1 },
+      rgba: new Uint8Array([1, 2, 3, 4]) },
+    { width: 1, height: 1, bounds: { x: 1, y: 1, width: 1, height: 1 },
+      gray: new Uint8Array([255]), defaultColor: 0, disabled: false });
   const textInput = { name: "Text", text: "Hi", font: "Arial", sizePixels: 12,
     color: [1, 2, 3], bold: true, italic: false, boxText: true, width: 1, height: 1,
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) };
@@ -278,6 +295,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   const path = { anchors: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
   engine.addVectorShape(session, snapshot, { name: "Shape", path, fill: [1, 2, 3],
     strokeEnabled: true, stroke: [4, 5, 6], strokeWidth: 2 });
+  engine.updateVectorShape(session, snapshot, 7n, { name: "Shape", path, fill: [1, 2, 3],
+    strokeEnabled: false, stroke: [4, 5, 6], strokeWidth: 0 });
   engine.setVectorMask(session, snapshot, 7n, { path, density: 255 });
   engine.addSmartObject(session, snapshot, { name: "Embedded", filename: "asset.png", filetype: "PNG ",
     width: 1, height: 1, bounds: { x: 0, y: 0, width: 1, height: 1 },
@@ -357,6 +376,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     replacePixelLayer(session, before, layerId, input) {
       calls.push(["replacePixels", layerId, input.bounds]); revision++;
     },
+    replacePixelLayerAndMask(session, before, layerId, input, nextMask) {
+      calls.push(["replacePixelsAndMask", layerId, input.bounds, nextMask.bounds]); revision++;
+    },
     addTextLayer(session, before, input) { calls.push(["addText", input.text]); revision++; },
     updateTextLayer(session, before, layerId, input) {
       calls.push(["updateText", layerId, input.text]); revision++;
@@ -364,6 +386,7 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     addAdjustment(session, before, input) { calls.push(["addAdjustment", input.kind]); revision++; },
     updateAdjustment(session, before, layerId, input) { calls.push(["updateAdjustment", layerId, input.kind]); revision++; },
     addVectorShape(session, before, input) { calls.push(["shape", input.path.anchors.length]); revision++; },
+    updateVectorShape(session, before, layerId, input) { calls.push(["updateShape", layerId, input.path.anchors.length]); revision++; },
     setVectorMask(session, before, layerId, input) { calls.push(["vectorMask", layerId, input]); revision++; },
     addSmartObject(session, before, input) { calls.push(["smartObject", input.sourceBytes.byteLength]); revision++; },
     replaceSmartObject(session, before, layerId, input) { calls.push(["replaceSmartObject", layerId, input.sourceBytes.byteLength]); revision++; },
@@ -400,9 +423,18 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   assert.equal(maskPixels[0], 0);
   assert.equal((await host.dispatch({ method: "removeLayerMask", layerId: "7" })).layers[0].mask, null);
   assert.equal((await host.dispatch({ method: "layerPixels", layerId: "7" })).byteLength, 24);
+  mask = { bounds: { x: 0, y: 0, width: 3, height: 2 }, defaultColor: 0,
+    disabled: false, linked: true };
+  maskPixels = new Uint8Array(6).fill(255);
+  assert.equal((await host.dispatch({ method: "layerMaskPixels", layerId: "7" })).byteLength, 6);
   await host.dispatch({ method: "replacePixelLayer", layerId: "7", name: "Layer",
     width: 3, height: 2, bounds: { x: 1, y: 1, width: 3, height: 2 },
     rgba: new Uint8Array(24).buffer });
+  await host.dispatch({ method: "replacePixelLayerAndMask", layerId: "7",
+    input: { name: "Layer", width: 3, height: 2, bounds: { x: 1, y: 1, width: 3, height: 2 },
+      rgba: new Uint8Array(24).buffer },
+    mask: { width: 3, height: 2, bounds: { x: 1, y: 1, width: 3, height: 2 },
+      gray: new Uint8Array(6).buffer, defaultColor: 0, disabled: false } });
   const browserText = { name: "Text", text: "Browser", font: "Arial", sizePixels: 20,
     color: [0, 0, 0], bold: false, italic: false, boxText: true, width: 1, height: 1,
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array(4).buffer };
@@ -412,6 +444,7 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "updateAdjustment", layerId: "7", input: { kind: 7, values: [3, 4] } });
   const browserPath = { anchors: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] };
   await host.dispatch({ method: "addVectorShape", input: { path: browserPath } });
+  await host.dispatch({ method: "updateVectorShape", layerId: "7", input: { path: browserPath } });
   await host.dispatch({ method: "setVectorMask", layerId: "7", input: { path: browserPath } });
   await host.dispatch({ method: "addSmartObject", input: { rgba: new Uint8Array(4).buffer,
     sourceBytes: new Uint8Array(8).buffer } });

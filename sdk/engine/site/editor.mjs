@@ -20,6 +20,8 @@ let panStart = null;
 let moveDraft = null;
 let paintDraft = null;
 let textEditingId = null;
+let cloneSource = null;
+let gradientDraft = null;
 
 const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
 const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
@@ -83,7 +85,8 @@ function updateControls() {
   $("invertLayerButton").disabled = busy || layer?.kind !== 0;
   $("textLayerButton").disabled = busy || !snapshot;
   $("textLayerButton").textContent = layer?.kind === 3 ? "Edit text" : "Add text";
-  $("layerTransformButton").disabled = busy || ![0, 3].includes(layer?.kind) || Boolean(layer?.mask);
+  $("layerTransformButton").disabled = busy || ![0, 3].includes(layer?.kind) ||
+    Boolean(layer?.mask && !(layer.kind === 0 && layer.mask.linked));
   $("shapeLayerButton").disabled = busy || !snapshot;
   $("adjustmentLayerButton").disabled = busy || !snapshot;
   $("smartObjectButton").disabled = busy || !snapshot;
@@ -283,7 +286,9 @@ function setCanvasTool(tool) {
   $("canvasViewport").dataset.tool = tool;
   for (const [id, value] of [["moveToolButton", "move"], ["marqueeToolButton", "marquee"],
     ["panToolButton", "pan"], ["brushToolButton", "brush"],
-    ["eraserToolButton", "eraser"], ["textToolButton", "text"]]) {
+    ["eraserToolButton", "eraser"], ["cloneToolButton", "clone"],
+    ["healToolButton", "heal"], ["gradientToolButton", "gradient"],
+    ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
   }
 }
@@ -415,11 +420,14 @@ function adjustmentName(kind) {
 
 function openShapeDialog() {
   if (busy || !snapshot) return;
-  const bounds = snapshot.selection?.[0] || { x: Math.round(snapshot.width * .2),
+  const layer = selectedLayer();
+  const bounds = layer?.kind === 4 ? layer.bounds : snapshot.selection?.[0] || { x: Math.round(snapshot.width * .2),
     y: Math.round(snapshot.height * .2), width: Math.max(40, Math.round(snapshot.width * .35)),
     height: Math.max(40, Math.round(snapshot.height * .35)) };
   for (const [id, value] of [["shapeXInput", bounds.x], ["shapeYInput", bounds.y],
     ["shapeWidthInput", bounds.width], ["shapeHeightInput", bounds.height]]) $(id).value = String(value);
+  $("shapeDialogTitle").textContent = layer?.kind === 4 ? "Edit vector points" : "Create vector shape";
+  $("commitShapeButton").textContent = layer?.kind === 4 ? "Update shape" : "Create shape";
   $("shapeDialog").showModal();
 }
 
@@ -430,9 +438,12 @@ function commitShape() {
   if ([x, y, width, height].some((value) => value == null) || !Number.isFinite(strokeWidth) || strokeWidth < 0) return;
   $("shapeDialog").close();
   const bounds = { x, y, width, height };
-  mutate("Creating vector shape", () => client.addVectorShape({ name: "Shape", path: rectanglePath(bounds),
+  const layer = selectedLayer();
+  const input = { name: layer?.name || "Shape", path: rectanglePath(bounds),
     fill: colorBytes($("shapeFillInput").value), strokeEnabled: strokeWidth > 0,
-    stroke: colorBytes($("shapeStrokeInput").value), strokeWidth }));
+    stroke: colorBytes($("shapeStrokeInput").value), strokeWidth };
+  mutate(layer?.kind === 4 ? "Updating vector points" : "Creating vector shape", () => layer?.kind === 4
+    ? client.updateVectorShape(layer.id, input) : client.addVectorShape(input));
 }
 
 function openAdjustmentDialog() {
@@ -578,7 +589,8 @@ async function commitTextDialog() {
 
 function openLayerTransformDialog() {
   const layer = selectedLayer();
-  if (busy || ![0, 3].includes(layer?.kind) || layer?.mask) return;
+  if (busy || ![0, 3].includes(layer?.kind) ||
+      (layer?.mask && !(layer.kind === 0 && layer.mask.linked))) return;
   for (const [id, value] of [["layerXInput", layer.bounds.x], ["layerYInput", layer.bounds.y],
     ["layerWidthInput", layer.bounds.width], ["layerHeightInput", layer.bounds.height]]) $(id).value = String(value);
   $("layerTransformDialog").showModal();
@@ -604,8 +616,29 @@ async function transformedLayerSnapshot(layer, bounds) {
   const targetContext = target.getContext("2d", { alpha: true, willReadFrequently: true });
   targetContext.drawImage(source, 0, 0, bounds.width, bounds.height);
   const rgba = new Uint8Array(targetContext.getImageData(0, 0, bounds.width, bounds.height).data);
-  return client.replacePixelLayer(layer.id, { name: layer.name,
-    width: bounds.width, height: bounds.height, bounds, rgba });
+  const layerInput = { name: layer.name, width: bounds.width, height: bounds.height, bounds, rgba };
+  if (!layer.mask?.linked) return client.replacePixelLayer(layer.id, layerInput);
+  const maskBytes = await client.layerMaskPixels(layer.id);
+  const oldMask = document.createElement("canvas");
+  oldMask.width = layer.mask.bounds.width; oldMask.height = layer.mask.bounds.height;
+  const oldMaskContext = oldMask.getContext("2d");
+  const grayRgba = new Uint8ClampedArray(maskBytes.byteLength * 4);
+  maskBytes.forEach((value, index) => grayRgba.set([value, value, value, 255], index * 4));
+  oldMaskContext.putImageData(new ImageData(grayRgba, oldMask.width, oldMask.height), 0, 0);
+  const scaleX = bounds.width / layer.bounds.width; const scaleY = bounds.height / layer.bounds.height;
+  const maskBounds = { x: Math.round(bounds.x + (layer.mask.bounds.x - layer.bounds.x) * scaleX),
+    y: Math.round(bounds.y + (layer.mask.bounds.y - layer.bounds.y) * scaleY),
+    width: Math.max(1, Math.round(layer.mask.bounds.width * scaleX)),
+    height: Math.max(1, Math.round(layer.mask.bounds.height * scaleY)) };
+  const nextMask = document.createElement("canvas"); nextMask.width = maskBounds.width; nextMask.height = maskBounds.height;
+  const nextMaskContext = nextMask.getContext("2d", { willReadFrequently: true });
+  nextMaskContext.drawImage(oldMask, 0, 0, maskBounds.width, maskBounds.height);
+  const maskPixels = nextMaskContext.getImageData(0, 0, maskBounds.width, maskBounds.height).data;
+  const gray = new Uint8Array(maskBounds.width * maskBounds.height);
+  for (let index = 0; index < gray.length; ++index) gray[index] = maskPixels[index * 4];
+  return client.replacePixelLayerAndMask(layer.id, layerInput, { width: maskBounds.width,
+    height: maskBounds.height, bounds: maskBounds, gray, defaultColor: layer.mask.defaultColor,
+    disabled: layer.mask.disabled });
 }
 
 function commitLayerBounds(layer, bounds, title = "Transforming layer") {
@@ -623,8 +656,20 @@ function drawPaintSegment(draft, from, to) {
     target.strokeStyle = color; target.beginPath(); target.moveTo(a.x, a.y); target.lineTo(b.x, b.y); target.stroke();
     target.beginPath(); target.arc(b.x, b.y, size / 2, 0, Math.PI * 2); target.fillStyle = color; target.fill(); target.restore();
   };
-  paint(draft.context, localFrom, localTo, $("brushColorInput").value,
-    erase ? "destination-out" : "source-over");
+  if (draft.tool === "clone" || draft.tool === "heal") {
+    const offset = { x: draft.source.x - draft.start.x, y: draft.source.y - draft.start.y };
+    const sample = { x: to.x + offset.x - draft.layer.bounds.x,
+      y: to.y + offset.y - draft.layer.bounds.y };
+    draft.context.save();
+    draft.context.beginPath(); draft.context.arc(localTo.x, localTo.y, size / 2, 0, Math.PI * 2);
+    draft.context.clip(); draft.context.globalAlpha = draft.tool === "heal" ? .65 : 1;
+    draft.context.drawImage(draft.original, sample.x - size / 2, sample.y - size / 2, size, size,
+      localTo.x - size / 2, localTo.y - size / 2, size, size);
+    draft.context.restore();
+  } else {
+    paint(draft.context, localFrom, localTo, $("brushColorInput").value,
+      erase ? "destination-out" : "source-over");
+  }
   paint(draft.overlay, from, to, erase ? "#ffffff88" : $("brushColorInput").value,
     "source-over");
 }
@@ -632,9 +677,16 @@ function drawPaintSegment(draft, from, to) {
 async function beginPaint(event) {
   const layer = selectedLayer();
   if (busy || layer?.kind !== 0 || event.button !== 0) return;
-  canvas.setPointerCapture(event.pointerId);
   const point = canvasPoint(event);
-  const draft = { pointerId: event.pointerId, tool: canvasTool, layer, last: point, ready: false };
+  if ((canvasTool === "clone" || canvasTool === "heal") && event.altKey) {
+    cloneSource = point; setSessionState("document", "Clone source set"); return;
+  }
+  if ((canvasTool === "clone" || canvasTool === "heal") && !cloneSource) {
+    showError("Set a source first", new Error("Alt-click the canvas to choose a clone/heal source.")); return;
+  }
+  canvas.setPointerCapture(event.pointerId);
+  const draft = { pointerId: event.pointerId, tool: canvasTool, layer, last: point,
+    start: point, source: cloneSource, ready: false };
   paintDraft = draft;
   try {
     const bytes = await client.layerPixels(layer.id);
@@ -645,10 +697,61 @@ async function beginPaint(event) {
     draft.context.putImageData(new ImageData(
       new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength),
       scratch.width, scratch.height), 0, 0);
+    draft.original = document.createElement("canvas");
+    draft.original.width = scratch.width; draft.original.height = scratch.height;
+    draft.original.getContext("2d").drawImage(scratch, 0, 0);
     draft.overlay = $("gestureCanvas").getContext("2d");
     draft.ready = true;
     drawPaintSegment(draft, point, point);
   } catch (error) { paintDraft = null; showError("Could not start painting", error); }
+}
+
+async function fillSelectedPixels() {
+  const layer = selectedLayer();
+  if (busy || layer?.kind !== 0) return;
+  await mutate("Filling pixels", async () => {
+    const bytes = await client.layerPixels(layer.id);
+    const scratch = document.createElement("canvas"); scratch.width = layer.bounds.width; scratch.height = layer.bounds.height;
+    const target = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
+    target.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      scratch.width, scratch.height), 0, 0);
+    target.fillStyle = $("brushColorInput").value;
+    const rects = snapshot.selection?.length ? snapshot.selection : [layer.bounds];
+    for (const rect of rects) target.fillRect(rect.x - layer.bounds.x, rect.y - layer.bounds.y, rect.width, rect.height);
+    const rgba = new Uint8Array(target.getImageData(0, 0, scratch.width, scratch.height).data);
+    return client.replacePixelLayer(layer.id, { name: layer.name, width: scratch.width,
+      height: scratch.height, bounds: layer.bounds, rgba });
+  });
+}
+
+async function beginGradient(event) {
+  const layer = selectedLayer();
+  if (busy || layer?.kind !== 0 || event.button !== 0) return;
+  const start = canvasPoint(event); canvas.setPointerCapture(event.pointerId);
+  gradientDraft = { pointerId: event.pointerId, layer, start, end: start };
+}
+
+async function finishGradient(event) {
+  const draft = gradientDraft;
+  if (!draft || event.pointerId !== draft.pointerId) return;
+  gradientDraft = null;
+  await mutate("Applying gradient", async () => {
+    const bytes = await client.layerPixels(draft.layer.id);
+    const scratch = document.createElement("canvas"); scratch.width = draft.layer.bounds.width; scratch.height = draft.layer.bounds.height;
+    const target = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
+    target.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      scratch.width, scratch.height), 0, 0);
+    const local = (point) => ({ x: point.x - draft.layer.bounds.x, y: point.y - draft.layer.bounds.y });
+    const start = local(draft.start); const end = local(draft.end);
+    const gradient = target.createLinearGradient(start.x, start.y, end.x || start.x + 1, end.y);
+    gradient.addColorStop(0, $("brushColorInput").value); gradient.addColorStop(1, "transparent");
+    target.fillStyle = gradient;
+    const rects = snapshot.selection?.length ? snapshot.selection : [draft.layer.bounds];
+    for (const rect of rects) target.fillRect(rect.x - draft.layer.bounds.x, rect.y - draft.layer.bounds.y, rect.width, rect.height);
+    const rgba = new Uint8Array(target.getImageData(0, 0, scratch.width, scratch.height).data);
+    return client.replacePixelLayer(draft.layer.id, { name: draft.layer.name, width: scratch.width,
+      height: scratch.height, bounds: draft.layer.bounds, rgba });
+  });
 }
 
 function movePaint(event) {
@@ -686,6 +789,10 @@ registerCommand("tool.marquee", "marqueeToolButton", () => setCanvasTool("marque
 registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"));
 registerCommand("tool.brush", "brushToolButton", () => setCanvasTool("brush"));
 registerCommand("tool.eraser", "eraserToolButton", () => setCanvasTool("eraser"));
+registerCommand("tool.clone", "cloneToolButton", () => setCanvasTool("clone"));
+registerCommand("tool.heal", "healToolButton", () => setCanvasTool("heal"));
+registerCommand("tool.gradient", "gradientToolButton", () => setCanvasTool("gradient"));
+registerCommand("tool.fill", "fillToolButton", fillSelectedPixels, () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.text", "textToolButton", () => { setCanvasTool("text"); openTextDialog(); });
 registerCommand("selection.all", "selectAllButton", () => {
   mutate("Selecting all", () => client.setSelection([{ x: 0, y: 0, width: snapshot.width, height: snapshot.height }]));
@@ -810,11 +917,13 @@ $("togglePanelsButton").addEventListener("click", () => {
 
 canvas.addEventListener("pointerdown", (event) => {
   if (busy || !snapshot || event.button !== 0) return;
-  if (canvasTool === "brush" || canvasTool === "eraser") { beginPaint(event); return; }
+  if (["brush", "eraser", "clone", "heal"].includes(canvasTool)) { beginPaint(event); return; }
+  if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "text") { openTextDialog(); return; }
   if (canvasTool === "move") {
     const layer = selectedLayer();
-    if (![0, 3].includes(layer?.kind) || layer?.mask) return;
+    if (![0, 3].includes(layer?.kind) ||
+        (layer?.mask && !(layer.kind === 0 && layer.mask.linked))) return;
     const start = canvasPoint(event);
     canvas.setPointerCapture(event.pointerId);
     moveDraft = { layer, start, bounds: { ...layer.bounds } };
@@ -849,6 +958,7 @@ canvas.addEventListener("pointerdown", (event) => {
 
 canvas.addEventListener("pointermove", (event) => {
   movePaint(event);
+  if (gradientDraft?.pointerId === event.pointerId) gradientDraft.end = canvasPoint(event);
   if (!moveDraft) return;
   const point = canvasPoint(event);
   moveDraft.bounds = { ...moveDraft.layer.bounds,
@@ -858,12 +968,13 @@ canvas.addEventListener("pointermove", (event) => {
 });
 canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
+  finishGradient(event);
   if (!moveDraft) return;
   const draft = moveDraft; moveDraft = null; renderTransformOverlay();
   commitLayerBounds(draft.layer, draft.bounds, "Moving layer");
 });
 canvas.addEventListener("pointercancel", (event) => {
-  finishPaint(event, true); moveDraft = null; renderTransformOverlay();
+  finishPaint(event, true); gradientDraft = null; moveDraft = null; renderTransformOverlay();
 });
 
 $("canvasViewport").addEventListener("pointerdown", (event) => {

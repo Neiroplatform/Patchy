@@ -973,6 +973,73 @@ int patchy_engine_session_replace_rgba8_layer(
   }
 }
 
+int patchy_engine_session_replace_rgba8_layer_and_mask(
+    patchy_engine_session *session,
+    const patchy_engine_pixel_layer_input *pixels,
+    const patchy_engine_layer_mask_input *mask,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || pixels == nullptr ||
+      mask == nullptr || pixels->struct_size != sizeof(*pixels) ||
+      mask->struct_size != sizeof(*mask) || pixels->layer_id == 0 ||
+      pixels->layer_id != mask->layer_id || pixels->expected_state_id != mask->expected_state_id ||
+      pixels->expected_revision != mask->expected_revision || pixels->rgba == nullptr ||
+      mask->gray == nullptr || pixels->width <= 0 || pixels->height <= 0 ||
+      mask->width <= 0 || mask->height <= 0 || mask->has_mask == 0 ||
+      pixels->bounds.width != pixels->width || pixels->bounds.height != pixels->height ||
+      mask->bounds.width != mask->width || mask->bounds.height != mask->height) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete linked pixels and mask replacement is required");
+  }
+  if (!expected_state(session, pixels->expected_state_id,
+                      pixels->expected_revision, error)) return 0;
+  const auto pixel_count = static_cast<std::size_t>(pixels->width) *
+                           static_cast<std::size_t>(pixels->height);
+  const auto mask_count = static_cast<std::size_t>(mask->width) *
+                          static_cast<std::size_t>(mask->height);
+  if (pixel_count > std::numeric_limits<std::size_t>::max() / 4U ||
+      pixels->rgba_size != pixel_count * 4U || mask->gray_size != mask_count) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "linked pixels or mask byte length is invalid");
+  }
+  try {
+    const auto *current = session->value->document().find_layer(pixels->layer_id);
+    if (current == nullptr || !current->mask() ||
+        !patchy::layer_mask_linked(*current)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "an existing linked raster mask is required");
+    }
+    patchy::Layer updated = *current;
+    patchy::PixelBuffer rgba(pixels->width, pixels->height,
+                             patchy::PixelFormat::rgba8());
+    std::copy_n(pixels->rgba, pixels->rgba_size, rgba.data().begin());
+    updated.set_pixels(std::move(rgba));
+    updated.set_bounds({pixels->bounds.x, pixels->bounds.y, pixels->bounds.width,
+                        pixels->bounds.height});
+    patchy::PixelBuffer gray(mask->width, mask->height,
+                             patchy::PixelFormat::gray8());
+    std::copy_n(mask->gray, mask->gray_size, gray.data().begin());
+    updated.set_mask(patchy::LayerMask{
+        {mask->bounds.x, mask->bounds.y, mask->bounds.width, mask->bounds.height},
+        std::move(gray), mask->default_color, mask->disabled != 0});
+    patchy::set_layer_mask_linked(updated, true);
+    const auto result = session->value->execute(
+        patchy::engine::CommitPreviewedLayerStates{
+            {{pixels->layer_id, std::move(updated)}}, {}, std::nullopt});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate linked transform pixels");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown linked transform failure");
+  }
+}
+
 int patchy_engine_session_layer_rgba8_pixels(
     const patchy_engine_session *session, std::uint64_t layer_id,
     patchy_engine_buffer *rgba, patchy_engine_error *error) {
@@ -2480,6 +2547,49 @@ int patchy_engine_session_add_vector_shape(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown vector-shape authoring failure");
+  }
+}
+
+int patchy_engine_session_update_vector_shape(
+    patchy_engine_session *session, std::uint64_t layer_id,
+    const patchy_engine_vector_shape_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || layer_id == 0 ||
+      !std::isfinite(input->stroke_width) || input->stroke_width < 0.0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete vector-shape update is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) return 0;
+  auto path = vector_path_from_input(input->path, error);
+  if (!path.has_value()) return 0;
+  try {
+    patchy::VectorShapeContent content;
+    content.path = std::move(*path);
+    content.fill.kind = patchy::VectorFillKind::Solid;
+    content.fill.color = {input->fill_red, input->fill_green, input->fill_blue};
+    content.stroke.enabled = input->stroke_enabled != 0;
+    content.stroke.width = input->stroke_width;
+    content.stroke.content.kind = patchy::VectorFillKind::Solid;
+    content.stroke.content.color = {input->stroke_red, input->stroke_green,
+                                    input->stroke_blue};
+    const auto result = session->value->execute(
+        patchy::engine::UpdateVectorShapeLayer{
+            layer_id, std::move(content),
+            session->value->document().metadata().patterns});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate vector-shape update");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown vector-shape update failure");
   }
 }
 
