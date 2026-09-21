@@ -70,13 +70,13 @@ skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
 
 ## Qt-free browser SDK
 
-The `wasm-sdk` preset produces a no-entry Worker ES module
-(`patchy-engine.mjs` plus `.wasm`) and deployable `build/wasm-sdk/site`.
-The module has BigInt IDs and a 256 MB–4 GB heap. It
+`wasm-sdk` produces a no-entry Worker module and deployable site.
+It has BigInt IDs and a 256 MB–4 GB heap. It
 opens/drops PSD, authors documents/layers/editable text, renders and downloads.
-One command registry drives toolbar/keys; canvas tools cover geometry,
-fit/zoom/pan, marquee, selected invert, masks, direct move/free-transform and
-one-commit brush/eraser. Masked transforms fail closed pending linked geometry.
+One registry drives toolbar/keys; canvas tools cover geometry, zoom/pan,
+marquee, masks, move/transform, brush/eraser and text. The inspector authors
+shapes/vector masks, adjustments, embedded Smart Object place/replace and five
+Smart Filters through the sole Worker owner. Masked transforms fail closed.
 Assets stay local and failures explicit.
 
 `client.mjs` owns correlation/crash state, `worker.mjs` the runtime/session,

@@ -879,6 +879,10 @@ int patchy_engine_session_add_smart_object(
     patchy_engine_session *session,
     const patchy_engine_smart_object_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_replace_smart_object(
+    patchy_engine_session *session, uint64_t layer_id,
+    const patchy_engine_smart_object_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_smart_object(
     const patchy_engine_session *session, uint64_t layer_id,
     patchy_engine_smart_object_projection *smart_object,

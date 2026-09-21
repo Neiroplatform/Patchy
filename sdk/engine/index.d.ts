@@ -6,6 +6,9 @@ export interface LayerProjection {
   mask: null | { bounds: Rect; defaultColor: number; disabled: boolean; linked: boolean };
   text: null | { value: string; font: string; sizePixels: number;
     color: [number, number, number]; bold: boolean; italic: boolean; boxText: boolean };
+  adjustment: null | { kind: number; values: number[] };
+  smartObject: null | { sourceKind: number; filename: string; filetype: string;
+    sourceSize: bigint; editable: boolean };
 }
 export interface DocumentProjection {
   width: number; height: number; colorMode: number; bitDepth: number;
@@ -52,6 +55,13 @@ export class PatchyWorkerClient {
     height: number; bounds: Rect; rgba: Uint8Array }): Promise<DocumentProjection>;
   addTextLayer(input: TextLayerInput): Promise<DocumentProjection>;
   updateTextLayer(layerId: bigint, input: TextLayerInput): Promise<DocumentProjection>;
+  addAdjustment(input: AdjustmentInput): Promise<DocumentProjection>;
+  updateAdjustment(layerId: bigint, input: AdjustmentInput): Promise<DocumentProjection>;
+  addVectorShape(input: VectorShapeInput): Promise<DocumentProjection>;
+  setVectorMask(layerId: bigint, input: VectorMaskInput | null): Promise<DocumentProjection>;
+  addSmartObject(input: SmartObjectInput): Promise<DocumentProjection>;
+  replaceSmartObject(layerId: bigint, input: SmartObjectInput): Promise<DocumentProjection>;
+  setSmartFilter(layerId: bigint, input: SmartFilterInput): Promise<DocumentProjection>;
   moveLayer(layerId: bigint, targetLayerId: bigint | null,
             position: number): Promise<DocumentProjection>;
   undo(): Promise<DocumentProjection>;
@@ -70,3 +80,16 @@ export interface TextLayerInput {
   color: [number, number, number]; bold: boolean; italic: boolean;
   boxText: boolean; width: number; height: number; bounds: Rect; rgba: Uint8Array;
 }
+export interface VectorAnchor { x: number; y: number; inX?: number; inY?: number;
+  outX?: number; outY?: number; smooth?: boolean }
+export interface VectorPathInput { anchors: VectorAnchor[] }
+export interface VectorShapeInput { name: string; path: VectorPathInput;
+  fill: [number, number, number]; strokeEnabled: boolean;
+  stroke: [number, number, number]; strokeWidth: number }
+export interface VectorMaskInput { path: VectorPathInput; feather?: number; density?: number;
+  disabled?: boolean; inverted?: boolean; unlinked?: boolean; hidesEffects?: boolean }
+export interface AdjustmentInput { name?: string; kind: number; values?: number[];
+  curvePoints?: Array<{ input: number; output: number }> }
+export interface SmartObjectInput { name: string; filename: string; filetype: string;
+  width: number; height: number; bounds: Rect; rgba: Uint8Array; sourceBytes: Uint8Array }
+export interface SmartFilterInput { kind: number; amount: number; enabled?: boolean }

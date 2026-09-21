@@ -124,6 +124,37 @@ export class PatchyWorkerHost {
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
           { ...message.input, rgba: new Uint8Array(message.input.rgba) });
         return this.#snapshot();
+      case "addAdjustment":
+        this.#engine.addAdjustment(this.#requireSession(), this.#snapshot(), message.input);
+        return this.#snapshot();
+      case "updateAdjustment":
+        this.#engine.updateAdjustment(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.input);
+        return this.#snapshot();
+      case "addVectorShape":
+        this.#engine.addVectorShape(this.#requireSession(), this.#snapshot(), message.input);
+        return this.#snapshot();
+      case "setVectorMask":
+        this.#engine.setVectorMask(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.input);
+        return this.#snapshot();
+      case "addSmartObject":
+        this.#engine.addSmartObject(this.#requireSession(), this.#snapshot(), {
+          ...message.input, rgba: new Uint8Array(message.input.rgba),
+          sourceBytes: new Uint8Array(message.input.sourceBytes),
+        });
+        return this.#snapshot();
+      case "replaceSmartObject":
+        this.#engine.replaceSmartObject(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), {
+            ...message.input, rgba: new Uint8Array(message.input.rgba),
+            sourceBytes: new Uint8Array(message.input.sourceBytes),
+          });
+        return this.#snapshot();
+      case "setSmartFilter":
+        this.#engine.setSmartFilter(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.input);
+        return this.#snapshot();
       case "moveLayer":
         this.#engine.moveLayer(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),

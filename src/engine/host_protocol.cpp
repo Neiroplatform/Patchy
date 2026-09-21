@@ -1545,6 +1545,123 @@ int patchy_engine_session_add_smart_object(
   }
 }
 
+int patchy_engine_session_replace_smart_object(
+    patchy_engine_session *session, std::uint64_t layer_id,
+    const patchy_engine_smart_object_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || layer_id == 0 ||
+      input->source_kind != PATCHY_ENGINE_SMART_OBJECT_EMBEDDED ||
+      input->source_bytes == nullptr || input->source_size == 0 ||
+      !valid_rgba_payload(input->rgba, input->rgba_size, input->width,
+                          input->height, input->bounds, error)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete embedded Smart Object replacement is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::string name;
+  std::string filename;
+  if (!copy_command_text(input->name, input->name_size, 256U, name, error) ||
+      !copy_command_text(input->filename, input->filename_size, 256U, filename,
+                         error)) {
+    return 0;
+  }
+  if (std::memchr(input->filetype, '\0', sizeof(input->filetype)) != nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "smart object filetype must contain four bytes");
+  }
+  try {
+    auto prepared = session->value->document();
+    auto *layer = prepared.find_layer(layer_id);
+    if (layer == nullptr || !patchy::layer_is_smart_object(*layer) ||
+        !patchy::smart_object_lock_reason(*layer).empty()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "editable embedded Smart Object is required");
+    }
+    const auto placed_uuid = patchy::smart_object_placed_uuid(*layer);
+    if (placed_uuid.empty()) {
+      return fail(error, PATCHY_ENGINE_ERROR_ENGINE,
+                  "Smart Object placement is incomplete");
+    }
+    patchy::PixelBuffer pixels(input->width, input->height,
+                               patchy::PixelFormat::rgba8());
+    std::copy_n(input->rgba, input->rgba_size, pixels.data().begin());
+    const auto source_uuid = patchy::generate_smart_object_uuid();
+    prepared.metadata().smart_objects.add_embedded(
+        source_uuid, filename,
+        std::string(input->filetype, sizeof(input->filetype)),
+        std::make_shared<const std::vector<std::uint8_t>>(
+            input->source_bytes, input->source_bytes + input->source_size));
+    layer = prepared.find_layer(layer_id);
+    layer->set_name(std::move(name));
+    layer->set_pixels(std::move(pixels));
+    layer->set_bounds({input->bounds.x, input->bounds.y, input->bounds.width,
+                       input->bounds.height});
+    patchy::SmartObjectPlacement placement;
+    placement.uuid = source_uuid;
+    placement.transform = {
+        static_cast<double>(input->bounds.x), static_cast<double>(input->bounds.y),
+        static_cast<double>(input->bounds.x + input->bounds.width), static_cast<double>(input->bounds.y),
+        static_cast<double>(input->bounds.x + input->bounds.width),
+        static_cast<double>(input->bounds.y + input->bounds.height),
+        static_cast<double>(input->bounds.x), static_cast<double>(input->bounds.y + input->bounds.height)};
+    placement.width = input->width;
+    placement.height = input->height;
+    patchy::set_layer_smart_object_metadata(
+        *layer, placement, placed_uuid, "SoLd", "",
+        patchy::kSmartObjectRasterStatusPatchy);
+    if (const auto *stack = layer->smart_filter_stack(); stack != nullptr) {
+      const auto document_bounds = patchy::Rect::from_size(
+          prepared.width(), prepared.height());
+      auto effects = prepared.metadata().smart_filter_effects;
+      auto record = patchy::psd::author_filter_effects_record(
+          placed_uuid, document_bounds, layer->pixels(), layer->bounds(),
+          stack->mask);
+      if (!record.has_value() || !effects.upsert_authored(std::move(*record))) {
+        return fail(error, PATCHY_ENGINE_ERROR_ENGINE,
+                    "could not replace Smart Filter cache");
+      }
+      const auto rendered = patchy::render_smart_filter_stack(
+          layer->pixels(), layer->bounds(), document_bounds, *stack);
+      prepared.metadata().smart_filter_effects = std::move(effects);
+      layer->set_pixels(rendered.pixels);
+      layer->set_bounds(rendered.bounds);
+    }
+    auto &blocks = layer->unknown_psd_blocks();
+    blocks.erase(std::remove_if(blocks.begin(), blocks.end(),
+                                [](const patchy::UnknownPsdBlock &block) {
+                                  return block.key == "SoLd" || block.key == "SoLE" ||
+                                         block.key == "PlLd" || block.key == "plLd";
+                                }),
+                 blocks.end());
+    blocks.push_back(patchy::UnknownPsdBlock{
+        "SoLd", patchy::psd::author_placed_layer_sold_payload(
+                    placement, placed_uuid, layer->smart_filter_stack())});
+    patchy::mark_layer_smart_object_block_dirty(*layer);
+    const auto dirty_bounds = layer->bounds();
+    const auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::SmartObject,
+            input->expected_state_id, std::move(prepared),
+            dirty_bounds});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate Smart Object replacement");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_ENGINE, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown Smart Object replacement failure");
+  }
+}
+
 int patchy_engine_session_smart_object(
     const patchy_engine_session *session, std::uint64_t layer_id,
     patchy_engine_smart_object_projection *smart_object,

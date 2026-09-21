@@ -202,7 +202,8 @@ either immutable source bytes or explicit external URI/absolute/relative link
 metadata. Both families commit through the stale-safe prepared-document
 boundary, project their editable/source identity back to the host and preserve
 stable layer IDs, embedded bytes, link kind and composite pixels through PSD
-save/reopen. Embedded bytes can be exported without exposing C++ ownership;
+save/reopen. Replacing embedded content preserves the layer ID, appearance and
+Smart Filter stack in one undoable commit. Embedded bytes can be exported without exposing C++ ownership;
 linked sources deliberately expose metadata only and never read host paths.
 The browser host can now create or update all eight modeled adjustment-layer
 kinds, author/remove vector masks with path, density, feather and mask flags,
@@ -234,7 +235,8 @@ transfers an owned copy of input bytes to one Dedicated Worker, correlates
 typed requests and rejects every pending request if the Worker traps or message
 decoding fails. The Worker alone owns the Emscripten runtime and active session;
 it exposes `open`/`create`, document/layer/selection/mask/text projections,
-layer and editable-text authoring, image/canvas geometry, canonical selection,
+layer, text, shape/vector-mask, adjustment and embedded Smart Object authoring,
+replacement and Smart Filters, image/canvas geometry, canonical selection,
 raster masks, one-commit RGBA paint/transform, selected-area filtering,
 undo/redo, render and layered PSD save. Canonical document state never enters
 the UI process. Filter cancellation is a main-thread `SharedArrayBuffer`

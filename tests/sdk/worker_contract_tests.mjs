@@ -34,6 +34,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "gestureCanvas", "transformOverlay", "moveToolButton", "brushToolButton",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton",
     "textDialog", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
+    "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "smartFilterButton",
+    "createVectorMaskButton", "smartObjectInput", "shapeDialog", "commitShapeButton",
+    "adjustmentDialog", "commitAdjustmentButton", "smartFilterDialog", "commitSmartFilterButton",
     "undoButton", "redoButton", "saveButton", "errorBanner"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
@@ -45,7 +48,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.setSelection", "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
     "client.layerPixels", "client.replacePixelLayer", "client.addTextLayer",
-    "client.updateTextLayer",
+    "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
+    "client.addAdjustment", "client.updateAdjustment", "client.addSmartObject",
+    "client.replaceSmartObject", "client.setSmartFilter",
     "client.undo", "client.redo", "client.render", "client.save"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -206,6 +211,24 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_update_text_layer(session, layerId, input) {
       assert.equal(layerId, 7n); assert.equal(heap[input + 91], 1); return 1;
     },
+    _patchy_engine_session_set_adjustment(session, input) {
+      assert.equal(view.getUint32(input, true), 88); assert.equal(view.getUint32(input + 40, true), 7); return 1;
+    },
+    _patchy_engine_session_add_vector_shape(session, input) {
+      assert.equal(view.getUint32(input, true), 64); assert.equal(view.getUint32(input + 36, true), 1); return 1;
+    },
+    _patchy_engine_session_set_vector_mask(session, input) {
+      assert.equal(view.getBigUint64(input + 24, true), 7n); assert.equal(heap[input + 61], 1); return 1;
+    },
+    _patchy_engine_session_add_smart_object(session, input) {
+      assert.equal(view.getUint32(input, true), 112); assert.equal(view.getUint32(input + 84, true), 4); return 1;
+    },
+    _patchy_engine_session_replace_smart_object(session, layerId, input) {
+      assert.equal(layerId, 7n); assert.equal(view.getUint32(input + 84, true), 4); return 1;
+    },
+    _patchy_engine_session_set_smart_filter(session, input) {
+      assert.equal(view.getUint32(input + 32, true), 1); assert.equal(view.getFloat64(input + 40, true), 4); return 1;
+    },
     _patchy_engine_session_render_region(session, x, y, width, height, output) {
       assert.deepEqual([x, y, width, height], [0, 0, 3, 2]);
       const data = alloc(24); heap.fill(17, data, data + 24);
@@ -250,6 +273,19 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) };
   engine.addTextLayer(session, snapshot, textInput);
   engine.updateTextLayer(session, snapshot, 7n, textInput);
+  engine.addAdjustment(session, snapshot, { name: "Brightness", kind: 7, values: [10, 5] });
+  engine.updateAdjustment(session, snapshot, 7n, { kind: 7, values: [20, 10] });
+  const path = { anchors: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+  engine.addVectorShape(session, snapshot, { name: "Shape", path, fill: [1, 2, 3],
+    strokeEnabled: true, stroke: [4, 5, 6], strokeWidth: 2 });
+  engine.setVectorMask(session, snapshot, 7n, { path, density: 255 });
+  engine.addSmartObject(session, snapshot, { name: "Embedded", filename: "asset.png", filetype: "PNG ",
+    width: 1, height: 1, bounds: { x: 0, y: 0, width: 1, height: 1 },
+    rgba: new Uint8Array([1, 2, 3, 4]), sourceBytes: new Uint8Array([5, 6, 7, 8]) });
+  engine.replaceSmartObject(session, snapshot, 7n, { name: "Replaced", filename: "new.png", filetype: "PNG ",
+    width: 1, height: 1, bounds: { x: 0, y: 0, width: 1, height: 1 },
+    rgba: new Uint8Array([1, 2, 3, 4]), sourceBytes: new Uint8Array([5, 6, 7, 8]) });
+  engine.setSmartFilter(session, snapshot, 7n, { kind: 1, amount: 4 });
   engine.groupLayer(session, snapshot, 7n, "Group");
   engine.ungroup(session, snapshot, 7n);
   engine.addPixelLayer(session, snapshot, { name: "Pixel", width: 1, height: 1,
@@ -325,6 +361,13 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     updateTextLayer(session, before, layerId, input) {
       calls.push(["updateText", layerId, input.text]); revision++;
     },
+    addAdjustment(session, before, input) { calls.push(["addAdjustment", input.kind]); revision++; },
+    updateAdjustment(session, before, layerId, input) { calls.push(["updateAdjustment", layerId, input.kind]); revision++; },
+    addVectorShape(session, before, input) { calls.push(["shape", input.path.anchors.length]); revision++; },
+    setVectorMask(session, before, layerId, input) { calls.push(["vectorMask", layerId, input]); revision++; },
+    addSmartObject(session, before, input) { calls.push(["smartObject", input.sourceBytes.byteLength]); revision++; },
+    replaceSmartObject(session, before, layerId, input) { calls.push(["replaceSmartObject", layerId, input.sourceBytes.byteLength]); revision++; },
+    setSmartFilter(session, before, layerId, input) { calls.push(["smartFilter", layerId, input.kind]); revision++; },
     applyFilter(session, before, layerId, filterId, cancellation, progress) {
       calls.push(["filter", layerId, filterId]); progress({ completed: 1, total: 1, stage: 0, ratio: 1 }); revision++;
     },
@@ -365,6 +408,16 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array(4).buffer };
   await host.dispatch({ method: "addTextLayer", input: browserText });
   await host.dispatch({ method: "updateTextLayer", layerId: "7", input: browserText });
+  await host.dispatch({ method: "addAdjustment", input: { kind: 7, values: [1, 2] } });
+  await host.dispatch({ method: "updateAdjustment", layerId: "7", input: { kind: 7, values: [3, 4] } });
+  const browserPath = { anchors: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] };
+  await host.dispatch({ method: "addVectorShape", input: { path: browserPath } });
+  await host.dispatch({ method: "setVectorMask", layerId: "7", input: { path: browserPath } });
+  await host.dispatch({ method: "addSmartObject", input: { rgba: new Uint8Array(4).buffer,
+    sourceBytes: new Uint8Array(8).buffer } });
+  await host.dispatch({ method: "replaceSmartObject", layerId: "7", input: { rgba: new Uint8Array(4).buffer,
+    sourceBytes: new Uint8Array(8).buffer } });
+  await host.dispatch({ method: "setSmartFilter", layerId: "7", input: { kind: 1, amount: 4 } });
   await host.dispatch({ method: "groupLayer", layerId: "7", name: "Group" });
   await host.dispatch({ method: "ungroup", layerId: "7" });
   await host.dispatch({ method: "addPixelLayer", name: "Pixels", width: 1, height: 1,

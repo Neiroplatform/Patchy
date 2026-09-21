@@ -84,6 +84,12 @@ function updateControls() {
   $("textLayerButton").disabled = busy || !snapshot;
   $("textLayerButton").textContent = layer?.kind === 3 ? "Edit text" : "Add text";
   $("layerTransformButton").disabled = busy || ![0, 3].includes(layer?.kind) || Boolean(layer?.mask);
+  $("shapeLayerButton").disabled = busy || !snapshot;
+  $("adjustmentLayerButton").disabled = busy || !snapshot;
+  $("smartObjectButton").disabled = busy || !snapshot;
+  $("smartObjectButton").textContent = layer?.kind === 5 ? "Replace Smart Object" : "Place Smart Object";
+  $("smartFilterButton").disabled = busy || layer?.kind !== 5 || !layer?.smartObject?.editable;
+  $("createVectorMaskButton").disabled = busy || !layer || layer.kind === 1 || layer.kind === 4 || !snapshot?.selection?.length;
   $("createMaskButton").disabled = busy || layer?.kind !== 0 || Boolean(layer?.mask);
   $("toggleMaskButton").disabled = busy || !layer?.mask;
   $("toggleMaskButton").textContent = layer?.mask?.disabled ? "Enable mask" : "Disable mask";
@@ -179,7 +185,7 @@ function renderLayers() {
       <button class="reorder-button" type="button" aria-label="Move layer up" ${index === 0 ? "disabled" : ""}>↑</button>
       <button class="reorder-button" type="button" aria-label="Move layer down" ${index === layers.length - 1 ? "disabled" : ""}>↓</button>`;
     row.querySelector(".layer-name").textContent = layer.name || "Unnamed layer";
-    row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}`;
+    row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}${layer.adjustment ? ` · ${adjustmentName(layer.adjustment.kind)}` : ""}${layer.smartObject ? ` · ${layer.smartObject.filename}` : ""}`;
     row.querySelector(".layer-select-button").setAttribute("aria-label", `Select ${layer.name || "unnamed layer"}`);
     row.querySelector(".layer-select-button").addEventListener("click", () => {
       selectedLayerId = layer.id;
@@ -391,6 +397,108 @@ async function importPixelLayer(file) {
     }));
   } catch (error) { showError("Could not import pixels", error); }
   finally { image?.close?.(); setBusy(false); }
+}
+
+function rectanglePath(bounds) {
+  return { anchors: [
+    { x: bounds.x, y: bounds.y },
+    { x: bounds.x + bounds.width, y: bounds.y },
+    { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+    { x: bounds.x, y: bounds.y + bounds.height },
+  ] };
+}
+
+function adjustmentName(kind) {
+  return ["Levels", "Curves", "Hue/Saturation", "Color Balance", "Invert",
+    "Posterize", "Threshold", "Brightness/Contrast"][kind] || "Adjustment";
+}
+
+function openShapeDialog() {
+  if (busy || !snapshot) return;
+  const bounds = snapshot.selection?.[0] || { x: Math.round(snapshot.width * .2),
+    y: Math.round(snapshot.height * .2), width: Math.max(40, Math.round(snapshot.width * .35)),
+    height: Math.max(40, Math.round(snapshot.height * .35)) };
+  for (const [id, value] of [["shapeXInput", bounds.x], ["shapeYInput", bounds.y],
+    ["shapeWidthInput", bounds.width], ["shapeHeightInput", bounds.height]]) $(id).value = String(value);
+  $("shapeDialog").showModal();
+}
+
+function commitShape() {
+  const x = integerInput("shapeXInput"); const y = integerInput("shapeYInput");
+  const width = integerInput("shapeWidthInput", true); const height = integerInput("shapeHeightInput", true);
+  const strokeWidth = Number($("shapeStrokeWidthInput").value);
+  if ([x, y, width, height].some((value) => value == null) || !Number.isFinite(strokeWidth) || strokeWidth < 0) return;
+  $("shapeDialog").close();
+  const bounds = { x, y, width, height };
+  mutate("Creating vector shape", () => client.addVectorShape({ name: "Shape", path: rectanglePath(bounds),
+    fill: colorBytes($("shapeFillInput").value), strokeEnabled: strokeWidth > 0,
+    stroke: colorBytes($("shapeStrokeInput").value), strokeWidth }));
+}
+
+function openAdjustmentDialog() {
+  if (busy || !snapshot) return;
+  const layer = selectedLayer();
+  const editing = layer?.kind === 2;
+  $("adjustmentDialogTitle").textContent = editing ? "Edit adjustment layer" : "Create adjustment layer";
+  $("commitAdjustmentButton").textContent = editing ? "Update adjustment" : "Create adjustment";
+  $("adjustmentKindInput").value = String(layer?.adjustment?.kind ?? 7);
+  $("adjustmentValueOne").value = String(layer?.adjustment?.values?.[0] ?? 0);
+  $("adjustmentValueTwo").value = String(layer?.adjustment?.values?.[1] ?? 0);
+  $("adjustmentDialog").showModal();
+}
+
+function commitAdjustment() {
+  const kind = Number($("adjustmentKindInput").value);
+  const first = Number($("adjustmentValueOne").value);
+  const second = Number($("adjustmentValueTwo").value);
+  if (![kind, first, second].every(Number.isInteger)) return;
+  const defaults = kind === 0 ? [first, second || 255, 100, 0, 255] : kind === 5 ? [Math.max(2, first || 4)]
+    : kind === 6 ? [Math.max(0, first || 128)] : [first, second];
+  const input = { name: adjustmentName(kind), kind, values: defaults,
+    curvePoints: kind === 1 ? [{ input: 0, output: 0 }, { input: 255, output: 255 }] : [] };
+  const layer = selectedLayer();
+  $("adjustmentDialog").close();
+  mutate(layer?.kind === 2 ? "Updating adjustment" : "Creating adjustment", () => layer?.kind === 2
+    ? client.updateAdjustment(layer.id, input) : client.addAdjustment(input));
+}
+
+async function placeSmartObject(file) {
+  if (!file || busy || !snapshot) return;
+  clearError(); setBusy(true, "Placing Smart Object", "Embedding source bytes and raster preview");
+  let image;
+  try {
+    const sourceBytes = new Uint8Array(await file.arrayBuffer());
+    image = await createImageBitmap(file);
+    const byteLength = image.width * image.height * 4;
+    if (!Number.isSafeInteger(byteLength) || byteLength <= 0 || byteLength > 512 * 1024 * 1024) {
+      throw new RangeError("Smart Object preview exceeds the 512 MB browser editing limit");
+    }
+    const scratch = document.createElement("canvas"); scratch.width = image.width; scratch.height = image.height;
+    const scratchContext = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
+    scratchContext.drawImage(image, 0, 0);
+    const rgba = new Uint8Array(scratchContext.getImageData(0, 0, image.width, image.height).data);
+    const filetype = file.type === "image/png" ? "PNG " : file.type === "image/jpeg" ? "JPEG" : "WEBP";
+    const input = { name: file.name.replace(/\.[^.]+$/, "") || "Smart Object",
+      filename: file.name, filetype, width: image.width, height: image.height,
+      bounds: selectedLayer()?.kind === 5 ? selectedLayer().bounds :
+        { x: 0, y: 0, width: image.width, height: image.height }, rgba, sourceBytes };
+    const layer = selectedLayer();
+    await acceptSnapshot(await (layer?.kind === 5
+      ? client.replaceSmartObject(layer.id, input) : client.addSmartObject(input)));
+  } catch (error) { showError("Could not place Smart Object", error); }
+  finally { image?.close?.(); setBusy(false); }
+}
+
+function openSmartFilterDialog() {
+  if (!busy && selectedLayer()?.kind === 5) $("smartFilterDialog").showModal();
+}
+
+function commitSmartFilter() {
+  const layer = selectedLayer(); const kind = Number($("smartFilterKindInput").value);
+  const amount = Number($("smartFilterAmountInput").value);
+  if (layer?.kind !== 5 || !Number.isInteger(kind) || !Number.isFinite(amount)) return;
+  $("smartFilterDialog").close();
+  mutate("Applying Smart Filter", () => client.setSmartFilter(layer.id, { kind, amount, enabled: true }));
 }
 
 function colorBytes(value) {
@@ -610,6 +718,14 @@ $("ungroupLayerButton").addEventListener("click", () => {
 });
 $("invertLayerButton").addEventListener("click", invertSelectedLayer);
 $("textLayerButton").addEventListener("click", openTextDialog);
+$("shapeLayerButton").addEventListener("click", openShapeDialog);
+$("adjustmentLayerButton").addEventListener("click", openAdjustmentDialog);
+$("smartObjectButton").addEventListener("click", () => $("smartObjectInput").click());
+$("smartObjectInput").addEventListener("change", () => { placeSmartObject($("smartObjectInput").files[0]); $("smartObjectInput").value = ""; });
+$("smartFilterButton").addEventListener("click", openSmartFilterDialog);
+$("commitShapeButton").addEventListener("click", commitShape);
+$("commitAdjustmentButton").addEventListener("click", commitAdjustment);
+$("commitSmartFilterButton").addEventListener("click", commitSmartFilter);
 $("layerTransformButton").addEventListener("click", openLayerTransformDialog);
 $("commitTextButton").addEventListener("click", commitTextDialog);
 $("commitLayerTransformButton").addEventListener("click", () => {
@@ -638,6 +754,11 @@ $("invertMaskButton").addEventListener("click", () => {
 $("removeMaskButton").addEventListener("click", () => {
   const layer = selectedLayer();
   if (layer?.mask) mutate("Removing layer mask", () => client.removeLayerMask(layer.id));
+});
+$("createVectorMaskButton").addEventListener("click", () => {
+  const layer = selectedLayer(); const bounds = snapshot?.selection?.[0];
+  if (layer && bounds) mutate("Creating vector mask", () => client.setVectorMask(layer.id,
+    { path: rectanglePath(bounds), feather: 0, density: 255 }));
 });
 $("cancelOperationButton").addEventListener("click", () => {
   cancelActiveOperation?.();

@@ -15,6 +15,15 @@ const LAYER_MASK_INPUT_SIZE = 72;
 const LAYER_MASK_SIZE = 24;
 const TEXT_INPUT_SIZE = 96;
 const TEXT_PROJECTION_SIZE = 1312;
+const SMART_OBJECT_INPUT_SIZE = 112;
+const SMART_OBJECT_PROJECTION_SIZE = 288;
+const ADJUSTMENT_INPUT_SIZE = 88;
+const ADJUSTMENT_PROJECTION_SIZE = 44;
+const SMART_FILTER_INPUT_SIZE = 56;
+const VECTOR_MASK_INPUT_SIZE = 64;
+const VECTOR_SHAPE_INPUT_SIZE = 64;
+const PATH_SUBPATH_SIZE = 20;
+const PATH_ANCHOR_SIZE = 56;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -407,6 +416,130 @@ export class EmscriptenPatchyEngine {
       "_patchy_engine_session_update_text_layer", session, snapshot, layerId, input);
   }
 
+  addAdjustment(session, snapshot, input) {
+    return this.#adjustmentMutation(session, snapshot, null, input);
+  }
+
+  updateAdjustment(session, snapshot, layerId, input) {
+    return this.#adjustmentMutation(session, snapshot, layerId, input);
+  }
+
+  addVectorShape(session, snapshot, input) {
+    const name = this.#text(input.name);
+    const path = this.#path(input.path);
+    const value = this.#alloc(VECTOR_SHAPE_INPUT_SIZE);
+    const namePointer = this.#alloc(name.byteLength || 1);
+    try {
+      this.#module.HEAPU8.set(name, namePointer);
+      const view = this.#view(value, VECTOR_SHAPE_INPUT_SIZE);
+      view.setUint32(0, VECTOR_SHAPE_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true);
+      view.setUint32(24, namePointer, true); view.setUint32(28, name.byteLength, true);
+      this.#writePath(view, 32, path);
+      const fill = this.#rgb(input.fill, "Shape fill");
+      const stroke = this.#rgb(input.stroke ?? [0, 0, 0], "Shape stroke");
+      fill.forEach((component, index) => view.setUint8(48 + index, component));
+      view.setUint8(51, input.strokeEnabled ? 1 : 0);
+      stroke.forEach((component, index) => view.setUint8(52 + index, component));
+      if (!Number.isFinite(input.strokeWidth) || input.strokeWidth < 0) {
+        throw new TypeError("Shape stroke width must be finite and non-negative");
+      }
+      view.setFloat64(56, input.strokeWidth, true);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_add_vector_shape(session, value, event, error));
+    } finally {
+      this.#releasePath(path); this.#module._free(namePointer); this.#module._free(value);
+    }
+  }
+
+  setVectorMask(session, snapshot, layerId, input) {
+    const path = input == null ? null : this.#path(input.path);
+    const value = this.#alloc(VECTOR_MASK_INPUT_SIZE);
+    try {
+      const view = this.#view(value, VECTOR_MASK_INPUT_SIZE);
+      view.setUint32(0, VECTOR_MASK_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true); view.setBigUint64(16, snapshot.revision, true);
+      view.setBigUint64(24, layerId, true);
+      if (path) {
+        this.#writePath(view, 32, path);
+        if (!Number.isFinite(input.feather ?? 0) || (input.feather ?? 0) < 0) {
+          throw new TypeError("Vector mask feather must be finite and non-negative");
+        }
+        view.setFloat64(48, input.feather ?? 0, true);
+        view.setUint8(56, input.density ?? 255); view.setUint8(57, input.disabled ? 1 : 0);
+        view.setUint8(58, input.inverted ? 1 : 0); view.setUint8(59, input.unlinked ? 1 : 0);
+        view.setUint8(60, input.hidesEffects ? 1 : 0); view.setUint8(61, 1);
+      }
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_set_vector_mask(session, value, event, error));
+    } finally {
+      if (path) this.#releasePath(path); this.#module._free(value);
+    }
+  }
+
+  addSmartObject(session, snapshot, input) {
+    return this.#smartObjectMutation(
+      "_patchy_engine_session_add_smart_object", session, snapshot, null, input);
+  }
+
+  replaceSmartObject(session, snapshot, layerId, input) {
+    return this.#smartObjectMutation(
+      "_patchy_engine_session_replace_smart_object", session, snapshot, layerId, input);
+  }
+
+  #smartObjectMutation(symbol, session, snapshot, layerId, input) {
+    const name = this.#text(input.name);
+    const filename = this.#text(input.filename, "Smart Object filename", 256);
+    const rgba = input.rgba;
+    const source = input.sourceBytes;
+    const expected = input.width * input.height * 4;
+    if (!(rgba instanceof Uint8Array) || rgba.byteLength !== expected ||
+        !(source instanceof Uint8Array) || source.byteLength === 0 || !Number.isSafeInteger(expected)) {
+      throw new TypeError("Embedded Smart Object requires preview RGBA and source bytes");
+    }
+    this.#rect(input.bounds);
+    const filetype = String(input.filetype || "    ");
+    if (encoder.encode(filetype).byteLength !== 4) throw new TypeError("Smart Object filetype must be four ASCII bytes");
+    const pointers = [rgba, name, filename, source].map((bytes) => this.#alloc(bytes.byteLength || 1));
+    const value = this.#alloc(SMART_OBJECT_INPUT_SIZE);
+    try {
+      [rgba, name, filename, source].forEach((bytes, index) => this.#module.HEAPU8.set(bytes, pointers[index]));
+      const view = this.#view(value, SMART_OBJECT_INPUT_SIZE);
+      view.setUint32(0, SMART_OBJECT_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true); view.setBigUint64(16, snapshot.revision, true);
+      view.setInt32(24, input.bounds.x, true); view.setInt32(28, input.bounds.y, true);
+      view.setInt32(32, input.bounds.width, true); view.setInt32(36, input.bounds.height, true);
+      view.setInt32(40, input.width, true); view.setInt32(44, input.height, true);
+      view.setUint32(48, pointers[0], true); view.setUint32(52, rgba.byteLength, true);
+      view.setUint32(56, pointers[1], true); view.setUint32(60, name.byteLength, true);
+      view.setUint32(64, 0, true); view.setUint32(68, pointers[2], true);
+      view.setUint32(72, filename.byteLength, true);
+      encoder.encode(filetype).forEach((byte, index) => view.setUint8(76 + index, byte));
+      view.setUint32(80, pointers[3], true); view.setUint32(84, source.byteLength, true);
+      return this.#mutation((event, error) => layerId == null
+        ? this.#module[symbol](session, value, event, error)
+        : this.#module[symbol](session, layerId, value, event, error));
+    } finally {
+      this.#module._free(value); pointers.forEach((pointer) => this.#module._free(pointer));
+    }
+  }
+
+  setSmartFilter(session, snapshot, layerId, input) {
+    if (!Number.isInteger(input.kind) || input.kind < 1 || input.kind > 5 ||
+        !Number.isFinite(input.amount)) throw new TypeError("Supported Smart Filter settings are required");
+    const value = this.#alloc(SMART_FILTER_INPUT_SIZE);
+    try {
+      const view = this.#view(value, SMART_FILTER_INPUT_SIZE);
+      view.setUint32(0, SMART_FILTER_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true); view.setBigUint64(16, snapshot.revision, true);
+      view.setBigUint64(24, layerId, true); view.setUint32(32, input.kind, true);
+      view.setFloat64(40, input.amount, true); view.setUint8(48, input.enabled === false ? 0 : 1);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_set_smart_filter(session, value, event, error));
+    } finally { this.#module._free(value); }
+  }
+
   moveLayer(session, snapshot, layerId, targetLayerId, position) {
     return this.#mutation((event, error) =>
       this.#module._patchy_engine_session_move_layer(
@@ -459,6 +592,8 @@ export class EmscriptenPatchyEngine {
     const layer = this.#alloc(LAYER_SIZE);
     const mask = this.#alloc(LAYER_MASK_SIZE);
     const text = this.#alloc(TEXT_PROJECTION_SIZE);
+    const adjustment = this.#alloc(ADJUSTMENT_PROJECTION_SIZE);
+    const smartObject = this.#alloc(SMART_OBJECT_PROJECTION_SIZE);
     try {
       const layers = [];
       for (let index = 0; index < count; ++index) {
@@ -472,6 +607,8 @@ export class EmscriptenPatchyEngine {
         const maskView = this.#view(mask, LAYER_MASK_SIZE);
         const kind = view.getUint32(16, true);
         let textValue = null;
+        let adjustmentValue = null;
+        let smartObjectValue = null;
         if (kind === 3) {
           this.#view(text, TEXT_PROJECTION_SIZE).setUint32(0, TEXT_PROJECTION_SIZE, true);
           this.#check(this.#module._patchy_engine_session_text(
@@ -487,6 +624,25 @@ export class EmscriptenPatchyEngine {
             bold: textView.getUint8(1307) !== 0, italic: textView.getUint8(1308) !== 0,
             boxText: textView.getUint8(1309) !== 0,
           };
+        }
+        if (kind === 2) {
+          this.#view(adjustment, ADJUSTMENT_PROJECTION_SIZE).setUint32(0, ADJUSTMENT_PROJECTION_SIZE, true);
+          this.#check(this.#module._patchy_engine_session_adjustment(
+            session, u64(view, 0), adjustment, error), error);
+          const projected = this.#view(adjustment, ADJUSTMENT_PROJECTION_SIZE);
+          adjustmentValue = { kind: projected.getUint32(4, true), values: Array.from(
+            { length: 8 }, (_, valueIndex) => projected.getInt32(8 + valueIndex * 4, true)) };
+        }
+        if (kind === 5) {
+          this.#view(smartObject, SMART_OBJECT_PROJECTION_SIZE).setUint32(0, SMART_OBJECT_PROJECTION_SIZE, true);
+          this.#check(this.#module._patchy_engine_session_smart_object(
+            session, u64(view, 0), smartObject, error), error);
+          const projected = this.#view(smartObject, SMART_OBJECT_PROJECTION_SIZE);
+          const filenameSize = projected.getUint32(8, true);
+          smartObjectValue = { sourceKind: projected.getUint32(4, true),
+            filename: decoder.decode(this.#module.HEAPU8.subarray(smartObject + 12, smartObject + 12 + filenameSize)),
+            filetype: decoder.decode(this.#module.HEAPU8.subarray(smartObject + 268, smartObject + 272)),
+            sourceSize: u64(projected, 272), editable: projected.getUint8(280) !== 0 };
         }
         layers.push({
           id: u64(view, 0),
@@ -511,10 +667,14 @@ export class EmscriptenPatchyEngine {
             linked: maskView.getUint8(22) !== 0,
           } : null,
           text: textValue,
+          adjustment: adjustmentValue,
+          smartObject: smartObjectValue,
         });
       }
       return layers;
     } finally {
+      this.#module._free(smartObject);
+      this.#module._free(adjustment);
       this.#module._free(text);
       this.#module._free(mask);
       this.#module._free(layer);
@@ -632,6 +792,84 @@ export class EmscriptenPatchyEngine {
     } finally {
       this.#module._free(value); pointers.forEach((pointer) => this.#module._free(pointer));
     }
+  }
+
+  #adjustmentMutation(session, snapshot, layerId, input) {
+    const name = this.#text(input.name ?? "Adjustment");
+    const values = input.values ?? [];
+    if (!Number.isInteger(input.kind) || input.kind < 0 || input.kind > 7 ||
+        !Array.isArray(values) || values.length > 8 || !values.every(Number.isInteger)) {
+      throw new TypeError("Supported adjustment settings are required");
+    }
+    const curves = input.curvePoints ?? [];
+    if (!Array.isArray(curves) || curves.length > 64 ||
+        !curves.every((point) => Number.isInteger(point.input) && Number.isInteger(point.output))) {
+      throw new TypeError("Adjustment curve points must contain integer input/output pairs");
+    }
+    const namePointer = this.#alloc(name.byteLength || 1);
+    const curvePointer = this.#alloc(Math.max(1, curves.length * 8));
+    const value = this.#alloc(ADJUSTMENT_INPUT_SIZE);
+    try {
+      this.#module.HEAPU8.set(name, namePointer);
+      const curveView = this.#view(curvePointer, Math.max(1, curves.length * 8));
+      curves.forEach((point, index) => { curveView.setInt32(index * 8, point.input, true);
+        curveView.setInt32(index * 8 + 4, point.output, true); });
+      const view = this.#view(value, ADJUSTMENT_INPUT_SIZE);
+      view.setUint32(0, ADJUSTMENT_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true); view.setBigUint64(16, snapshot.revision, true);
+      view.setBigUint64(24, layerId ?? 0n, true); view.setUint32(32, namePointer, true);
+      view.setUint32(36, name.byteLength, true); view.setUint32(40, input.kind, true);
+      values.forEach((item, index) => view.setInt32(44 + index * 4, item, true));
+      view.setUint32(76, curves.length ? curvePointer : 0, true); view.setUint32(80, curves.length, true);
+      view.setUint8(84, layerId == null ? 0 : 1);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_set_adjustment(session, value, event, error));
+    } finally {
+      this.#module._free(value); this.#module._free(curvePointer); this.#module._free(namePointer);
+    }
+  }
+
+  #path(input) {
+    const anchors = input?.anchors;
+    if (!Array.isArray(anchors) || anchors.length < 3 || anchors.length > 4096) {
+      throw new TypeError("Vector path requires between 3 and 4096 anchors");
+    }
+    const anchorPointer = this.#alloc(anchors.length * PATH_ANCHOR_SIZE);
+    const subpathPointer = this.#alloc(PATH_SUBPATH_SIZE);
+    try {
+      const anchorView = this.#view(anchorPointer, anchors.length * PATH_ANCHOR_SIZE);
+      anchors.forEach((anchor, index) => {
+        const values = [anchor.x, anchor.y, anchor.inX ?? anchor.x, anchor.inY ?? anchor.y,
+          anchor.outX ?? anchor.x, anchor.outY ?? anchor.y];
+        if (!values.every(Number.isFinite)) throw new TypeError("Vector path coordinates must be finite");
+        values.forEach((number, valueIndex) => anchorView.setFloat64(
+          index * PATH_ANCHOR_SIZE + valueIndex * 8, number, true));
+        anchorView.setUint8(index * PATH_ANCHOR_SIZE + 48, anchor.smooth ? 1 : 0);
+      });
+      const subpathView = this.#view(subpathPointer, PATH_SUBPATH_SIZE);
+      subpathView.setUint32(0, 0, true); subpathView.setUint32(4, anchors.length, true);
+      subpathView.setInt32(8, 0, true); subpathView.setUint32(12, 1, true); subpathView.setUint8(16, 1);
+      return { anchorPointer, anchorCount: anchors.length, subpathPointer };
+    } catch (error) {
+      this.#module._free(subpathPointer); this.#module._free(anchorPointer); throw error;
+    }
+  }
+
+  #writePath(view, offset, path) {
+    view.setUint32(offset, path.subpathPointer, true); view.setUint32(offset + 4, 1, true);
+    view.setUint32(offset + 8, path.anchorPointer, true); view.setUint32(offset + 12, path.anchorCount, true);
+  }
+
+  #releasePath(path) {
+    this.#module._free(path.subpathPointer); this.#module._free(path.anchorPointer);
+  }
+
+  #rgb(color, subject) {
+    if (!Array.isArray(color) || color.length !== 3 ||
+        !color.every((component) => Number.isInteger(component) && component >= 0 && component <= 255)) {
+      throw new TypeError(`${subject} must contain three byte values`);
+    }
+    return color;
   }
 
   #text(value, subject = "Layer names", maximum = 256) {

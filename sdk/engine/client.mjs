@@ -86,6 +86,30 @@ export class PatchyWorkerClient {
   updateTextLayer(layerId, input) {
     return this.#textLayerRequest("updateTextLayer", layerId, input);
   }
+  addAdjustment(input) { return this.#request("addAdjustment", { input }); }
+  updateAdjustment(layerId, input) {
+    return this.#request("updateAdjustment", { layerId: String(layerId), input });
+  }
+  addVectorShape(input) { return this.#request("addVectorShape", { input }); }
+  setVectorMask(layerId, input) {
+    return this.#request("setVectorMask", { layerId: String(layerId), input });
+  }
+  addSmartObject(input) {
+    const rgba = input.rgba.slice();
+    const sourceBytes = input.sourceBytes.slice();
+    return this.#request("addSmartObject", {
+      input: { ...input, rgba: rgba.buffer, sourceBytes: sourceBytes.buffer },
+    }, [rgba.buffer, sourceBytes.buffer]);
+  }
+  replaceSmartObject(layerId, input) {
+    const rgba = input.rgba.slice(); const sourceBytes = input.sourceBytes.slice();
+    return this.#request("replaceSmartObject", { layerId: String(layerId),
+      input: { ...input, rgba: rgba.buffer, sourceBytes: sourceBytes.buffer } },
+    [rgba.buffer, sourceBytes.buffer]);
+  }
+  setSmartFilter(layerId, input) {
+    return this.#request("setSmartFilter", { layerId: String(layerId), input });
+  }
   moveLayer(layerId, targetLayerId, position) {
     return this.#request("moveLayer", {
       layerId: String(layerId),

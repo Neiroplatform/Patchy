@@ -3426,6 +3426,41 @@ void engine_host_protocol_authors_nondestructive_workflow() {
         PATCHY_ENGINE_SMART_FILTER_GAUSSIAN_BLUR);
   CHECK(projected_filter.first_amount == 1.25);
 
+  const auto smart_revision_before_replace = project().revision;
+  const std::array<std::uint8_t, 9> replacement_bytes{
+      '8', 'B', 'P', 'S', 9, 8, 7, 6, 5};
+  auto replacement_pixels = pixels;
+  replacement_pixels[0] = 240;
+  const auto before_replace = project();
+  smart.expected_state_id = before_replace.state_id;
+  smart.expected_revision = before_replace.revision;
+  smart.rgba = replacement_pixels.data();
+  smart.rgba_size = replacement_pixels.size();
+  smart.name = "Replaced object";
+  smart.name_size = std::strlen(smart.name);
+  smart.filename = "replacement.psb";
+  smart.filename_size = std::strlen(smart.filename);
+  smart.source_bytes = replacement_bytes.data();
+  smart.source_size = replacement_bytes.size();
+  CHECK(patchy_engine_session_replace_smart_object(
+            session, smart_id, &smart, &event, &error) == 1);
+  CHECK(project().revision == smart_revision_before_replace + 1);
+  patchy_engine_smart_object_projection projected_smart{};
+  projected_smart.struct_size = sizeof(projected_smart);
+  CHECK(patchy_engine_session_smart_object(
+            session, smart_id, &projected_smart, &error) == 1);
+  CHECK(std::string(projected_smart.filename, projected_smart.filename_size) ==
+        "replacement.psb");
+  CHECK(projected_smart.source_size == replacement_bytes.size());
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  projected_smart = {};
+  projected_smart.struct_size = sizeof(projected_smart);
+  CHECK(patchy_engine_session_smart_object(
+            session, smart_id, &projected_smart, &error) == 1);
+  CHECK(std::string(projected_smart.filename, projected_smart.filename_size) ==
+        "filter-source.psb");
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+
   patchy_engine_buffer rendered{};
   CHECK(patchy_engine_session_render(session, {0, 0, 6, 4}, &rendered,
                                      &event, &error) == 1);
@@ -3448,6 +3483,11 @@ void engine_host_protocol_authors_nondestructive_workflow() {
   CHECK(patchy_engine_session_smart_filter(
             reopened, smart_id, &projected_filter, &error) == 1);
   CHECK(projected_filter.first_amount == 1.25);
+  projected_smart = {};
+  projected_smart.struct_size = sizeof(projected_smart);
+  CHECK(patchy_engine_session_smart_object(
+            reopened, smart_id, &projected_smart, &error) == 1);
+  CHECK(projected_smart.source_size == replacement_bytes.size());
   patchy_engine_buffer reopened_render{};
   CHECK(patchy_engine_session_render(reopened, {0, 0, 6, 4},
                                      &reopened_render, &event, &error) == 1);

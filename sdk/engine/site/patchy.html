@@ -101,11 +101,16 @@
             <button type="button" id="removeLayerButton" disabled>Delete</button>
             <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
             <button type="button" id="textLayerButton" disabled>Add text</button>
+            <button type="button" id="shapeLayerButton" disabled>Add shape</button>
+            <button type="button" id="adjustmentLayerButton" disabled>Add adjustment</button>
+            <button type="button" id="smartObjectButton" disabled>Place Smart Object</button>
+            <button type="button" id="smartFilterButton" disabled>Smart Filter</button>
             <button type="button" id="layerTransformButton" disabled>Transform</button>
             <button type="button" id="createMaskButton" disabled>Add mask</button>
             <button type="button" id="toggleMaskButton" disabled>Disable mask</button>
             <button type="button" id="invertMaskButton" disabled>Invert mask</button>
             <button type="button" id="removeMaskButton" disabled>Remove mask</button>
+            <button type="button" id="createVectorMaskButton" disabled>Vector mask</button>
           </div>
           <div class="layer-list" id="layerList" role="list" aria-label="Layers"></div>
           <div class="panel-empty" id="layersEmpty">Open a document to inspect its layers.</div>
@@ -141,6 +146,7 @@
     </div>
     <input id="fileInput" type="file" accept=".psd,.psb,application/octet-stream" hidden>
     <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif" hidden>
+    <input id="smartObjectInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif" hidden>
     <dialog class="document-dialog" id="documentDialog" aria-labelledby="documentDialogTitle">
       <form method="dialog">
         <header><div><p class="eyebrow">DOCUMENT</p><h2 id="documentDialogTitle">Canvas operations</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
@@ -204,6 +210,40 @@
           </div>
           <div class="dialog-actions"><button class="button button-primary" id="commitLayerTransformButton" type="button">Apply transform</button></div>
         </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="shapeDialog" aria-labelledby="shapeDialogTitle">
+      <form method="dialog"><header><div><p class="eyebrow">SHAPE</p><h2 id="shapeDialogTitle">Create vector shape</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section><div class="field-row field-row-four">
+          <label><span>X</span><input id="shapeXInput" type="number" step="1" required></label>
+          <label><span>Y</span><input id="shapeYInput" type="number" step="1" required></label>
+          <label><span>Width</span><input id="shapeWidthInput" type="number" min="1" step="1" required></label>
+          <label><span>Height</span><input id="shapeHeightInput" type="number" min="1" step="1" required></label>
+        </div><div class="field-row">
+          <label><span>Fill</span><input id="shapeFillInput" type="color" value="#4f7cff"></label>
+          <label><span>Stroke</span><input id="shapeStrokeInput" type="color" value="#10141d"></label>
+          <label><span>Stroke width</span><input id="shapeStrokeWidthInput" type="number" min="0" max="200" value="0"></label>
+        </div><div class="dialog-actions"><button class="button button-primary" id="commitShapeButton" type="button">Create shape</button></div></section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="adjustmentDialog" aria-labelledby="adjustmentDialogTitle">
+      <form method="dialog"><header><div><p class="eyebrow">ADJUSTMENT</p><h2 id="adjustmentDialogTitle">Adjustment layer</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section><label class="dialog-field"><span>Kind</span><select id="adjustmentKindInput">
+          <option value="7">Brightness / Contrast</option><option value="2">Hue / Saturation</option>
+          <option value="0">Levels</option><option value="1">Curves</option><option value="3">Color Balance</option>
+          <option value="4">Invert</option><option value="5">Posterize</option><option value="6">Threshold</option>
+        </select></label><div class="field-row">
+          <label><span>Primary value</span><input id="adjustmentValueOne" type="number" step="1" value="0"></label>
+          <label><span>Secondary value</span><input id="adjustmentValueTwo" type="number" step="1" value="0"></label>
+        </div><p class="dialog-note">Values are interpreted by the selected adjustment. Curves starts with a neutral RGB curve.</p>
+        <div class="dialog-actions"><button class="button button-primary" id="commitAdjustmentButton" type="button">Apply adjustment</button></div></section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="smartFilterDialog" aria-labelledby="smartFilterDialogTitle">
+      <form method="dialog"><header><div><p class="eyebrow">SMART FILTER</p><h2 id="smartFilterDialogTitle">Edit Smart Filter</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section><div class="field-row"><label><span>Filter</span><select id="smartFilterKindInput"><option value="1">Gaussian Blur</option><option value="2">High Pass</option><option value="3">Median</option><option value="4">Mosaic</option><option value="5">Box Blur</option></select></label>
+          <label><span>Amount</span><input id="smartFilterAmountInput" type="number" min="0.1" max="1000" step="0.1" value="8"></label></div>
+          <div class="dialog-actions"><button class="button button-primary" id="commitSmartFilterButton" type="button">Apply filter</button></div></section>
       </form>
     </dialog>
   </div>
