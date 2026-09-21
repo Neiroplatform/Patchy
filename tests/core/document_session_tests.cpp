@@ -1753,9 +1753,10 @@ void engine_session_commits_prepared_smart_filter_state_atomically() {
   layer.unknown_psd_blocks().push_back({"SoLd", {1, 2, 3}});
   patchy::SmartFilterStack original_stack;
   original_stack.support = patchy::SmartFilterStackSupport::Supported;
-  original_stack.entries.push_back(
-      patchy::SmartFilterEntry{.kind = patchy::SmartFilterKind::GaussianBlur,
-                               .parameters = patchy::GaussianBlurSmartFilter{2.0}});
+  patchy::SmartFilterEntry original_filter;
+  original_filter.kind = patchy::SmartFilterKind::GaussianBlur;
+  original_filter.parameters = patchy::GaussianBlurSmartFilter{2.0};
+  original_stack.entries.push_back(std::move(original_filter));
   layer.set_smart_filter_stack(original_stack);
   document.add_layer(std::move(layer));
   DocumentSession session(std::move(document));
