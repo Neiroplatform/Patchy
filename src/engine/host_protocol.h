@@ -11,6 +11,7 @@ extern "C" {
 
 typedef struct patchy_engine_runtime patchy_engine_runtime;
 typedef struct patchy_engine_session patchy_engine_session;
+typedef struct patchy_engine_cancellation patchy_engine_cancellation;
 
 enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_LAYER_PROJECTION = UINT64_C(1) << 0,
@@ -29,6 +30,10 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_PIXEL_AUTHORING = UINT64_C(1) << 13,
   PATCHY_ENGINE_CAP_PATH_PROJECTION = UINT64_C(1) << 14,
   PATCHY_ENGINE_CAP_VECTOR_AUTHORING = UINT64_C(1) << 15,
+  PATCHY_ENGINE_CAP_LAYER_MASK_AUTHORING = UINT64_C(1) << 16,
+  PATCHY_ENGINE_CAP_FILTER_AUTHORING = UINT64_C(1) << 17,
+  PATCHY_ENGINE_CAP_PROGRESS_CANCELLATION = UINT64_C(1) << 18,
+  PATCHY_ENGINE_CAP_EVENT_DRAIN = UINT64_C(1) << 19,
 };
 
 enum patchy_engine_error_code {
@@ -39,6 +44,7 @@ enum patchy_engine_error_code {
   PATCHY_ENGINE_ERROR_ALLOCATION = 4,
   PATCHY_ENGINE_ERROR_INTERNAL = 5,
   PATCHY_ENGINE_ERROR_STALE_STATE = 6,
+  PATCHY_ENGINE_ERROR_CANCELLED = 7,
 };
 
 typedef struct patchy_engine_error {
@@ -207,6 +213,68 @@ typedef struct patchy_engine_pixel_layer_input {
   size_t name_size;
   uint8_t rasterize_smart_object;
 } patchy_engine_pixel_layer_input;
+
+typedef struct patchy_engine_layer_mask_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  uint64_t layer_id;
+  patchy_engine_rect bounds;
+  int32_t width;
+  int32_t height;
+  const uint8_t *gray;
+  size_t gray_size;
+  uint8_t default_color;
+  uint8_t disabled;
+  uint8_t linked;
+  uint8_t has_mask;
+} patchy_engine_layer_mask_input;
+
+enum patchy_engine_filter_parameter_kind {
+  PATCHY_ENGINE_FILTER_PARAMETER_INTEGER = 0,
+  PATCHY_ENGINE_FILTER_PARAMETER_DOUBLE = 1,
+  PATCHY_ENGINE_FILTER_PARAMETER_BOOLEAN = 2,
+  PATCHY_ENGINE_FILTER_PARAMETER_OPTION = 3,
+};
+
+typedef struct patchy_engine_filter_parameter {
+  uint32_t kind;
+  uint32_t key_size;
+  char key[64];
+  union {
+    int64_t integer_value;
+    double double_value;
+    uint8_t boolean_value;
+    struct {
+      uint32_t size;
+      char value[128];
+    } option_value;
+  } value;
+} patchy_engine_filter_parameter;
+
+typedef struct patchy_engine_filter_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  uint64_t layer_id;
+  const char *filter_id;
+  size_t filter_id_size;
+  const patchy_engine_filter_parameter *parameters;
+  size_t parameter_count;
+  const patchy_engine_rect *selection;
+  size_t selection_count;
+} patchy_engine_filter_input;
+
+typedef int (*patchy_engine_render_progress_fn)(int32_t completed,
+                                                int32_t total,
+                                                void *user_data);
+typedef int (*patchy_engine_save_progress_fn)(uint32_t phase,
+                                              uint64_t logical_output_bytes,
+                                              void *user_data);
+typedef int (*patchy_engine_filter_progress_fn)(int32_t completed,
+                                                int32_t total,
+                                                uint32_t stage,
+                                                void *user_data);
 
 typedef struct patchy_engine_alpha_channel_input {
   uint32_t struct_size;
@@ -497,9 +565,21 @@ typedef struct patchy_engine_command {
   } payload;
 } patchy_engine_command;
 
+enum patchy_engine_event_kind {
+  PATCHY_ENGINE_EVENT_COMMAND_APPLIED = 0,
+  PATCHY_ENGINE_EVENT_SELECTION_CHANGED = 1,
+  PATCHY_ENGINE_EVENT_PREVIEW_STARTED = 2,
+  PATCHY_ENGINE_EVENT_PREVIEW_UPDATED = 3,
+  PATCHY_ENGINE_EVENT_PREVIEW_ENDED = 4,
+  PATCHY_ENGINE_EVENT_UNDO_APPLIED = 5,
+  PATCHY_ENGINE_EVENT_REDO_APPLIED = 6,
+  PATCHY_ENGINE_EVENT_SAVED = 7,
+};
+
 typedef struct patchy_engine_event {
   uint32_t struct_size;
   uint32_t protocol_version;
+  uint32_t kind;
   uint64_t revision;
   uint64_t state_id;
   uint64_t affected_layer_id;
@@ -514,6 +594,11 @@ int patchy_engine_get_protocol_info(patchy_engine_protocol_info *info,
 patchy_engine_runtime *patchy_engine_runtime_create(uint32_t requested_version,
                                                     patchy_engine_error *error);
 void patchy_engine_runtime_destroy(patchy_engine_runtime *runtime);
+patchy_engine_cancellation *patchy_engine_cancellation_create(
+    patchy_engine_error *error);
+void patchy_engine_cancellation_cancel(patchy_engine_cancellation *cancellation);
+void patchy_engine_cancellation_destroy(
+    patchy_engine_cancellation *cancellation);
 
 patchy_engine_session *patchy_engine_session_open_psd(
     patchy_engine_runtime *runtime, const uint8_t *data, size_t size,
@@ -565,6 +650,15 @@ int patchy_engine_session_replace_rgba8_layer(
     patchy_engine_session *session,
     const patchy_engine_pixel_layer_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_set_layer_mask(
+    patchy_engine_session *session,
+    const patchy_engine_layer_mask_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_apply_filter(
+    patchy_engine_session *session, const patchy_engine_filter_input *input,
+    patchy_engine_filter_progress_fn progress, void *progress_user_data,
+    patchy_engine_cancellation *cancellation, patchy_engine_event *event,
+    patchy_engine_error *error);
 int patchy_engine_session_add_alpha_channel(
     patchy_engine_session *session,
     const patchy_engine_alpha_channel_input *input,
@@ -607,10 +701,26 @@ int patchy_engine_session_render(patchy_engine_session *session,
                                  patchy_engine_buffer *rgba,
                                  patchy_engine_event *event,
                                  patchy_engine_error *error);
+int patchy_engine_session_render_with_progress(
+    patchy_engine_session *session, patchy_engine_rect region,
+    patchy_engine_render_progress_fn progress, void *progress_user_data,
+    patchy_engine_cancellation *cancellation, patchy_engine_buffer *rgba,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_save_psd(patchy_engine_session *session,
                                    patchy_engine_buffer *psd,
                                    patchy_engine_event *event,
                                    patchy_engine_error *error);
+int patchy_engine_session_save_psd_with_progress(
+    patchy_engine_session *session, patchy_engine_save_progress_fn progress,
+    void *progress_user_data, patchy_engine_cancellation *cancellation,
+    patchy_engine_buffer *psd, patchy_engine_event *event,
+    patchy_engine_error *error);
+int patchy_engine_session_event_count(const patchy_engine_session *session,
+                                      size_t *count, uint64_t *dropped,
+                                      patchy_engine_error *error);
+int patchy_engine_session_pop_event(patchy_engine_session *session,
+                                    patchy_engine_event *event,
+                                    patchy_engine_error *error);
 int patchy_engine_session_mark_saved(patchy_engine_session *session,
                                      uint64_t expected_state_id,
                                      patchy_engine_event *event,

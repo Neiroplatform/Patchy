@@ -2778,6 +2778,181 @@ void engine_host_protocol_authors_pixels_channels_and_selection() {
   patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_runs_mask_filter_async_lifecycle() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 2, 2, &error);
+  CHECK(session != nullptr);
+  const auto project = [&]() {
+    patchy_engine_document_projection document{};
+    document.struct_size = sizeof(document);
+    CHECK(patchy_engine_session_document(session, &document, &error) == 1);
+    return document;
+  };
+
+  const std::array<std::uint8_t, 16> pixels{
+      20, 40, 60, 255, 20, 40, 60, 255,
+      20, 40, 60, 255, 20, 40, 60, 255};
+  const auto initial = project();
+  patchy_engine_pixel_layer_input add{};
+  add.struct_size = sizeof(add);
+  add.expected_state_id = initial.state_id;
+  add.expected_revision = initial.revision;
+  add.bounds = {0, 0, 2, 2};
+  add.width = 2;
+  add.height = 2;
+  add.rgba = pixels.data();
+  add.rgba_size = pixels.size();
+  add.name = "Async pixels";
+  add.name_size = std::strlen(add.name);
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &add, &event, &error) ==
+        1);
+  const auto layer_id = event.affected_layer_id;
+
+  const std::array<std::uint8_t, 4> mask_pixels{255, 0, 128, 255};
+  const auto before_mask = project();
+  patchy_engine_layer_mask_input mask{};
+  mask.struct_size = sizeof(mask);
+  mask.expected_state_id = before_mask.state_id;
+  mask.expected_revision = before_mask.revision;
+  mask.layer_id = layer_id;
+  mask.bounds = {0, 0, 2, 2};
+  mask.width = 2;
+  mask.height = 2;
+  mask.gray = mask_pixels.data();
+  mask.gray_size = mask_pixels.size();
+  mask.default_color = 255;
+  mask.has_mask = 1;
+  CHECK(patchy_engine_session_set_layer_mask(session, &mask, &event, &error) ==
+        1);
+
+  struct FilterProgressState {
+    int calls{0};
+    int completed{0};
+  } filter_state;
+  const auto filter_callback = [](std::int32_t completed, std::int32_t,
+                                  std::uint32_t, void *user_data) -> int {
+    auto &state = *static_cast<FilterProgressState *>(user_data);
+    ++state.calls;
+    state.completed = std::max(state.completed, static_cast<int>(completed));
+    return 1;
+  };
+  const auto before_filter = project();
+  patchy_engine_filter_input filter{};
+  filter.struct_size = sizeof(filter);
+  filter.expected_state_id = before_filter.state_id;
+  filter.expected_revision = before_filter.revision;
+  filter.layer_id = layer_id;
+  filter.filter_id = "patchy.filters.invert";
+  filter.filter_id_size = std::strlen(filter.filter_id);
+  CHECK(patchy_engine_session_apply_filter(
+            session, &filter, filter_callback, &filter_state, nullptr, &event,
+            &error) == 1);
+  CHECK(filter_state.calls > 0);
+
+  struct RenderProgressState {
+    int calls{0};
+    int completed{0};
+  } render_state;
+  const auto render_callback = [](std::int32_t completed, std::int32_t,
+                                  void *user_data) -> int {
+    auto &state = *static_cast<RenderProgressState *>(user_data);
+    ++state.calls;
+    state.completed = std::max(state.completed, static_cast<int>(completed));
+    return 1;
+  };
+  patchy_engine_buffer rendered{};
+  CHECK(patchy_engine_session_render_with_progress(
+            session, {0, 0, 2, 2}, render_callback, &render_state, nullptr,
+            &rendered, &event, &error) == 1);
+  CHECK(render_state.calls > 0);
+  CHECK(rendered.size == 16);
+  CHECK(rendered.data[0] == 235);
+  CHECK(rendered.data[1] == 215);
+  CHECK(rendered.data[2] == 195);
+  CHECK(rendered.data[3] == 255);
+  CHECK(rendered.data[7] == 0);
+
+  auto *cancelled = patchy_engine_cancellation_create(&error);
+  CHECK(cancelled != nullptr);
+  patchy_engine_cancellation_cancel(cancelled);
+  patchy_engine_buffer cancelled_output{};
+  CHECK(patchy_engine_session_render_with_progress(
+            session, {0, 0, 2, 2}, render_callback, &render_state, cancelled,
+            &cancelled_output, &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(cancelled_output.data == nullptr);
+  CHECK(patchy_engine_session_save_psd_with_progress(
+            session, nullptr, nullptr, cancelled, &cancelled_output, &event,
+            &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  const auto before_cancelled_filter = project();
+  filter.expected_state_id = before_cancelled_filter.state_id;
+  filter.expected_revision = before_cancelled_filter.revision;
+  CHECK(patchy_engine_session_apply_filter(
+            session, &filter, filter_callback, &filter_state, cancelled, &event,
+            &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(project().state_id == before_cancelled_filter.state_id);
+  patchy_engine_cancellation_destroy(cancelled);
+
+  std::size_t event_count = 0;
+  std::uint64_t dropped = 0;
+  CHECK(patchy_engine_session_event_count(session, &event_count, &dropped,
+                                          &error) == 1);
+  CHECK(event_count == 3);
+  CHECK(dropped == 0);
+  for (std::size_t index = 0; index < event_count; ++index) {
+    patchy_engine_event queued{};
+    CHECK(patchy_engine_session_pop_event(session, &queued, &error) == 1);
+    CHECK(queued.kind == PATCHY_ENGINE_EVENT_COMMAND_APPLIED);
+    CHECK(queued.state_id != 0);
+  }
+
+  struct SaveProgressState {
+    int calls{0};
+    std::uint32_t phase{0};
+    std::uint64_t bytes{0};
+  } save_state;
+  const auto save_callback = [](std::uint32_t phase, std::uint64_t bytes,
+                                void *user_data) -> int {
+    auto &state = *static_cast<SaveProgressState *>(user_data);
+    CHECK(phase >= state.phase);
+    if (phase == state.phase) {
+      CHECK(bytes >= state.bytes);
+    }
+    ++state.calls;
+    state.phase = phase;
+    state.bytes = bytes;
+    return 1;
+  };
+  patchy_engine_buffer psd{};
+  CHECK(patchy_engine_session_save_psd_with_progress(
+            session, save_callback, &save_state, nullptr, &psd, &event,
+            &error) == 1);
+  CHECK(save_state.calls > 0);
+  auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
+                                                  &error);
+  CHECK(reopened != nullptr);
+  patchy_engine_buffer reopened_render{};
+  CHECK(patchy_engine_session_render(reopened, {0, 0, 2, 2}, &reopened_render,
+                                     &event, &error) == 1);
+  CHECK(reopened_render.size == rendered.size);
+  CHECK(std::equal(reopened_render.data,
+                   reopened_render.data + reopened_render.size,
+                   rendered.data));
+
+  patchy_engine_buffer_release(&reopened_render);
+  patchy_engine_session_destroy(reopened);
+  patchy_engine_buffer_release(&psd);
+  patchy_engine_buffer_release(&rendered);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -2852,5 +3027,7 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_authors_layers_and_document_geometry},
       {"engine_host_protocol_authors_pixels_channels_and_selection",
        engine_host_protocol_authors_pixels_channels_and_selection},
+      {"engine_host_protocol_runs_mask_filter_async_lifecycle",
+       engine_host_protocol_runs_mask_filter_async_lifecycle},
   };
 }

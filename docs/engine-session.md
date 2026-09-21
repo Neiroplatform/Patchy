@@ -173,16 +173,26 @@ solid layers and groups, remove/move/ungroup them, edit visibility/name/opacity/
 fill/blend/locks/clipping, resize image/canvas, rotate or crop, then render,
 undo/redo, encode layered PSD and acknowledge durable persistence separately.
 The save acknowledgement is also state-guarded, so bytes from an older state
-cannot clear the dirty flag of a newer edit. Core contract fixtures execute
-The protocol also projects committed selection rectangles/soft mask, saved
+cannot clear the dirty flag of a newer edit. The protocol also projects
+committed selection rectangles/soft mask, saved
 channels and complete document-path knots. It accepts bounded RGBA8 layer
 add/replace payloads, full-canvas alpha-channel payloads and solid-fill/stroke
 vector shapes, while selection morphology, channel CRUD/reorder/load and path
 CRUD/reorder/clipping/select commands reuse the same canonical engine history.
+Raster layer masks and parameterized destructive filters now cross the same
+revision-and-state guarded boundary. Render, PSD encode and filter execution
+expose C callbacks for cooperative progress/cancellation; cancellation returns
+a typed error, publishes no partial output and does not advance canonical
+state. Each session also drains engine events through a fixed-capacity FIFO:
+events retain their command/selection/preview/history/save kind, revision,
+state identity, dirty flag, affected layer and dirty region, while an explicit
+dropped counter makes a slow browser consumer observable without allocating
+inside the engine event callback.
 Core contract fixtures execute `open → inspect → render → mutate → undo → redo
 → save → reopen`, `create → author layers/tree/geometry → render → save-ack →
-reopen` and `upload pixels → select → author channel/path/vector → save →
-reopen` in every native or wasm-core build, and the header is valid strict C11.
+reopen`, `upload pixels → select → author channel/path/vector → save → reopen`
+and `upload → mask → filter → progress/cancel → drain events → save → reopen`
+in every native or wasm-core build, and the header is valid strict C11.
 
 The build recursively rejects any Qt target in `patchy_engine`'s dependency
 tree and rejects Qt includes in the public engine facade at configure time. A
@@ -230,9 +240,8 @@ or a second dirty/revision counter is forbidden.
 
 - run the versioned host sequence under the supported wasm-core/Qt-WASM
   toolchain and compare its event/projection/output contract with native;
-- extend the private host protocol with masks, text/Smart Object/filter payloads,
-  progress/cancellation and event draining without stabilizing it as public ABI
-  prematurely;
+- extend the private host protocol with text and Smart Object payloads without
+  stabilizing it as public ABI prematurely;
 - migrate remaining unrelated direct shell mutations by cohesive command
   family while keeping desktop, scripting and browser hosts on one model;
 - complete Windows/WASM, corpus, Photoshop and independent review gates before

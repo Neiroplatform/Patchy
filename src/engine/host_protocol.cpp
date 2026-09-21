@@ -3,6 +3,7 @@
 #include "engine/document_session.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +22,14 @@ struct patchy_engine_runtime {
 
 struct patchy_engine_session {
   std::unique_ptr<patchy::engine::DocumentSession> value;
+  std::array<patchy_engine_event, 256> events{};
+  std::size_t event_start{0};
+  std::size_t event_count{0};
+  std::uint64_t dropped_events{0};
+};
+
+struct patchy_engine_cancellation {
+  patchy::engine::CancellationToken value;
 };
 
 namespace {
@@ -28,6 +37,46 @@ namespace {
 using patchy::engine::CommandResult;
 using patchy::engine::DocumentSession;
 using patchy::engine::SessionError;
+
+void enqueue_event(patchy_engine_session &session,
+                   const patchy::engine::SessionEvent &source) noexcept {
+  patchy_engine_event event{};
+  event.struct_size = sizeof(event);
+  event.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  event.kind = static_cast<std::uint32_t>(source.kind);
+  event.revision = source.revision;
+  event.state_id = source.state_id;
+  event.affected_layer_id = source.layer_id;
+  event.changed = 1U;
+  event.dirty = source.dirty ? 1U : 0U;
+  if (source.affected_region.has_value()) {
+    event.has_affected_region = 1U;
+    event.affected_region = {source.affected_region->x, source.affected_region->y,
+                             source.affected_region->width,
+                             source.affected_region->height};
+  }
+  if (session.event_count == session.events.size()) {
+    session.event_start = (session.event_start + 1U) % session.events.size();
+    --session.event_count;
+    ++session.dropped_events;
+  }
+  const auto index =
+      (session.event_start + session.event_count) % session.events.size();
+  session.events[index] = event;
+  ++session.event_count;
+}
+
+patchy_engine_session *make_session(
+    std::unique_ptr<patchy::engine::DocumentSession> value) {
+  auto result = std::make_unique<patchy_engine_session>();
+  result->value = std::move(value);
+  auto *raw = result.get();
+  raw->value->set_event_sink(
+      [raw](const patchy::engine::SessionEvent &event) noexcept {
+        enqueue_event(*raw, event);
+      });
+  return result.release();
+}
 
 static_assert(static_cast<std::uint32_t>(patchy::ColorMode::RGB) ==
               PATCHY_ENGINE_COLOR_MODE_RGB);
@@ -67,7 +116,11 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_SAVED_CHANNELS |
     PATCHY_ENGINE_CAP_PIXEL_AUTHORING |
     PATCHY_ENGINE_CAP_PATH_PROJECTION |
-    PATCHY_ENGINE_CAP_VECTOR_AUTHORING;
+    PATCHY_ENGINE_CAP_VECTOR_AUTHORING |
+    PATCHY_ENGINE_CAP_LAYER_MASK_AUTHORING |
+    PATCHY_ENGINE_CAP_FILTER_AUTHORING |
+    PATCHY_ENGINE_CAP_PROGRESS_CANCELLATION |
+    PATCHY_ENGINE_CAP_EVENT_DRAIN;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -87,7 +140,11 @@ int fail(patchy_engine_error *error, std::uint32_t code,
 }
 
 int fail(patchy_engine_error *error, const SessionError &session_error) noexcept {
-  return fail(error, PATCHY_ENGINE_ERROR_ENGINE, session_error.message);
+  const auto code =
+      session_error.code == patchy::engine::SessionErrorCode::Cancelled
+          ? PATCHY_ENGINE_ERROR_CANCELLED
+          : PATCHY_ENGINE_ERROR_ENGINE;
+  return fail(error, code, session_error.message);
 }
 
 patchy::EditColor edit_color(std::uint8_t red, std::uint8_t green,
@@ -283,6 +340,7 @@ void publish_event(const DocumentSession &session, const CommandResult &result,
   *event = {};
   event->struct_size = sizeof(*event);
   event->protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  event->kind = PATCHY_ENGINE_EVENT_COMMAND_APPLIED;
   event->revision = session.revision();
   event->state_id = session.state_id();
   event->affected_layer_id = result.affected_layer_id;
@@ -386,6 +444,33 @@ void patchy_engine_runtime_destroy(patchy_engine_runtime *runtime) {
   delete runtime;
 }
 
+patchy_engine_cancellation *patchy_engine_cancellation_create(
+    patchy_engine_error *error) {
+  clear_error(error);
+  try {
+    return new patchy_engine_cancellation{};
+  } catch (const std::bad_alloc &) {
+    fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+         "could not allocate cancellation token");
+  } catch (...) {
+    fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+         "unknown cancellation token failure");
+  }
+  return nullptr;
+}
+
+void patchy_engine_cancellation_cancel(
+    patchy_engine_cancellation *cancellation) {
+  if (cancellation != nullptr) {
+    cancellation->value.cancel();
+  }
+}
+
+void patchy_engine_cancellation_destroy(
+    patchy_engine_cancellation *cancellation) {
+  delete cancellation;
+}
+
 patchy_engine_session *patchy_engine_session_open_psd(
     patchy_engine_runtime *runtime, const std::uint8_t *data, std::size_t size,
     patchy_engine_error *error) {
@@ -401,7 +486,7 @@ patchy_engine_session *patchy_engine_session_open_psd(
       fail(error, opened.error);
       return nullptr;
     }
-    return new patchy_engine_session{std::move(opened.session)};
+    return make_session(std::move(opened.session));
   } catch (const std::bad_alloc &) {
     fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
          "could not allocate engine session");
@@ -423,8 +508,8 @@ patchy_engine_session *patchy_engine_session_create_rgba8(
     return nullptr;
   }
   try {
-    return new patchy_engine_session{std::make_unique<DocumentSession>(
-        patchy::Document(width, height, patchy::PixelFormat::rgba8()))};
+    return make_session(std::make_unique<DocumentSession>(
+        patchy::Document(width, height, patchy::PixelFormat::rgba8())));
   } catch (const std::bad_alloc &) {
     fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
          "could not allocate engine session");
@@ -782,6 +867,166 @@ int patchy_engine_session_replace_rgba8_layer(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown RGBA8 replacement failure");
+  }
+}
+
+int patchy_engine_session_set_layer_mask(
+    patchy_engine_session *session,
+    const patchy_engine_layer_mask_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->layer_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete layer mask input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  try {
+    std::optional<patchy::LayerMask> mask;
+    if (input->has_mask != 0) {
+      if (input->gray == nullptr || input->width <= 0 || input->height <= 0 ||
+          input->bounds.width != input->width ||
+          input->bounds.height != input->height) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "mask pixels and matching geometry are required");
+      }
+      const auto width = static_cast<std::size_t>(input->width);
+      const auto height = static_cast<std::size_t>(input->height);
+      if (width > std::numeric_limits<std::size_t>::max() / height ||
+          input->gray_size != width * height) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "mask byte length does not match its geometry");
+      }
+      patchy::PixelBuffer pixels(input->width, input->height,
+                                 patchy::PixelFormat::gray8());
+      std::copy_n(input->gray, input->gray_size, pixels.data().begin());
+      mask = patchy::LayerMask{
+          {input->bounds.x, input->bounds.y, input->bounds.width,
+           input->bounds.height},
+          std::move(pixels), input->default_color, input->disabled != 0};
+    }
+    const auto result = session->value->execute(patchy::engine::SetLayerMaskState{
+        input->layer_id, std::move(mask), input->linked != 0});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer mask pixels");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer mask authoring failure");
+  }
+}
+
+int patchy_engine_session_apply_filter(
+    patchy_engine_session *session, const patchy_engine_filter_input *input,
+    patchy_engine_filter_progress_fn progress, void *progress_user_data,
+    patchy_engine_cancellation *cancellation, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->layer_id == 0 ||
+      input->parameter_count > 256U || input->selection_count > 65536U ||
+      (input->parameter_count != 0 && input->parameters == nullptr) ||
+      (input->selection_count != 0 && input->selection == nullptr)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete filter input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  if (cancellation != nullptr && cancellation->value.cancelled()) {
+    return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
+                "filter operation was cancelled");
+  }
+  try {
+    patchy::FilterInvocation invocation;
+    if (!copy_command_text(input->filter_id, input->filter_id_size, 128U,
+                           invocation.filter_id, error)) {
+      return 0;
+    }
+    for (std::size_t index = 0; index < input->parameter_count; ++index) {
+      const auto &source = input->parameters[index];
+      std::string key;
+      if (!copy_command_text(source.key, source.key_size, sizeof(source.key),
+                             key, error)) {
+        return 0;
+      }
+      switch (source.kind) {
+      case PATCHY_ENGINE_FILTER_PARAMETER_INTEGER:
+        invocation.parameters.emplace(std::move(key),
+                                      source.value.integer_value);
+        break;
+      case PATCHY_ENGINE_FILTER_PARAMETER_DOUBLE:
+        invocation.parameters.emplace(std::move(key),
+                                      source.value.double_value);
+        break;
+      case PATCHY_ENGINE_FILTER_PARAMETER_BOOLEAN:
+        invocation.parameters.emplace(std::move(key),
+                                      source.value.boolean_value != 0);
+        break;
+      case PATCHY_ENGINE_FILTER_PARAMETER_OPTION: {
+        std::string value;
+        if (!copy_command_text(source.value.option_value.value,
+                               source.value.option_value.size,
+                               sizeof(source.value.option_value.value), value,
+                               error)) {
+          return 0;
+        }
+        invocation.parameters.emplace(std::move(key), std::move(value));
+        break;
+      }
+      default:
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "filter parameter kind is invalid");
+      }
+    }
+    std::vector<patchy::Rect> selection;
+    selection.reserve(input->selection_count);
+    for (std::size_t index = 0; index < input->selection_count; ++index) {
+      const auto &rect = input->selection[index];
+      if (rect.width <= 0 || rect.height <= 0) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "filter selection rectangles must be positive");
+      }
+      selection.push_back({rect.x, rect.y, rect.width, rect.height});
+    }
+    patchy::FilterProgress filter_progress{
+        [progress, progress_user_data, cancellation](
+            int completed, int total, patchy::FilterProgressStage stage) {
+          if (cancellation != nullptr && cancellation->value.cancelled()) {
+            return false;
+          }
+          return progress == nullptr ||
+                 progress(completed, total, static_cast<std::uint32_t>(stage),
+                          progress_user_data) != 0;
+        }};
+    const auto result = session->value->execute(
+        patchy::engine::ApplyFilter{input->layer_id, std::move(invocation),
+                                   std::move(selection)},
+        &filter_progress);
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate filter payload");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown filter authoring failure");
   }
 }
 
@@ -1445,14 +1690,38 @@ int patchy_engine_session_render(patchy_engine_session *session,
                                  patchy_engine_buffer *rgba,
                                  patchy_engine_event *event,
                                  patchy_engine_error *error) {
+  return patchy_engine_session_render_with_progress(
+      session, region, nullptr, nullptr, nullptr, rgba, event, error);
+}
+
+int patchy_engine_session_render_with_progress(
+    patchy_engine_session *session, patchy_engine_rect region,
+    patchy_engine_render_progress_fn progress, void *progress_user_data,
+    patchy_engine_cancellation *cancellation, patchy_engine_buffer *rgba,
+    patchy_engine_event *event, patchy_engine_error *error) {
   clear_error(error);
   if (session == nullptr || session->value == nullptr || rgba == nullptr) {
     return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
                 "session and render output are required");
   }
+  if (cancellation != nullptr && cancellation->value.cancelled()) {
+    return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
+                "render operation was cancelled");
+  }
   try {
+    const patchy::engine::OperationProgress operation_progress{
+        [progress, progress_user_data, cancellation](std::int32_t completed,
+                                                     std::int32_t total) {
+          if (cancellation != nullptr && cancellation->value.cancelled()) {
+            return false;
+          }
+          return progress == nullptr ||
+                 progress(completed, total, progress_user_data) != 0;
+        }};
     const auto rendered = session->value->render(
-        {region.x, region.y, region.width, region.height});
+        {region.x, region.y, region.width, region.height},
+        cancellation == nullptr ? nullptr : &cancellation->value,
+        &operation_progress);
     if (!rendered) {
       return fail(error, rendered.error);
     }
@@ -1473,13 +1742,39 @@ int patchy_engine_session_save_psd(patchy_engine_session *session,
                                    patchy_engine_buffer *psd,
                                    patchy_engine_event *event,
                                    patchy_engine_error *error) {
+  return patchy_engine_session_save_psd_with_progress(
+      session, nullptr, nullptr, nullptr, psd, event, error);
+}
+
+int patchy_engine_session_save_psd_with_progress(
+    patchy_engine_session *session, patchy_engine_save_progress_fn progress,
+    void *progress_user_data, patchy_engine_cancellation *cancellation,
+    patchy_engine_buffer *psd, patchy_engine_event *event,
+    patchy_engine_error *error) {
   clear_error(error);
   if (session == nullptr || session->value == nullptr || psd == nullptr) {
     return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
                 "session and save output are required");
   }
+  if (cancellation != nullptr && cancellation->value.cancelled()) {
+    return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
+                "save operation was cancelled");
+  }
   try {
-    const auto saved = session->value->encode_psd();
+    const patchy::engine::SaveOperationProgress save_progress{
+        [progress, progress_user_data, cancellation](
+            patchy::engine::SavePhase phase,
+            std::uint64_t logical_output_bytes) {
+          if (cancellation != nullptr && cancellation->value.cancelled()) {
+            return false;
+          }
+          return progress == nullptr ||
+                 progress(static_cast<std::uint32_t>(phase),
+                          logical_output_bytes, progress_user_data) != 0;
+        }};
+    const auto saved = session->value->encode_psd(
+        false, cancellation == nullptr ? nullptr : &cancellation->value,
+        &save_progress);
     if (!saved) {
       return fail(error, saved.error);
     }
@@ -1494,6 +1789,40 @@ int patchy_engine_session_save_psd(patchy_engine_session *session,
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown save failure");
   }
+}
+
+int patchy_engine_session_event_count(const patchy_engine_session *session,
+                                      std::size_t *count,
+                                      std::uint64_t *dropped,
+                                      patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || count == nullptr ||
+      dropped == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and event counters are required");
+  }
+  *count = session->event_count;
+  *dropped = session->dropped_events;
+  return 1;
+}
+
+int patchy_engine_session_pop_event(patchy_engine_session *session,
+                                    patchy_engine_event *event,
+                                    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || event == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and event output are required");
+  }
+  if (session->event_count == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session event queue is empty");
+  }
+  *event = session->events[session->event_start];
+  session->event_start =
+      (session->event_start + 1U) % session->events.size();
+  --session->event_count;
+  return 1;
 }
 
 int patchy_engine_session_mark_saved(patchy_engine_session *session,
