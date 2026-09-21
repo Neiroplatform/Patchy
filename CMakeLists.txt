@@ -555,6 +555,28 @@ if(PATCHY_BUILD_WASM_SDK)
     OUTPUT_NAME patchy-engine
     SUFFIX ".mjs")
   patchy_configure_target(patchy_engine_wasm_sdk)
+  set(PATCHY_WASM_SDK_SITE_DIR "${CMAKE_CURRENT_BINARY_DIR}/site")
+  add_custom_target(patchy_engine_wasm_site ALL
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${PATCHY_WASM_SDK_SITE_DIR}/engine"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/patchy.html"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.css"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.mjs"
+            "${PROJECT_SOURCE_DIR}/packaging/web/.htaccess"
+            "${PATCHY_WASM_SDK_SITE_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/sdk/engine/client.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/worker.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/worker-host.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/module-adapter.mjs"
+            "${PATCHY_WASM_SDK_SITE_DIR}/engine"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:patchy_engine_wasm_sdk>"
+            "$<TARGET_FILE_DIR:patchy_engine_wasm_sdk>/patchy-engine.wasm"
+            "${PATCHY_WASM_SDK_SITE_DIR}"
+    DEPENDS patchy_engine_wasm_sdk
+    COMMENT "Staging the self-hosted Patchy Worker editor")
 endif()
 
 if(PATCHY_BUILD_TESTS)

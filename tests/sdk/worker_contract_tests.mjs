@@ -16,6 +16,32 @@ test("WASM export manifest covers every engine symbol used by the adapter", asyn
   assert.equal(new Set(exportsList).size, exportsList.length);
 });
 
+test("self-hosted editor closes the minimal product workflow without remote assets", async () => {
+  const root = new URL("../../", import.meta.url);
+  const html = await readFile(new URL("sdk/engine/site/patchy.html", root), "utf8");
+  const css = await readFile(new URL("sdk/engine/site/editor.css", root), "utf8");
+  const script = await readFile(new URL("sdk/engine/site/editor.mjs", root), "utf8");
+  const nodeServer = await readFile(new URL("scripts/wasm/serve.mjs", root), "utf8");
+  const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
+  for (const id of ["openButton", "fileInput", "documentCanvas", "layerList",
+    "undoButton", "redoButton", "saveButton", "errorBanner"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  for (const method of ["client.open", "client.setLayerVisibility",
+    "client.moveLayer", "client.undo", "client.redo", "client.render", "client.save"]) {
+    assert.ok(script.includes(method), `${method} is not wired`);
+  }
+  assert.match(script, /from "\.\/engine\/client\.mjs"/);
+  assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
+  assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
+  assert.doesNotMatch(`${html}\n${css}\n${script}`, /https?:\/\//);
+  assert.match(css, /prefers-reduced-motion/);
+  assert.match(css, /@media \(max-width: 560px\)/);
+  assert.match(html, /role="alert"/);
+  assert.match(nodeServer, /'\.css': 'text\/css; charset=utf-8'/);
+  assert.match(pythonServer, /"\.css": "text\/css; charset=utf-8"/);
+});
+
 test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   const memory = new ArrayBuffer(1 << 20);
   const heap = new Uint8Array(memory);

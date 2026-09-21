@@ -16,6 +16,7 @@ const root = normalize(positional[0] ?? '.');
 const port = Number(positional[1] ?? 8973);
 const types = {
   '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript',
   '.mjs': 'text/javascript',
   '.wasm': 'application/wasm',

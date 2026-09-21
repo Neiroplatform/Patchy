@@ -239,6 +239,14 @@ the complete Worker workflow, transferable input ownership, output-buffer
 release, export closure and explicit crash state. The actual Emscripten build
 remains a required hosted gate when the pinned toolchain is available.
 
+The same preset stages `build/wasm-sdk/site`, a dependency-free self-hosted
+editor shell. It closes the first browser product loop: open or drop PSD,
+create a blank document, inspect layers, toggle visibility, reorder, undo/redo,
+render and download layered PSD. Empty, busy, drop, engine-error and Worker
+crash states remain explicit; the UI holds only projections and never becomes
+a second document owner. Download completion deliberately does not acknowledge
+durable save because the browser cannot prove that the user kept the file.
+
 ## Desktop transition
 
 The Qt shell now stores its canonical document, committed selection and all

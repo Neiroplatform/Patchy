@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Patchy Local Editor</title>
+  <link rel="stylesheet" href="./editor.css">
+</head>
+<body>
+  <div class="editor-shell" data-state="starting">
+    <header class="topbar">
+      <a class="brand" href="#workspace" aria-label="Patchy editor home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>Patchy</strong><small>local editor</small></span>
+      </a>
+      <nav class="document-actions" aria-label="Document actions">
+        <button class="button button-primary" id="openButton" type="button">Open PSD</button>
+        <button class="button" id="newButton" type="button">New</button>
+        <span class="action-divider" aria-hidden="true"></span>
+        <button class="icon-button" id="undoButton" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>↶</button>
+        <button class="icon-button" id="redoButton" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
+        <button class="button" id="saveButton" type="button" disabled>Download PSD</button>
+      </nav>
+      <div class="session-indicator" id="sessionIndicator" aria-live="polite">
+        <span class="status-dot"></span><span>Starting engine</span>
+      </div>
+    </header>
+
+    <main class="workspace" id="workspace">
+      <aside class="tool-rail" aria-label="Workspace tools">
+        <span class="tool-spacer"></span>
+        <button class="tool-button" id="togglePanelsButton" type="button" aria-label="Toggle panels" aria-pressed="false" title="Toggle panels">◫</button>
+      </aside>
+
+      <section class="stage" aria-label="Document canvas">
+        <div class="stage-meta" id="stageMeta" hidden>
+          <span id="documentName">Untitled</span>
+          <span id="documentMetrics"></span>
+        </div>
+        <div class="canvas-viewport" id="canvasViewport" tabindex="0">
+          <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
+          <div class="empty-state" id="emptyState">
+            <div class="empty-glyph" aria-hidden="true"><span></span></div>
+            <p class="eyebrow">LOCAL-FIRST WORKSPACE</p>
+            <h1>Open a layered document.<br>Keep it on this device.</h1>
+            <p>PSD bytes stay inside the browser Worker. Editing state is owned by the Patchy engine.</p>
+            <div class="empty-actions">
+              <button class="button button-primary button-large" id="emptyOpenButton" type="button">Choose a PSD</button>
+              <span>or drop it anywhere</span>
+            </div>
+          </div>
+          <div class="busy-state" id="busyState" role="status" aria-live="polite" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <strong id="busyTitle">Opening document</strong>
+            <span id="busyDetail">Reading layers and rendering pixels</span>
+          </div>
+          <div class="drop-state" id="dropState" hidden>
+            <strong>Drop to open locally</strong><span>No upload, no cloud copy</span>
+          </div>
+        </div>
+        <footer class="stage-footer">
+          <span id="zoomLabel">Fit</span>
+          <span class="privacy-label"><b></b>Local session</span>
+          <span id="memoryLabel">Worker isolated</span>
+        </footer>
+      </section>
+
+      <aside class="inspector" id="inspector" aria-label="Document panels">
+        <section class="panel layers-panel">
+          <header class="panel-header">
+            <div><p class="eyebrow">STRUCTURE</p><h2>Layers</h2></div>
+            <span class="layer-count" id="layerCount">0</span>
+          </header>
+          <div class="layer-list" id="layerList" role="list" aria-label="Layers"></div>
+          <div class="panel-empty" id="layersEmpty">Open a document to inspect its layers.</div>
+        </section>
+        <section class="panel details-panel">
+          <header class="panel-header"><div><p class="eyebrow">SESSION</p><h2>Document</h2></div></header>
+          <dl class="details-grid">
+            <div><dt>State</dt><dd id="detailState">No document</dd></div>
+            <div><dt>Format</dt><dd id="detailFormat">-</dd></div>
+            <div><dt>Canvas</dt><dd id="detailCanvas">-</dd></div>
+            <div><dt>Revision</dt><dd id="detailRevision">-</dd></div>
+          </dl>
+        </section>
+      </aside>
+    </main>
+
+    <div class="error-banner" id="errorBanner" role="alert" hidden>
+      <div><strong id="errorTitle">Could not open document</strong><span id="errorMessage"></span></div>
+      <button class="icon-button" id="dismissErrorButton" type="button" aria-label="Dismiss error">×</button>
+    </div>
+    <input id="fileInput" type="file" accept=".psd,.psb,application/octet-stream" hidden>
+  </div>
+  <script type="module" src="./editor.mjs"></script>
+</body>
+</html>

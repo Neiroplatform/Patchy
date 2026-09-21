@@ -70,21 +70,20 @@ skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
 
 ## Qt-free browser SDK
 
-`cmake --preset wasm-sdk` followed by `cmake --build --preset wasm-sdk`
-produces `build/wasm-sdk/patchy-engine.mjs` and its `.wasm` sidecar. The target
-is a no-entry ES module for Dedicated Workers, uses wasm BigInt for the C ABI's
-64-bit IDs and keeps the same growable 256 MB to 4 GB heap envelope as
-`wasm-core`. It contains no Qt or browser UI.
+`cmake --preset wasm-sdk` and `cmake --build --preset wasm-sdk` produce a
+no-entry Dedicated-Worker ES module (`patchy-engine.mjs` plus `.wasm`) and a
+deployable `build/wasm-sdk/site`. The module uses wasm BigInt for 64-bit IDs,
+a 256 MB–4 GB heap and no Qt. The local-first editor opens or drops PSD,
+creates a document, projects layers, toggles visibility, reorders, undo/redoes,
+renders and downloads PSD. It has no remote assets and exposes empty, busy,
+drop, engine-error and crash states.
 
-`sdk/engine/client.mjs` owns request correlation and crash state;
-`worker.mjs` owns one runtime/session; `module-adapter.mjs` is the only code
-that reads C ABI structures. Input is copied once into a transferable buffer
-before leaving the UI thread. Render and PSD outputs are copied into owned JS
-buffers before the engine buffer is released. The checked export manifest and
-wasm32 layout assertions fail closed when the C ABI or toolchain layout drifts.
-Run the platform-independent contract with
-`node --test tests/sdk/worker_contract_tests.mjs`; the real artifact still
-requires the pinned emsdk and the hosted wasm gate.
+`client.mjs` owns correlation/crash state, `worker.mjs` the runtime/session,
+and `module-adapter.mjs` reads C structures. Input is copied once; render/PSD
+outputs become owned JS buffers before engine release. Checked exports and
+wasm32 layout assertions fail closed on ABI drift. The Node contract covers
+self-hosted asset closure and CSS MIME support in both local servers;
+the real artifact still requires pinned emsdk and the hosted wasm gate.
 
 ## wasm-core preset decisions (all in CMakePresets.json)
 
