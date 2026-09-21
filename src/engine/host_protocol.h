@@ -48,6 +48,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_LAYER_WARP = UINT64_C(1) << 31,
   PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE = UINT64_C(1) << 32,
   PATCHY_ENGINE_CAP_PSB_SAVE_AS = UINT64_C(1) << 33,
+  PATCHY_ENGINE_CAP_LAYER_MASK_STROKE = UINT64_C(1) << 34,
 };
 
 enum patchy_engine_error_code {
@@ -1208,6 +1209,10 @@ int patchy_engine_session_set_layer_mask(
     patchy_engine_session *session,
     const patchy_engine_layer_mask_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_set_layer_mask_linked(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, uint64_t layer_id, uint8_t linked,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_layer_mask(
     const patchy_engine_session *session, uint64_t layer_id,
     patchy_engine_layer_mask_projection *mask, patchy_engine_error *error);
@@ -1351,6 +1356,16 @@ int patchy_engine_session_preview_raster_stroke(
     patchy_engine_rect *region, patchy_engine_buffer *rgba,
     patchy_engine_error *error);
 int patchy_engine_session_apply_raster_stroke(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_raster_stroke *stroke,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_preview_layer_mask_stroke(
+    const patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_raster_stroke *stroke,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error);
+int patchy_engine_session_apply_layer_mask_stroke(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const patchy_engine_raster_stroke *stroke,
     patchy_engine_event *event, patchy_engine_error *error);

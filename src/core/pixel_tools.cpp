@@ -570,6 +570,22 @@ struct TipDabTransform {
   return layer;
 }
 
+[[nodiscard]] static Layer* editable_stroke_layer(
+    Document& document, LayerId layer_id, const EditOptions& options) noexcept {
+  auto* layer = document.find_layer(layer_id);
+  if (layer == nullptr || layer->kind() != LayerKind::Pixel) {
+    return nullptr;
+  }
+  const auto format = layer->pixels().format();
+  const auto custom_gray_writer =
+      format.channels == 1 && static_cast<bool>(options.stroke_pixel_writer);
+  if (format.bit_depth != BitDepth::UInt8 ||
+      (format.channels < 3 && !custom_gray_writer)) {
+    return nullptr;
+  }
+  return layer;
+}
+
 namespace {
 
 [[nodiscard]] Rect clear_affected_rect(const Document& document, const Layer& layer, Rect rect,
@@ -1498,7 +1514,7 @@ Rect paint_brush_segment(Document& document, LayerId layer_id, double x0, double
     return paint_tip_segment(document, layer_id, x0, y0, x1, y1, options, erase, state);
   }
 
-  auto* layer = editable_layer(document, layer_id);
+  auto* layer = editable_stroke_layer(document, layer_id, options);
   if (layer == nullptr) {
     return {};
   }

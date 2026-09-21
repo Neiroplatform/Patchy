@@ -111,6 +111,18 @@ export class PatchyWorkerClient {
       layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
       expectedRevision: String(input.expectedRevision) });
   }
+  previewLayerMaskStroke(input) {
+    const cancellation = input.cancellation instanceof Int32Array
+      ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
+    return this.#request("previewLayerMaskStroke", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision), cancellation: cancellation.buffer });
+  }
+  applyLayerMaskStroke(input) {
+    return this.#request("applyLayerMaskStroke", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
   previewRasterFill(input) {
     const cancellation = input.cancellation instanceof Int32Array
       ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
@@ -232,6 +244,9 @@ export class PatchyWorkerClient {
   }
   invertLayerMask(layerId) {
     return this.#request("invertLayerMask", { layerId: String(layerId) });
+  }
+  setLayerMaskLinked(layerId, linked) {
+    return this.#request("setLayerMaskLinked", { layerId: String(layerId), linked: Boolean(linked) });
   }
   removeLayerMask(layerId) {
     return this.#request("removeLayerMask", { layerId: String(layerId) });

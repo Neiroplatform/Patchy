@@ -53,6 +53,10 @@ struct RasterFillRequest {
                                        const RasterStrokeRequest& request,
                                        RasterStrokeResult* result,
                                        std::string* error);
+[[nodiscard]] bool apply_layer_mask_stroke(Document& document, LayerId layer_id,
+                                           const RasterStrokeRequest& request,
+                                           RasterStrokeResult* result,
+                                           std::string* error);
 [[nodiscard]] bool apply_raster_fill(Document& document, LayerId layer_id,
                                      const RasterFillRequest& request,
                                      RasterStrokeResult* result,

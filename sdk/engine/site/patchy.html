@@ -73,6 +73,9 @@
           <span class="tool-options" id="toolOptions">
             <label>Size <input id="brushSizeInput" type="range" min="1" max="128" value="24"><output id="brushSizeOutput">24 px</output></label>
             <label>Color <input id="brushColorInput" type="color" value="#111111"></label>
+            <label>Target <select id="paintTargetSelect" aria-label="Paint target">
+              <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
+            </select></label>
             <label>Paint <select id="paintPresetSelect">
               <option value="foreground-transparent">Foreground → transparent</option>
               <option value="black-white">Black → white</option>
@@ -159,6 +162,7 @@
             <button type="button" id="layerWarpButton" disabled>Warp</button>
             <button type="button" id="createMaskButton" disabled>Add mask</button>
             <button type="button" id="toggleMaskButton" disabled>Disable mask</button>
+            <button type="button" id="linkMaskButton" disabled>Unlink mask</button>
             <button type="button" id="invertMaskButton" disabled>Invert mask</button>
             <button type="button" id="removeMaskButton" disabled>Remove mask</button>
             <button type="button" id="createVectorMaskButton" disabled>Vector mask</button>

@@ -31,6 +31,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
     "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "pastePixelsButton", "paintPresetSelect",
+    "paintTargetSelect", "linkMaskButton",
     "importLayerButton", "groupLayerButton", "removeLayerButton", "layerNameInput",
     "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
     "documentDialog", "resizeImageButton", "resizeCanvasButton", "rotateLeftButton",
@@ -82,8 +83,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.setSelection", "client.setSelectionMask", "client.quickSelect", "client.magneticLasso",
     "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
+    "client.setLayerMaskLinked",
     "client.layerThumbnail", "client.previewLayerTransform",
     "client.transformLayer", "client.previewRasterStroke", "client.applyRasterStroke",
+    "client.previewLayerMaskStroke", "client.applyLayerMaskStroke",
     "client.previewRasterFill", "client.applyRasterFill",
     "client.previewLayerWarp", "client.warpLayer",
     "client.addTextLayer",
@@ -112,7 +115,11 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.doesNotMatch(`${rasterPreviewFlow}\n${rasterCommitFlow}`,
     /client\.(?:layerPixels|replacePixelLayer)/);
   assert.match(rasterPreviewFlow, /client\.previewRasterStroke/);
+  assert.match(rasterPreviewFlow, /client\.previewLayerMaskStroke/);
+  assert.match(rasterPreviewFlow, /color: draft\.color/);
   assert.match(rasterCommitFlow, /client\.applyRasterStroke/);
+  assert.match(rasterCommitFlow, /client\.applyLayerMaskStroke/);
+  assert.match(script, /if \(!canPaintMask\) \{\s*\$\("paintTargetSelect"\)\.value = "pixels"/);
   assert.doesNotMatch(script, /client\.(?:layerPixels|replacePixelLayer)/);
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
   assert.match(script, /from "\.\/engine\/workspace-store\.mjs"/);
@@ -319,7 +326,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 34n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 35n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -489,6 +496,21 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.equal(view.getBigUint64(transform + 8, true), 7n);
       return 1;
     },
+    _patchy_engine_session_preview_layer_mask_stroke(session, state, revision,
+        stroke, progress, progressUserData, region, output) {
+      assert.deepEqual([session, state, revision], [22, 9n, 4n]);
+      assert.equal(view.getBigUint64(stroke + 8, true), 7n);
+      assert.equal(progress, 71); assert.equal(progressUserData, 0);
+      callbackReturns.push(callback(1, 0, 0));
+      [1, 0, 2, 2].forEach((value, index) => view.setInt32(region + index * 4, value, true));
+      const data = alloc(16); heap.fill(93, data, data + 16);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 16, true);
+      return 1;
+    },
+    _patchy_engine_session_apply_layer_mask_stroke(session, state, revision, stroke) {
+      assert.deepEqual([session, state, revision], [22, 9n, 4n]);
+      assert.equal(view.getBigUint64(stroke + 8, true), 7n); return 1;
+    },
     _patchy_engine_session_add_rgba8_layer(session, input) {
       assert.equal(view.getUint32(input, true), 80);
       assert.equal(view.getBigUint64(input + 8, true), 9n);
@@ -532,6 +554,12 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.equal(view.getUint32(input, true), 72);
       assert.equal(view.getBigUint64(input + 24, true), 7n);
       assert.equal(heap[input + 67], 1);
+      return 1;
+    },
+    _patchy_engine_session_set_layer_mask_linked(session, state, revision,
+        layerId, linked) {
+      assert.deepEqual([session, state, revision, layerId, linked],
+        [22, 9n, 4n, 7n, 0]);
       return 1;
     },
     _patchy_engine_session_layer_mask_pixels(session, layerId, output) {
@@ -629,7 +657,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 34n) - 1n);
+  assert.equal(engine.capabilities, (1n << 35n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -700,6 +728,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.addAlphaChannel(session, snapshot, { name: "Alpha", gray: new Uint8Array(6).fill(255) });
   engine.setLayerMask(session, snapshot, 7n, { bounds: { x: 0, y: 0, width: 2, height: 1 },
     gray: new Uint8Array([255, 0]), defaultColor: 0, linked: true });
+  engine.setLayerMaskLinked(session, snapshot, 7n, false);
   assert.deepEqual(Array.from(engine.layerMaskPixels(session, 7n)), [0, 255]);
   assert.deepEqual(Array.from(engine.layerPixels(session, 7n).subarray(0, 4)), [1, 2, 3, 4]);
   assert.deepEqual(engine.layerThumbnail(session, 7n, 2), {
@@ -744,6 +773,12 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(transformPreview.region, { x: 0, y: 0, width: 2, height: 2 });
   assert.equal(transformPreview.rgba.byteLength, 16);
   engine.transformLayer(session, snapshot, 7n, transformQuad, 1);
+  const maskStroke = { layerId: 7n, mode: 0, brushSize: 3,
+    color: [0, 0, 0, 255], points: [[1, 1], [2, 1]], source: [0, 0] };
+  const maskPreview = engine.previewLayerMaskStroke(session, snapshot, maskStroke);
+  assert.deepEqual(maskPreview.region, { x: 1, y: 0, width: 2, height: 2 });
+  assert.equal(maskPreview.rgba.byteLength, 16);
+  engine.applyLayerMaskStroke(session, snapshot, maskStroke);
   engine.ungroup(session, snapshot, 7n);
   engine.addPixelLayer(session, snapshot, { name: "Pixel", width: 1, height: 1,
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) });
@@ -765,14 +800,14 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(progress, [0.5, 1]);
   Atomics.store(cancellation, 0, 1);
   engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", [], cancellation);
-  assert.deepEqual(callbackReturns, [1, 1, 1, 0, 0]);
+  assert.deepEqual(callbackReturns, [1, 1, 1, 1, 0, 0]);
   assert.deepEqual(commandTypes, [2, 3, 6, 7, 35, 36, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
   assert.deepEqual(Array.from(engine.save(session, { largeDocument: true })), [56, 66, 80, 83]);
   assert.deepEqual(saveFormats, [0, 1]);
-  assert.equal(released, 9);
+  assert.equal(released, 10);
   engine.dispose();
   assert.equal(destroyed, 2);
 });
@@ -803,6 +838,15 @@ test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsup
   assert.equal(releases, 1);
   assert.throws(() => engine.save(99, { largeDocument: true }),
     (error) => error instanceof Error && error.code === 2 && /PSB Save As/.test(error.message));
+  const maskStroke = { layerId: 1n, mode: 0, brushSize: 1,
+    color: [0, 0, 0, 255], points: [[0, 0]], source: [0, 0] };
+  assert.throws(() => engine.previewLayerMaskStroke(99, { stateId: 1n, revision: 1n }, maskStroke),
+    (error) => error instanceof Error && error.code === 2 && /layer-mask strokes/.test(error.message));
+  assert.throws(() => engine.applyLayerMaskStroke(99, { stateId: 1n, revision: 1n }, maskStroke),
+    (error) => error instanceof Error && error.code === 2 && /layer-mask strokes/.test(error.message));
+  assert.throws(() => engine.setLayerMaskLinked(
+    99, { stateId: 1n, revision: 1n }, 1n, false),
+  (error) => error instanceof Error && error.code === 2 && /link state/.test(error.message));
   engine.dispose();
 });
 
@@ -825,6 +869,7 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   let selection = [];
   let mask = null;
   let maskPixels = new Uint8Array();
+  let maskPixelReads = 0;
   const calls = [];
   const engine = {
     capabilities: (1n << 26n) - 1n,
@@ -882,7 +927,12 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
         disabled: next.disabled, linked: next.linked } : null;
       maskPixels = next?.gray?.slice() || new Uint8Array(); revision++;
     },
-    layerMaskPixels() { return maskPixels.slice(); },
+    setLayerMaskLinked(session, before, layerId, linked) {
+      assert.equal(before.revision, BigInt(revision));
+      calls.push(["maskLinked", layerId, linked]);
+      mask = { ...mask, linked }; revision++;
+    },
+    layerMaskPixels() { maskPixelReads++; return maskPixels.slice(); },
     layerPixels() { return new Uint8Array(24).fill(9); },
     layerThumbnail() { return { width: 2, height: 1,
       rgba: new Uint8Array([1, 2, 3, 255, 4, 5, 6, 255]) }; },
@@ -974,6 +1024,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "rasterizeLayer", layerId: "7" });
   await host.dispatch({ method: "mergeVisibleCopy", name: "Merged" });
   assert.equal((await host.dispatch({ method: "createLayerMask", layerId: "7" })).layers[0].mask.defaultColor, 0);
+  assert.equal((await host.dispatch({ method: "setLayerMaskLinked", layerId: "7",
+    linked: false })).layers[0].mask.linked, false);
+  assert.equal(maskPixelReads, 0);
   assert.equal((await host.dispatch({ method: "toggleLayerMask", layerId: "7" })).layers[0].mask.disabled, true);
   await host.dispatch({ method: "invertLayerMask", layerId: "7" });
   assert.equal(maskPixels[0], 0);
@@ -1176,6 +1229,41 @@ test("worker previews and commits one exact-state raster stroke", async () => {
   const committed = await host.dispatch({ method: "applyRasterStroke", ...message });
   assert.equal(committed.revision, 5n);
   await assert.rejects(host.dispatch({ method: "applyRasterStroke", ...message }),
+    (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
+  host.dispose();
+});
+
+test("worker previews and commits one exact-state layer-mask stroke", async () => {
+  let revision = 4n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 34n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision), true, {
+      bounds: { x: 0, y: 0, width: 3, height: 2 }, defaultColor: 255,
+      disabled: false, linked: false,
+    }), revision, stateId: revision }; },
+    previewLayerMaskStroke(session, before, input) {
+      calls.push(["preview", session, before.revision, input]);
+      return { region: { x: 1, y: 0, width: 2, height: 2 }, rgba: new Uint8Array(16) };
+    },
+    applyLayerMaskStroke(session, before, input) {
+      calls.push(["commit", session, before.revision, input]); revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 8, height: 4, name: "Mask.psb" });
+  const message = { layerId: "7", mode: 0, brushSize: 4, color: [0, 0, 0, 255],
+    points: [[1, 1], [4, 2]], source: [0, 0], expectedStateId: "4",
+    expectedRevision: "4" };
+  const preview = await host.dispatch({ method: "previewLayerMaskStroke", ...message,
+    cancellation: new SharedArrayBuffer(4) });
+  assert.equal(preview.rgba.byteLength, 16); assert.equal(revision, 4n);
+  const committed = await host.dispatch({ method: "applyLayerMaskStroke", ...message });
+  assert.equal(committed.revision, 5n);
+  await assert.rejects(host.dispatch({ method: "applyLayerMaskStroke", ...message }),
     (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
   host.dispose();

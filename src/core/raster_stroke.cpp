@@ -1,17 +1,22 @@
 #include "core/raster_stroke.hpp"
 
+#include "core/layer_metadata.hpp"
 #include "core/rect_utils.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string_view>
 
 namespace patchy {
 namespace {
 constexpr std::size_t kMaximumStrokePoints = 65536;
 constexpr std::int32_t kMaximumBrushSize = 4096;
+constexpr std::uint64_t kMaximumLayerMaskStrokePixels = 268435456ULL;
+struct LayerMaskStrokeCancelled {};
 bool fail(std::string* error, std::string_view message) {
   if (error != nullptr) *error = std::string(message);
   return false;
@@ -20,6 +25,12 @@ std::uint8_t blend_byte(std::uint8_t destination, std::uint8_t source,
                         double alpha) {
   return static_cast<std::uint8_t>(std::clamp(
       std::lround(source * alpha + destination * (1.0 - alpha)), 0L, 255L));
+}
+
+std::uint8_t mask_luminance(EditColor color) {
+  return static_cast<std::uint8_t>(std::clamp(
+      std::lround(color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722),
+      0L, 255L));
 }
 
 float selection_coverage(const RasterFillRequest& request, std::int32_t x,
@@ -226,6 +237,232 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
   if (result != nullptr) result->affected_region = affected;
   if (error != nullptr) error->clear();
   return true;
+}
+
+bool apply_layer_mask_stroke(Document& document, LayerId layer_id,
+                             const RasterStrokeRequest& request,
+                             RasterStrokeResult* result, std::string* error) {
+  auto* layer = document.find_layer(layer_id);
+  if (layer == nullptr || !layer->mask().has_value()) {
+    return fail(error, "layer-mask stroke requires an existing raster mask");
+  }
+  if (request.mode != RasterStrokeMode::Brush &&
+      request.mode != RasterStrokeMode::Eraser) {
+    return fail(error, "layer-mask stroke supports Brush and Eraser only");
+  }
+  if (request.points.empty() || request.points.size() > kMaximumStrokePoints ||
+      request.brush_size < 1 || request.brush_size > kMaximumBrushSize ||
+      std::any_of(request.points.begin(), request.points.end(),
+                  [](const RasterStrokePoint& point) {
+                    return !std::isfinite(point.x) || !std::isfinite(point.y);
+                  })) {
+    return fail(error, "layer-mask stroke geometry exceeds its bounded contract");
+  }
+  if (request.selection_mask.has_value() &&
+      (request.selection_mask->format() != PixelFormat::gray8() ||
+       request.selection_mask->width() != request.selection_mask_bounds.width ||
+       request.selection_mask->height() != request.selection_mask_bounds.height)) {
+    return fail(error, "selection mask must be bounded Gray8 data");
+  }
+  if (layer_is_effectively_locked(document.layers(), layer_id)) {
+    return fail(error, "layer-mask stroke target is locked");
+  }
+  const auto& source_mask = *layer->mask();
+  if (source_mask.disabled) {
+    return fail(error, "layer-mask stroke requires an enabled raster mask");
+  }
+  if (source_mask.pixels.empty() ||
+      source_mask.pixels.format() != PixelFormat::gray8() ||
+      source_mask.pixels.width() != source_mask.bounds.width ||
+      source_mask.pixels.height() != source_mask.bounds.height ||
+      source_mask.bounds.width <= 0 || source_mask.bounds.height <= 0 ||
+      document.width() <= 0 || document.height() <= 0) {
+    return fail(error, "layer-mask stroke requires bounded Gray8 mask data");
+  }
+
+  const auto continue_or_cancel = [&request]() {
+    if (request.continue_operation && !request.continue_operation()) {
+      throw LayerMaskStrokeCancelled{};
+    }
+  };
+
+  try {
+    // Cancellation precedes any allocation or scan. The temporary Gray8 layer
+    // keeps mask painting at one byte per pixel instead of expanding it to RGBA.
+    continue_or_cancel();
+    const auto padding = std::max(1, request.brush_size) / 2 + 1;
+    auto minimum_x = request.points.front().x;
+    auto minimum_y = request.points.front().y;
+    auto maximum_x = minimum_x;
+    auto maximum_y = minimum_y;
+    for (const auto& point : request.points) {
+      minimum_x = std::min(minimum_x, point.x);
+      minimum_y = std::min(minimum_y, point.y);
+      maximum_x = std::max(maximum_x, point.x);
+      maximum_y = std::max(maximum_y, point.y);
+    }
+    const auto bounded_x = [width = document.width()](double value) {
+      return std::clamp(value, 0.0, static_cast<double>(width));
+    };
+    const auto bounded_y = [height = document.height()](double value) {
+      return std::clamp(value, 0.0, static_cast<double>(height));
+    };
+    const auto left = static_cast<std::int32_t>(
+        std::floor(bounded_x(minimum_x - padding)));
+    const auto top = static_cast<std::int32_t>(
+        std::floor(bounded_y(minimum_y - padding)));
+    const auto right = static_cast<std::int32_t>(
+        std::ceil(bounded_x(maximum_x + padding + 1)));
+    const auto bottom = static_cast<std::int32_t>(
+        std::ceil(bounded_y(maximum_y + padding + 1)));
+    const Rect stroke_bounds{left, top, std::max(0, right - left),
+                             std::max(0, bottom - top)};
+    const auto source_right = static_cast<std::int64_t>(source_mask.bounds.x) +
+                              source_mask.bounds.width;
+    const auto source_bottom = static_cast<std::int64_t>(source_mask.bounds.y) +
+                               source_mask.bounds.height;
+    const auto stroke_right = static_cast<std::int64_t>(stroke_bounds.x) +
+                              stroke_bounds.width;
+    const auto stroke_bottom = static_cast<std::int64_t>(stroke_bounds.y) +
+                               stroke_bounds.height;
+    const auto working_left = std::min<std::int64_t>(source_mask.bounds.x,
+                                                     stroke_bounds.x);
+    const auto working_top = std::min<std::int64_t>(source_mask.bounds.y,
+                                                    stroke_bounds.y);
+    const auto working_right = std::max(source_right, stroke_right);
+    const auto working_bottom = std::max(source_bottom, stroke_bottom);
+    const auto working_width = working_right - working_left;
+    const auto working_height = working_bottom - working_top;
+    const auto coordinate_min =
+        static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min());
+    const auto coordinate_max =
+        static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+    if (working_left < coordinate_min || working_top < coordinate_min ||
+        working_right > coordinate_max || working_bottom > coordinate_max ||
+        working_width <= 0 || working_height <= 0 ||
+        static_cast<std::uint64_t>(working_width) >
+            kMaximumLayerMaskStrokePixels /
+                static_cast<std::uint64_t>(working_height)) {
+      return fail(error,
+                  "layer-mask stroke working area exceeds its bounded contract");
+    }
+    const Rect working_bounds{
+        static_cast<std::int32_t>(working_left),
+        static_cast<std::int32_t>(working_top),
+        static_cast<std::int32_t>(working_width),
+        static_cast<std::int32_t>(working_height)};
+    const auto same_bounds = working_bounds.x == source_mask.bounds.x &&
+                             working_bounds.y == source_mask.bounds.y &&
+                             working_bounds.width == source_mask.bounds.width &&
+                             working_bounds.height == source_mask.bounds.height;
+    PixelBuffer gray;
+    if (same_bounds) {
+      gray = source_mask.pixels;
+    } else {
+      gray = PixelBuffer(working_bounds.width, working_bounds.height,
+                         PixelFormat::gray8());
+      for (std::int32_t y = 0; y < working_bounds.height; ++y) {
+        continue_or_cancel();
+        auto row = gray.row(y);
+        for (std::int32_t x = 0; x < working_bounds.width; ++x) {
+          auto value = source_mask.default_color;
+          const auto source_x = static_cast<std::int64_t>(x) +
+                                working_bounds.x - source_mask.bounds.x;
+          const auto source_y = static_cast<std::int64_t>(y) +
+                                working_bounds.y - source_mask.bounds.y;
+          if (source_x >= 0 && source_y >= 0 &&
+              source_x < source_mask.pixels.width() &&
+              source_y < source_mask.pixels.height()) {
+            value = source_mask.pixels.pixel(
+                static_cast<std::int32_t>(source_x),
+                static_cast<std::int32_t>(source_y))[0];
+          }
+          row[static_cast<std::size_t>(x)] = value;
+        }
+      }
+    }
+
+    Document mask_document(document.width(), document.height(),
+                           PixelFormat::gray8());
+    const auto mask_layer_id = mask_document.allocate_layer_id();
+    Layer mask_layer(mask_layer_id, "Layer mask", std::move(gray));
+    mask_layer.set_bounds(working_bounds);
+    mask_document.add_layer(std::move(mask_layer));
+
+    const auto target = request.mode == RasterStrokeMode::Eraser
+                            ? static_cast<std::uint8_t>(255)
+                            : mask_luminance(request.color);
+    const auto opacity = static_cast<double>(request.color.a) / 255.0;
+    std::size_t coverage_checks = 0;
+    EditOptions options;
+    options.primary = {target, target, target, request.color.a};
+    options.brush_size = request.brush_size;
+    options.lock_transparent_pixels = true;
+    options.progress_callback = continue_or_cancel;
+    options.selection_coverage =
+        [&request, &continue_or_cancel,
+         &coverage_checks](std::int32_t x, std::int32_t y) {
+          if ((coverage_checks++ & 1023U) == 0U) continue_or_cancel();
+          if (request.selection_mask.has_value()) {
+            const auto local_x = static_cast<std::int64_t>(x) -
+                                 request.selection_mask_bounds.x;
+            const auto local_y = static_cast<std::int64_t>(y) -
+                                 request.selection_mask_bounds.y;
+            if (local_x < 0 || local_y < 0 ||
+                local_x >= request.selection_mask->width() ||
+                local_y >= request.selection_mask->height()) {
+              return 0.0F;
+            }
+            return static_cast<float>(
+                       request.selection_mask
+                           ->pixel(static_cast<std::int32_t>(local_x),
+                                   static_cast<std::int32_t>(local_y))[0]) /
+                   255.0F;
+          }
+          if (request.selection.empty()) return 1.0F;
+          return std::any_of(
+                     request.selection.begin(), request.selection.end(),
+                     [x, y](const Rect& rect) { return rect.contains(x, y); })
+                     ? 1.0F
+                     : 0.0F;
+        };
+    options.stroke_pixel_writer =
+        [target, opacity](std::int32_t, std::int32_t, std::uint8_t* pixel,
+                          std::uint16_t channels, float coverage,
+                          const EditColor&) {
+          if (channels != 1U) return false;
+          const auto before = pixel[0];
+          pixel[0] = blend_byte(
+              before, target,
+              std::clamp(static_cast<double>(coverage) * opacity, 0.0, 1.0));
+          return pixel[0] != before;
+        };
+
+    Rect affected;
+    for (std::size_t index = 0; index < request.points.size(); ++index) {
+      continue_or_cancel();
+      const auto& from = request.points[index == 0 ? 0 : index - 1U];
+      const auto& to = request.points[index];
+      affected = unite_rect(
+          affected,
+          paint_brush_segment(mask_document, mask_layer_id, from.x, from.y,
+                              to.x, to.y, options, false));
+    }
+    if (affected.empty()) {
+      return fail(error, "raster stroke did not affect the target layer");
+    }
+    continue_or_cancel();
+    const auto* painted = mask_document.find_layer(mask_layer_id);
+    auto updated = source_mask;
+    updated.bounds = painted->bounds();
+    updated.pixels = painted->pixels();
+    layer->set_mask(std::move(updated));
+    if (result != nullptr) result->affected_region = affected;
+    if (error != nullptr) error->clear();
+    return true;
+  } catch (const LayerMaskStrokeCancelled&) {
+    return fail(error, "raster stroke was cancelled");
+  }
 }
 
 bool apply_raster_fill(Document& document, LayerId layer_id,

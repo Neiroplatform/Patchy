@@ -245,8 +245,16 @@ function updateControls() {
   $("createMaskButton").disabled = busy || layer?.kind !== 0 || Boolean(layer?.mask);
   $("toggleMaskButton").disabled = busy || !layer?.mask;
   $("toggleMaskButton").textContent = layer?.mask?.disabled ? "Enable mask" : "Disable mask";
+  $("linkMaskButton").disabled = busy || !layer?.mask;
+  $("linkMaskButton").textContent = layer?.mask?.linked === false ? "Link mask" : "Unlink mask";
   $("invertMaskButton").disabled = busy || !layer?.mask;
   $("removeMaskButton").disabled = busy || !layer?.mask;
+  const canPaintMask = Boolean(layer?.mask && !layer.mask.disabled &&
+    (canvasTool === "brush" || canvasTool === "eraser"));
+  $("paintTargetSelect").disabled = busy || !canPaintMask;
+  if (!canPaintMask) {
+    $("paintTargetSelect").value = "pixels";
+  }
   $("transformButton").disabled = busy || !snapshot;
   $("selectAllButton").disabled = busy || !snapshot;
   $("clearSelectionButton").disabled = busy || !snapshot?.selection?.length;
@@ -1183,6 +1191,7 @@ function setCanvasTool(tool) {
   }
   if (tool === "quickMask") renderQuickMask();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  updateControls();
   persistPreferences();
 }
 
@@ -2308,6 +2317,13 @@ function rasterStrokePayload(draft) {
     expectedStateId: draft.stateId, expectedRevision: draft.revision };
 }
 
+function layerMaskStrokePayload(draft) {
+  return { layerId: draft.layer.id, mode: draft.tool === "eraser" ? 1 : 0,
+    brushSize: draft.brushSize, color: draft.color,
+    points: draft.points.map(({ x, y }) => [x, y]), source: [0, 0],
+    expectedStateId: draft.stateId, expectedRevision: draft.revision };
+}
+
 function clearRasterPreview() {
   ++rasterPreviewGeneration; rasterPreviewPending = null;
   if (rasterPreviewCancellation) Atomics.store(rasterPreviewCancellation, 0, 1);
@@ -2329,7 +2345,9 @@ async function drainRasterPreview() {
       try {
         const preview = await (pending.kind === "fill"
           ? client.previewRasterFill({ ...pending.payload, cancellation: pending.cancellation })
-          : client.previewRasterStroke({ ...pending.payload, cancellation: pending.cancellation }));
+          : pending.kind === "mask"
+            ? client.previewLayerMaskStroke({ ...pending.payload, cancellation: pending.cancellation })
+            : client.previewRasterStroke({ ...pending.payload, cancellation: pending.cancellation }));
         if (pending.generation !== rasterPreviewGeneration || rasterPreviewPending) continue;
         if (rasterPreviewRestore) {
           context.putImageData(rasterPreviewRestore.pixels,
@@ -2354,7 +2372,8 @@ async function drainRasterPreview() {
 function scheduleRasterPreview(draft) {
   if (rasterPreviewCancellation) Atomics.store(rasterPreviewCancellation, 0, 1);
   rasterPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
-  rasterPreviewPending = { kind: "stroke", payload: rasterStrokePayload(draft),
+  rasterPreviewPending = { kind: draft.maskTarget ? "mask" : "stroke",
+    payload: draft.maskTarget ? layerMaskStrokePayload(draft) : rasterStrokePayload(draft),
     cancellation: rasterPreviewCancellation, generation: ++rasterPreviewGeneration };
   drainRasterPreview();
 }
@@ -2388,7 +2407,10 @@ function scheduleRasterFillPreview(draft) {
 
 function beginPaint(event) {
   const layer = selectedLayer();
-  if (busy || layer?.kind !== 0 || event.button !== 0) return;
+  const maskTarget = $("paintTargetSelect").value === "mask";
+  if (busy || event.button !== 0 ||
+      (maskTarget ? !layer?.mask || layer.mask.disabled ||
+        (canvasTool !== "brush" && canvasTool !== "eraser") : layer?.kind !== 0)) return;
   const point = canvasPoint(event);
   if ((canvasTool === "clone" || canvasTool === "heal") && event.altKey) {
     cloneSource = point; setSessionState("document", "Clone source set"); return;
@@ -2399,6 +2421,7 @@ function beginPaint(event) {
   canvas.setPointerCapture(event.pointerId);
   const draft = { pointerId: event.pointerId, tool: canvasTool, layer, last: point,
     start: point, source: cloneSource, ready: true, points: [point],
+    maskTarget,
     stateId: snapshot.stateId, revision: snapshot.revision,
     brushSize: Math.round(Number($("brushSizeInput").value)),
     color: [...colorBytes($("brushColorInput").value), 255],
@@ -2456,8 +2479,11 @@ function finishPaint(event, cancelled = false) {
   paintDraft = null;
   clearRasterPreview();
   if (cancelled || !draft.ready) return;
-  mutate(draft.tool === "eraser" ? "Erasing pixels" : "Painting pixels", () =>
-    client.applyRasterStroke(rasterStrokePayload(draft)));
+  mutate(draft.maskTarget ? (draft.tool === "eraser" ? "Revealing layer mask" : "Painting layer mask")
+    : draft.tool === "eraser" ? "Erasing pixels" : "Painting pixels", () =>
+    draft.maskTarget
+      ? client.applyLayerMaskStroke(layerMaskStrokePayload(draft))
+      : client.applyRasterStroke(rasterStrokePayload(draft)));
 }
 
 function escapeHtml(value) {
@@ -2614,6 +2640,7 @@ $("brushSizeInput").addEventListener("input", () => {
   persistPreferences();
 });
 $("brushColorInput").addEventListener("input", persistPreferences);
+$("paintTargetSelect").addEventListener("change", updateControls);
 $("paintPresetSelect").addEventListener("change", persistPreferences);
 $("textFontInput").addEventListener("change", persistPreferences);
 $("memoryBudgetSelect").addEventListener("change", async () => {
@@ -2630,6 +2657,11 @@ $("createMaskButton").addEventListener("click", () => {
 $("toggleMaskButton").addEventListener("click", () => {
   const layer = selectedLayer();
   if (layer?.mask) mutate(layer.mask.disabled ? "Enabling layer mask" : "Disabling layer mask", () => client.toggleLayerMask(layer.id));
+});
+$("linkMaskButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer?.mask) mutate(layer.mask.linked === false ? "Linking layer mask" : "Unlinking layer mask",
+    () => client.setLayerMaskLinked(layer.id, layer.mask.linked === false));
 });
 $("invertMaskButton").addEventListener("click", () => {
   const layer = selectedLayer();

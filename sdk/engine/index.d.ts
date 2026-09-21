@@ -119,6 +119,14 @@ export class PatchyWorkerClient {
   applyRasterStroke(input: { layerId: bigint; mode: 0 | 1 | 2 | 3; brushSize: number;
     color: number[]; points: number[][]; source?: number[];
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
+  previewLayerMaskStroke(input: { layerId: bigint; mode: 0 | 1; brushSize: number;
+    color: [number, number, number, number]; points: Array<[number, number]>;
+    source?: [number, number]; expectedStateId: bigint; expectedRevision: bigint;
+    cancellation?: Int32Array }): Promise<RenderPatch>;
+  applyLayerMaskStroke(input: { layerId: bigint; mode: 0 | 1; brushSize: number;
+    color: [number, number, number, number]; points: Array<[number, number]>;
+    source?: [number, number]; expectedStateId: bigint;
+    expectedRevision: bigint }): Promise<DocumentProjection>;
   previewRasterFill(input: { layerId: bigint; mode: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
     color: number[]; secondaryColor?: number[]; patternSize?: number;
     start: number[]; end: number[]; cancellation?: Int32Array;
@@ -191,6 +199,7 @@ export class PatchyWorkerClient {
   createLayerMask(layerId: bigint): Promise<DocumentProjection>;
   toggleLayerMask(layerId: bigint): Promise<DocumentProjection>;
   invertLayerMask(layerId: bigint): Promise<DocumentProjection>;
+  setLayerMaskLinked(layerId: bigint, linked: boolean): Promise<DocumentProjection>;
   removeLayerMask(layerId: bigint): Promise<DocumentProjection>;
   groupLayer(layerId: bigint, name?: string): Promise<DocumentProjection>;
   ungroup(layerId: bigint): Promise<DocumentProjection>;

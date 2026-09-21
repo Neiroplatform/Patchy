@@ -99,6 +99,28 @@ export class PatchyWorkerHost {
           { ...message, layerId: BigInt(message.layerId) });
         return this.#snapshot();
       }
+      case "previewLayerMaskStroke": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Layer-mask stroke was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        return this.#engine.previewLayerMaskStroke(this.#requireSession(), before,
+          { ...message, layerId: BigInt(message.layerId) },
+          new Int32Array(message.cancellation));
+      }
+      case "applyLayerMaskStroke": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Layer-mask stroke was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        this.#engine.applyLayerMaskStroke(this.#requireSession(), before,
+          { ...message, layerId: BigInt(message.layerId) });
+        return this.#snapshot();
+      }
       case "previewRasterFill": {
         const before = this.#snapshot();
         if (before.stateId !== BigInt(message.expectedStateId) ||
@@ -434,6 +456,11 @@ export class PatchyWorkerHost {
           }
           mask.defaultColor = 255 - mask.defaultColor;
         });
+        return this.#snapshot();
+      case "setLayerMaskLinked":
+        this.#engine.setLayerMaskLinked(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          Boolean(message.linked));
         return this.#snapshot();
       case "removeLayerMask":
         this.#engine.setLayerMask(

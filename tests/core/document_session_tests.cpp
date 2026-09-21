@@ -2151,6 +2151,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_FILL) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_WARP) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_PSB_SAVE_AS) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_MASK_STROKE) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -4391,6 +4392,187 @@ void core_raster_stroke_respects_selection_and_immutable_clone_source() {
                    document.find_layer(layer_id)->pixels().data().end(), before.begin()));
 }
 
+void core_layer_mask_stroke_respects_selection_and_preserves_metadata() {
+  Document document(8, 4, PixelFormat::rgba8());
+  PixelBuffer pixels(8, 4, PixelFormat::rgba8()); pixels.clear(255);
+  const auto layer_id = document.add_pixel_layer("Masked", std::move(pixels)).id();
+  PixelBuffer gray(8, 4, PixelFormat::gray8()); gray.clear(255);
+  patchy::LayerMask mask{{0, 0, 8, 4}, std::move(gray), 173, false};
+  document.find_layer(layer_id)->set_mask(std::move(mask));
+  patchy::set_layer_mask_linked(*document.find_layer(layer_id), false);
+
+  patchy::RasterStrokeRequest paint;
+  paint.mode = patchy::RasterStrokeMode::Brush;
+  paint.brush_size = 1;
+  paint.color = {0, 255, 0, 255};
+  paint.points = {{1.0, 1.0}, {6.0, 1.0}};
+  paint.selection = {{0, 0, 4, 4}};
+  patchy::RasterStrokeResult result;
+  std::string error;
+  CHECK(patchy::apply_layer_mask_stroke(document, layer_id, paint, &result, &error));
+  const auto* layer = document.find_layer(layer_id);
+  CHECK(layer->mask()->pixels.pixel(1, 1)[0] == 182);
+  CHECK(layer->mask()->pixels.pixel(6, 1)[0] == 255);
+  CHECK(layer->mask()->default_color == 173);
+  CHECK(!layer->mask()->disabled);
+  CHECK(!patchy::layer_mask_linked(*layer));
+
+  auto erase = paint; erase.mode = patchy::RasterStrokeMode::Eraser;
+  erase.points = {{1.0, 1.0}}; erase.selection.clear();
+  CHECK(patchy::apply_layer_mask_stroke(document, layer_id, erase, &result, &error));
+  CHECK(document.find_layer(layer_id)->mask()->pixels.pixel(1, 1)[0] == 255);
+  auto clone = paint; clone.mode = patchy::RasterStrokeMode::Clone;
+  const auto before = document.find_layer(layer_id)->mask()->pixels.data()[0];
+  CHECK(!patchy::apply_layer_mask_stroke(document, layer_id, clone, nullptr, &error));
+  CHECK(document.find_layer(layer_id)->mask()->pixels.data()[0] == before);
+
+  auto malformed_selection = paint;
+  malformed_selection.selection.clear();
+  malformed_selection.selection_mask_bounds = {0, 0, 1, 1};
+  malformed_selection.selection_mask =
+      PixelBuffer(1, 1, PixelFormat::rgba8());
+  const auto before_invalid = std::vector<std::uint8_t>(
+      document.find_layer(layer_id)->mask()->pixels.data().begin(),
+      document.find_layer(layer_id)->mask()->pixels.data().end());
+  CHECK(!patchy::apply_layer_mask_stroke(
+      document, layer_id, malformed_selection, nullptr, &error));
+  CHECK(error == "selection mask must be bounded Gray8 data");
+  CHECK(std::equal(document.find_layer(layer_id)->mask()->pixels.data().begin(),
+                   document.find_layer(layer_id)->mask()->pixels.data().end(),
+                   before_invalid.begin()));
+
+}
+
+void core_layer_mask_stroke_is_compact_and_precancelled_before_expansion() {
+  Document compact(8, 4, PixelFormat::rgba8());
+  PixelBuffer compact_pixels(8, 4, PixelFormat::rgba8());
+  compact_pixels.clear(255);
+  const auto compact_id =
+      compact.add_pixel_layer("Compact mask", std::move(compact_pixels)).id();
+  PixelBuffer compact_gray(2, 2, PixelFormat::gray8());
+  compact_gray.clear(200);
+  compact.find_layer(compact_id)->set_mask(
+      patchy::LayerMask{{3, 1, 2, 2}, std::move(compact_gray), 77, false});
+
+  patchy::RasterStrokeRequest paint;
+  paint.mode = patchy::RasterStrokeMode::Brush;
+  paint.brush_size = 1;
+  paint.color = {0, 0, 0, 255};
+  paint.points = {{-10.0, 1.0}, {1.0, 1.0}};
+  patchy::RasterStrokeResult result;
+  std::string error;
+  CHECK(patchy::apply_layer_mask_stroke(compact, compact_id, paint, &result,
+                                        &error));
+  const auto& expanded = *compact.find_layer(compact_id)->mask();
+  CHECK(expanded.bounds.x == 0 && expanded.bounds.y == 0);
+  CHECK(expanded.bounds.width == 5 && expanded.bounds.height == 3);
+  CHECK(expanded.pixels.pixel(1, 1)[0] == 0);
+  CHECK(expanded.pixels.pixel(2, 2)[0] == 77);
+  CHECK(expanded.pixels.pixel(3, 1)[0] == 200);
+
+  Document large(8192, 8192, PixelFormat::rgba8());
+  const auto large_id = large.allocate_layer_id();
+  PixelBuffer single_pixel(1, 1, PixelFormat::rgba8());
+  single_pixel.clear(255);
+  patchy::Layer large_layer(large_id, "Large compact mask",
+                            std::move(single_pixel));
+  PixelBuffer large_gray(2, 2, PixelFormat::gray8());
+  large_gray.clear(155);
+  large_layer.set_mask(
+      patchy::LayerMask{{4095, 4095, 2, 2}, std::move(large_gray), 91, false});
+  large.add_layer(std::move(large_layer));
+  const auto before = std::vector<std::uint8_t>(
+      large.find_layer(large_id)->mask()->pixels.data().begin(),
+      large.find_layer(large_id)->mask()->pixels.data().end());
+  auto cancelled = paint;
+  cancelled.points = {{-1000.0, -1000.0}, {9000.0, 9000.0}};
+  std::size_t cancellation_checks = 0;
+  cancelled.continue_operation = [&cancellation_checks]() {
+    ++cancellation_checks;
+    return false;
+  };
+  CHECK(!patchy::apply_layer_mask_stroke(large, large_id, cancelled, nullptr,
+                                         &error));
+  CHECK(error == "raster stroke was cancelled");
+  CHECK(cancellation_checks == 1);
+  const auto& unchanged = *large.find_layer(large_id)->mask();
+  CHECK(unchanged.bounds.x == 4095 && unchanged.bounds.y == 4095);
+  CHECK(unchanged.bounds.width == 2 && unchanged.bounds.height == 2);
+  CHECK(std::equal(unchanged.pixels.data().begin(),
+                   unchanged.pixels.data().end(), before.begin()));
+
+  Document extreme(8, 4, PixelFormat::rgba8());
+  PixelBuffer extreme_pixels(1, 1, PixelFormat::rgba8());
+  extreme_pixels.clear(255);
+  const auto extreme_id = extreme.allocate_layer_id();
+  patchy::Layer extreme_layer(extreme_id, "Extreme mask",
+                              std::move(extreme_pixels));
+  PixelBuffer extreme_gray(1, 1, PixelFormat::gray8());
+  extreme_gray.clear(143);
+  extreme_layer.set_mask(patchy::LayerMask{
+      {std::numeric_limits<std::int32_t>::max(), 0, 1, 1},
+      std::move(extreme_gray), 17, false});
+  extreme.add_layer(std::move(extreme_layer));
+  auto extreme_paint = paint;
+  extreme_paint.points = {{1.0, 1.0}};
+  CHECK(!patchy::apply_layer_mask_stroke(
+      extreme, extreme_id, extreme_paint, nullptr, &error));
+  CHECK(error ==
+        "layer-mask stroke working area exceeds its bounded contract");
+  CHECK(extreme.find_layer(extreme_id)->mask()->bounds.x ==
+        std::numeric_limits<std::int32_t>::max());
+  CHECK(extreme.find_layer(extreme_id)->mask()->pixels.pixel(0, 0)[0] == 143);
+
+  Document thin(100000, 1, PixelFormat::rgba8());
+  const auto thin_id = thin.allocate_layer_id();
+  PixelBuffer thin_pixels(1, 1, PixelFormat::rgba8());
+  thin_pixels.clear(255);
+  patchy::Layer thin_layer(thin_id, "PSB-width mask",
+                           std::move(thin_pixels));
+  PixelBuffer thin_gray(100000, 1, PixelFormat::gray8());
+  thin_gray.clear(255);
+  thin_layer.set_mask(patchy::LayerMask{
+      {0, 0, 100000, 1}, std::move(thin_gray), 255, false});
+  thin.add_layer(std::move(thin_layer));
+  auto thin_paint = paint;
+  thin_paint.points = {{50000.0, 0.0}};
+  CHECK(patchy::apply_layer_mask_stroke(
+      thin, thin_id, thin_paint, nullptr, &error));
+  CHECK(thin.find_layer(thin_id)->mask()->pixels.pixel(50000, 0)[0] == 0);
+}
+
+void core_layer_mask_stroke_respects_locked_ancestors() {
+  Document document(8, 4, PixelFormat::rgba8());
+  const auto group_id = document.allocate_layer_id();
+  const auto child_id = document.allocate_layer_id();
+  patchy::Layer group(group_id, "Locked group", patchy::LayerKind::Group);
+  PixelBuffer pixels(8, 4, PixelFormat::rgba8());
+  pixels.clear(255);
+  patchy::Layer child(child_id, "Masked child", std::move(pixels));
+  PixelBuffer gray(8, 4, PixelFormat::gray8());
+  gray.clear(255);
+  child.set_mask(patchy::LayerMask{{0, 0, 8, 4}, std::move(gray), 255, false});
+  group.add_child(std::move(child));
+  patchy::set_layer_locked(group, true);
+  document.add_layer(std::move(group));
+
+  patchy::RasterStrokeRequest paint;
+  paint.mode = patchy::RasterStrokeMode::Brush;
+  paint.brush_size = 1;
+  paint.color = {0, 0, 0, 255};
+  paint.points = {{1.0, 1.0}};
+  const auto before = std::vector<std::uint8_t>(
+      document.find_layer(child_id)->mask()->pixels.data().begin(),
+      document.find_layer(child_id)->mask()->pixels.data().end());
+  std::string error;
+  CHECK(!patchy::apply_layer_mask_stroke(document, child_id, paint, nullptr,
+                                         &error));
+  CHECK(error == "layer-mask stroke target is locked");
+  const auto& unchanged = document.find_layer(child_id)->mask()->pixels;
+  CHECK(std::equal(unchanged.data().begin(), unchanged.data().end(),
+                   before.begin()));
+}
+
 void engine_host_protocol_previews_and_commits_one_raster_stroke() {
   patchy_engine_error error{};
   auto *runtime = patchy_engine_runtime_create(
@@ -4445,6 +4627,116 @@ void engine_host_protocol_previews_and_commits_one_raster_stroke() {
   CHECK(std::any_of(reopened_pixels.data, reopened_pixels.data + reopened_pixels.size,
                     [](std::uint8_t value) { return value != 0; }));
   patchy_engine_buffer_release(&reopened_pixels);
+  patchy_engine_session_destroy(reopened); patchy_engine_buffer_release(&saved);
+  patchy_engine_session_destroy(session); patchy_engine_runtime_destroy(runtime);
+}
+
+void engine_host_protocol_previews_and_commits_one_layer_mask_stroke() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 8, 4, &error);
+  CHECK(session != nullptr);
+  patchy_engine_document_projection before{}; before.struct_size = sizeof(before);
+  CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+  std::array<std::uint8_t, 8 * 4 * 4> rgba{}; rgba.fill(255);
+  patchy_engine_pixel_layer_input input{}; input.struct_size = sizeof(input);
+  input.expected_state_id = before.state_id; input.expected_revision = before.revision;
+  input.bounds = {0, 0, 8, 4}; input.width = 8; input.height = 4;
+  input.rgba = rgba.data(); input.rgba_size = rgba.size();
+  input.name = "Masked"; input.name_size = std::strlen(input.name);
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event, &error) == 1);
+  const auto layer_id = event.affected_layer_id;
+  patchy_engine_document_projection added{}; added.struct_size = sizeof(added);
+  CHECK(patchy_engine_session_document(session, &added, &error) == 1);
+  std::array<std::uint8_t, 8 * 4> gray{}; gray.fill(255);
+  patchy_engine_layer_mask_input mask{}; mask.struct_size = sizeof(mask);
+  mask.expected_state_id = added.state_id; mask.expected_revision = added.revision;
+  mask.layer_id = layer_id; mask.bounds = {0, 0, 8, 4};
+  mask.width = 8; mask.height = 4; mask.gray = gray.data();
+  mask.gray_size = gray.size(); mask.default_color = 255;
+  mask.has_mask = 1; mask.linked = 0;
+  CHECK(patchy_engine_session_set_layer_mask(session, &mask, &event, &error) == 1);
+  patchy_engine_document_projection ready{}; ready.struct_size = sizeof(ready);
+  CHECK(patchy_engine_session_document(session, &ready, &error) == 1);
+
+  const std::array<patchy_engine_stroke_point, 2> points{{{1.0, 1.0}, {5.0, 1.0}}};
+  patchy_engine_raster_stroke stroke{}; stroke.struct_size = sizeof(stroke);
+  stroke.mode = PATCHY_ENGINE_RASTER_BRUSH; stroke.layer_id = layer_id;
+  stroke.brush_size = 1; stroke.alpha = 255;
+  stroke.points = points.data(); stroke.point_count = points.size();
+  patchy_engine_rect region{}; patchy_engine_buffer preview{};
+  CHECK(patchy_engine_session_preview_layer_mask_stroke(
+            session, ready.state_id, ready.revision, &stroke, nullptr, nullptr,
+            &region, &preview, &error) == 1);
+  CHECK(region.width > 0 && preview.size ==
+        static_cast<std::size_t>(region.width * region.height * 4));
+  patchy_engine_buffer_release(&preview);
+  patchy_engine_buffer unchanged{};
+  CHECK(patchy_engine_session_layer_mask_pixels(
+            session, layer_id, &unchanged, &error) == 1);
+  CHECK(std::all_of(unchanged.data, unchanged.data + unchanged.size,
+                    [](std::uint8_t value) { return value == 255; }));
+  patchy_engine_buffer_release(&unchanged);
+
+  CHECK(patchy_engine_session_apply_layer_mask_stroke(
+            session, ready.state_id, ready.revision, &stroke, &event, &error) == 1);
+  CHECK(event.revision == ready.revision + 1U);
+  const auto stroke_state_id = event.state_id;
+  const auto stroke_revision = event.revision;
+  patchy_engine_layer_mask_projection projected{}; projected.struct_size = sizeof(projected);
+  CHECK(patchy_engine_session_layer_mask(session, layer_id, &projected, &error) == 1);
+  CHECK(projected.linked == 0 && projected.disabled == 0);
+  patchy_engine_buffer painted{};
+  CHECK(patchy_engine_session_layer_mask_pixels(
+            session, layer_id, &painted, &error) == 1);
+  CHECK(std::any_of(painted.data, painted.data + painted.size,
+                    [](std::uint8_t value) { return value == 0; }));
+  const auto painted_bytes = std::vector<std::uint8_t>(
+      painted.data, painted.data + painted.size);
+  patchy_engine_buffer_release(&painted);
+
+  CHECK(patchy_engine_session_set_layer_mask_linked(
+            session, ready.state_id, ready.revision, layer_id, 1, &event,
+            &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  CHECK(patchy_engine_session_set_layer_mask_linked(
+            session, stroke_state_id, stroke_revision, layer_id, 1, &event,
+            &error) == 1);
+  CHECK(event.revision == stroke_revision + 1U);
+  projected = {}; projected.struct_size = sizeof(projected);
+  CHECK(patchy_engine_session_layer_mask(session, layer_id, &projected,
+                                         &error) == 1);
+  CHECK(projected.linked == 1 && projected.disabled == 0);
+  patchy_engine_buffer linked_pixels{};
+  CHECK(patchy_engine_session_layer_mask_pixels(
+            session, layer_id, &linked_pixels, &error) == 1);
+  CHECK(linked_pixels.size == painted_bytes.size());
+  CHECK(std::equal(linked_pixels.data,
+                   linked_pixels.data + linked_pixels.size,
+                   painted_bytes.begin()));
+  patchy_engine_buffer_release(&linked_pixels);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+
+  patchy_engine_buffer saved{};
+  CHECK(patchy_engine_session_save_psd_as(
+            session, 1, &saved, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(
+      runtime, saved.data, saved.size, &error);
+  CHECK(reopened != nullptr);
+  patchy_engine_buffer reopened_mask{};
+  patchy_engine_layer_mask_projection reopened_projection{};
+  reopened_projection.struct_size = sizeof(reopened_projection);
+  CHECK(patchy_engine_session_layer_mask(
+            reopened, layer_id, &reopened_projection, &error) == 1);
+  CHECK(reopened_projection.linked == 1);
+  CHECK(patchy_engine_session_layer_mask_pixels(
+            reopened, layer_id, &reopened_mask, &error) == 1);
+  CHECK(std::any_of(reopened_mask.data, reopened_mask.data + reopened_mask.size,
+                    [](std::uint8_t value) { return value == 0; }));
+  patchy_engine_buffer_release(&reopened_mask);
   patchy_engine_session_destroy(reopened); patchy_engine_buffer_release(&saved);
   patchy_engine_session_destroy(session); patchy_engine_runtime_destroy(runtime);
 }
@@ -5011,8 +5303,16 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_returns_bounded_layer_thumbnail},
       {"core_raster_stroke_respects_selection_and_immutable_clone_source",
        core_raster_stroke_respects_selection_and_immutable_clone_source},
+      {"core_layer_mask_stroke_respects_selection_and_preserves_metadata",
+       core_layer_mask_stroke_respects_selection_and_preserves_metadata},
+      {"core_layer_mask_stroke_is_compact_and_precancelled_before_expansion",
+       core_layer_mask_stroke_is_compact_and_precancelled_before_expansion},
+      {"core_layer_mask_stroke_respects_locked_ancestors",
+       core_layer_mask_stroke_respects_locked_ancestors},
       {"engine_host_protocol_previews_and_commits_one_raster_stroke",
        engine_host_protocol_previews_and_commits_one_raster_stroke},
+      {"engine_host_protocol_previews_and_commits_one_layer_mask_stroke",
+       engine_host_protocol_previews_and_commits_one_layer_mask_stroke},
       {"engine_host_protocol_previews_and_commits_one_raster_fill",
        engine_host_protocol_previews_and_commits_one_raster_fill},
       {"core_raster_fill_respects_soft_selection_locks_and_presets",

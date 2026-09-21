@@ -40,6 +40,7 @@ const RASTER_STROKE_SIZE = 48;
 const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
 const CAP_PSB_SAVE_AS = 1n << 33n;
+const CAP_LAYER_MASK_STROKE = 1n << 34n;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -668,6 +669,21 @@ export class EmscriptenPatchyEngine {
 
   previewRasterStroke(session, snapshot, input,
                       cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    return this.#previewRasterStrokeCall("_patchy_engine_session_preview_raster_stroke",
+      session, snapshot, input, cancellation);
+  }
+
+  previewLayerMaskStroke(session, snapshot, input,
+                         cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    if (!(this.#capabilities & CAP_LAYER_MASK_STROKE) ||
+        typeof this.#module._patchy_engine_session_preview_layer_mask_stroke !== "function") {
+      throw new PatchyEngineError(2, "Patchy engine does not support layer-mask strokes");
+    }
+    return this.#previewRasterStrokeCall("_patchy_engine_session_preview_layer_mask_stroke",
+      session, snapshot, input, cancellation);
+  }
+
+  #previewRasterStrokeCall(symbol, session, snapshot, input, cancellation) {
     if (!(cancellation instanceof Int32Array) ||
         !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
       throw new TypeError("Raster preview cancellation must use shared Int32 storage");
@@ -679,7 +695,7 @@ export class EmscriptenPatchyEngine {
         region = this.#alloc(RECT_SIZE); buffer = this.#alloc(BUFFER_SIZE);
         callback = this.#module.addFunction(
           () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
-        this.#check(this.#module._patchy_engine_session_preview_raster_stroke(
+        this.#check(this.#module[symbol](
           session, snapshot.stateId, snapshot.revision, value.stroke, callback, 0,
           region, buffer, error), error);
         const r = this.#view(region, RECT_SIZE); const b = this.#view(buffer, BUFFER_SIZE);
@@ -701,6 +717,19 @@ export class EmscriptenPatchyEngine {
     try {
       return this.#mutation((event, error) =>
         this.#module._patchy_engine_session_apply_raster_stroke(
+          session, snapshot.stateId, snapshot.revision, value.stroke, event, error));
+    } finally { this.#module._free(value.points); this.#module._free(value.stroke); }
+  }
+
+  applyLayerMaskStroke(session, snapshot, input) {
+    if (!(this.#capabilities & CAP_LAYER_MASK_STROKE) ||
+        typeof this.#module._patchy_engine_session_apply_layer_mask_stroke !== "function") {
+      throw new PatchyEngineError(2, "Patchy engine does not support layer-mask strokes");
+    }
+    const value = this.#rasterStroke(input);
+    try {
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_apply_layer_mask_stroke(
           session, snapshot.stateId, snapshot.revision, value.stroke, event, error));
     } finally { this.#module._free(value.points); this.#module._free(value.stroke); }
   }
@@ -851,6 +880,17 @@ export class EmscriptenPatchyEngine {
       this.#module._free(input);
       this.#module._free(pixels);
     }
+  }
+
+  setLayerMaskLinked(session, snapshot, layerId, linked) {
+    if (!(this.#capabilities & CAP_LAYER_MASK_STROKE) ||
+        typeof this.#module._patchy_engine_session_set_layer_mask_linked !== "function") {
+      throw new PatchyEngineError(2, "Patchy engine does not support layer-mask link state");
+    }
+    return this.#mutation((event, error) =>
+      this.#module._patchy_engine_session_set_layer_mask_linked(
+        session, snapshot.stateId, snapshot.revision, layerId,
+        linked ? 1 : 0, event, error));
   }
 
   layerMaskPixels(session, layerId) {

@@ -173,7 +173,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_RASTER_FILL |
     PATCHY_ENGINE_CAP_LAYER_WARP |
     PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE |
-    PATCHY_ENGINE_CAP_PSB_SAVE_AS;
+    PATCHY_ENGINE_CAP_PSB_SAVE_AS |
+    PATCHY_ENGINE_CAP_LAYER_MASK_STROKE;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -1776,6 +1777,42 @@ int patchy_engine_session_set_layer_mask(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown layer mask authoring failure");
+  }
+}
+
+int patchy_engine_session_set_layer_mask_linked(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, std::uint64_t layer_id,
+    std::uint8_t linked, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || layer_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and layer are required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  if (layer == nullptr || !layer->mask().has_value()) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer-mask link state requires an existing raster mask");
+  }
+  try {
+    auto mask = *layer->mask();
+    const auto result = session->value->execute(patchy::engine::SetLayerMaskState{
+        layer_id, std::move(mask), linked != 0});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not preserve layer mask while changing link state");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer-mask link-state failure");
   }
 }
 
@@ -4238,6 +4275,105 @@ int patchy_engine_session_apply_raster_stroke(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown raster-stroke failure");
+  }
+}
+
+int patchy_engine_session_preview_layer_mask_stroke(
+    const patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision,
+    const patchy_engine_raster_stroke *stroke,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || region == nullptr ||
+      rgba == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, preview region and buffer are required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) return 0;
+  auto request = raster_stroke_request(session, stroke, error);
+  if (!request.has_value()) return 0;
+  std::int32_t completed_points = 0;
+  request->continue_operation = [progress, progress_user_data,
+                                 &completed_points]() {
+    ++completed_points;
+    return progress == nullptr ||
+           progress(completed_points, 0, progress_user_data) != 0;
+  };
+  try {
+    auto preview_document = session->value->document();
+    patchy::RasterStrokeResult stroked;
+    std::string stroke_error;
+    if (!patchy::apply_layer_mask_stroke(preview_document, stroke->layer_id,
+                                         *request, &stroked, &stroke_error)) {
+      return fail(error,
+                  stroke_error == "raster stroke was cancelled"
+                      ? PATCHY_ENGINE_ERROR_CANCELLED
+                      : PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  stroke_error.c_str());
+    }
+    const auto preview_region = patchy::intersect_rect(
+        stroked.affected_region,
+        patchy::Rect::from_size(preview_document.width(),
+                                preview_document.height()));
+    if (preview_region.empty()) { *region = {}; return 1; }
+    DocumentSession preview(std::move(preview_document));
+    const auto rendered = preview.render(preview_region);
+    if (!rendered) return fail(error, rendered.error);
+    if (!copy_buffer(rendered.pixels.data(), rgba, error)) return 0;
+    *region = {preview_region.x, preview_region.y, preview_region.width,
+               preview_region.height};
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer-mask stroke preview");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer-mask stroke preview failure");
+  }
+}
+
+int patchy_engine_session_apply_layer_mask_stroke(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision,
+    const patchy_engine_raster_stroke *stroke, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) return 0;
+  const auto request = raster_stroke_request(session, stroke, error);
+  if (!request.has_value()) return 0;
+  try {
+    auto prepared = session->value->document();
+    patchy::RasterStrokeResult stroked;
+    std::string stroke_error;
+    if (!patchy::apply_layer_mask_stroke(prepared, stroke->layer_id, *request,
+                                         &stroked, &stroke_error)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  stroke_error.c_str());
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::RasterStroke,
+            expected_state_id, std::move(prepared), stroked.affected_region});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = stroke->layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer-mask stroke");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer-mask stroke failure");
   }
 }
 
