@@ -2076,6 +2076,11 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_DOCUMENT_GEOMETRY) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_OPTIMISTIC_COMMANDS) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_SAVE_STATE) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_SELECTION_PROJECTION) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_SAVED_CHANNELS) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_PIXEL_AUTHORING) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_PATH_PROJECTION) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_VECTOR_AUTHORING) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -2115,6 +2120,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   command.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
   command.type = PATCHY_ENGINE_COMMAND_SET_LAYER_VISIBILITY;
   command.expected_state_id = event.state_id;
+  command.expected_revision = event.revision;
   command.payload.set_layer_visibility.layer_id = layer.id;
   command.payload.set_layer_visibility.visible = 0;
   CHECK(patchy_engine_session_execute(session, &command, &event, &error) == 1);
@@ -2169,6 +2175,7 @@ void engine_host_protocol_authors_layers_and_document_geometry() {
     command.struct_size = sizeof(command);
     command.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
     command.expected_state_id = before.state_id;
+    command.expected_revision = before.revision;
     patchy_engine_event event{};
     CHECK(patchy_engine_session_execute(session, &command, &event, &error) ==
           1);
@@ -2226,6 +2233,7 @@ void engine_host_protocol_authors_layers_and_document_geometry() {
   stale_rename.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
   stale_rename.type = PATCHY_ENGINE_COMMAND_RENAME_LAYER;
   stale_rename.expected_state_id = stale_state_id;
+  stale_rename.expected_revision = upper_event.revision;
   stale_rename.payload.rename_layer.layer_id = upper_id;
   set_name(stale_rename.payload.rename_layer.name,
            stale_rename.payload.rename_layer.name_size, "Stale");
@@ -2239,6 +2247,7 @@ void engine_host_protocol_authors_layers_and_document_geometry() {
   invalid_name.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
   invalid_name.type = PATCHY_ENGINE_COMMAND_RENAME_LAYER;
   invalid_name.expected_state_id = project().state_id;
+  invalid_name.expected_revision = project().revision;
   invalid_name.payload.rename_layer.layer_id = upper_id;
   invalid_name.payload.rename_layer.name_size = 2;
   invalid_name.payload.rename_layer.name[0] = static_cast<char>(0xC0);
@@ -2404,6 +2413,371 @@ void engine_host_protocol_authors_layers_and_document_geometry() {
   patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_authors_pixels_channels_and_selection() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 5, 4, &error);
+  CHECK(session != nullptr);
+
+  const auto project = [&]() {
+    patchy_engine_document_projection document{};
+    document.struct_size = sizeof(document);
+    CHECK(patchy_engine_session_document(session, &document, &error) == 1);
+    return document;
+  };
+  const auto execute = [&](patchy_engine_command &command) {
+    const auto before = project();
+    command.struct_size = sizeof(command);
+    command.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+    command.expected_state_id = before.state_id;
+    command.expected_revision = before.revision;
+    patchy_engine_event event{};
+    CHECK(patchy_engine_session_execute(session, &command, &event, &error) ==
+          1);
+    return event;
+  };
+
+  std::vector<std::uint8_t> pixels(2U * 2U * 4U, 0U);
+  for (std::size_t index = 0; index < pixels.size(); index += 4U) {
+    pixels[index] = 220;
+    pixels[index + 1U] = 40;
+    pixels[index + 2U] = 30;
+    pixels[index + 3U] = 255;
+  }
+  const auto before_add = project();
+  const std::string pixel_name = "Uploaded pixels";
+  patchy_engine_pixel_layer_input add{};
+  add.struct_size = sizeof(add);
+  add.expected_state_id = before_add.state_id;
+  add.expected_revision = before_add.revision;
+  add.bounds = {1, 1, 2, 2};
+  add.width = 2;
+  add.height = 2;
+  add.rgba = pixels.data();
+  add.rgba_size = pixels.size();
+  add.name = pixel_name.data();
+  add.name_size = pixel_name.size();
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &add, &event, &error) ==
+        1);
+  CHECK(event.changed == 1);
+  const auto layer_id = event.affected_layer_id;
+  CHECK(layer_id != 0);
+  patchy_engine_layer_projection layer{};
+  CHECK(patchy_engine_session_layer_at(session, 0, &layer, &error) == 1);
+  CHECK(layer.id == layer_id);
+  CHECK(layer.bounds.x == 1);
+  CHECK(layer.bounds.y == 1);
+  CHECK(layer.bounds.width == 2);
+  CHECK(project().revision == before_add.revision + 1U);
+
+  pixels[0] = 10;
+  pixels[1] = 200;
+  const auto before_replace = project();
+  patchy_engine_pixel_layer_input replace = add;
+  replace.expected_state_id = before_replace.state_id;
+  replace.expected_revision = before_replace.revision;
+  replace.layer_id = layer_id;
+  CHECK(patchy_engine_session_replace_rgba8_layer(session, &replace, &event,
+                                                  &error) == 1);
+  CHECK(event.changed == 1);
+  patchy_engine_buffer replaced_render{};
+  CHECK(patchy_engine_session_render(session, {1, 1, 1, 1},
+                                     &replaced_render, &event, &error) == 1);
+  CHECK(replaced_render.size == 4);
+  CHECK(replaced_render.data[0] == 10);
+  CHECK(replaced_render.data[1] == 200);
+  patchy_engine_buffer_release(&replaced_render);
+
+  patchy_engine_command select_all{};
+  select_all.type = PATCHY_ENGINE_COMMAND_SELECT_ALL;
+  const auto before_select_all = project();
+  const auto selected_event = execute(select_all);
+  CHECK(selected_event.state_id == event.state_id);
+  CHECK(selected_event.state_id == before_select_all.state_id);
+  CHECK(selected_event.revision == before_select_all.revision + 1U);
+  patchy_engine_command stale_after_selection{};
+  stale_after_selection.struct_size = sizeof(stale_after_selection);
+  stale_after_selection.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  stale_after_selection.type = PATCHY_ENGINE_COMMAND_SET_LAYER_VISIBILITY;
+  stale_after_selection.expected_state_id = before_select_all.state_id;
+  stale_after_selection.expected_revision = before_select_all.revision;
+  stale_after_selection.payload.set_layer_visibility = {layer_id, 0};
+  patchy_engine_event stale_event{};
+  CHECK(patchy_engine_session_execute(session, &stale_after_selection,
+                                      &stale_event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  patchy_engine_selection_projection selection{};
+  selection.struct_size = sizeof(selection);
+  CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
+  CHECK(selection.empty == 0);
+  CHECK(selection.selection_rect_count == 1);
+  patchy_engine_rect selection_rect{};
+  CHECK(patchy_engine_session_selection_rect_at(
+            session, 0, &selection_rect, &error) == 1);
+  CHECK(selection_rect.width == 5);
+  CHECK(selection_rect.height == 4);
+
+  std::vector<std::uint8_t> channel_pixels(20U, 0U);
+  channel_pixels[6] = 128;
+  channel_pixels[7] = 255;
+  const std::string channel_name = "Browser alpha";
+  const auto before_channel = project();
+  patchy_engine_alpha_channel_input channel_input{};
+  channel_input.struct_size = sizeof(channel_input);
+  channel_input.expected_state_id = before_channel.state_id;
+  channel_input.expected_revision = before_channel.revision;
+  channel_input.gray = channel_pixels.data();
+  channel_input.gray_size = channel_pixels.size();
+  channel_input.name = channel_name.data();
+  channel_input.name_size = channel_name.size();
+  CHECK(patchy_engine_session_add_alpha_channel(
+            session, &channel_input, &event, &error) == 1);
+  std::size_t channel_count = 0;
+  CHECK(patchy_engine_session_channel_count(session, &channel_count, &error) ==
+        1);
+  CHECK(channel_count == 1);
+  patchy_engine_channel_projection channel{};
+  CHECK(patchy_engine_session_channel_at(session, 0, &channel, &error) == 1);
+  CHECK(std::string(channel.name, channel.name_size) == channel_name);
+  const auto channel_id = channel.id;
+  patchy_engine_buffer exported_channel{};
+  CHECK(patchy_engine_session_channel_pixels(
+            session, channel_id, &exported_channel, &error) == 1);
+  CHECK(exported_channel.size == channel_pixels.size());
+  CHECK(exported_channel.data[6] == 128);
+  patchy_engine_buffer_release(&exported_channel);
+
+  patchy_engine_command select_channel{};
+  select_channel.type = PATCHY_ENGINE_COMMAND_SELECT_CHANNEL;
+  select_channel.payload.select_channel.channel_id = channel_id;
+  execute(select_channel);
+  selection = {};
+  selection.struct_size = sizeof(selection);
+  CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
+  CHECK(selection.has_mask == 1);
+  CHECK(selection.selection_rect_count == 1);
+  patchy_engine_buffer selection_mask{};
+  CHECK(patchy_engine_session_selection_mask(session, &selection_mask,
+                                              &error) == 1);
+  CHECK(selection_mask.size == channel_pixels.size());
+  CHECK(selection_mask.data[6] == 128);
+  patchy_engine_buffer_release(&selection_mask);
+
+  patchy_engine_command rename_channel{};
+  rename_channel.type = PATCHY_ENGINE_COMMAND_RENAME_CHANNEL;
+  rename_channel.payload.rename_channel.channel_id = channel_id;
+  const std::string renamed = "Mask from browser";
+  rename_channel.payload.rename_channel.name_size =
+      static_cast<std::uint32_t>(renamed.size());
+  std::memcpy(rename_channel.payload.rename_channel.name, renamed.data(),
+              renamed.size());
+  execute(rename_channel);
+  patchy_engine_command invert_channel{};
+  invert_channel.type = PATCHY_ENGINE_COMMAND_INVERT_CHANNEL;
+  invert_channel.payload.invert_channel.channel_id = channel_id;
+  execute(invert_channel);
+  patchy_engine_buffer inverted{};
+  CHECK(patchy_engine_session_channel_pixels(session, channel_id, &inverted,
+                                              &error) == 1);
+  CHECK(inverted.data[6] == 127);
+  CHECK(inverted.data[7] == 0);
+  patchy_engine_buffer_release(&inverted);
+
+  std::fill(channel_pixels.begin(), channel_pixels.end(), 64U);
+  const auto before_second_channel = project();
+  channel_input.expected_state_id = before_second_channel.state_id;
+  channel_input.expected_revision = before_second_channel.revision;
+  channel_input.gray = channel_pixels.data();
+  channel_input.name = "Second alpha";
+  channel_input.name_size = std::strlen(channel_input.name);
+  CHECK(patchy_engine_session_add_alpha_channel(
+            session, &channel_input, &event, &error) == 1);
+  CHECK(patchy_engine_session_channel_count(session, &channel_count, &error) ==
+        1);
+  CHECK(channel_count == 2);
+  patchy_engine_channel_projection second_channel{};
+  CHECK(patchy_engine_session_channel_at(session, 1, &second_channel, &error) ==
+        1);
+  patchy_engine_command move_channel{};
+  move_channel.type = PATCHY_ENGINE_COMMAND_MOVE_CHANNEL;
+  move_channel.payload.move_channel = {second_channel.id, 0};
+  execute(move_channel);
+  CHECK(patchy_engine_session_channel_at(session, 0, &second_channel, &error) ==
+        1);
+  CHECK(std::string(second_channel.name, second_channel.name_size) ==
+        "Second alpha");
+
+  const patchy_engine_path_anchor path_anchors[] = {
+      {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0},
+      {4.0, 1.0, 4.0, 1.0, 4.0, 1.0, 0},
+      {4.0, 3.0, 4.0, 3.0, 4.0, 3.0, 0},
+      {1.0, 3.0, 1.0, 3.0, 1.0, 3.0, 0},
+  };
+  const patchy_engine_path_subpath_input path_subpath{
+      0, 4, 0, PATCHY_ENGINE_PATH_ADD, 1};
+  const patchy_engine_path_input path_input{
+      &path_subpath, 1, path_anchors, 4};
+  const std::string path_name = "Browser path";
+  const auto before_path = project();
+  patchy_engine_document_path_input add_path{};
+  add_path.struct_size = sizeof(add_path);
+  add_path.expected_state_id = before_path.state_id;
+  add_path.expected_revision = before_path.revision;
+  add_path.name = path_name.data();
+  add_path.name_size = path_name.size();
+  add_path.kind = PATCHY_ENGINE_PATH_SAVED;
+  add_path.path = path_input;
+  CHECK(patchy_engine_session_add_document_path(session, &add_path, &event,
+                                                &error) == 1);
+  const auto path_id = event.affected_layer_id;
+  CHECK(path_id != 0);
+  std::size_t path_count = 0;
+  CHECK(patchy_engine_session_path_count(session, &path_count, &error) == 1);
+  CHECK(path_count == 1);
+  patchy_engine_document_path_projection path{};
+  CHECK(patchy_engine_session_path_at(session, 0, &path, &error) == 1);
+  CHECK(path.id == path_id);
+  CHECK(path.subpath_count == 1);
+  CHECK(path.anchor_count == 4);
+  patchy_engine_path_subpath_projection projected_subpath{};
+  CHECK(patchy_engine_session_path_subpath_at(
+            session, path_id, 0, &projected_subpath, &error) == 1);
+  CHECK(projected_subpath.anchor_count == 4);
+  patchy_engine_path_anchor projected_anchor{};
+  CHECK(patchy_engine_session_path_anchor_at(
+            session, path_id, 0, 2, &projected_anchor, &error) == 1);
+  CHECK(projected_anchor.anchor_x == 4.0);
+  CHECK(projected_anchor.anchor_y == 3.0);
+
+  patchy_engine_command rename_path{};
+  rename_path.type = PATCHY_ENGINE_COMMAND_RENAME_DOCUMENT_PATH;
+  rename_path.payload.rename_document_path.path_id = path_id;
+  const std::string renamed_path = "Clipping outline";
+  rename_path.payload.rename_document_path.name_size =
+      static_cast<std::uint32_t>(renamed_path.size());
+  std::memcpy(rename_path.payload.rename_document_path.name,
+              renamed_path.data(), renamed_path.size());
+  execute(rename_path);
+  patchy_engine_command clipping_path{};
+  clipping_path.type = PATCHY_ENGINE_COMMAND_SET_CLIPPING_PATH;
+  clipping_path.payload.set_clipping_path = {path_id, 1};
+  execute(clipping_path);
+  CHECK(patchy_engine_session_path_at(session, 0, &path, &error) == 1);
+  CHECK(path.clipping == 1);
+
+  const std::string second_path_name = "Temporary path";
+  const auto before_second_path = project();
+  add_path.expected_state_id = before_second_path.state_id;
+  add_path.expected_revision = before_second_path.revision;
+  add_path.name = second_path_name.data();
+  add_path.name_size = second_path_name.size();
+  add_path.clipping = 0;
+  CHECK(patchy_engine_session_add_document_path(session, &add_path, &event,
+                                                &error) == 1);
+  const auto second_path_id = event.affected_layer_id;
+  patchy_engine_command move_path{};
+  move_path.type = PATCHY_ENGINE_COMMAND_MOVE_DOCUMENT_PATH;
+  move_path.payload.move_document_path = {second_path_id, 0};
+  execute(move_path);
+  CHECK(patchy_engine_session_path_at(session, 0, &path, &error) == 1);
+  CHECK(path.id == second_path_id);
+  patchy_engine_command remove_path{};
+  remove_path.type = PATCHY_ENGINE_COMMAND_REMOVE_DOCUMENT_PATH;
+  remove_path.payload.remove_document_path.path_id = second_path_id;
+  execute(remove_path);
+  CHECK(patchy_engine_session_path_count(session, &path_count, &error) == 1);
+  CHECK(path_count == 1);
+
+  patchy_engine_command select_path{};
+  select_path.type = PATCHY_ENGINE_COMMAND_SELECT_DOCUMENT_PATH;
+  select_path.payload.select_document_path.path_id = path_id;
+  select_path.payload.select_document_path.combine =
+      PATCHY_ENGINE_SELECTION_REPLACE;
+  select_path.payload.select_document_path.antialias = 1;
+  execute(select_path);
+  selection = {};
+  selection.struct_size = sizeof(selection);
+  CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
+  CHECK(selection.empty == 0);
+
+  const auto before_shape = project();
+  const std::string shape_name = "Browser vector";
+  patchy_engine_vector_shape_input shape{};
+  shape.struct_size = sizeof(shape);
+  shape.expected_state_id = before_shape.state_id;
+  shape.expected_revision = before_shape.revision;
+  shape.name = shape_name.data();
+  shape.name_size = shape_name.size();
+  shape.path = path_input;
+  shape.fill_red = 30;
+  shape.fill_green = 120;
+  shape.fill_blue = 220;
+  shape.stroke_enabled = 1;
+  shape.stroke_red = 250;
+  shape.stroke_green = 240;
+  shape.stroke_blue = 20;
+  shape.stroke_width = 1.5;
+  CHECK(patchy_engine_session_add_vector_shape(session, &shape, &event,
+                                               &error) == 1);
+  CHECK(event.affected_layer_id != 0);
+  CHECK(project().layer_count == 2);
+
+  patchy_engine_command clear_selection{};
+  clear_selection.type = PATCHY_ENGINE_COMMAND_CLEAR_SELECTION;
+  execute(clear_selection);
+  selection = {};
+  selection.struct_size = sizeof(selection);
+  CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
+  CHECK(selection.empty == 1);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  selection = {};
+  selection.struct_size = sizeof(selection);
+  CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
+  CHECK(selection.empty == 0);
+
+  patchy_engine_buffer pre_save_render{};
+  CHECK(patchy_engine_session_render(session, {0, 0, 5, 4},
+                                     &pre_save_render, &event, &error) == 1);
+  patchy_engine_buffer psd{};
+  CHECK(patchy_engine_session_save_psd(session, &psd, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
+                                                  &error);
+  CHECK(reopened != nullptr);
+  CHECK(patchy_engine_session_channel_count(reopened, &channel_count, &error) ==
+        1);
+  CHECK(channel_count == 2);
+  CHECK(patchy_engine_session_path_count(reopened, &path_count, &error) == 1);
+  CHECK(path_count == 1);
+  CHECK(patchy_engine_session_path_at(reopened, 0, &path, &error) == 1);
+  CHECK(std::string(path.name, path.name_size) == renamed_path);
+  CHECK(path.clipping == 1);
+  patchy_engine_layer_projection reopened_layer{};
+  CHECK(patchy_engine_session_layer_at(reopened, 0, &reopened_layer, &error) ==
+        1);
+  CHECK(reopened_layer.bounds.x == 1);
+  std::size_t reopened_layer_count = 0;
+  CHECK(patchy_engine_session_layer_count(reopened, &reopened_layer_count,
+                                          &error) == 1);
+  CHECK(reopened_layer_count == 2);
+  patchy_engine_buffer reopened_render{};
+  CHECK(patchy_engine_session_render(reopened, {0, 0, 5, 4},
+                                     &reopened_render, &event, &error) == 1);
+  CHECK(reopened_render.size == pre_save_render.size);
+  CHECK(std::equal(reopened_render.data,
+                   reopened_render.data + reopened_render.size,
+                   pre_save_render.data));
+
+  patchy_engine_buffer_release(&reopened_render);
+  patchy_engine_buffer_release(&pre_save_render);
+  patchy_engine_session_destroy(reopened);
+  patchy_engine_buffer_release(&psd);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -2476,5 +2850,7 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_runs_versioned_native_wasm_sequence},
       {"engine_host_protocol_authors_layers_and_document_geometry",
        engine_host_protocol_authors_layers_and_document_geometry},
+      {"engine_host_protocol_authors_pixels_channels_and_selection",
+       engine_host_protocol_authors_pixels_channels_and_selection},
   };
 }

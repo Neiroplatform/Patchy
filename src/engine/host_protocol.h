@@ -24,6 +24,11 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_DOCUMENT_GEOMETRY = UINT64_C(1) << 8,
   PATCHY_ENGINE_CAP_OPTIMISTIC_COMMANDS = UINT64_C(1) << 9,
   PATCHY_ENGINE_CAP_SAVE_STATE = UINT64_C(1) << 10,
+  PATCHY_ENGINE_CAP_SELECTION_PROJECTION = UINT64_C(1) << 11,
+  PATCHY_ENGINE_CAP_SAVED_CHANNELS = UINT64_C(1) << 12,
+  PATCHY_ENGINE_CAP_PIXEL_AUTHORING = UINT64_C(1) << 13,
+  PATCHY_ENGINE_CAP_PATH_PROJECTION = UINT64_C(1) << 14,
+  PATCHY_ENGINE_CAP_VECTOR_AUTHORING = UINT64_C(1) << 15,
 };
 
 enum patchy_engine_error_code {
@@ -156,6 +161,152 @@ typedef struct patchy_engine_document_projection {
   uint8_t can_redo;
 } patchy_engine_document_projection;
 
+typedef struct patchy_engine_selection_projection {
+  uint32_t struct_size;
+  size_t selection_rect_count;
+  size_t display_rect_count;
+  patchy_engine_rect mask_bounds;
+  uint8_t has_mask;
+  uint8_t empty;
+} patchy_engine_selection_projection;
+
+enum patchy_engine_channel_kind {
+  PATCHY_ENGINE_CHANNEL_ALPHA = 0,
+  PATCHY_ENGINE_CHANNEL_SPOT = 1,
+};
+
+enum patchy_engine_channel_color_indicates {
+  PATCHY_ENGINE_CHANNEL_MASKED_AREAS = 0,
+  PATCHY_ENGINE_CHANNEL_SELECTED_AREAS = 1,
+  PATCHY_ENGINE_CHANNEL_SPOT_COLOR = 2,
+};
+
+typedef struct patchy_engine_channel_projection {
+  uint64_t id;
+  uint32_t kind;
+  uint32_t name_size;
+  char name[256];
+  uint8_t display_red;
+  uint8_t display_green;
+  uint8_t display_blue;
+  float display_opacity;
+  uint32_t color_indicates;
+} patchy_engine_channel_projection;
+
+typedef struct patchy_engine_pixel_layer_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  uint64_t layer_id;
+  patchy_engine_rect bounds;
+  int32_t width;
+  int32_t height;
+  const uint8_t *rgba;
+  size_t rgba_size;
+  const char *name;
+  size_t name_size;
+  uint8_t rasterize_smart_object;
+} patchy_engine_pixel_layer_input;
+
+typedef struct patchy_engine_alpha_channel_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const uint8_t *gray;
+  size_t gray_size;
+  const char *name;
+  size_t name_size;
+} patchy_engine_alpha_channel_input;
+
+enum patchy_engine_path_kind {
+  PATCHY_ENGINE_PATH_SAVED = 0,
+  PATCHY_ENGINE_PATH_WORK = 1,
+};
+
+enum patchy_engine_path_combine {
+  PATCHY_ENGINE_PATH_XOR = 0,
+  PATCHY_ENGINE_PATH_ADD = 1,
+  PATCHY_ENGINE_PATH_SUBTRACT = 2,
+  PATCHY_ENGINE_PATH_INTERSECT = 3,
+};
+
+enum patchy_engine_selection_combine {
+  PATCHY_ENGINE_SELECTION_REPLACE = 0,
+  PATCHY_ENGINE_SELECTION_ADD = 1,
+  PATCHY_ENGINE_SELECTION_SUBTRACT = 2,
+  PATCHY_ENGINE_SELECTION_INTERSECT = 3,
+};
+
+typedef struct patchy_engine_path_anchor {
+  double anchor_x;
+  double anchor_y;
+  double in_x;
+  double in_y;
+  double out_x;
+  double out_y;
+  uint8_t smooth;
+} patchy_engine_path_anchor;
+
+typedef struct patchy_engine_path_subpath_input {
+  size_t first_anchor;
+  size_t anchor_count;
+  int32_t shape_group;
+  uint32_t combine;
+  uint8_t closed;
+} patchy_engine_path_subpath_input;
+
+typedef struct patchy_engine_path_input {
+  const patchy_engine_path_subpath_input *subpaths;
+  size_t subpath_count;
+  const patchy_engine_path_anchor *anchors;
+  size_t anchor_count;
+} patchy_engine_path_input;
+
+typedef struct patchy_engine_document_path_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const char *name;
+  size_t name_size;
+  uint32_t kind;
+  uint8_t clipping;
+  patchy_engine_path_input path;
+} patchy_engine_document_path_input;
+
+typedef struct patchy_engine_vector_shape_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const char *name;
+  size_t name_size;
+  patchy_engine_path_input path;
+  uint8_t fill_red;
+  uint8_t fill_green;
+  uint8_t fill_blue;
+  uint8_t stroke_enabled;
+  uint8_t stroke_red;
+  uint8_t stroke_green;
+  uint8_t stroke_blue;
+  double stroke_width;
+} patchy_engine_vector_shape_input;
+
+typedef struct patchy_engine_document_path_projection {
+  uint64_t id;
+  uint32_t kind;
+  uint32_t name_size;
+  char name[256];
+  size_t subpath_count;
+  size_t anchor_count;
+  uint8_t clipping;
+} patchy_engine_document_path_projection;
+
+typedef struct patchy_engine_path_subpath_projection {
+  size_t anchor_count;
+  int32_t shape_group;
+  uint32_t combine;
+  uint8_t closed;
+} patchy_engine_path_subpath_projection;
+
 enum patchy_engine_canvas_anchor {
   PATCHY_ENGINE_ANCHOR_TOP_LEFT = 0,
   PATCHY_ENGINE_ANCHOR_TOP = 1,
@@ -192,6 +343,22 @@ enum patchy_engine_command_type {
   PATCHY_ENGINE_COMMAND_ADD_GROUP = 14,
   PATCHY_ENGINE_COMMAND_MOVE_LAYER = 15,
   PATCHY_ENGINE_COMMAND_UNGROUP = 16,
+  PATCHY_ENGINE_COMMAND_SELECT_ALL = 17,
+  PATCHY_ENGINE_COMMAND_CLEAR_SELECTION = 18,
+  PATCHY_ENGINE_COMMAND_INVERT_SELECTION = 19,
+  PATCHY_ENGINE_COMMAND_EXPAND_SELECTION = 20,
+  PATCHY_ENGINE_COMMAND_CONTRACT_SELECTION = 21,
+  PATCHY_ENGINE_COMMAND_BORDER_SELECTION = 22,
+  PATCHY_ENGINE_COMMAND_SELECT_CHANNEL = 23,
+  PATCHY_ENGINE_COMMAND_RENAME_CHANNEL = 24,
+  PATCHY_ENGINE_COMMAND_INVERT_CHANNEL = 25,
+  PATCHY_ENGINE_COMMAND_REMOVE_CHANNEL = 26,
+  PATCHY_ENGINE_COMMAND_MOVE_CHANNEL = 27,
+  PATCHY_ENGINE_COMMAND_SELECT_DOCUMENT_PATH = 28,
+  PATCHY_ENGINE_COMMAND_RENAME_DOCUMENT_PATH = 29,
+  PATCHY_ENGINE_COMMAND_REMOVE_DOCUMENT_PATH = 30,
+  PATCHY_ENGINE_COMMAND_MOVE_DOCUMENT_PATH = 31,
+  PATCHY_ENGINE_COMMAND_SET_CLIPPING_PATH = 32,
 };
 
 typedef struct patchy_engine_command {
@@ -200,6 +367,7 @@ typedef struct patchy_engine_command {
   uint32_t type;
   uint32_t flags;
   uint64_t expected_state_id;
+  uint64_t expected_revision;
   union {
     struct {
       uint64_t layer_id;
@@ -283,6 +451,49 @@ typedef struct patchy_engine_command {
     struct {
       uint64_t group_id;
     } ungroup;
+    struct {
+      int32_t pixels;
+    } selection_radius;
+    struct {
+      uint64_t channel_id;
+    } select_channel;
+    struct {
+      uint64_t channel_id;
+      uint32_t name_size;
+      char name[256];
+    } rename_channel;
+    struct {
+      uint64_t channel_id;
+    } invert_channel;
+    struct {
+      uint64_t channel_id;
+    } remove_channel;
+    struct {
+      uint64_t channel_id;
+      size_t final_index;
+    } move_channel;
+    struct {
+      uint64_t path_id;
+      double feather;
+      uint32_t combine;
+      uint8_t antialias;
+    } select_document_path;
+    struct {
+      uint64_t path_id;
+      uint32_t name_size;
+      char name[256];
+    } rename_document_path;
+    struct {
+      uint64_t path_id;
+    } remove_document_path;
+    struct {
+      uint64_t path_id;
+      size_t final_index;
+    } move_document_path;
+    struct {
+      uint64_t path_id;
+      uint8_t clipping;
+    } set_clipping_path;
   } payload;
 } patchy_engine_command;
 
@@ -315,6 +526,19 @@ void patchy_engine_session_destroy(patchy_engine_session *session);
 int patchy_engine_session_document(const patchy_engine_session *session,
                                    patchy_engine_document_projection *document,
                                    patchy_engine_error *error);
+int patchy_engine_session_selection(
+    const patchy_engine_session *session,
+    patchy_engine_selection_projection *selection,
+    patchy_engine_error *error);
+int patchy_engine_session_selection_rect_at(
+    const patchy_engine_session *session, size_t index,
+    patchy_engine_rect *rect, patchy_engine_error *error);
+int patchy_engine_session_selection_display_rect_at(
+    const patchy_engine_session *session, size_t index,
+    patchy_engine_rect *rect, patchy_engine_error *error);
+int patchy_engine_session_selection_mask(
+    const patchy_engine_session *session, patchy_engine_buffer *gray,
+    patchy_engine_error *error);
 
 int patchy_engine_session_layer_count(const patchy_engine_session *session,
                                       size_t *count,
@@ -323,6 +547,51 @@ int patchy_engine_session_layer_at(const patchy_engine_session *session,
                                    size_t index,
                                    patchy_engine_layer_projection *layer,
                                    patchy_engine_error *error);
+int patchy_engine_session_channel_count(const patchy_engine_session *session,
+                                        size_t *count,
+                                        patchy_engine_error *error);
+int patchy_engine_session_channel_at(const patchy_engine_session *session,
+                                     size_t index,
+                                     patchy_engine_channel_projection *channel,
+                                     patchy_engine_error *error);
+int patchy_engine_session_channel_pixels(
+    const patchy_engine_session *session, uint64_t channel_id,
+    patchy_engine_buffer *gray, patchy_engine_error *error);
+int patchy_engine_session_add_rgba8_layer(
+    patchy_engine_session *session,
+    const patchy_engine_pixel_layer_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_replace_rgba8_layer(
+    patchy_engine_session *session,
+    const patchy_engine_pixel_layer_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_add_alpha_channel(
+    patchy_engine_session *session,
+    const patchy_engine_alpha_channel_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_path_count(const patchy_engine_session *session,
+                                     size_t *count,
+                                     patchy_engine_error *error);
+int patchy_engine_session_path_at(
+    const patchy_engine_session *session, size_t index,
+    patchy_engine_document_path_projection *path,
+    patchy_engine_error *error);
+int patchy_engine_session_path_subpath_at(
+    const patchy_engine_session *session, uint64_t path_id, size_t index,
+    patchy_engine_path_subpath_projection *subpath,
+    patchy_engine_error *error);
+int patchy_engine_session_path_anchor_at(
+    const patchy_engine_session *session, uint64_t path_id,
+    size_t subpath_index, size_t anchor_index,
+    patchy_engine_path_anchor *anchor, patchy_engine_error *error);
+int patchy_engine_session_add_document_path(
+    patchy_engine_session *session,
+    const patchy_engine_document_path_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_add_vector_shape(
+    patchy_engine_session *session,
+    const patchy_engine_vector_shape_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_execute(patchy_engine_session *session,
                                   const patchy_engine_command *command,
                                   patchy_engine_event *event,
