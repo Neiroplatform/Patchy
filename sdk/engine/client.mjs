@@ -48,6 +48,11 @@ export class PatchyWorkerClient {
     return this.#request("openBlob", { blob, name });
   }
   inspectBlob(blob) { return this.#request("inspectBlob", { blob }); }
+  placePsdSmartObject(blob, name = "Smart Object.psd", layerId = null) {
+    return this.#request("placePsdSmartObject", {
+      blob, name, layerId: layerId == null ? null : String(layerId),
+    });
+  }
   create(width, height, name = "Untitled.psd") {
     return this.#request("create", { width, height, name });
   }
@@ -198,6 +203,12 @@ export class PatchyWorkerClient {
     return this.#request("replaceSmartObject", { layerId: String(layerId),
       input: { ...input, rgba: rgba.buffer, sourceBytes: sourceBytes.buffer } },
     [rgba.buffer, sourceBytes.buffer]);
+  }
+  openSmartObjectContents(layerId) {
+    return this.#request("openSmartObjectContents", { layerId: String(layerId) });
+  }
+  saveSmartObjectContents(documentId) {
+    return this.#request("saveSmartObjectContents", { documentId });
   }
   setSmartFilter(layerId, input) {
     return this.#request("setSmartFilter", { layerId: String(layerId), input });

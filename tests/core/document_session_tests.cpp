@@ -3327,7 +3327,15 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   CHECK(std::string(projected_text.text, projected_text.text_size) ==
         "Edited browser text");
 
-  const std::array<std::uint8_t, 6> embedded_bytes{'8', 'B', 'P', 'S', 1, 2};
+  auto *source_session = patchy_engine_session_create_rgba8(runtime, 2, 2, &error);
+  CHECK(source_session != nullptr);
+  patchy_engine_buffer source_psd{};
+  CHECK(patchy_engine_session_save_psd(source_session, &source_psd, &event,
+                                       &error) == 1);
+  const std::vector<std::uint8_t> embedded_bytes(
+      source_psd.data, source_psd.data + source_psd.size);
+  patchy_engine_buffer_release(&source_psd);
+  patchy_engine_session_destroy(source_session);
   const auto before_embedded = project();
   patchy_engine_smart_object_input smart{};
   smart.struct_size = sizeof(smart);
@@ -3341,9 +3349,9 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   smart.name = "Embedded art";
   smart.name_size = std::strlen(smart.name);
   smart.source_kind = PATCHY_ENGINE_SMART_OBJECT_EMBEDDED;
-  smart.filename = "art.psb";
+  smart.filename = "art.psd";
   smart.filename_size = std::strlen(smart.filename);
-  std::memcpy(smart.filetype, "8BPB", 4);
+  std::memcpy(smart.filetype, "8BPS", 4);
   smart.source_bytes = embedded_bytes.data();
   smart.source_size = embedded_bytes.size();
   CHECK(patchy_engine_session_add_smart_object(session, &smart, &event,
@@ -3362,6 +3370,45 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   CHECK(exported.size == embedded_bytes.size());
   CHECK(std::equal(exported.data, exported.data + exported.size,
                    embedded_bytes.data()));
+  auto *contents = patchy_engine_session_open_psd(
+      runtime, exported.data, exported.size, &error);
+  CHECK(contents != nullptr);
+  patchy_engine_document_projection contents_projection{};
+  contents_projection.struct_size = sizeof(contents_projection);
+  CHECK(patchy_engine_session_document(contents, &contents_projection,
+                                       &error) == 1);
+  patchy_engine_pixel_layer_input contents_layer{};
+  contents_layer.struct_size = sizeof(contents_layer);
+  contents_layer.expected_state_id = contents_projection.state_id;
+  contents_layer.expected_revision = contents_projection.revision;
+  contents_layer.bounds = {0, 0, 2, 2};
+  contents_layer.width = 2;
+  contents_layer.height = 2;
+  contents_layer.rgba = pixels.data();
+  contents_layer.rgba_size = pixels.size();
+  contents_layer.name = "Contents edit";
+  contents_layer.name_size = std::strlen(contents_layer.name);
+  CHECK(patchy_engine_session_add_rgba8_layer(
+            contents, &contents_layer, &event, &error) == 1);
+  patchy_engine_buffer edited_source{};
+  CHECK(patchy_engine_session_save_psd(contents, &edited_source, &event,
+                                       &error) == 1);
+  const auto committed_source_size = edited_source.size;
+  const auto before_contents_commit = project();
+  smart.expected_state_id = before_contents_commit.state_id;
+  smart.expected_revision = before_contents_commit.revision;
+  smart.source_bytes = edited_source.data;
+  smart.source_size = edited_source.size;
+  CHECK(patchy_engine_session_replace_smart_object(
+            session, embedded_id, &smart, &event, &error) == 1);
+  CHECK(project().revision == before_contents_commit.revision + 1U);
+  projected_smart = {};
+  projected_smart.struct_size = sizeof(projected_smart);
+  CHECK(patchy_engine_session_smart_object(
+            session, embedded_id, &projected_smart, &error) == 1);
+  CHECK(projected_smart.source_size == edited_source.size);
+  patchy_engine_buffer_release(&edited_source);
+  patchy_engine_session_destroy(contents);
   patchy_engine_buffer_release(&exported);
 
   const auto before_linked = project();
@@ -3422,7 +3469,7 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   projected_smart.struct_size = sizeof(projected_smart);
   CHECK(patchy_engine_session_smart_object(
             reopened, embedded_id, &projected_smart, &error) == 1);
-  CHECK(projected_smart.source_size == embedded_bytes.size());
+  CHECK(projected_smart.source_size == committed_source_size);
   CHECK(patchy_engine_session_smart_object(
             reopened, linked_id, &projected_smart, &error) == 1);
   CHECK(projected_smart.source_kind == PATCHY_ENGINE_SMART_OBJECT_EXTERNAL);

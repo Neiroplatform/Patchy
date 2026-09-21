@@ -42,7 +42,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "lassoToolButton", "polygonToolButton", "magicToolButton", "selectionToleranceInput",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton",
     "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
-    "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "smartFilterButton",
+    "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "openSmartObjectButton", "smartFilterButton",
     "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
     "layerFillInput", "layerClipInput", "layerLockInput", "layerStyleSelect",
     "applyLayerStyleButton", "invertSelectionButton",
@@ -73,7 +73,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
     "client.updateVectorShape",
     "client.addAdjustment", "client.updateAdjustment", "client.addSmartObject",
-    "client.replaceSmartObject", "client.setSmartFilter",
+    "client.replaceSmartObject", "client.openSmartObjectContents",
+    "client.saveSmartObjectContents", "client.setSmartFilter",
     "client.setLayerFillOpacity", "client.setLayerLocks", "client.setLayerClipping",
     "client.setLayerStylePreset",
     "client.invertSelection", "client.expandSelection", "client.contractSelection",
@@ -84,7 +85,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
     "client.undo", "client.redo", "client.renderFrame", "client.saveBlob", "client.saveDocument",
-    "client.setMemoryBudget", "client.openBlob", "client.inspectBlob"]) {
+    "client.setMemoryBudget", "client.openBlob", "client.inspectBlob", "client.placePsdSmartObject"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
@@ -94,6 +95,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(worker, /method === "renderFrame"/);
   assert.match(worker, /method === "openBlob"/);
   assert.match(worker, /method === "inspectBlob"/);
+  assert.match(worker, /method === "placePsdSmartObject"/);
   assert.match(worker, /method === "saveBlob"/);
   assert.match(worker, /createRenderFrame\(bytes, payload\.region\)/);
   assert.match(script, /context\.drawImage\(frame\.bitmap/);
@@ -115,7 +117,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     assert.match(html, new RegExp(`value="${preset}"`));
   }
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
-    "activateDocument(", "closeDocument(", "saveDocument(", "growSelection(", "selectSimilar(", "setLayerStylePreset("]) {
+    "activateDocument(", "closeDocument(", "saveDocument(", "openSmartObjectContents(",
+    "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset("]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
   assert.match(types, /addStateListener\(listener:/);
@@ -419,6 +422,11 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_replace_smart_object(session, layerId, input) {
       assert.equal(layerId, 7n); assert.equal(view.getUint32(input + 84, true), 4); return 1;
     },
+    _patchy_engine_session_smart_object_bytes(session, layerId, output) {
+      assert.equal(layerId, 7n);
+      const data = alloc(6); heap.set([56, 66, 80, 83, 1, 2], data);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 6, true); return 1;
+    },
     _patchy_engine_session_set_smart_filter(session, input) {
       assert.equal(view.getUint32(input + 32, true), 1); assert.equal(view.getFloat64(input + 40, true), 4); return 1;
     },
@@ -478,6 +486,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.equal(engine.memoryUsage(session).renderCacheEvictions, 15);
   assert.deepEqual(engine.pendingRenderRegion(session), { x: 1, y: 0, width: 2, height: 2 });
   assert.equal(engine.evictOldestUndo(session), true);
+  assert.deepEqual(Array.from(engine.smartObjectBytes(session, 7n)), [56, 66, 80, 83, 1, 2]);
   engine.setLayerVisibility(session, snapshot, 7n, false);
   engine.setLayerOpacity(session, snapshot, 7n, 0.5);
   engine.setLayerFillOpacity(session, snapshot, 7n, 0.75);
@@ -559,7 +568,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
-  assert.equal(released, 5);
+  assert.equal(released, 6);
   engine.dispose();
   assert.equal(destroyed, 2);
 });
@@ -808,6 +817,84 @@ test("one Worker owns isolated switchable document sessions", async () => {
   assert.deepEqual(closed, [101, 100]);
 });
 
+test("Smart Object contents open once and save back as one stale-guarded parent revision", async () => {
+  const revisions = new Map([[1, 4], [2, 1]]);
+  let parentHasSmartObject = false;
+  let replacements = 0;
+  const parentProjection = () => ({ ...projection(revisions.get(1)), width: 3, height: 2,
+    layers: [{ ...projection(1).layers[0],
+      ...(parentHasSmartObject ? { kind: 5, name: "embedded",
+        smartObject: { sourceKind: 0, filename: "embedded.psd", filetype: "8BPS",
+          sourceSize: 128n, editable: true } } : { smartObject: null }) }] });
+  const childProjection = () => ({ ...projection(revisions.get(2)), width: 3, height: 2 });
+  const engine = {
+    capabilities: 0n,
+    create() { return 1; },
+    open(bytes) { assert.deepEqual(Array.from(bytes), [56, 66, 80, 83]); return 2; },
+    snapshot(session) { return session === 1 ? parentProjection() : childProjection(); },
+    addSmartObject(session, before, input) {
+      assert.equal(session, 1); assert.equal(input.filetype, "8BPS");
+      assert.equal(input.rgba.byteLength, 24); parentHasSmartObject = true;
+      revisions.set(1, revisions.get(1) + 1);
+    },
+    smartObjectBytes(session, layerId) {
+      assert.deepEqual([session, layerId], [1, 7n]); return new Uint8Array([56, 66, 80, 83]);
+    },
+    render(session, region) {
+      assert.equal(session, 2); assert.deepEqual(region, { x: 0, y: 0, width: 3, height: 2 });
+      return new Uint8Array(24).fill(17);
+    },
+    save(session) { assert.equal(session, 2); return new Uint8Array([56, 66, 80, 83, 0, 1]); },
+    replaceSmartObject(session, before, layerId, input) {
+      assert.equal(session, 1); assert.equal(before.stateId, BigInt(revisions.get(1)));
+      assert.equal(before.revision, BigInt(revisions.get(1)));
+      assert.equal(layerId, 7n); assert.equal(input.filetype, "8BPS");
+      assert.equal(input.rgba.byteLength, 24);
+      assert.equal(input.sourceBytes.byteLength, replacements === 0 ? 4 : 6);
+      replacements++; revisions.set(1, revisions.get(1) + 1);
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  const parent = await host.dispatch({ method: "create", width: 3, height: 2, name: "Parent.psd" });
+  const placed = await host.dispatch({ method: "addPsdSmartObject",
+    bytes: new Uint8Array([56, 66, 80, 83]).buffer,
+    name: "embedded", filename: "embedded.psd", filetype: "8BPS" });
+  assert.equal(placed.layers[0].smartObject.contentsEditable, true);
+  const replaced = await host.dispatch({ method: "addPsdSmartObject", layerId: "7",
+    bytes: new Uint8Array([56, 66, 80, 83]).buffer,
+    name: "embedded", filename: "embedded.psd", filetype: "8BPS" });
+  assert.equal(replaced.layers.length, 1);
+  assert.equal(replaced.layers[0].smartObject.contentsEditable, true);
+  const child = await host.dispatch({ method: "openSmartObjectContents", layerId: "7" });
+  assert.equal(child.documents.length, 2);
+  assert.equal(child.documents.find((item) => item.active).smartObjectParentId, parent.documentId);
+  await host.dispatch({ method: "activateDocument", documentId: parent.documentId });
+  await assert.rejects(
+    host.dispatch({ method: "addPsdSmartObject", layerId: "7",
+      bytes: new Uint8Array([56, 66, 80, 83]).buffer,
+      name: "replacement", filename: "replacement.psd", filetype: "8BPS" }),
+    /Close the open Smart Object contents/);
+  const reopened = await host.dispatch({ method: "openSmartObjectContents", layerId: "7" });
+  assert.equal(reopened.documentId, child.documentId);
+  assert.equal(reopened.documents.length, 2);
+
+  const committed = await host.dispatch({ method: "saveSmartObjectContents", documentId: child.documentId });
+  assert.equal(committed.documentId, parent.documentId);
+  assert.equal(committed.revision, 7n);
+  assert.equal(replacements, 2);
+
+  await host.dispatch({ method: "activateDocument", documentId: child.documentId });
+  revisions.set(1, 8);
+  await assert.rejects(
+    host.dispatch({ method: "saveSmartObjectContents", documentId: child.documentId }),
+    /parent document changed/);
+  assert.equal(replacements, 2);
+  await host.dispatch({ method: "closeDocument", documentId: child.documentId });
+  assert.equal(replacements, 2);
+  host.dispose();
+});
+
 test("Worker enforces per-document and global history budgets with one undo-state floor", async () => {
   let nextSession = 1;
   const histories = new Map(); const undoStates = new Map();
@@ -929,6 +1016,13 @@ test("client sends Blob handles without main-thread byte materialization", async
   worker.reply({ id: 2, ok: true, value: { version: 1, width: 1, height: 1,
     channels: 4, depth: 8, colorMode: 3, sourceBytes: 4 } });
   assert.equal((await inspected).width, 1);
+  const placed = client.placePsdSmartObject(blob, "Placed.psd", 7n);
+  assert.equal(worker.sent[2].message.method, "placePsdSmartObject");
+  assert.equal(worker.sent[2].message.blob.size, 4);
+  assert.equal(worker.sent[2].message.layerId, "7");
+  assert.equal(worker.sent[2].transfer.length, 0);
+  worker.reply({ id: 3, ok: true, value: projection(2) });
+  assert.equal((await placed).revision, 2n);
 });
 
 test("client receives Worker-native PSD Blobs without byte transfer lists", async () => {

@@ -33,6 +33,121 @@ export class PatchyWorkerHost {
         this.#activateDocument(message.documentId);
         return this.#snapshot();
       case "closeDocument": return this.#closeDocument(message.documentId);
+      case "addPsdSmartObject": {
+        const parent = this.#sessions.get(this.#activeDocumentId);
+        const replacementId = message.layerId == null ? null : BigInt(message.layerId);
+        if (replacementId != null &&
+            this.#linkedSmartObjectChild(this.#activeDocumentId, replacementId)) {
+          throw new Error("Close the open Smart Object contents before replacing its source");
+        }
+        const sourceBytes = new Uint8Array(message.bytes);
+        const sourceSession = this.#engine.open(sourceBytes);
+        let source;
+        try {
+          const projected = this.#engine.snapshot(sourceSession);
+          source = { width: projected.width, height: projected.height,
+            rgba: this.#engine.render(sourceSession, {
+              x: 0, y: 0, width: projected.width, height: projected.height,
+            }) };
+        } finally {
+          this.#engine.close(sourceSession);
+        }
+        const before = this.#snapshot();
+        const replacement = replacementId == null ? null : before.layers.find(
+          (candidate) => candidate.id === replacementId);
+        if (replacementId != null && (!parent.contentsEditableLayerIds.has(replacementId) ||
+            !replacement?.smartObject?.contentsEditable)) {
+          throw new Error("PSD/PSB replacement requires a Smart Object placed by this browser session");
+        }
+        if (replacement && (replacement.bounds.width !== source.width ||
+            replacement.bounds.height !== source.height)) {
+          throw new Error("PSD/PSB replacement dimensions must match the current Smart Object");
+        }
+        const input = {
+          name: message.name, filename: message.filename,
+          filetype: message.filetype, width: source.width, height: source.height,
+          bounds: replacement ? { ...replacement.bounds } :
+            { x: 0, y: 0, width: source.width, height: source.height },
+          rgba: source.rgba, sourceBytes,
+        };
+        if (replacementId == null) this.#engine.addSmartObject(parent.session, before, input);
+        else this.#engine.replaceSmartObject(parent.session, before, replacementId, input);
+        const authored = replacementId ?? this.#engine.snapshot(parent.session).activeLayerId;
+        parent.contentsEditableLayerIds.add(authored);
+        return this.#snapshot();
+      }
+      case "openSmartObjectContents": {
+        const parentDocumentId = this.#activeDocumentId;
+        const parent = this.#sessions.get(parentDocumentId);
+        const before = this.#snapshot();
+        const layerId = BigInt(message.layerId);
+        const layer = before.layers.find((candidate) => candidate.id === layerId);
+        if (!layer?.smartObject?.contentsEditable) {
+          throw new Error("Smart Object contents require one unwarped embedded PSD/PSB instance");
+        }
+        const existing = this.#linkedSmartObjectChild(parentDocumentId, layerId);
+        if (existing) {
+          this.#activateDocument(existing[0]);
+          return this.#snapshot();
+        }
+        const bytes = this.#engine.smartObjectBytes(parent.session, layerId);
+        const child = this.#engine.open(bytes);
+        const childId = this.#addSession(
+          child, `${layer.smartObject.filename || layer.name} — Smart Object`);
+        this.#sessions.get(childId).smartObjectLink = {
+          parentDocumentId, layerId, expectedStateId: before.stateId,
+          expectedRevision: before.revision, filename: layer.smartObject.filename,
+          filetype: layer.smartObject.filetype, name: layer.name,
+          bounds: { ...layer.bounds }, width: before.layers.find(
+            (candidate) => candidate.id === layerId).bounds.width,
+          height: before.layers.find((candidate) => candidate.id === layerId).bounds.height,
+        };
+        return this.#snapshot();
+      }
+      case "saveSmartObjectContents": {
+        const childId = Number(message.documentId || this.#activeDocumentId);
+        const child = this.#sessions.get(childId);
+        const link = child?.smartObjectLink;
+        if (!child || !link) throw new Error("Document is not linked Smart Object contents");
+        const parent = this.#sessions.get(link.parentDocumentId);
+        if (!parent) throw new Error("The parent Smart Object document is closed");
+        const parentBefore = this.#engine.snapshot(parent.session);
+        if (parentBefore.stateId !== link.expectedStateId ||
+            parentBefore.revision !== link.expectedRevision) {
+          throw new Error("The parent document changed after Smart Object contents were opened");
+        }
+        const parentLayer = parentBefore.layers.find((candidate) => candidate.id === link.layerId);
+        if (!parent.contentsEditableLayerIds.has(link.layerId) ||
+            !parentLayer?.smartObject?.editable ||
+            parentLayer.smartObject.filename !== link.filename ||
+            parentLayer.smartObject.filetype !== link.filetype) {
+          throw new Error("The parent Smart Object is no longer safely editable");
+        }
+        const childBefore = this.#engine.snapshot(child.session);
+        if (childBefore.width !== link.width || childBefore.height !== link.height) {
+          throw new Error("Resized Smart Object contents require the full transform resampler");
+        }
+        const rgba = this.#engine.render(child.session, {
+          x: 0, y: 0, width: childBefore.width, height: childBefore.height,
+        });
+        const sourceBytes = this.#engine.save(child.session);
+        const childAfter = this.#engine.snapshot(child.session);
+        child.dirty = childAfter.dirty; child.revision = childAfter.revision;
+        this.#engine.replaceSmartObject(parent.session, {
+          ...parentBefore, stateId: link.expectedStateId,
+          revision: link.expectedRevision,
+        }, link.layerId, {
+          name: link.name, filename: link.filename, filetype: link.filetype,
+          width: childBefore.width, height: childBefore.height,
+          bounds: { ...link.bounds }, rgba, sourceBytes,
+        });
+        const parentAfter = this.#engine.snapshot(parent.session);
+        parent.dirty = parentAfter.dirty; parent.revision = parentAfter.revision;
+        link.expectedStateId = parentAfter.stateId;
+        link.expectedRevision = parentAfter.revision;
+        this.#activateDocument(link.parentDocumentId);
+        return this.#snapshot();
+      }
       case "setMemoryBudget": {
         const documentBytes = Number(message.documentBytes);
         const globalBytes = Number(message.globalBytes);
@@ -260,13 +375,27 @@ export class PatchyWorkerHost {
           ...message.input, rgba: new Uint8Array(message.input.rgba),
           sourceBytes: new Uint8Array(message.input.sourceBytes),
         });
+        if (["8BPS", "8BPB"].includes(message.input.filetype)) {
+          const activeLayerId = this.#engine.snapshot(this.#requireSession()).activeLayerId;
+          this.#sessions.get(this.#activeDocumentId).contentsEditableLayerIds.add(activeLayerId);
+        }
         return this.#snapshot();
       case "replaceSmartObject":
+        if (this.#linkedSmartObjectChild(this.#activeDocumentId, BigInt(message.layerId))) {
+          throw new Error("Close the open Smart Object contents before replacing its source");
+        }
         this.#engine.replaceSmartObject(this.#requireSession(), this.#snapshot(),
           BigInt(message.layerId), {
             ...message.input, rgba: new Uint8Array(message.input.rgba),
             sourceBytes: new Uint8Array(message.input.sourceBytes),
           });
+        if (["8BPS", "8BPB"].includes(message.input.filetype)) {
+          this.#sessions.get(this.#activeDocumentId).contentsEditableLayerIds.add(
+            BigInt(message.layerId));
+        } else {
+          this.#sessions.get(this.#activeDocumentId).contentsEditableLayerIds.delete(
+            BigInt(message.layerId));
+        }
         return this.#snapshot();
       case "setSmartFilter":
         this.#engine.setSmartFilter(this.#requireSession(), this.#snapshot(),
@@ -311,7 +440,11 @@ export class PatchyWorkerHost {
     active.dirty = projection.dirty; active.revision = projection.revision;
     const memory = this.#engine.memoryUsage?.(this.#requireSession()) || null;
     const dirtyRegion = this.#engine.pendingRenderRegion?.(this.#requireSession()) || null;
-    return { ...projection, documentId: this.#activeDocumentId,
+    const layers = projection.layers.map((layer) => ({ ...layer,
+      smartObject: layer.smartObject == null ? null : { ...layer.smartObject,
+        contentsEditable: active.contentsEditableLayerIds.has(layer.id) &&
+          layer.smartObject.editable && ["8BPS", "8BPB"].includes(layer.smartObject.filetype) } }));
+    return { ...projection, layers, documentId: this.#activeDocumentId,
       documentName: active.name, documents: this.#documentList(), memory,
       dirtyRegion, memoryBudget: { documentBytes: this.#documentHistoryBudget,
         globalBytes: this.#globalHistoryBudget } };
@@ -343,14 +476,22 @@ export class PatchyWorkerHost {
     return this.#session;
   }
 
+  #linkedSmartObjectChild(parentDocumentId, layerId) {
+    return [...this.#sessions.entries()].find(([, record]) =>
+      record.smartObjectLink?.parentDocumentId === parentDocumentId &&
+      record.smartObjectLink?.layerId === layerId);
+  }
+
   #addSession(session, name) {
     if (this.#sessions.size >= MAX_OPEN_DOCUMENTS) {
       this.#engine.close(session);
       throw new RangeError(`Patchy supports at most ${MAX_OPEN_DOCUMENTS} open browser documents`);
     }
     const documentId = this.#nextDocumentId++;
-    this.#sessions.set(documentId, { session, name, dirty: false, revision: 1n });
+    this.#sessions.set(documentId, { session, name, dirty: false, revision: 1n,
+      contentsEditableLayerIds: new Set() });
     this.#activeDocumentId = documentId; this.#session = session;
+    return documentId;
   }
 
   #activateDocument(documentId) {
@@ -378,7 +519,10 @@ export class PatchyWorkerHost {
       return { id, name: record.name, dirty: record.dirty, revision: record.revision,
         active: id === this.#activeDocumentId,
         retainedBytes: memory?.totalRetainedBytes || 0,
-        historyBytes: memory?.historyRetainedBytes || 0 };
+        historyBytes: memory?.historyRetainedBytes || 0,
+        ...(record.smartObjectLink
+          ? { smartObjectParentId: record.smartObjectLink.parentDocumentId }
+          : {}) };
     });
   }
 

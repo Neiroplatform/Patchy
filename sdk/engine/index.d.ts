@@ -8,7 +8,7 @@ export interface LayerProjection {
     color: [number, number, number]; bold: boolean; italic: boolean; boxText: boolean };
   adjustment: null | { kind: number; values: number[] };
   smartObject: null | { sourceKind: number; filename: string; filetype: string;
-    sourceSize: bigint; editable: boolean };
+    sourceSize: bigint; editable: boolean; contentsEditable: boolean };
 }
 export interface DocumentProjection {
   width: number; height: number; colorMode: number; bitDepth: number;
@@ -34,7 +34,8 @@ export interface MemoryUsage {
   renderCacheMisses: number; renderCacheEvictions: number;
 }
 export interface DocumentTabProjection { id: number; name: string; dirty: boolean;
-  revision: bigint; active: boolean; retainedBytes: number; historyBytes: number }
+  revision: bigint; active: boolean; retainedBytes: number; historyBytes: number;
+  smartObjectParentId?: number }
 export type WorkerState = "starting" | "ready" | "crashed" | "closed";
 export interface FilterProgress {
   completed: number; total: number; stage: number; ratio: number;
@@ -58,6 +59,8 @@ export class PatchyWorkerClient {
   open(bytes: Uint8Array, name?: string, options?: TransferOptions): Promise<DocumentProjection>;
   openBlob(blob: Blob, name?: string): Promise<DocumentProjection>;
   inspectBlob(blob: Blob): Promise<PsdHeader>;
+  placePsdSmartObject(blob: Blob, name?: string,
+    layerId?: bigint | null): Promise<DocumentProjection>;
   create(width: number, height: number, name?: string): Promise<DocumentProjection>;
   snapshot(): Promise<DocumentProjection>;
   listDocuments(): Promise<DocumentTabProjection[]>;
@@ -135,6 +138,8 @@ export class PatchyWorkerClient {
     options?: TransferOptions): Promise<DocumentProjection>;
   replaceSmartObject(layerId: bigint, input: SmartObjectInput,
     options?: TransferOptions): Promise<DocumentProjection>;
+  openSmartObjectContents(layerId: bigint): Promise<DocumentProjection>;
+  saveSmartObjectContents(documentId: number): Promise<DocumentProjection>;
   setSmartFilter(layerId: bigint, input: SmartFilterInput): Promise<DocumentProjection>;
   moveLayer(layerId: bigint, targetLayerId: bigint | null,
             position: number): Promise<DocumentProjection>;

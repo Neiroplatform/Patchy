@@ -753,6 +753,12 @@ export class EmscriptenPatchyEngine {
       "_patchy_engine_session_replace_smart_object", session, snapshot, layerId, input);
   }
 
+  smartObjectBytes(session, layerId) {
+    return this.#bufferCall((buffer, event, error) =>
+      this.#module._patchy_engine_session_smart_object_bytes(
+        session, layerId, buffer, error));
+  }
+
   #smartObjectMutation(symbol, session, snapshot, layerId, input) {
     const name = this.#text(input.name);
     const filename = this.#text(input.filename, "Smart Object filename", 256);

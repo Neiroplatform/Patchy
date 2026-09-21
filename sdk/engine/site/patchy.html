@@ -136,6 +136,7 @@
             <button type="button" id="shapeLayerButton" disabled>Add shape</button>
             <button type="button" id="adjustmentLayerButton" disabled>Add adjustment</button>
             <button type="button" id="smartObjectButton" disabled>Place Smart Object</button>
+            <button type="button" id="openSmartObjectButton" disabled>Open contents</button>
             <button type="button" id="smartFilterButton" disabled>Smart Filter</button>
             <button type="button" id="layerTransformButton" disabled>Transform</button>
             <button type="button" id="createMaskButton" disabled>Add mask</button>
@@ -228,7 +229,7 @@
     </div>
     <input id="fileInput" type="file" accept=".psd,.psb,application/octet-stream" hidden>
     <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
-    <input id="smartObjectInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
+    <input id="smartObjectInput" type="file" accept=".psd,.psb,image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
     <dialog class="document-dialog recovery-dialog" id="recoveryDialog" aria-labelledby="recoveryDialogTitle">
       <form method="dialog">
         <header><div><p class="eyebrow">LOCAL RECOVERY</p><h2 id="recoveryDialogTitle">Recover workspaces</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>

@@ -135,6 +135,8 @@ function updateControls() {
   $("adjustmentLayerButton").disabled = busy || !snapshot;
   $("smartObjectButton").disabled = busy || !snapshot;
   $("smartObjectButton").textContent = layer?.kind === 5 ? "Replace Smart Object" : "Place Smart Object";
+  $("openSmartObjectButton").disabled = busy || layer?.kind !== 5 ||
+    !layer?.smartObject?.contentsEditable;
   $("smartFilterButton").disabled = busy || layer?.kind !== 5 || !layer?.smartObject?.editable;
   $("createVectorMaskButton").disabled = busy || !layer || layer.kind === 1 || layer.kind === 4 || !snapshot?.selection?.length;
   $("createMaskButton").disabled = busy || layer?.kind !== 0 || Boolean(layer?.mask);
@@ -937,12 +939,35 @@ async function newDocument() {
 async function saveDocument() {
   if (busy || !snapshot) return;
   clearError();
-  setBusy(true, "Encoding PSD", "Preparing a local browser download");
+  const activeTab = snapshot.documents.find((item) => item.active);
+  const applyingContents = activeTab?.smartObjectParentId != null;
+  setBusy(true, applyingContents ? "Applying Smart Object contents" : "Encoding PSD",
+    applyingContents ? "Committing one guarded parent revision" : "Preparing a local browser download");
   try {
+    if (applyingContents) {
+      const next = await client.saveSmartObjectContents(snapshot.documentId);
+      selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+      await acceptSnapshot(next);
+      scheduleCheckpoint(next);
+      return;
+    }
     const blob = await client.saveBlob();
     downloadBlob(blob,
       documentName.toLowerCase().endsWith(".psd") ? documentName : `${documentName}.psd`);
   } catch (error) { showError("Could not encode PSD", error); }
+  finally { setBusy(false); }
+}
+
+async function openSmartObjectContents() {
+  const layer = selectedLayer();
+  if (busy || layer?.kind !== 5 || !layer.smartObject?.contentsEditable) return;
+  clearError();
+  setBusy(true, "Opening Smart Object contents", "Creating a linked canonical Worker session");
+  try {
+    const next = await client.openSmartObjectContents(layer.id);
+    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    await acceptSnapshot(next);
+  } catch (error) { showError("Could not open Smart Object contents", error); }
   finally { setBusy(false); }
 }
 
@@ -1209,6 +1234,12 @@ async function placeSmartObject(file) {
   clearError(); setBusy(true, "Placing Smart Object", "Embedding source bytes and raster preview");
   let image;
   try {
+    if (/\.(?:psd|psb)$/i.test(file.name)) {
+      const layer = selectedLayer();
+      await acceptSnapshot(await client.placePsdSmartObject(
+        file, file.name, layer?.kind === 5 ? layer.id : null));
+      return;
+    }
     const sourceBytes = new Uint8Array(await file.arrayBuffer());
     image = await createImageBitmap(file);
     const byteLength = image.width * image.height * 4;
@@ -1542,6 +1573,8 @@ registerCommand("document.open", "openButton", openPicker, () => !busy);
 registerCommand("document.new", "newButton", newDocument, () => !busy);
 registerCommand("document.recovery", "recoveryButton", openRecoveryDialog, () => !busy);
 registerCommand("document.save", "saveButton", saveDocument, () => !busy && Boolean(snapshot));
+registerCommand("layer.openSmartObject", "openSmartObjectButton", openSmartObjectContents,
+  () => !busy && Boolean(selectedLayer()?.smartObject?.contentsEditable));
 registerCommand("document.export", "exportButton", exportDocument, () => !busy && Boolean(snapshot));
 registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
 registerCommand("document.pastePixels", "pastePixelsButton", pastePixels, () => !busy && Boolean(snapshot) &&

@@ -42,11 +42,11 @@ try {
     const first = recovered.restored[0].snapshot;
     const second = recovered.restored[1].snapshot;
     check(recovered.restored[0].manifest.generation === 2 &&
-      recovered.restored[0].manifest.revision === "4",
+      recovered.restored[0].manifest.revision === "7",
       "latest complete first generation was not selected");
     check(recovered.restored[1].manifest.generation === 1,
       "second workspace generation was not isolated");
-    check(first.width === 4 && first.height === 3 && first.layers.length === 1,
+    check(first.width === 4 && first.height === 3 && first.layers.length === 2,
       "first recovered PSD lost authored state");
     check(second.width === 2 && second.height === 2 && second.documents.length === 2,
       "second recovered PSD or multi-document isolation failed");
@@ -131,8 +131,25 @@ try {
     check(workerSavedBlob.type === "image/vnd.adobe.photoshop" &&
       workerSavedBlob.size === saved.length,
     "Worker-native PSD Blob save mismatch");
+    const smart = await client.addSmartObject({ name: "Embedded contents",
+      filename: "contents.psd", filetype: "8BPS", width: 4, height: 3,
+      bounds: { x: 0, y: 0, width: 4, height: 3 }, rgba: rendered.slice(),
+      sourceBytes: saved.slice() }, { transferOwnership: true });
+    const smartLayer = smart.layers.find((layer) => layer.id === smart.activeLayerId);
+    check(smartLayer?.smartObject?.contentsEditable,
+      "identity embedded PSD Smart Object did not expose Open Contents");
+    const child = await client.openSmartObjectContents(smartLayer.id);
+    check(child.documents.find((item) => item.active)?.smartObjectParentId === first.documentId,
+      "Smart Object child tab lost its parent link");
+    const childLayer = child.layers.find((layer) => layer.id === child.activeLayerId);
+    await client.setLayerOpacity(childLayer.id, 0.5);
+    const committedParent = await client.saveSmartObjectContents(child.documentId);
+    check(committedParent.documentId === first.documentId &&
+      committedParent.revision === smart.revision + 1n,
+    "Smart Object Save-back was not one parent revision");
+    const savedWithSmartObject = await client.saveDocument(first.documentId);
     await workspaceStore.checkpoint({ id: workspaceOne, name: "First.psd",
-      revision: styled.revision, dirty: true, bytes: saved });
+      revision: committedParent.revision, dirty: true, bytes: savedWithSmartObject });
     const opacity = await client.setLayerOpacity(layerId, 0.75);
     const savedAgain = await client.saveDocument(first.documentId);
     await workspaceStore.checkpoint({ id: workspaceOne, name: "First.psd",

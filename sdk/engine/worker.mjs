@@ -35,6 +35,20 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ id, ok: true, value });
       return;
     }
+    if (method === "placePsdSmartObject") {
+      const header = await inspectPsdBlob(payload.blob);
+      const admission = documentPreflight({ ...header, limitBytes: WORKER_WORKING_SET_LIMIT });
+      if (!admission.allowed) {
+        throw new RangeError("Smart Object PSD/PSB exceeds the Worker working-set safety limit");
+      }
+      const bytes = await readBlobInput(payload.blob);
+      const filename = payload.name || "Smart Object.psd";
+      const value = await host.dispatch({ method: "addPsdSmartObject",
+        bytes: bytes.buffer, filename, name: filename.replace(/\.[^.]+$/, "") || "Smart Object",
+        filetype: header.version === 2 ? "8BPB" : "8BPS", layerId: payload.layerId });
+      self.postMessage({ id, ok: true, value });
+      return;
+    }
     if (method === "saveBlob" || method === "saveDocumentBlob") {
       const bytes = await host.dispatch({
         method: method === "saveBlob" ? "save" : "saveDocument",
