@@ -877,6 +877,12 @@ test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsup
       view.setUint32(output, data, true); view.setUint32(output + 4, 6, true);
       return 1;
     },
+    _patchy_engine_session_add_text_layer(session, input) {
+      assert.equal(session, 99);
+      assert.equal(view.getUint32(input, true), 96);
+      assert.equal(view.getFloat64(input + 80, true), 12);
+      return 1;
+    },
     _patchy_engine_buffer_release() { releases++; },
   };
   const engine = new EmscriptenPatchyEngine(module);
@@ -893,6 +899,17 @@ test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsup
   assert.throws(() => engine.setLayerMaskLinked(
     99, { stateId: 1n, revision: 1n }, 1n, false),
   (error) => error instanceof Error && error.code === 2 && /link state/.test(error.message));
+  const plainText = { name: "Text", text: "Hi", font: "Arial", sizePixels: 12,
+    color: [1, 2, 3], bold: false, italic: false, boxText: true,
+    width: 1, height: 1, bounds: { x: 0, y: 0, width: 1, height: 1 },
+    rgba: new Uint8Array([1, 2, 3, 4]) };
+  assert.doesNotThrow(() => engine.addTextLayer(
+    99, { stateId: 1n, revision: 1n }, plainText));
+  assert.throws(() => engine.addTextLayer(
+    99, { stateId: 1n, revision: 1n }, { ...plainText,
+      styleRuns: [{ start: 0, length: 2, font: "Arial", sizePixels: 12,
+        color: [1, 2, 3] }] }),
+  (error) => error instanceof Error && error.code === 2 && /Rich text authoring/.test(error.message));
   engine.dispose();
 });
 

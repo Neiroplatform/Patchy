@@ -1421,7 +1421,9 @@ export class EmscriptenPatchyEngine {
         let adjustmentValue = null;
         let smartObjectValue = null;
         if (kind === 3) {
-          this.#view(text, TEXT_PROJECTION_SIZE).setUint32(0, TEXT_PROJECTION_SIZE, true);
+          const richText = Boolean(this.#capabilities & CAP_RICH_TEXT_AUTHORING);
+          const projectionSize = richText ? TEXT_PROJECTION_SIZE : 1312;
+          this.#view(text, TEXT_PROJECTION_SIZE).setUint32(0, projectionSize, true);
           this.#check(this.#module._patchy_engine_session_text(
             session, u64(view, 0), text, error), error);
           const textView = this.#view(text, TEXT_PROJECTION_SIZE);
@@ -1436,12 +1438,11 @@ export class EmscriptenPatchyEngine {
             boxText: textView.getUint8(1309) !== 0,
             styleRuns: [], paragraphRuns: [],
           };
-          const styleRunCount = textView.getUint32(1312, true);
-          const paragraphRunCount = textView.getUint32(1316, true);
-          if (styleRunCount > 128 || paragraphRunCount > 128 ||
-              !(this.#capabilities & CAP_RICH_TEXT_AUTHORING) ||
+          const styleRunCount = richText ? textView.getUint32(1312, true) : 0;
+          const paragraphRunCount = richText ? textView.getUint32(1316, true) : 0;
+          if (richText && (styleRunCount > 128 || paragraphRunCount > 128 ||
               typeof this.#module._patchy_engine_session_text_style_run_at !== "function" ||
-              typeof this.#module._patchy_engine_session_text_paragraph_run_at !== "function") {
+              typeof this.#module._patchy_engine_session_text_paragraph_run_at !== "function")) {
             throw new PatchyEngineError(2, "Rich text projection capability is unavailable or invalid");
           }
           for (let runIndex = 0; runIndex < styleRunCount; ++runIndex) {
@@ -1733,9 +1734,7 @@ export class EmscriptenPatchyEngine {
   }
 
   #textLayerMutation(symbol, session, snapshot, layerId, input) {
-    if (!(this.#capabilities & CAP_RICH_TEXT_AUTHORING)) {
-      throw new PatchyEngineError(2, "Rich text authoring capability is unavailable");
-    }
+    const richText = Boolean(this.#capabilities & CAP_RICH_TEXT_AUTHORING);
     const name = this.#text(input.name);
     const text = this.#text(input.text, "Text content", 1024);
     const font = this.#text(input.font, "Font family", 256);
@@ -1755,14 +1754,20 @@ export class EmscriptenPatchyEngine {
         !Array.isArray(paragraphRuns) || paragraphRuns.length > 128) {
       throw new TypeError("Text runs must be bounded arrays");
     }
+    if (!richText && (styleRuns.length || paragraphRuns.length)) {
+      throw new PatchyEngineError(2, "Rich text authoring capability is unavailable");
+    }
     const pointers = [rgba, name, text, font].map((bytes) => this.#alloc(bytes.byteLength || 1));
-    const stylePointer = this.#alloc(Math.max(1, styleRuns.length * TEXT_STYLE_RUN_SIZE));
-    const paragraphPointer = this.#alloc(Math.max(1, paragraphRuns.length * TEXT_PARAGRAPH_RUN_SIZE));
-    const value = this.#alloc(TEXT_INPUT_SIZE);
+    const stylePointer = richText
+      ? this.#alloc(Math.max(1, styleRuns.length * TEXT_STYLE_RUN_SIZE)) : 0;
+    const paragraphPointer = richText
+      ? this.#alloc(Math.max(1, paragraphRuns.length * TEXT_PARAGRAPH_RUN_SIZE)) : 0;
+    const inputSize = richText ? TEXT_INPUT_SIZE : 96;
+    const value = this.#alloc(inputSize);
     try {
       [rgba, name, text, font].forEach((bytes, index) => this.#module.HEAPU8.set(bytes, pointers[index]));
-      const view = this.#view(value, TEXT_INPUT_SIZE);
-      view.setUint32(0, TEXT_INPUT_SIZE, true);
+      const view = this.#view(value, inputSize);
+      view.setUint32(0, inputSize, true);
       view.setBigUint64(8, snapshot.stateId, true); view.setBigUint64(16, snapshot.revision, true);
       view.setInt32(24, input.bounds.x, true); view.setInt32(28, input.bounds.y, true);
       view.setInt32(32, input.bounds.width, true); view.setInt32(36, input.bounds.height, true);
@@ -1829,16 +1834,19 @@ export class EmscriptenPatchyEngine {
       if (paragraphRuns.length && covered !== input.text.length) {
         throw new TypeError("Text paragraph runs must cover the complete UTF-16 story");
       }
-      view.setUint32(96, styleRuns.length ? stylePointer : 0, true);
-      view.setUint32(100, styleRuns.length, true);
-      view.setUint32(104, paragraphRuns.length ? paragraphPointer : 0, true);
-      view.setUint32(108, paragraphRuns.length, true);
+      if (richText) {
+        view.setUint32(96, styleRuns.length ? stylePointer : 0, true);
+        view.setUint32(100, styleRuns.length, true);
+        view.setUint32(104, paragraphRuns.length ? paragraphPointer : 0, true);
+        view.setUint32(108, paragraphRuns.length, true);
+      }
       return this.#mutation((event, error) => layerId == null
         ? this.#module[symbol](session, value, event, error)
         : this.#module[symbol](session, layerId, value, event, error));
     } finally {
-      this.#module._free(value); this.#module._free(stylePointer);
-      this.#module._free(paragraphPointer);
+      this.#module._free(value);
+      if (stylePointer) this.#module._free(stylePointer);
+      if (paragraphPointer) this.#module._free(paragraphPointer);
       pointers.forEach((pointer) => this.#module._free(pointer));
     }
   }
