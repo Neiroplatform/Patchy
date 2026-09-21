@@ -72,6 +72,27 @@ export class PatchyWorkerClient {
   selectPath(pathId, feather = 0, combine = 0, antialias = true) {
     return this.#request("selectPath", { pathId: String(pathId), feather, combine, antialias });
   }
+  renameChannel(channelId, name) {
+    return this.#request("renameChannel", { channelId: String(channelId), name });
+  }
+  invertChannel(channelId) { return this.#request("invertChannel", { channelId: String(channelId) }); }
+  removeChannel(channelId) { return this.#request("removeChannel", { channelId: String(channelId) }); }
+  moveChannel(channelId, finalIndex) {
+    return this.#request("moveChannel", { channelId: String(channelId), finalIndex });
+  }
+  renamePath(pathId, name) { return this.#request("renamePath", { pathId: String(pathId), name }); }
+  removePath(pathId) { return this.#request("removePath", { pathId: String(pathId) }); }
+  movePath(pathId, finalIndex) {
+    return this.#request("movePath", { pathId: String(pathId), finalIndex });
+  }
+  setClippingPath(pathId, clipping) {
+    return this.#request("setClippingPath", { pathId: String(pathId), clipping });
+  }
+  updateDocumentPath(pathId, input) {
+    return this.#request("updateDocumentPath", { pathId: String(pathId), input });
+  }
+  rasterizeLayer(layerId) { return this.#request("rasterizeLayer", { layerId: String(layerId) }); }
+  mergeVisibleCopy(name) { return this.#request("mergeVisibleCopy", { name }); }
   createLayerMask(layerId) {
     return this.#request("createLayerMask", { layerId: String(layerId) });
   }

@@ -84,6 +84,30 @@ export class PatchyWorkerHost {
         this.#engine.selectPath(this.#requireSession(), this.#snapshot(), BigInt(message.pathId),
           message.feather, message.combine, message.antialias);
         return this.#snapshot();
+      case "renameChannel":
+        this.#engine.renameChannel(this.#requireSession(), this.#snapshot(),
+          BigInt(message.channelId), message.name); return this.#snapshot();
+      case "invertChannel":
+        this.#engine.invertChannel(this.#requireSession(), this.#snapshot(),
+          BigInt(message.channelId)); return this.#snapshot();
+      case "removeChannel":
+        this.#engine.removeChannel(this.#requireSession(), this.#snapshot(),
+          BigInt(message.channelId)); return this.#snapshot();
+      case "moveChannel":
+        this.#engine.moveChannel(this.#requireSession(), this.#snapshot(),
+          BigInt(message.channelId), message.finalIndex); return this.#snapshot();
+      case "renamePath":
+        this.#engine.renamePath(this.#requireSession(), this.#snapshot(),
+          BigInt(message.pathId), message.name); return this.#snapshot();
+      case "removePath":
+        this.#engine.removePath(this.#requireSession(), this.#snapshot(),
+          BigInt(message.pathId)); return this.#snapshot();
+      case "movePath":
+        this.#engine.movePath(this.#requireSession(), this.#snapshot(),
+          BigInt(message.pathId), message.finalIndex); return this.#snapshot();
+      case "setClippingPath":
+        this.#engine.setClippingPath(this.#requireSession(), this.#snapshot(),
+          BigInt(message.pathId), message.clipping); return this.#snapshot();
       case "addAlphaChannel": {
         const before = this.#snapshot(); const gray = selectionGray(before);
         this.#engine.addAlphaChannel(this.#requireSession(), before, { name: message.name, gray });
@@ -91,6 +115,15 @@ export class PatchyWorkerHost {
       }
       case "addDocumentPath":
         this.#engine.addDocumentPath(this.#requireSession(), this.#snapshot(), message.input);
+        return this.#snapshot();
+      case "updateDocumentPath":
+        this.#engine.updateDocumentPath(this.#requireSession(), this.#snapshot(),
+          BigInt(message.pathId), message.input); return this.#snapshot();
+      case "rasterizeLayer":
+        this.#engine.rasterizeLayer(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId)); return this.#snapshot();
+      case "mergeVisibleCopy":
+        this.#engine.mergeVisibleCopy(this.#requireSession(), this.#snapshot(), message.name);
         return this.#snapshot();
       case "createLayerMask": {
         const before = this.#snapshot();

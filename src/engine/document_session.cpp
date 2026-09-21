@@ -55,6 +55,20 @@ bool pixel_buffers_equal(const PixelBuffer &left, const PixelBuffer &right) {
                     right.data().begin(), right.data().end());
 }
 
+void strip_layer_text_data(Layer &layer) {
+  for (auto it = layer.metadata().begin(); it != layer.metadata().end();) {
+    if (it->first.rfind("patchy.text", 0) == 0 ||
+        it->first.rfind("patchy.psd.text", 0) == 0) {
+      it = layer.metadata().erase(it);
+    } else {
+      ++it;
+    }
+  }
+  std::erase_if(layer.unknown_psd_blocks(), [](const UnknownPsdBlock &block) {
+    return block.key == "TySh" || block.key == "tySh";
+  });
+}
+
 bool vector_masks_equal(const LayerVectorMask &left,
                         const LayerVectorMask &right) {
   return left.path == right.path && left.disabled == right.disabled &&
@@ -1547,6 +1561,8 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             auto *layer = document_.find_layer(concrete.layer_id);
             if (concrete.rasterize_smart_object) {
               strip_layer_smart_object_data(document_, *layer);
+              strip_layer_vector_data(*layer);
+              strip_layer_text_data(*layer);
             }
             layer->set_pixels(concrete.pixels);
             layer->set_bounds(concrete.bounds);

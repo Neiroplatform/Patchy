@@ -1569,6 +1569,18 @@ void engine_session_vector_shape_authoring_is_atomic_and_round_trips() {
   CHECK(!static_cast<bool>(rejected));
   CHECK(rejected.error.code == SessionErrorCode::InvalidArgument);
   CHECK(session.revision() == revision_before_rejection);
+
+  const auto *procedural = session.document().find_layer(layer_id);
+  auto raster_pixels = procedural->pixels();
+  const auto raster_bounds = procedural->bounds();
+  const auto rasterized = session.execute(ReplaceLayerPixels{
+      layer_id, std::move(raster_pixels), raster_bounds, true});
+  CHECK(static_cast<bool>(rasterized));
+  const auto *plain = session.document().find_layer(layer_id);
+  CHECK(plain->vector_shape() == nullptr);
+  CHECK(!patchy::layer_has_vector_shape_marker(*plain));
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(layer_id)->vector_shape() != nullptr);
 }
 
 void engine_session_commits_previewed_vector_layer_states_atomically() {
@@ -2692,6 +2704,24 @@ void engine_host_protocol_authors_pixels_channels_and_selection() {
   CHECK(projected_anchor.anchor_x == 4.0);
   CHECK(projected_anchor.anchor_y == 3.0);
 
+  auto edited_anchors = std::array<patchy_engine_path_anchor, 4>{
+      path_anchors[0], path_anchors[1], path_anchors[2], path_anchors[3]};
+  edited_anchors[0].anchor_x = 2.0;
+  edited_anchors[0].in_x = 2.0;
+  edited_anchors[0].out_x = 2.0;
+  const patchy_engine_path_input edited_path_input{
+      &path_subpath, 1, edited_anchors.data(), edited_anchors.size()};
+  const auto before_path_update = project();
+  add_path.expected_state_id = before_path_update.state_id;
+  add_path.expected_revision = before_path_update.revision;
+  add_path.path = edited_path_input;
+  CHECK(patchy_engine_session_update_document_path(
+            session, path_id, &add_path, &event, &error) == 1);
+  CHECK(event.affected_layer_id == path_id);
+  CHECK(patchy_engine_session_path_anchor_at(
+            session, path_id, 0, 0, &projected_anchor, &error) == 1);
+  CHECK(projected_anchor.anchor_x == 2.0);
+
   patchy_engine_command rename_path{};
   rename_path.type = PATCHY_ENGINE_COMMAND_RENAME_DOCUMENT_PATH;
   rename_path.payload.rename_document_path.path_id = path_id;
@@ -2764,6 +2794,10 @@ void engine_host_protocol_authors_pixels_channels_and_selection() {
                                                &error) == 1);
   CHECK(event.affected_layer_id != 0);
   CHECK(project().layer_count == 2);
+  patchy_engine_layer_projection projected_shape{};
+  CHECK(patchy_engine_session_layer_at(session, 1, &projected_shape, &error) ==
+        1);
+  CHECK(projected_shape.kind == PATCHY_ENGINE_LAYER_VECTOR);
 
   patchy_engine_command clear_selection{};
   clear_selection.type = PATCHY_ENGINE_COMMAND_CLEAR_SELECTION;
@@ -2777,6 +2811,14 @@ void engine_host_protocol_authors_pixels_channels_and_selection() {
   selection.struct_size = sizeof(selection);
   CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
   CHECK(selection.empty == 0);
+
+  const auto before_merge = project();
+  const std::string merged_name = "Merged Visible (Copy)";
+  CHECK(patchy_engine_session_merge_visible_copy(
+            session, before_merge.state_id, before_merge.revision,
+            merged_name.data(), merged_name.size(), &event, &error) == 1);
+  CHECK(event.affected_layer_id != 0);
+  CHECK(project().layer_count == 3);
 
   patchy_engine_buffer pre_save_render{};
   CHECK(patchy_engine_session_render(session, {0, 0, 5, 4},
@@ -2801,7 +2843,7 @@ void engine_host_protocol_authors_pixels_channels_and_selection() {
   std::size_t reopened_layer_count = 0;
   CHECK(patchy_engine_session_layer_count(reopened, &reopened_layer_count,
                                           &error) == 1);
-  CHECK(reopened_layer_count == 2);
+  CHECK(reopened_layer_count == 3);
   patchy_engine_buffer reopened_render{};
   CHECK(patchy_engine_session_render(reopened, {0, 0, 5, 4},
                                      &reopened_render, &event, &error) == 1);

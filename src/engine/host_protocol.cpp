@@ -5,6 +5,7 @@
 #include "core/layer_metadata.hpp"
 #include "core/smart_object.hpp"
 #include "filters/smart_filter_renderer.hpp"
+#include "formats/document_flatten.hpp"
 #include "psd/psd_filter_effects.hpp"
 #include "psd/psd_smart_objects.hpp"
 
@@ -775,7 +776,9 @@ int patchy_engine_session_layer_at(const patchy_engine_session *session,
                       ? PATCHY_ENGINE_LAYER_TEXT
                       : patchy::layer_is_smart_object(*document_layer)
                             ? PATCHY_ENGINE_LAYER_SMART_OBJECT
-                            : static_cast<std::uint32_t>(source.kind);
+                            : patchy::layer_is_vector_shape(*document_layer)
+                                  ? PATCHY_ENGINE_LAYER_VECTOR
+                                  : static_cast<std::uint32_t>(source.kind);
     layer->visible = source.visible ? 1U : 0U;
     layer->opacity = source.opacity;
     auto count = std::min(source.name.size(), sizeof(layer->name) - 1U);
@@ -2493,6 +2496,114 @@ int patchy_engine_session_add_document_path(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown document-path authoring failure");
+  }
+}
+
+int patchy_engine_session_update_document_path(
+    patchy_engine_session *session, std::uint64_t path_id,
+    const patchy_engine_document_path_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || path_id == 0 ||
+      input->kind > PATCHY_ENGINE_PATH_WORK) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete document-path update is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  auto path = vector_path_from_input(input->path, error);
+  if (!path.has_value()) {
+    return 0;
+  }
+  std::string name;
+  if (!copy_command_text(input->name, input->name_size, 256U, name, error)) {
+    return 0;
+  }
+  try {
+    auto prepared = session->value->document();
+    auto *target = prepared.find_path(path_id);
+    if (target == nullptr) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "updated document path does not exist");
+    }
+    patchy::DocumentPath updated(
+        path_id, std::move(name),
+        static_cast<patchy::DocumentPathKind>(input->kind), std::move(*path));
+    updated.set_clipping_path(input->clipping != 0);
+    *target = std::move(updated);
+    if (input->clipping != 0) {
+      for (auto &candidate : prepared.paths()) {
+        if (candidate.id() != path_id) {
+          candidate.set_clipping_path(false);
+        }
+      }
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::Path,
+            input->expected_state_id, std::move(prepared), {}});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    result.affected_layer_id = path_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate updated document path");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown document-path update failure");
+  }
+}
+
+int patchy_engine_session_merge_visible_copy(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, const char *name, std::size_t name_size,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  std::string layer_name;
+  if (!copy_command_text(name, name_size, 256U, layer_name, error)) {
+    return 0;
+  }
+  try {
+    const auto pixels =
+        patchy::flatten_document_rgba8(session->value->document());
+    auto prepared = session->value->document();
+    const auto layer_id = prepared.allocate_layer_id();
+    prepared.add_layer(patchy::Layer(layer_id, std::move(layer_name), pixels));
+    prepared.set_active_layer(layer_id);
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::MergeRasterize,
+            expected_state_id, std::move(prepared),
+            patchy::Rect::from_size(pixels.width(), pixels.height())});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    result.affected_layer_id = layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate merged visible copy");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown merge-visible failure");
   }
 }
 

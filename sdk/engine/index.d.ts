@@ -17,7 +17,8 @@ export interface DocumentProjection {
   canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
   selection: Rect[]; channels: Array<{ id: bigint; kind: number; name: string }>;
   paths: Array<{ id: bigint; kind: number; name: string; subpathCount: number;
-    anchorCount: number; clipping: boolean }>;
+    anchorCount: number; clipping: boolean; anchors: VectorAnchor[];
+    subpaths: VectorSubpathInput[] }>;
 }
 export type WorkerState = "starting" | "ready" | "crashed" | "closed";
 export interface FilterProgress {
@@ -57,6 +58,18 @@ export class PatchyWorkerClient {
   selectChannel(channelId: bigint): Promise<DocumentProjection>;
   selectPath(pathId: bigint, feather?: number, combine?: number,
     antialias?: boolean): Promise<DocumentProjection>;
+  renameChannel(channelId: bigint, name: string): Promise<DocumentProjection>;
+  invertChannel(channelId: bigint): Promise<DocumentProjection>;
+  removeChannel(channelId: bigint): Promise<DocumentProjection>;
+  moveChannel(channelId: bigint, finalIndex: number): Promise<DocumentProjection>;
+  renamePath(pathId: bigint, name: string): Promise<DocumentProjection>;
+  removePath(pathId: bigint): Promise<DocumentProjection>;
+  movePath(pathId: bigint, finalIndex: number): Promise<DocumentProjection>;
+  setClippingPath(pathId: bigint, clipping: boolean): Promise<DocumentProjection>;
+  updateDocumentPath(pathId: bigint, input: { name: string; kind?: number;
+    clipping?: boolean; path: VectorPathInput }): Promise<DocumentProjection>;
+  rasterizeLayer(layerId: bigint): Promise<DocumentProjection>;
+  mergeVisibleCopy(name?: string): Promise<DocumentProjection>;
   createLayerMask(layerId: bigint): Promise<DocumentProjection>;
   toggleLayerMask(layerId: bigint): Promise<DocumentProjection>;
   invertLayerMask(layerId: bigint): Promise<DocumentProjection>;
@@ -103,7 +116,9 @@ export interface TextLayerInput {
 }
 export interface VectorAnchor { x: number; y: number; inX?: number; inY?: number;
   outX?: number; outY?: number; smooth?: boolean }
-export interface VectorPathInput { anchors: VectorAnchor[] }
+export interface VectorSubpathInput { anchors: VectorAnchor[]; shapeGroup?: number;
+  combine?: number; closed?: boolean }
+export interface VectorPathInput { anchors?: VectorAnchor[]; subpaths?: VectorSubpathInput[] }
 export interface VectorShapeInput { name: string; path: VectorPathInput;
   fill: [number, number, number]; strokeEnabled: boolean;
   stroke: [number, number, number]; strokeWidth: number }

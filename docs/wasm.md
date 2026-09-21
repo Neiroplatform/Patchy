@@ -76,7 +76,7 @@ One registry drives toolbar/keys; canvas tools cover geometry, zoom/pan,
 marquee, masks, move/transform, brush/eraser and text. The inspector authors
 shapes/vector masks, adjustments, Smart Objects and five Smart Filters. Fill,
 gradient, clone/heal and linked-mask transforms also commit through that owner.
-Channels, paths, selection morphology and layer flags share it.
+Channels/paths, rasterize and merge share one undo/save owner.
 Assets stay local and failures explicit.
 
 `client.mjs` owns correlation/crash state, `worker.mjs` the runtime/session,

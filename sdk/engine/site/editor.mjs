@@ -8,6 +8,8 @@ const canvas = $("documentCanvas");
 const context = canvas.getContext("2d", { alpha: true });
 let snapshot = null;
 let selectedLayerId = null;
+let selectedChannelId = null;
+let selectedPathId = null;
 let documentName = "Untitled.psd";
 let busy = false;
 let dragDepth = 0;
@@ -46,6 +48,9 @@ function syncCommands() {
 function selectedLayer() {
   return snapshot?.layers.find((layer) => layer.id === selectedLayerId) || null;
 }
+
+function selectedChannel() { return snapshot?.channels.find((item) => item.id === selectedChannelId) || null; }
+function selectedPath() { return snapshot?.paths.find((item) => item.id === selectedPathId) || null; }
 
 function setSessionState(state, label) {
   shell.dataset.state = state;
@@ -111,6 +116,14 @@ function updateControls() {
     "borderSelectionButton", "saveChannelButton", "savePathButton"]) {
     $(id).disabled = busy || !snapshot?.selection?.length;
   }
+  $("rasterizeLayerButton").disabled = busy || ![3, 4, 5].includes(layer?.kind);
+  $("mergeVisibleButton").disabled = busy || !snapshot?.layers?.length;
+  for (const id of ["channelRenameButton", "channelInvertButton", "channelUpButton",
+    "channelDownButton", "channelDeleteButton"]) $(id).disabled = busy || !selectedChannel();
+  for (const id of ["pathRenameButton", "pathClipButton", "pathUpButton", "pathDownButton",
+    "pathDeleteButton", "pathAnchorApplyButton"]) $(id).disabled = busy || !selectedPath();
+  $("pathAnchorXInput").disabled = busy || !selectedPath()?.anchors?.length;
+  $("pathAnchorYInput").disabled = busy || !selectedPath()?.anchors?.length;
   syncCommands();
 }
 
@@ -242,15 +255,28 @@ function renderStructure() {
   for (const channel of snapshot?.channels || []) {
     const button = document.createElement("button"); button.type = "button";
     button.textContent = channel.name || "Alpha channel";
-    button.addEventListener("click", () => mutate("Loading channel selection", () => client.selectChannel(channel.id)));
+    button.setAttribute("aria-pressed", String(channel.id === selectedChannelId));
+    button.addEventListener("click", () => {
+      selectedChannelId = channel.id; renderStructure(); updateControls();
+      mutate("Loading channel selection", () => client.selectChannel(channel.id));
+    });
     channelList.append(button);
   }
   for (const path of snapshot?.paths || []) {
     const button = document.createElement("button"); button.type = "button";
     button.textContent = path.name || (path.kind === 1 ? "Work path" : "Saved path");
-    button.addEventListener("click", () => mutate("Loading path selection", () => client.selectPath(path.id)));
+    button.setAttribute("aria-pressed", String(path.id === selectedPathId));
+    button.addEventListener("click", () => {
+      selectedPathId = path.id; renderStructure(); updateControls();
+      mutate("Loading path selection", () => client.selectPath(path.id));
+    });
     pathList.append(button);
   }
+  const path = selectedPath(); const anchor = path?.anchors?.[0];
+  $("pathAnchorXInput").value = anchor ? String(anchor.x) : "";
+  $("pathAnchorYInput").value = anchor ? String(anchor.y) : "";
+  $("pathClipButton").textContent = path?.clipping ? "Clear clipping" : "Set clipping";
+  updateControls();
 }
 
 function renderMetadata() {
@@ -350,6 +376,8 @@ async function acceptSnapshot(next, rerender = true) {
   if (selectedLayerId == null || !snapshot.layers.some((layer) => layer.id === selectedLayerId)) {
     selectedLayerId = snapshot.activeLayerId || snapshot.layers.at(-1)?.id || null;
   }
+  if (!snapshot.channels.some((item) => item.id === selectedChannelId)) selectedChannelId = null;
+  if (!snapshot.paths.some((item) => item.id === selectedPathId)) selectedPathId = null;
   $("emptyState").hidden = true;
   setSessionState("document", snapshot.dirty ? "Modified locally" : "Document ready");
   renderLayers();
@@ -961,6 +989,57 @@ $("savePathButton").addEventListener("click", () => {
   const bounds = snapshot?.selection?.[0];
   if (bounds) mutate("Saving document path", () => client.addDocumentPath({
     name: `Path ${snapshot.paths.length + 1}`, kind: 0, path: rectanglePath(bounds) }));
+});
+$("rasterizeLayerButton").addEventListener("click", () => {
+  const layer = selectedLayer(); if (layer) mutate("Rasterizing layer", () => client.rasterizeLayer(layer.id));
+});
+$("mergeVisibleButton").addEventListener("click", () =>
+  mutate("Merging visible copy", () => client.mergeVisibleCopy("Merged Visible (Copy)")));
+$("channelRenameButton").addEventListener("click", () => {
+  const channel = selectedChannel(); const name = channel && prompt("Channel name", channel.name);
+  if (name?.trim()) mutate("Renaming channel", () => client.renameChannel(channel.id, name.trim()));
+});
+$("channelInvertButton").addEventListener("click", () => {
+  const channel = selectedChannel(); if (channel) mutate("Inverting channel", () => client.invertChannel(channel.id));
+});
+$("channelDeleteButton").addEventListener("click", () => {
+  const channel = selectedChannel(); if (channel) mutate("Deleting channel", () => client.removeChannel(channel.id));
+});
+for (const [id, delta] of [["channelUpButton", -1], ["channelDownButton", 1]]) {
+  $(id).addEventListener("click", () => {
+    const channel = selectedChannel(); const index = snapshot.channels.findIndex((item) => item.id === channel?.id);
+    const destination = Math.max(0, Math.min(snapshot.channels.length - 1, index + delta));
+    if (channel && destination !== index) mutate("Reordering channel", () => client.moveChannel(channel.id, destination));
+  });
+}
+$("pathRenameButton").addEventListener("click", () => {
+  const path = selectedPath(); const name = path && prompt("Path name", path.name);
+  if (name?.trim()) mutate("Renaming path", () => client.renamePath(path.id, name.trim()));
+});
+$("pathClipButton").addEventListener("click", () => {
+  const path = selectedPath(); if (path) mutate("Changing clipping path", () => client.setClippingPath(path.id, !path.clipping));
+});
+$("pathDeleteButton").addEventListener("click", () => {
+  const path = selectedPath(); if (path) mutate("Deleting path", () => client.removePath(path.id));
+});
+for (const [id, delta] of [["pathUpButton", -1], ["pathDownButton", 1]]) {
+  $(id).addEventListener("click", () => {
+    const path = selectedPath(); const index = snapshot.paths.findIndex((item) => item.id === path?.id);
+    const destination = Math.max(0, Math.min(snapshot.paths.length - 1, index + delta));
+    if (path && destination !== index) mutate("Reordering path", () => client.movePath(path.id, destination));
+  });
+}
+$("pathAnchorApplyButton").addEventListener("click", () => {
+  const path = selectedPath(); const x = Number($("pathAnchorXInput").value);
+  const y = Number($("pathAnchorYInput").value);
+  if (!path?.subpaths?.[0]?.anchors?.length || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  const subpaths = path.subpaths.map((subpath) => ({ ...subpath,
+    anchors: subpath.anchors.map((anchor) => ({ ...anchor })) }));
+  const anchor = subpaths[0].anchors[0]; const dx = x - anchor.x; const dy = y - anchor.y;
+  Object.assign(anchor, { x, y, inX: anchor.inX + dx, inY: anchor.inY + dy,
+    outX: anchor.outX + dx, outY: anchor.outY + dy });
+  mutate("Editing path anchor", () => client.updateDocumentPath(path.id, {
+    name: path.name, kind: path.kind, clipping: path.clipping, path: { subpaths } }));
 });
 $("layerBlendSelect").addEventListener("change", () => {
   const layer = selectedLayer();

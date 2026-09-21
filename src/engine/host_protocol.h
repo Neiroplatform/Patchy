@@ -944,6 +944,14 @@ int patchy_engine_session_add_document_path(
     patchy_engine_session *session,
     const patchy_engine_document_path_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_update_document_path(
+    patchy_engine_session *session, uint64_t path_id,
+    const patchy_engine_document_path_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_merge_visible_copy(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const char *name, size_t name_size,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_add_vector_shape(
     patchy_engine_session *session,
     const patchy_engine_vector_shape_input *input,

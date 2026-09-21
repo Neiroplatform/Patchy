@@ -28,6 +28,7 @@ const CHANNEL_PROJECTION_SIZE = 288;
 const ALPHA_CHANNEL_INPUT_SIZE = 40;
 const DOCUMENT_PATH_INPUT_SIZE = 56;
 const DOCUMENT_PATH_PROJECTION_SIZE = 288;
+const PATH_SUBPATH_PROJECTION_SIZE = 16;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -281,6 +282,29 @@ export class EmscriptenPatchyEngine {
     return this.#command(session, snapshot, 23, (view) => view.setBigUint64(32, channelId, true));
   }
 
+  renameChannel(session, snapshot, channelId, name) {
+    const bytes = this.#text(name, "Channel names");
+    return this.#command(session, snapshot, 24, (view, command) => {
+      view.setBigUint64(32, channelId, true); view.setUint32(40, bytes.byteLength, true);
+      this.#module.HEAPU8.set(bytes, command + 44);
+    });
+  }
+
+  invertChannel(session, snapshot, channelId) {
+    return this.#command(session, snapshot, 25, (view) => view.setBigUint64(32, channelId, true));
+  }
+
+  removeChannel(session, snapshot, channelId) {
+    return this.#command(session, snapshot, 26, (view) => view.setBigUint64(32, channelId, true));
+  }
+
+  moveChannel(session, snapshot, channelId, finalIndex) {
+    this.#index(finalIndex, snapshot.channels.length, "Channel destination");
+    return this.#command(session, snapshot, 27, (view) => {
+      view.setBigUint64(32, channelId, true); view.setUint32(40, finalIndex, true);
+    });
+  }
+
   selectPath(session, snapshot, pathId, feather = 0, combine = 0, antialias = true) {
     if (!Number.isFinite(feather) || feather < 0 || !Number.isInteger(combine) || combine < 0 || combine > 3) {
       throw new TypeError("Supported path selection settings are required");
@@ -288,6 +312,31 @@ export class EmscriptenPatchyEngine {
     return this.#command(session, snapshot, 28, (view) => {
       view.setBigUint64(32, pathId, true); view.setFloat64(40, feather, true);
       view.setUint32(48, combine, true); view.setUint8(52, antialias ? 1 : 0);
+    });
+  }
+
+  renamePath(session, snapshot, pathId, name) {
+    const bytes = this.#text(name, "Path names");
+    return this.#command(session, snapshot, 29, (view, command) => {
+      view.setBigUint64(32, pathId, true); view.setUint32(40, bytes.byteLength, true);
+      this.#module.HEAPU8.set(bytes, command + 44);
+    });
+  }
+
+  removePath(session, snapshot, pathId) {
+    return this.#command(session, snapshot, 30, (view) => view.setBigUint64(32, pathId, true));
+  }
+
+  movePath(session, snapshot, pathId, finalIndex) {
+    this.#index(finalIndex, snapshot.paths.length, "Path destination");
+    return this.#command(session, snapshot, 31, (view) => {
+      view.setBigUint64(32, pathId, true); view.setUint32(40, finalIndex, true);
+    });
+  }
+
+  setClippingPath(session, snapshot, pathId, clipping) {
+    return this.#command(session, snapshot, 32, (view) => {
+      view.setBigUint64(32, pathId, true); view.setUint8(40, clipping ? 1 : 0);
     });
   }
 
@@ -311,6 +360,40 @@ export class EmscriptenPatchyEngine {
   }
 
   addDocumentPath(session, snapshot, input) {
+    return this.#documentPathMutation("_patchy_engine_session_add_document_path",
+      session, snapshot, null, input);
+  }
+
+  updateDocumentPath(session, snapshot, pathId, input) {
+    return this.#documentPathMutation("_patchy_engine_session_update_document_path",
+      session, snapshot, pathId, input);
+  }
+
+  mergeVisibleCopy(session, snapshot, name = "Merged Visible (Copy)") {
+    const bytes = this.#text(name);
+    const pointer = this.#alloc(bytes.byteLength || 1);
+    try {
+      this.#module.HEAPU8.set(bytes, pointer);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_merge_visible_copy(
+          session, snapshot.stateId, snapshot.revision, pointer,
+          bytes.byteLength, event, error));
+    } finally { this.#module._free(pointer); }
+  }
+
+  rasterizeLayer(session, snapshot, layerId) {
+    const layer = snapshot.layers.find((candidate) => candidate.id === layerId);
+    if (!layer || ![3, 4, 5].includes(layer.kind) ||
+        layer.bounds.width <= 0 || layer.bounds.height <= 0) {
+      throw new TypeError("Rasterizable layer is required");
+    }
+    return this.replacePixelLayer(session, snapshot, layerId, {
+      name: layer.name, width: layer.bounds.width, height: layer.bounds.height,
+      bounds: layer.bounds, rgba: this.layerPixels(session, layerId), rasterize: true,
+    });
+  }
+
+  #documentPathMutation(symbol, session, snapshot, pathId, input) {
     const name = this.#text(input.name);
     const path = this.#path(input.path); const namePointer = this.#alloc(name.byteLength || 1);
     const value = this.#alloc(DOCUMENT_PATH_INPUT_SIZE);
@@ -321,8 +404,9 @@ export class EmscriptenPatchyEngine {
       view.setBigUint64(16, snapshot.revision, true); view.setUint32(24, namePointer, true);
       view.setUint32(28, name.byteLength, true); view.setUint32(32, input.kind ?? 0, true);
       view.setUint8(36, input.clipping ? 1 : 0); this.#writePath(view, 40, path);
-      return this.#mutation((event, error) =>
-        this.#module._patchy_engine_session_add_document_path(session, value, event, error));
+      return this.#mutation((event, error) => pathId == null
+        ? this.#module[symbol](session, value, event, error)
+        : this.#module[symbol](session, pathId, value, event, error));
     } finally { this.#module._free(value); this.#module._free(namePointer); this.#releasePath(path); }
   }
 
@@ -853,19 +937,42 @@ export class EmscriptenPatchyEngine {
 
   #paths(session, error) {
     const countPointer = this.#alloc(4); const value = this.#alloc(DOCUMENT_PATH_PROJECTION_SIZE);
+    const subpathValue = this.#alloc(PATH_SUBPATH_PROJECTION_SIZE);
+    const anchorValue = this.#alloc(PATH_ANCHOR_SIZE);
     try {
       this.#check(this.#module._patchy_engine_session_path_count(session, countPointer, error), error);
       const count = this.#view(countPointer, 4).getUint32(0, true); const result = [];
       for (let index = 0; index < count; ++index) {
         this.#check(this.#module._patchy_engine_session_path_at(session, index, value, error), error);
         const view = this.#view(value, DOCUMENT_PATH_PROJECTION_SIZE); const nameSize = view.getUint32(12, true);
-        result.push({ id: u64(view, 0), kind: view.getUint32(8, true),
+        const pathId = u64(view, 0); const subpaths = [];
+        const subpathCount = view.getUint32(272, true);
+        for (let subpathIndex = 0; subpathIndex < subpathCount; ++subpathIndex) {
+          this.#check(this.#module._patchy_engine_session_path_subpath_at(
+            session, pathId, subpathIndex, subpathValue, error), error);
+          const subpathView = this.#view(subpathValue, PATH_SUBPATH_PROJECTION_SIZE);
+          const anchors = [];
+          for (let anchorIndex = 0; anchorIndex < subpathView.getUint32(0, true); ++anchorIndex) {
+            this.#check(this.#module._patchy_engine_session_path_anchor_at(
+              session, pathId, subpathIndex, anchorIndex, anchorValue, error), error);
+            const anchorView = this.#view(anchorValue, PATH_ANCHOR_SIZE);
+            anchors.push({ x: anchorView.getFloat64(0, true), y: anchorView.getFloat64(8, true),
+              inX: anchorView.getFloat64(16, true), inY: anchorView.getFloat64(24, true),
+              outX: anchorView.getFloat64(32, true), outY: anchorView.getFloat64(40, true),
+              smooth: anchorView.getUint8(48) !== 0 });
+          }
+          subpaths.push({ anchors, shapeGroup: subpathView.getInt32(4, true),
+            combine: subpathView.getUint32(8, true), closed: subpathView.getUint8(12) !== 0 });
+        }
+        result.push({ id: pathId, kind: view.getUint32(8, true),
           name: decoder.decode(this.#module.HEAPU8.subarray(value + 16, value + 16 + nameSize)),
-          subpathCount: view.getUint32(272, true), anchorCount: view.getUint32(276, true),
-          clipping: view.getUint8(280) !== 0 });
+          subpathCount, anchorCount: view.getUint32(276, true),
+          clipping: view.getUint8(280) !== 0, subpaths,
+          anchors: subpaths.flatMap((subpath) => subpath.anchors) });
       }
       return result;
-    } finally { this.#module._free(value); this.#module._free(countPointer); }
+    } finally { this.#module._free(anchorValue); this.#module._free(subpathValue);
+      this.#module._free(value); this.#module._free(countPointer); }
   }
 
   #command(session, snapshot, type, writePayload) {
@@ -911,6 +1018,7 @@ export class EmscriptenPatchyEngine {
       view.setInt32(48, input.width, true); view.setInt32(52, input.height, true);
       view.setUint32(56, pixels, true); view.setUint32(60, rgba.byteLength, true);
       view.setUint32(64, namePointer, true); view.setUint32(68, name.byteLength, true);
+      view.setUint8(72, input.rasterize ? 1 : 0);
       return this.#mutation((event, error) =>
         this.#module[symbol](session, value, event, error));
     } finally {
@@ -994,12 +1102,16 @@ export class EmscriptenPatchyEngine {
   }
 
   #path(input) {
-    const anchors = input?.anchors;
-    if (!Array.isArray(anchors) || anchors.length < 3 || anchors.length > 4096) {
+    const subpaths = Array.isArray(input?.subpaths) ? input.subpaths :
+      [{ anchors: input?.anchors, shapeGroup: 0, combine: 1, closed: true }];
+    const anchors = subpaths.flatMap((subpath) => subpath.anchors || []);
+    if (!subpaths.length || !subpaths.every((subpath) =>
+        Array.isArray(subpath.anchors) && subpath.anchors.length >= 2) ||
+        anchors.length < 3 || anchors.length > 4096) {
       throw new TypeError("Vector path requires between 3 and 4096 anchors");
     }
     const anchorPointer = this.#alloc(anchors.length * PATH_ANCHOR_SIZE);
-    const subpathPointer = this.#alloc(PATH_SUBPATH_SIZE);
+    const subpathPointer = this.#alloc(subpaths.length * PATH_SUBPATH_SIZE);
     try {
       const anchorView = this.#view(anchorPointer, anchors.length * PATH_ANCHOR_SIZE);
       anchors.forEach((anchor, index) => {
@@ -1010,22 +1122,38 @@ export class EmscriptenPatchyEngine {
           index * PATH_ANCHOR_SIZE + valueIndex * 8, number, true));
         anchorView.setUint8(index * PATH_ANCHOR_SIZE + 48, anchor.smooth ? 1 : 0);
       });
-      const subpathView = this.#view(subpathPointer, PATH_SUBPATH_SIZE);
-      subpathView.setUint32(0, 0, true); subpathView.setUint32(4, anchors.length, true);
-      subpathView.setInt32(8, 0, true); subpathView.setUint32(12, 1, true); subpathView.setUint8(16, 1);
-      return { anchorPointer, anchorCount: anchors.length, subpathPointer };
+      const subpathView = this.#view(subpathPointer, subpaths.length * PATH_SUBPATH_SIZE);
+      let firstAnchor = 0;
+      subpaths.forEach((subpath, index) => {
+        const offset = index * PATH_SUBPATH_SIZE;
+        subpathView.setUint32(offset, firstAnchor, true);
+        subpathView.setUint32(offset + 4, subpath.anchors.length, true);
+        subpathView.setInt32(offset + 8, subpath.shapeGroup ?? index, true);
+        subpathView.setUint32(offset + 12, subpath.combine ?? 1, true);
+        subpathView.setUint8(offset + 16, subpath.closed === false ? 0 : 1);
+        firstAnchor += subpath.anchors.length;
+      });
+      return { anchorPointer, anchorCount: anchors.length, subpathPointer,
+        subpathCount: subpaths.length };
     } catch (error) {
       this.#module._free(subpathPointer); this.#module._free(anchorPointer); throw error;
     }
   }
 
   #writePath(view, offset, path) {
-    view.setUint32(offset, path.subpathPointer, true); view.setUint32(offset + 4, 1, true);
+    view.setUint32(offset, path.subpathPointer, true);
+    view.setUint32(offset + 4, path.subpathCount, true);
     view.setUint32(offset + 8, path.anchorPointer, true); view.setUint32(offset + 12, path.anchorCount, true);
   }
 
   #releasePath(path) {
     this.#module._free(path.subpathPointer); this.#module._free(path.anchorPointer);
+  }
+
+  #index(value, length, subject) {
+    if (!Number.isInteger(value) || value < 0 || value >= length) {
+      throw new TypeError(`${subject} index is invalid`);
+    }
   }
 
   #rgb(color, subject) {

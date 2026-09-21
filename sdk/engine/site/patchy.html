@@ -144,8 +144,29 @@
             <button id="borderSelectionButton" type="button" disabled>Border 4 px</button>
             <button id="saveChannelButton" type="button" disabled>Save channel</button>
             <button id="savePathButton" type="button" disabled>Save path</button>
+            <button id="rasterizeLayerButton" type="button" disabled>Rasterize layer</button>
+            <button id="mergeVisibleButton" type="button" disabled>Merge visible copy</button>
           </div>
           <div class="structure-lists"><div><span>Channels</span><div id="channelList"></div></div><div><span>Paths</span><div id="pathList"></div></div></div>
+          <div class="structure-editor">
+            <div class="layer-actions">
+              <button id="channelRenameButton" type="button" disabled>Rename channel</button>
+              <button id="channelInvertButton" type="button" disabled>Invert channel</button>
+              <button id="channelUpButton" type="button" disabled>Channel up</button>
+              <button id="channelDownButton" type="button" disabled>Channel down</button>
+              <button id="channelDeleteButton" type="button" disabled>Delete channel</button>
+              <button id="pathRenameButton" type="button" disabled>Rename path</button>
+              <button id="pathClipButton" type="button" disabled>Toggle clipping</button>
+              <button id="pathUpButton" type="button" disabled>Path up</button>
+              <button id="pathDownButton" type="button" disabled>Path down</button>
+              <button id="pathDeleteButton" type="button" disabled>Delete path</button>
+            </div>
+            <div class="field-row path-anchor-editor">
+              <label><span>First anchor X</span><input id="pathAnchorXInput" type="number" step="0.25" disabled></label>
+              <label><span>First anchor Y</span><input id="pathAnchorYInput" type="number" step="0.25" disabled></label>
+              <button id="pathAnchorApplyButton" type="button" disabled>Apply anchor</button>
+            </div>
+          </div>
         </section>
         <section class="panel details-panel">
           <header class="panel-header"><div><p class="eyebrow">SESSION</p><h2>Document</h2></div></header>

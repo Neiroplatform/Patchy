@@ -54,6 +54,8 @@ static_assert(sizeof(patchy_engine_alpha_channel_input) == 40);
 static_assert(sizeof(patchy_engine_document_path_input) == 56);
 static_assert(offsetof(patchy_engine_document_path_input, path) == 40);
 static_assert(sizeof(patchy_engine_document_path_projection) == 288);
+static_assert(sizeof(patchy_engine_path_subpath_projection) == 16);
+static_assert(offsetof(patchy_engine_path_subpath_projection, closed) == 12);
 static_assert(sizeof(patchy_engine_selection_projection) == 32);
 static_assert(offsetof(patchy_engine_selection_projection, mask_bounds) == 12);
 static_assert(sizeof(patchy_engine_selection_input) == 32);

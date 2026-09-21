@@ -39,6 +39,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "layerFillInput", "layerClipInput", "layerLockInput", "invertSelectionButton",
     "expandSelectionButton", "contractSelectionButton", "borderSelectionButton",
     "saveChannelButton", "savePathButton", "channelList", "pathList",
+    "rasterizeLayerButton", "mergeVisibleButton", "channelRenameButton",
+    "channelInvertButton", "channelUpButton", "channelDownButton", "channelDeleteButton",
+    "pathRenameButton", "pathClipButton", "pathUpButton", "pathDownButton",
+    "pathDeleteButton", "pathAnchorXInput", "pathAnchorYInput", "pathAnchorApplyButton",
     "createVectorMaskButton", "smartObjectInput", "shapeDialog", "commitShapeButton",
     "adjustmentDialog", "commitAdjustmentButton", "smartFilterDialog", "commitSmartFilterButton",
     "undoButton", "redoButton", "saveButton", "errorBanner"]) {
@@ -61,6 +65,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.invertSelection", "client.expandSelection", "client.contractSelection",
     "client.borderSelection", "client.addAlphaChannel", "client.addDocumentPath",
     "client.selectChannel", "client.selectPath",
+    "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
+    "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
+    "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
     "client.undo", "client.redo", "client.render", "client.save"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -137,6 +144,18 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.equal(index, 0); view.setBigUint64(output, 41n, true); view.setUint32(output + 8, 0, true);
       view.setUint32(output + 12, 4, true); heap.set(new TextEncoder().encode("Path"), output + 16);
       view.setUint32(output + 272, 1, true); view.setUint32(output + 276, 4, true); return 1;
+    },
+    _patchy_engine_session_path_subpath_at(session, pathId, index, output) {
+      assert.equal(pathId, 41n); assert.equal(index, 0);
+      view.setUint32(output, 4, true); view.setInt32(output + 4, 0, true);
+      view.setUint32(output + 8, 1, true); heap[output + 12] = 1; return 1;
+    },
+    _patchy_engine_session_path_anchor_at(session, pathId, subpath, index, output) {
+      assert.equal(pathId, 41n); assert.equal(subpath, 0);
+      const x = index === 1 || index === 2 ? 3 : 0; const y = index >= 2 ? 2 : 0;
+      for (const [offset, number] of [[0, x], [8, y], [16, x], [24, y], [32, x], [40, y]])
+        view.setFloat64(output + offset, number, true);
+      return 1;
     },
     _patchy_engine_session_text(session, layerId, output) {
       assert.equal(layerId, 7n); assert.equal(view.getUint32(output, true), 1312);
@@ -221,8 +240,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       view.setUint32(output, data, true); view.setUint32(output + 4, 2, true); return 1;
     },
     _patchy_engine_session_layer_rgba8_pixels(session, layerId, output) {
-      const data = alloc(4); heap.set([1, 2, 3, 4], data);
-      view.setUint32(output, data, true); view.setUint32(output + 4, 4, true); return 1;
+      const data = alloc(24); heap.fill(0, data, data + 24); heap.set([1, 2, 3, 4], data);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 24, true); return 1;
     },
     _patchy_engine_session_replace_rgba8_layer(session, input) {
       assert.equal(view.getBigUint64(input + 24, true), 7n); return 1;
@@ -265,6 +284,13 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_add_document_path(session, input) {
       assert.equal(view.getUint32(input, true), 56); assert.equal(view.getUint32(input + 44, true), 1); return 1;
     },
+    _patchy_engine_session_update_document_path(session, pathId, input) {
+      assert.equal(pathId, 41n); assert.equal(view.getUint32(input + 44, true), 1); return 1;
+    },
+    _patchy_engine_session_merge_visible_copy(session, state, revision, name, nameSize) {
+      assert.deepEqual([state, revision], [9n, 4n]);
+      assert.equal(new TextDecoder().decode(heap.subarray(name, name + nameSize)), "Merged"); return 1;
+    },
     _patchy_engine_session_render_region(session, x, y, width, height, output) {
       assert.deepEqual([x, y, width, height], [0, 0, 3, 2]);
       const data = alloc(24); heap.fill(17, data, data + 24);
@@ -289,8 +315,10 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     color: [10, 20, 30], bold: true, italic: false, boxText: true });
   assert.deepEqual(snapshot.selection, []);
   assert.deepEqual(snapshot.channels, [{ id: 31n, kind: 0, name: "Alpha" }]);
-  assert.deepEqual(snapshot.paths, [{ id: 41n, kind: 0, name: "Path", subpathCount: 1,
-    anchorCount: 4, clipping: false }]);
+  assert.equal(snapshot.paths[0].id, 41n);
+  assert.equal(snapshot.paths[0].subpaths[0].anchors.length, 4);
+  assert.deepEqual(snapshot.paths[0].anchors[2],
+    { x: 3, y: 2, inX: 3, inY: 2, outX: 3, outY: 2, smooth: false });
   engine.setLayerVisibility(session, snapshot, 7n, false);
   engine.setLayerOpacity(session, snapshot, 7n, 0.5);
   engine.setLayerFillOpacity(session, snapshot, 7n, 0.75);
@@ -307,11 +335,19 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.modifySelection(session, snapshot, 20, 4);
   engine.selectChannel(session, snapshot, 31n);
   engine.selectPath(session, snapshot, 41n, 0, 0, true);
+  engine.renameChannel(session, snapshot, 31n, "Renamed channel");
+  engine.invertChannel(session, snapshot, 31n);
+  engine.removeChannel(session, snapshot, 31n);
+  engine.moveChannel(session, snapshot, 31n, 0);
+  engine.renamePath(session, snapshot, 41n, "Renamed path");
+  engine.removePath(session, snapshot, 41n);
+  engine.movePath(session, snapshot, 41n, 0);
+  engine.setClippingPath(session, snapshot, 41n, true);
   engine.addAlphaChannel(session, snapshot, { name: "Alpha", gray: new Uint8Array(6).fill(255) });
   engine.setLayerMask(session, snapshot, 7n, { bounds: { x: 0, y: 0, width: 2, height: 1 },
     gray: new Uint8Array([255, 0]), defaultColor: 0, linked: true });
   assert.deepEqual(Array.from(engine.layerMaskPixels(session, 7n)), [0, 255]);
-  assert.deepEqual(Array.from(engine.layerPixels(session, 7n)), [1, 2, 3, 4]);
+  assert.deepEqual(Array.from(engine.layerPixels(session, 7n).subarray(0, 4)), [1, 2, 3, 4]);
   engine.replacePixelLayer(session, snapshot, 7n, { name: "Layer", width: 1, height: 1,
     bounds: { x: 1, y: 1, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) });
   engine.replacePixelLayerAndMask(session, snapshot, 7n,
@@ -328,6 +364,9 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.updateAdjustment(session, snapshot, 7n, { kind: 7, values: [20, 10] });
   const path = { anchors: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
   engine.addDocumentPath(session, snapshot, { name: "Path", kind: 0, path });
+  engine.updateDocumentPath(session, snapshot, 41n, { name: "Path", kind: 0, path });
+  engine.rasterizeLayer(session, snapshot, 7n);
+  engine.mergeVisibleCopy(session, snapshot, "Merged");
   engine.addVectorShape(session, snapshot, { name: "Shape", path, fill: [1, 2, 3],
     strokeEnabled: true, stroke: [4, 5, 6], strokeWidth: 2 });
   engine.updateVectorShape(session, snapshot, 7n, { name: "Shape", path, fill: [1, 2, 3],
@@ -352,10 +391,11 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   Atomics.store(cancellation, 0, 1);
   engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", cancellation);
   assert.deepEqual(callbackReturns, [1, 1, 0, 0]);
-  assert.deepEqual(commandTypes, [2, 3, 6, 7, 4, 5, 9, 10, 11, 12, 13, 20, 23, 28, 16]);
+  assert.deepEqual(commandTypes, [2, 3, 6, 7, 4, 5, 9, 10, 11, 12, 13, 20, 23, 28,
+    24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
-  assert.equal(released, 4);
+  assert.equal(released, 5);
   engine.dispose();
   assert.equal(destroyed, 2);
 });
@@ -406,8 +446,19 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     modifySelection(session, before, type, pixels) { calls.push(["modifySelection", type, pixels]); revision++; },
     selectChannel(session, before, id) { calls.push(["selectChannel", id]); revision++; },
     selectPath(session, before, id) { calls.push(["selectPath", id]); revision++; },
+    renameChannel(session, before, id, name) { calls.push(["renameChannel", id, name]); revision++; },
+    invertChannel(session, before, id) { calls.push(["invertChannel", id]); revision++; },
+    removeChannel(session, before, id) { calls.push(["removeChannel", id]); revision++; },
+    moveChannel(session, before, id, index) { calls.push(["moveChannel", id, index]); revision++; },
+    renamePath(session, before, id, name) { calls.push(["renamePath", id, name]); revision++; },
+    removePath(session, before, id) { calls.push(["removePath", id]); revision++; },
+    movePath(session, before, id, index) { calls.push(["movePath", id, index]); revision++; },
+    setClippingPath(session, before, id, clipping) { calls.push(["clippingPath", id, clipping]); revision++; },
     addAlphaChannel(session, before, input) { calls.push(["alpha", input.gray.byteLength]); revision++; },
     addDocumentPath(session, before, input) { calls.push(["path", input.path.anchors.length]); revision++; },
+    updateDocumentPath(session, before, id, input) { calls.push(["updatePath", id, input.path.anchors.length]); revision++; },
+    rasterizeLayer(session, before, id) { calls.push(["rasterize", id]); revision++; },
+    mergeVisibleCopy(session, before, name) { calls.push(["mergeVisible", name]); revision++; },
     setLayerMask(session, before, layerId, next) {
       calls.push(["mask", layerId, next]);
       mask = next ? { bounds: next.bounds, defaultColor: next.defaultColor,
@@ -468,6 +519,18 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "addDocumentPath", input: { path: { anchors: [{}, {}, {}] } } });
   await host.dispatch({ method: "selectChannel", channelId: "3" });
   await host.dispatch({ method: "selectPath", pathId: "4", feather: 0, combine: 0, antialias: true });
+  await host.dispatch({ method: "renameChannel", channelId: "3", name: "Mask" });
+  await host.dispatch({ method: "invertChannel", channelId: "3" });
+  await host.dispatch({ method: "removeChannel", channelId: "3" });
+  await host.dispatch({ method: "moveChannel", channelId: "3", finalIndex: 0 });
+  await host.dispatch({ method: "renamePath", pathId: "4", name: "Outline" });
+  await host.dispatch({ method: "removePath", pathId: "4" });
+  await host.dispatch({ method: "movePath", pathId: "4", finalIndex: 0 });
+  await host.dispatch({ method: "setClippingPath", pathId: "4", clipping: true });
+  await host.dispatch({ method: "updateDocumentPath", pathId: "4",
+    input: { path: { anchors: [{}, {}, {}] } } });
+  await host.dispatch({ method: "rasterizeLayer", layerId: "7" });
+  await host.dispatch({ method: "mergeVisibleCopy", name: "Merged" });
   assert.equal((await host.dispatch({ method: "createLayerMask", layerId: "7" })).layers[0].mask.defaultColor, 0);
   assert.equal((await host.dispatch({ method: "toggleLayerMask", layerId: "7" })).layers[0].mask.disabled, true);
   await host.dispatch({ method: "invertLayerMask", layerId: "7" });
