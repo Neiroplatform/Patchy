@@ -52,6 +52,7 @@ export class PatchyWorkerClient {
   addStateListener(listener: (state: WorkerState, error: Error | null) => void): () => void;
   initialize(moduleUrl: string, moduleOptions?: object): Promise<void>;
   open(bytes: Uint8Array, name?: string, options?: TransferOptions): Promise<DocumentProjection>;
+  openBlob(blob: Blob, name?: string): Promise<DocumentProjection>;
   create(width: number, height: number, name?: string): Promise<DocumentProjection>;
   snapshot(): Promise<DocumentProjection>;
   listDocuments(): Promise<DocumentTabProjection[]>;

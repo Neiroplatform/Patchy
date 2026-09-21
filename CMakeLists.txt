@@ -569,6 +569,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/client.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/frame-transport.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/blob-ingress.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker-host.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/module-adapter.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/memory-policy.mjs"

@@ -1,5 +1,6 @@
 import { createWorkerHost } from "./worker-host.mjs";
 import { createRenderFrame } from "./frame-transport.mjs";
+import { readBlobInput } from "./blob-ingress.mjs";
 
 let hostPromise;
 
@@ -15,6 +16,12 @@ self.onmessage = async ({ data }) => {
     }
     if (!hostPromise) throw new Error("Patchy worker is not initialized");
     const host = await hostPromise;
+    if (method === "openBlob") {
+      const bytes = await readBlobInput(payload.blob);
+      const value = await host.dispatch({ method: "open", bytes: bytes.buffer, name: payload.name });
+      self.postMessage({ id, ok: true, value });
+      return;
+    }
     if (method === "renderFrame") {
       const bytes = await host.dispatch({ method: "render", ...payload });
       const frame = createRenderFrame(bytes, payload.region);

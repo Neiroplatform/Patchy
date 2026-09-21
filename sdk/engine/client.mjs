@@ -44,6 +44,9 @@ export class PatchyWorkerClient {
     const owned = transferableInput(bytes, transferOwnership);
     return this.#request("open", { bytes: owned.buffer, name }, [owned.buffer]);
   }
+  openBlob(blob, name = "Document.psd") {
+    return this.#request("openBlob", { blob, name });
+  }
   create(width, height, name = "Untitled.psd") {
     return this.#request("create", { width, height, name });
   }

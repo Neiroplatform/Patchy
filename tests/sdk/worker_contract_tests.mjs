@@ -6,6 +6,7 @@ import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "../../sdk/engine/memory-policy.mjs";
 import { createRenderFrame } from "../../sdk/engine/frame-transport.mjs";
+import { MAX_BROWSER_SOURCE_BYTES, readBlobInput } from "../../sdk/engine/blob-ingress.mjs";
 
 test("WASM export manifest covers every engine symbol used by the adapter", async () => {
   const root = new URL("../../", import.meta.url);
@@ -82,7 +83,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
     "client.undo", "client.redo", "client.renderFrame", "client.save", "client.saveDocument",
-    "client.setMemoryBudget"]) {
+    "client.setMemoryBudget", "client.openBlob"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
@@ -90,6 +91,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
   assert.match(script, /recoverWorkerSession/);
   assert.match(worker, /method === "renderFrame"/);
+  assert.match(worker, /method === "openBlob"/);
   assert.match(worker, /createRenderFrame\(bytes, payload\.region\)/);
   assert.match(script, /context\.drawImage\(frame\.bitmap/);
   assert.match(script, /frame\.bitmap\.close\(\)/);
@@ -123,6 +125,18 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(html, /role="alert"/);
   assert.match(nodeServer, /'\.css': 'text\/css; charset=utf-8'/);
   assert.match(pythonServer, /"\.css": "text\/css; charset=utf-8"/);
+});
+
+test("Worker Blob ingress validates before allocation and returns exact owned bytes", async () => {
+  const bytes = await readBlobInput(new Blob([new Uint8Array([1, 2, 3])]));
+  assert.deepEqual([...bytes], [1, 2, 3]);
+  assert.ok(bytes.buffer instanceof ArrayBuffer);
+  await assert.rejects(readBlobInput(new Blob([])), /empty/);
+  await assert.rejects(readBlobInput(new Blob([new Uint8Array(5)]), 4), /exceeds/);
+  await assert.rejects(readBlobInput({ size: 2, async arrayBuffer() {
+    return new ArrayBuffer(1);
+  }}), /changed/);
+  assert.equal(MAX_BROWSER_SOURCE_BYTES, 1024 * 1024 * 1024);
 });
 
 test("Worker frame transport transfers ImageBitmap without exposing RGBA bytes", () => {
@@ -860,6 +874,18 @@ test("client byte ingress copies by default and transfers explicit whole-buffer 
   assert.equal(rgba.byteLength, 0); assert.equal(sourceBytes.byteLength, 0);
   assert.equal(worker.sent[4].transfer.length, 2);
   worker.reply({ id: 5, ok: true, value: projection(2) }); await smart;
+});
+
+test("client sends Blob handles without main-thread byte materialization", async () => {
+  const worker = new FakeWorker(); const client = new PatchyWorkerClient(worker);
+  const blob = new Blob([new Uint8Array([56, 66, 80, 83])]);
+  const opened = client.openBlob(blob, "Local.psd");
+  assert.equal(worker.sent[0].message.method, "openBlob");
+  assert.equal(worker.sent[0].message.name, "Local.psd");
+  assert.equal(worker.sent[0].message.blob.size, 4);
+  assert.equal(worker.sent[0].transfer.length, 0);
+  worker.reply({ id: 1, ok: true, value: projection(1) });
+  assert.equal((await opened).revision, 1n);
 });
 
 test("client correlates RPC, transfers input and rejects all requests on crash", async () => {

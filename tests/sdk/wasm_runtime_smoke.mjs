@@ -118,6 +118,12 @@ try {
     const saved = await client.saveDocument(first.documentId);
     check(saved.length > 26 && String.fromCharCode(...saved.subarray(0, 4)) === "8BPS",
       "layered PSD encoding mismatch");
+    const blobOpened = await client.openBlob(
+      new Blob([saved], { type: "image/vnd.adobe.photoshop" }), "Worker Blob.psd");
+    check(blobOpened.layers.length === 1 && blobOpened.width === 4 && blobOpened.height === 3,
+      "Worker-native Blob open lost layered PSD state");
+    await client.closeDocument(blobOpened.documentId);
+    await client.activateDocument(first.documentId);
     await workspaceStore.checkpoint({ id: workspaceOne, name: "First.psd",
       revision: styled.revision, dirty: true, bytes: saved });
     const opacity = await client.setLayerOpacity(layerId, 0.75);
