@@ -570,6 +570,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker-host.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/module-adapter.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/memory-policy.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/recovery-controller.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/workspace-store.mjs"
             "${PATCHY_WASM_SDK_SITE_DIR}/engine"

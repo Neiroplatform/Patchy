@@ -1,6 +1,7 @@
 import { PatchyWorkerClient } from "./engine/client.mjs";
 import { recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
+import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "./engine/memory-policy.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -34,6 +35,11 @@ let workspaceAvailable = false;
 let automaticRecoveryEnabled = false;
 let recoveryPromise = null;
 let preferenceTimer = null;
+let renderedDocument = null;
+const workingSetLimit = browserWorkingSetLimit({
+  heapLimitBytes: performance.memory?.jsHeapSizeLimit,
+  deviceMemoryGiB: navigator.deviceMemory,
+});
 const workspaceIds = new Map();
 const checkpointStates = new Map();
 const checkpointQueues = new Map();
@@ -114,6 +120,7 @@ function updateControls() {
   $("openButton").disabled = busy;
   $("newButton").disabled = busy;
   $("recoveryButton").disabled = busy;
+  $("memoryBudgetSelect").disabled = busy;
   $("importLayerButton").disabled = busy || !snapshot;
   $("groupLayerButton").disabled = busy || !layer;
   $("ungroupLayerButton").disabled = busy || layer?.kind !== 1;
@@ -255,6 +262,7 @@ function preferenceSnapshot() {
     paintPreset: $("paintPresetSelect").value,
     font: $("textFontInput").value.trim() || "Arial",
     selectionTolerance: Number($("selectionToleranceInput").value),
+    historyBudgetMiB: Number($("memoryBudgetSelect").value),
     panelsHidden: shell.classList.contains("panels-hidden"),
   };
 }
@@ -276,6 +284,7 @@ function applyPreferences(preferences) {
   $("textFontInput").value = preferences.font;
   $("selectionToleranceInput").value = String(preferences.selectionTolerance);
   $("selectionToleranceOutput").textContent = String(preferences.selectionTolerance);
+  $("memoryBudgetSelect").value = String(preferences.historyBudgetMiB);
   shell.classList.toggle("panels-hidden", preferences.panelsHidden);
   $("togglePanelsButton").setAttribute("aria-pressed", String(preferences.panelsHidden));
   setCanvasTool(preferences.tool);
@@ -297,6 +306,8 @@ async function recoverEngineAfterCrash() {
       const result = await recoverWorkerSession({ createClient: createEngineClient,
         moduleUrl, workspaceStore, documents });
       client = result.client;
+      const historyBytes = Number($("memoryBudgetSelect").value) * MIB;
+      await client.setMemoryBudget(historyBytes, Math.min(3 * 1024 * MIB, historyBytes * 3));
       workspaceIds.clear(); checkpointStates.clear(); checkpointQueues.clear();
       for (const item of result.restored) {
         workspaceIds.set(item.documentId, item.workspaceId);
@@ -355,6 +366,23 @@ function formatBytes(bytes) {
   const units = ["B", "KB", "MB", "GB"];
   const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function ensureMemorySafe(input, label) {
+  const preflight = documentPreflight({ ...input, limitBytes: workingSetLimit });
+  const retainedBytes = (snapshot?.documents || []).reduce(
+    (sum, documentTab) => sum + Number(documentTab.retainedBytes || 0), 0);
+  const combinedBytes = preflight.estimatedBytes + retainedBytes;
+  if (!preflight.allowed || combinedBytes > preflight.limitBytes) {
+    throw new RangeError(`${label} needs an estimated ${formatBytes(preflight.estimatedBytes)} plus ${formatBytes(retainedBytes)} already retained, above this browser's ${formatBytes(preflight.limitBytes)} safety limit.`);
+  }
+  return preflight;
+}
+
+async function applyMemoryBudget(render = true) {
+  const documentBytes = Number($("memoryBudgetSelect").value) * MIB;
+  const next = await client.setMemoryBudget(documentBytes, Math.min(3 * 1024 * MIB, documentBytes * 3));
+  if (next?.documentId) await acceptSnapshot(next, render);
 }
 
 async function restoreWorkspace(id) {
@@ -561,6 +589,10 @@ function renderMetadata() {
   $("detailFormat").textContent = snapshot ? `${snapshot.bitDepth}-bit RGB` : "-";
   $("detailCanvas").textContent = snapshot ? `${snapshot.width} × ${snapshot.height}` : "-";
   $("detailRevision").textContent = snapshot ? String(snapshot.revision) : "-";
+  const memory = snapshot?.memory;
+  $("memoryLabel").textContent = memory
+    ? `${formatBytes(memory.totalRetainedBytes)} retained · ${formatBytes(memory.historyRetainedBytes)} history`
+    : "Memory ready";
   updateControls();
 }
 
@@ -585,16 +617,26 @@ function renderDocumentTabs() {
 
 async function renderDocument() {
   if (!snapshot) return;
-  const bytes = await client.render({ x: 0, y: 0, width: snapshot.width, height: snapshot.height });
-  const expected = snapshot.width * snapshot.height * 4;
+  const region = chooseRenderRegion(snapshot, renderedDocument && {
+    ...renderedDocument, currentDocumentId: snapshot.documentId,
+  });
+  if (!region) {
+    applyViewport(); renderSelection(); renderTransformOverlay(); return;
+  }
+  const bytes = await client.render(region);
+  const expected = region.width * region.height * 4;
   if (bytes.byteLength !== expected) throw new Error(`Engine returned ${bytes.byteLength} RGBA bytes, expected ${expected}`);
-  canvas.width = snapshot.width;
-  canvas.height = snapshot.height;
-  $("gestureCanvas").width = snapshot.width;
-  $("gestureCanvas").height = snapshot.height;
+  if (canvas.width !== snapshot.width || canvas.height !== snapshot.height ||
+      renderedDocument?.documentId !== snapshot.documentId) {
+    canvas.width = snapshot.width;
+    canvas.height = snapshot.height;
+    $("gestureCanvas").width = snapshot.width;
+    $("gestureCanvas").height = snapshot.height;
+  }
   const pixels = new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  context.putImageData(new ImageData(pixels, snapshot.width, snapshot.height), 0, 0);
-  $("gestureCanvas").getContext("2d").clearRect(0, 0, snapshot.width, snapshot.height);
+  context.putImageData(new ImageData(pixels, region.width, region.height), region.x, region.y);
+  renderedDocument = { documentId: snapshot.documentId, width: snapshot.width, height: snapshot.height };
+  $("gestureCanvas").getContext("2d").clearRect(region.x, region.y, region.width, region.height);
   applyViewport();
   renderSelection();
   renderTransformOverlay();
@@ -775,6 +817,7 @@ function canvasPoint(event) {
 async function acceptSnapshot(next, rerender = true) {
   if (!next) {
     snapshot = null; selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    renderedDocument = null;
     $("emptyState").hidden = false; setSessionState("ready", "Engine ready");
     renderLayers(); renderLayerProperties(); renderStructure(); renderMetadata(); renderDocumentTabs();
     renderRecoveryStatus();
@@ -847,6 +890,7 @@ async function openFile(file) {
   clearError();
   setBusy(true, "Opening document", "Transferring bytes to the isolated Worker");
   try {
+    ensureMemorySafe({ sourceBytes: file.size }, file.name || "Document");
     const bytes = new Uint8Array(await file.arrayBuffer());
     const next = await client.open(bytes, file.name || "Document.psd");
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
@@ -861,6 +905,7 @@ async function newDocument() {
   clearError();
   setBusy(true, "Creating document", "Preparing a 1600 × 1000 RGBA workspace");
   try {
+    ensureMemorySafe({ width: 1600, height: 1000 }, "New document");
     const next = await client.create(1600, 1000, "Untitled.psd");
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
@@ -999,6 +1044,7 @@ async function importPixelLayer(file, createDocument = false) {
         !Number.isSafeInteger(image.width * image.height * 4)) {
       throw new Error("Image dimensions cannot be represented safely");
     }
+    ensureMemorySafe({ width: image.width, height: image.height }, file.name || "Imported image");
     const scratch = document.createElement("canvas");
     scratch.width = image.width;
     scratch.height = image.height;
@@ -1553,6 +1599,13 @@ $("brushSizeInput").addEventListener("input", () => {
 $("brushColorInput").addEventListener("input", persistPreferences);
 $("paintPresetSelect").addEventListener("change", persistPreferences);
 $("textFontInput").addEventListener("change", persistPreferences);
+$("memoryBudgetSelect").addEventListener("change", async () => {
+  if (busy) return;
+  clearError(); setBusy(true, "Applying memory budget", "Trimming retained history if necessary");
+  try { await applyMemoryBudget(false); persistPreferences(); }
+  catch (error) { showError("Could not apply memory budget", error); }
+  finally { setBusy(false); }
+});
 $("createMaskButton").addEventListener("click", () => {
   const layer = selectedLayer();
   if (layer) mutate("Creating layer mask", () => client.createLayerMask(layer.id));
@@ -1905,11 +1958,12 @@ try {
   if (workspaceAvailable) {
     applyPreferences(await workspaceStore.loadPreferences({ tool: "marquee", brushSize: 24,
       color: "#111111", paintPreset: "solid", font: "Arial",
-      selectionTolerance: 32, panelsHidden: false }));
+      selectionTolerance: 32, historyBudgetMiB: 256, panelsHidden: false }));
     await refreshRecoveryList();
   } else {
     setCanvasTool("marquee");
   }
+  await applyMemoryBudget(false);
   automaticRecoveryEnabled = true;
   renderRecoveryStatus();
   setSessionState("ready", "Engine ready");

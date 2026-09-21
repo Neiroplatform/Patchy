@@ -110,7 +110,13 @@
           <span class="zoom-controls"><button id="zoomOutButton" type="button" aria-label="Zoom out">−</button><button id="zoomFitButton" type="button">Fit</button><button id="zoomInButton" type="button" aria-label="Zoom in">+</button><output id="zoomLabel">Fit</output></span>
           <span class="privacy-label"><b></b>Local session</span>
           <span id="recoveryLabel" aria-live="polite">Recovery starting</span>
-          <span id="memoryLabel">Worker isolated</span>
+          <span id="memoryLabel" aria-live="polite">Memory ready</span>
+          <label class="memory-control">History
+            <select id="memoryBudgetSelect" aria-label="History memory per document">
+              <option value="128">128 MB</option><option value="256" selected>256 MB</option>
+              <option value="512">512 MB</option><option value="1024">1 GB</option>
+            </select>
+          </label>
         </footer>
       </section>
 

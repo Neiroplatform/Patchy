@@ -3,6 +3,7 @@ const ERROR_SIZE = 260;
 const PROTOCOL_INFO_SIZE = 16;
 const EVENT_SIZE = 64;
 const DOCUMENT_SIZE = 56;
+const MEMORY_USAGE_SIZE = 88;
 const LAYER_SIZE = 320;
 const BUFFER_SIZE = 8;
 const COMMAND_SIZE = 304;
@@ -43,6 +44,12 @@ function decodeHeap(bytes) {
 
 function u64(view, offset) {
   return view.getBigUint64(offset, true);
+}
+
+function safeNumber(value, label) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) throw new RangeError(`${label} exceeds JavaScript integer precision`);
+  return number;
 }
 
 export class PatchyEngineError extends Error {
@@ -814,6 +821,47 @@ export class EmscriptenPatchyEngine {
   redo(session) {
     return this.#mutation((event, error) =>
       this.#module._patchy_engine_session_redo(session, event, error));
+  }
+
+  memoryUsage(session) {
+    return this.#withError((error) => {
+      const output = this.#alloc(MEMORY_USAGE_SIZE);
+      try {
+        const view = this.#view(output, MEMORY_USAGE_SIZE);
+        view.setUint32(0, MEMORY_USAGE_SIZE, true);
+        this.#check(this.#module._patchy_engine_session_memory_usage(session, output, error), error);
+        const names = ["documentPixelBytes", "historyPixelBytes", "previewPixelBytes",
+          "selectionBytes", "historySelectionBytes", "previewSelectionBytes",
+          "historyRetainedBytes", "totalRetainedBytes", "undoStates", "redoStates"];
+        return Object.fromEntries(names.map((name, index) =>
+          [name, safeNumber(u64(view, 8 + index * 8), name)]));
+      } finally { this.#module._free(output); }
+    });
+  }
+
+  pendingRenderRegion(session) {
+    return this.#withError((error) => {
+      const region = this.#alloc(RECT_SIZE); const hasRegion = this.#alloc(1);
+      try {
+        this.#check(this.#module._patchy_engine_session_pending_render_region(
+          session, region, hasRegion, error), error);
+        if (this.#module.HEAPU8[hasRegion] === 0) return null;
+        const view = this.#view(region, RECT_SIZE);
+        return { x: view.getInt32(0, true), y: view.getInt32(4, true),
+          width: view.getInt32(8, true), height: view.getInt32(12, true) };
+      } finally { this.#module._free(hasRegion); this.#module._free(region); }
+    });
+  }
+
+  evictOldestUndo(session) {
+    return this.#withError((error) => {
+      const evicted = this.#alloc(1);
+      try {
+        this.#check(this.#module._patchy_engine_session_evict_oldest_undo(
+          session, evicted, error), error);
+        return this.#module.HEAPU8[evicted] !== 0;
+      } finally { this.#module._free(evicted); }
+    });
   }
 
   render(session, region) {

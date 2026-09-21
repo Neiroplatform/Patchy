@@ -2094,6 +2094,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_PIXEL_AUTHORING) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_PATH_PROJECTION) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_VECTOR_AUTHORING) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_MEMORY_CONTROL) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -2140,6 +2141,32 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK(event.changed == 1);
   CHECK(event.dirty == 1);
   const auto changed_revision = event.revision;
+
+  patchy_engine_memory_usage usage{};
+  usage.struct_size = sizeof(usage);
+  CHECK(patchy_engine_session_memory_usage(session, &usage, &error) == 1);
+  CHECK(usage.protocol_version == PATCHY_ENGINE_HOST_PROTOCOL_VERSION);
+  CHECK(usage.total_retained_bytes >= usage.document_pixel_bytes);
+  CHECK(usage.undo_states == 1);
+  patchy_engine_rect pending_region{};
+  std::uint8_t has_pending_region = 0;
+  CHECK(patchy_engine_session_pending_render_region(
+            session, &pending_region, &has_pending_region, &error) == 1);
+  CHECK(has_pending_region == 1);
+  patchy_engine_buffer partial_render{};
+  CHECK(patchy_engine_session_render(session, {0, 0, 1, 1}, &partial_render,
+                                     &event, &error) == 1);
+  patchy_engine_buffer_release(&partial_render);
+  CHECK(patchy_engine_session_pending_render_region(
+            session, &pending_region, &has_pending_region, &error) == 1);
+  CHECK(has_pending_region == 1);
+  patchy_engine_buffer complete_render{};
+  CHECK(patchy_engine_session_render(session, {0, 0, 2, 2}, &complete_render,
+                                     &event, &error) == 1);
+  patchy_engine_buffer_release(&complete_render);
+  CHECK(patchy_engine_session_pending_render_region(
+            session, &pending_region, &has_pending_region, &error) == 1);
+  CHECK(has_pending_region == 0);
 
   CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
   CHECK(event.revision > changed_revision);

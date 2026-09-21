@@ -16,6 +16,8 @@ export interface DocumentProjection {
   layerCount: number; hasActiveLayer: boolean; dirty: boolean;
   canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
   documentId: number; documentName: string; documents: DocumentTabProjection[];
+  memory: MemoryUsage | null; dirtyRegion: Rect | null;
+  memoryBudget: { documentBytes: number; globalBytes: number };
   selection: Rect[];
   selectionMask: null | { bounds: Rect; gray: Uint8Array };
   channels: Array<{ id: bigint; kind: number; name: string }>;
@@ -23,8 +25,14 @@ export interface DocumentProjection {
     anchorCount: number; clipping: boolean; anchors: VectorAnchor[];
     subpaths: VectorSubpathInput[] }>;
 }
+export interface MemoryUsage {
+  documentPixelBytes: number; historyPixelBytes: number; previewPixelBytes: number;
+  selectionBytes: number; historySelectionBytes: number; previewSelectionBytes: number;
+  historyRetainedBytes: number; totalRetainedBytes: number;
+  undoStates: number; redoStates: number;
+}
 export interface DocumentTabProjection { id: number; name: string; dirty: boolean;
-  revision: bigint; active: boolean }
+  revision: bigint; active: boolean; retainedBytes: number; historyBytes: number }
 export type WorkerState = "starting" | "ready" | "crashed" | "closed";
 export interface FilterProgress {
   completed: number; total: number; stage: number; ratio: number;
@@ -43,6 +51,7 @@ export class PatchyWorkerClient {
   listDocuments(): Promise<DocumentTabProjection[]>;
   activateDocument(documentId: number): Promise<DocumentProjection>;
   closeDocument(documentId: number): Promise<DocumentProjection | null>;
+  setMemoryBudget(documentBytes: number, globalBytes: number): Promise<DocumentProjection>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;
   setLayerOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;
   setLayerFillOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;

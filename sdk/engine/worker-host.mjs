@@ -1,6 +1,8 @@
 import { EmscriptenPatchyEngine } from "./module-adapter.mjs";
 
 const MAX_OPEN_DOCUMENTS = 16;
+const DEFAULT_DOCUMENT_HISTORY_BUDGET = 256 * 1024 * 1024;
+const DEFAULT_GLOBAL_HISTORY_BUDGET = 768 * 1024 * 1024;
 
 export class PatchyWorkerHost {
   #engine;
@@ -8,6 +10,8 @@ export class PatchyWorkerHost {
   #activeDocumentId = 0;
   #nextDocumentId = 1;
   #sessions = new Map();
+  #documentHistoryBudget = DEFAULT_DOCUMENT_HISTORY_BUDGET;
+  #globalHistoryBudget = DEFAULT_GLOBAL_HISTORY_BUDGET;
 
   constructor(engine) { this.#engine = engine; }
 
@@ -29,6 +33,19 @@ export class PatchyWorkerHost {
         this.#activateDocument(message.documentId);
         return this.#snapshot();
       case "closeDocument": return this.#closeDocument(message.documentId);
+      case "setMemoryBudget": {
+        const documentBytes = Number(message.documentBytes);
+        const globalBytes = Number(message.globalBytes);
+        if (!Number.isSafeInteger(documentBytes) || !Number.isSafeInteger(globalBytes) ||
+            documentBytes < 16 * 1024 * 1024 || globalBytes < documentBytes ||
+            globalBytes > 3 * 1024 * 1024 * 1024) {
+          throw new RangeError("Memory budgets must be safe bytes with global >= document and <= 3 GB");
+        }
+        this.#documentHistoryBudget = documentBytes;
+        this.#globalHistoryBudget = globalBytes;
+        return this.#sessions.size ? this.#snapshot() : { memoryBudget: {
+          documentBytes: this.#documentHistoryBudget, globalBytes: this.#globalHistoryBudget } };
+      }
       case "setLayerVisibility":
         this.#engine.setLayerVisibility(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
@@ -288,11 +305,37 @@ export class PatchyWorkerHost {
   }
 
   #snapshot() {
+    this.#enforceMemoryBudget();
     const projection = this.#engine.snapshot(this.#requireSession());
     const active = this.#sessions.get(this.#activeDocumentId);
     active.dirty = projection.dirty; active.revision = projection.revision;
+    const memory = this.#engine.memoryUsage?.(this.#requireSession()) || null;
+    const dirtyRegion = this.#engine.pendingRenderRegion?.(this.#requireSession()) || null;
     return { ...projection, documentId: this.#activeDocumentId,
-      documentName: active.name, documents: this.#documentList() };
+      documentName: active.name, documents: this.#documentList(), memory,
+      dirtyRegion, memoryBudget: { documentBytes: this.#documentHistoryBudget,
+        globalBytes: this.#globalHistoryBudget } };
+  }
+
+  #enforceMemoryBudget() {
+    if (typeof this.#engine.memoryUsage !== "function" ||
+        typeof this.#engine.evictOldestUndo !== "function") return;
+    for (const record of this.#sessions.values()) {
+      let usage = this.#engine.memoryUsage(record.session);
+      while (usage.historyRetainedBytes > this.#documentHistoryBudget && usage.undoStates > 1) {
+        if (!this.#engine.evictOldestUndo(record.session)) break;
+        usage = this.#engine.memoryUsage(record.session);
+      }
+    }
+    for (;;) {
+      const candidates = [...this.#sessions.values()].map((record) => ({ record,
+        usage: this.#engine.memoryUsage(record.session) }));
+      const total = candidates.reduce((sum, item) => sum + item.usage.historyRetainedBytes, 0);
+      if (total <= this.#globalHistoryBudget) break;
+      candidates.sort((left, right) => right.usage.historyRetainedBytes - left.usage.historyRetainedBytes);
+      const target = candidates.find((item) => item.usage.undoStates > 1);
+      if (!target || !this.#engine.evictOldestUndo(target.record.session)) break;
+    }
   }
 
   #requireSession() {
@@ -330,9 +373,13 @@ export class PatchyWorkerHost {
   }
 
   #documentList() {
-    return [...this.#sessions.entries()].map(([id, record]) => ({ id,
-      name: record.name, dirty: record.dirty, revision: record.revision,
-      active: id === this.#activeDocumentId }));
+    return [...this.#sessions.entries()].map(([id, record]) => {
+      const memory = this.#engine.memoryUsage?.(record.session);
+      return { id, name: record.name, dirty: record.dirty, revision: record.revision,
+        active: id === this.#activeDocumentId,
+        retainedBytes: memory?.totalRetainedBytes || 0,
+        historyBytes: memory?.historyRetainedBytes || 0 };
+    });
   }
 
   #mutateExistingMask(layerId, change) {

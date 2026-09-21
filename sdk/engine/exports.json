@@ -55,6 +55,9 @@
   "_patchy_engine_session_group_layer",
   "_patchy_engine_session_undo",
   "_patchy_engine_session_redo",
+  "_patchy_engine_session_memory_usage",
+  "_patchy_engine_session_pending_render_region",
+  "_patchy_engine_session_evict_oldest_undo",
   "_patchy_engine_session_render_region",
   "_patchy_engine_session_save_psd",
   "_patchy_engine_buffer_release"

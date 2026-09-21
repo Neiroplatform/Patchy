@@ -54,8 +54,9 @@ try {
       "prior active workspace was not reactivated after id remap");
     await workspaceStore.savePreferences({ tool: "brush", brushSize: 37,
       color: "#123456", paintPreset: "ocean", font: "Georgia",
-      selectionTolerance: 28, panelsHidden: true });
-    check((await workspaceStore.loadPreferences()).brushSize === 37,
+      selectionTolerance: 28, historyBudgetMiB: 128, panelsHidden: true });
+    const preferences = await workspaceStore.loadPreferences();
+    check(preferences.brushSize === 37 && preferences.historyBudgetMiB === 128,
       "browser preferences did not survive OPFS round-trip");
     await workspaceStore.remove(workspaceOne);
     await workspaceStore.remove(workspaceTwo);
@@ -69,6 +70,10 @@ try {
     const first = await client.create(4, 3, "First.psd");
     check(first.documents.length === 1 && first.documentName === "First.psd",
       "first document projection mismatch");
+    const budgeted = await client.setMemoryBudget(16 * 1024 * 1024, 32 * 1024 * 1024);
+    check(budgeted.memoryBudget.documentBytes === 16 * 1024 * 1024 &&
+      budgeted.memory?.totalRetainedBytes > 0,
+    "WASM memory census or budget projection is unavailable");
 
     const rgba = new Uint8Array(4 * 3 * 4);
     for (let pixel = 0; pixel < 12; ++pixel) {
@@ -86,9 +91,17 @@ try {
     const styled = await client.setLayerStylePreset(
       layerId, "57a1e500-0015-4c6d-8f2a-9b3d4e55c015");
     check(styled.revision > authored.revision, "style preset did not publish a revision");
+    check(styled.dirtyRegion?.width === 4 && styled.dirtyRegion?.height === 3,
+      "dirty render region did not cross the wasm32 ABI");
 
+    check((await client.render({ x: 0, y: 0, width: 1, height: 1 })).length === 4,
+      "partial bounded render byte count mismatch");
+    check((await client.snapshot()).dirtyRegion != null,
+      "partial render cleared an uncovered dirty region");
     const rendered = await client.render({ x: 0, y: 0, width: 4, height: 3 });
     check(rendered.length === rgba.length, "bounded render byte count mismatch");
+    check((await client.snapshot()).dirtyRegion == null,
+      "complete render did not clear the covered dirty region");
     const saved = await client.saveDocument(first.documentId);
     check(saved.length > 26 && String.fromCharCode(...saved.subarray(0, 4)) === "8BPS",
       "layered PSD encoding mismatch");

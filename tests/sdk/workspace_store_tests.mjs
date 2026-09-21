@@ -205,11 +205,13 @@ test("preferences round-trip with validation and malformed-data fallback", async
   const { root, store } = fixture();
   const saved = await store.savePreferences({ tool: "brush", brushSize: 42,
     color: "#AABBCC", paintPreset: "ocean", font: "Georgia",
-    selectionTolerance: 31, panelsHidden: true });
+    selectionTolerance: 31, historyBudgetMiB: 512, panelsHidden: true });
   assert.deepEqual(saved, { tool: "brush", brushSize: 42, color: "#aabbcc",
-    paintPreset: "ocean", font: "Georgia", selectionTolerance: 31, panelsHidden: true });
+    paintPreset: "ocean", font: "Georgia", selectionTolerance: 31,
+    historyBudgetMiB: 512, panelsHidden: true });
   assert.deepEqual(await store.loadPreferences({ brushSize: 12 }), saved);
   await assert.rejects(store.savePreferences({ tool: "unknown" }), /Invalid preferred tool/);
+  await assert.rejects(store.savePreferences({ historyBudgetMiB: 12 }), /History memory budget/);
   const base = await root.getDirectoryHandle("patchy-workspaces-v1");
   base.files.set("preferences.json", new TextEncoder().encode("not-json"));
   assert.deepEqual(await store.loadPreferences({ tool: "marquee" }), { tool: "marquee" });

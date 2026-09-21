@@ -292,6 +292,13 @@ function normalizePreferences(value, stored) {
     }
     result.selectionTolerance = tolerance;
   }
+  if (value.historyBudgetMiB !== undefined) {
+    const historyBudgetMiB = Number(value.historyBudgetMiB);
+    if (![128, 256, 512, 1024].includes(historyBudgetMiB)) {
+      throw new RangeError("History memory budget must be 128, 256, 512, or 1024 MiB");
+    }
+    result.historyBudgetMiB = historyBudgetMiB;
+  }
   if (value.panelsHidden !== undefined) result.panelsHidden = Boolean(value.panelsHidden);
   return result;
 }

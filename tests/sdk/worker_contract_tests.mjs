@@ -4,6 +4,7 @@ import test from "node:test";
 import { PatchyWorkerHost } from "../../sdk/engine/worker-host.mjs";
 import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
+import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "../../sdk/engine/memory-policy.mjs";
 
 test("WASM export manifest covers every engine symbol used by the adapter", async () => {
   const root = new URL("../../", import.meta.url);
@@ -52,7 +53,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "adjustmentDialog", "commitAdjustmentButton", "smartFilterDialog", "commitSmartFilterButton",
     "undoButton", "redoButton", "saveButton", "errorBanner", "recoveryButton",
     "recoveryCount", "recoveryLabel", "recoveryDialog", "recoveryList", "recoveryQuota",
-    "cleanupRecoveryButton"]) {
+    "cleanupRecoveryButton", "memoryLabel", "memoryBudgetSelect"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
@@ -78,7 +79,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
-    "client.undo", "client.redo", "client.render", "client.save", "client.saveDocument"]) {
+    "client.undo", "client.redo", "client.render", "client.save", "client.saveDocument",
+    "client.setMemoryBudget"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
@@ -133,7 +135,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 26n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 27n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -339,13 +341,24 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       const data = alloc(4); heap.set([56, 66, 80, 83], data);
       view.setUint32(output, data, true); view.setUint32(output + 4, 4, true); return 1;
     },
+    _patchy_engine_session_memory_usage(session, output) {
+      assert.equal(view.getUint32(output, true), 88);
+      for (let index = 0; index < 10; ++index) view.setBigUint64(output + 8 + index * 8, BigInt(index + 1), true);
+      return 1;
+    },
+    _patchy_engine_session_pending_render_region(session, region, hasRegion) {
+      view.setInt32(region, 1, true); view.setInt32(region + 4, 0, true);
+      view.setInt32(region + 8, 2, true); view.setInt32(region + 12, 2, true);
+      heap[hasRegion] = 1; return 1;
+    },
+    _patchy_engine_session_evict_oldest_undo(session, evicted) { heap[evicted] = 1; return 1; },
     _patchy_engine_buffer_release() { released++; },
     _patchy_engine_session_move_layer() { return 1; },
     _patchy_engine_session_undo() { return 1; },
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 26n) - 1n);
+  assert.equal(engine.capabilities, (1n << 27n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -358,6 +371,9 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.equal(snapshot.paths[0].subpaths[0].anchors.length, 4);
   assert.deepEqual(snapshot.paths[0].anchors[2],
     { x: 3, y: 2, inX: 3, inY: 2, outX: 3, outY: 2, smooth: false });
+  assert.equal(engine.memoryUsage(session).totalRetainedBytes, 8);
+  assert.deepEqual(engine.pendingRenderRegion(session), { x: 1, y: 0, width: 2, height: 2 });
+  assert.equal(engine.evictOldestUndo(session), true);
   engine.setLayerVisibility(session, snapshot, 7n, false);
   engine.setLayerOpacity(session, snapshot, 7n, 0.5);
   engine.setLayerFillOpacity(session, snapshot, 7n, 0.75);
@@ -686,6 +702,59 @@ test("one Worker owns isolated switchable document sessions", async () => {
   assert.deepEqual(closed, [101]);
   host.dispose();
   assert.deepEqual(closed, [101, 100]);
+});
+
+test("Worker enforces per-document and global history budgets with one undo-state floor", async () => {
+  let nextSession = 1;
+  const histories = new Map(); const undoStates = new Map();
+  const engine = {
+    capabilities: 0n,
+    create() { const session = nextSession++; histories.set(session, 40 * MIB); undoStates.set(session, 3); return session; },
+    snapshot() { return projection(1); },
+    memoryUsage(session) { const historyRetainedBytes = histories.get(session); return {
+      documentPixelBytes: MIB, historyPixelBytes: historyRetainedBytes,
+      previewPixelBytes: 0, selectionBytes: 0, historySelectionBytes: 0,
+      previewSelectionBytes: 0, historyRetainedBytes,
+      totalRetainedBytes: historyRetainedBytes + MIB,
+      undoStates: undoStates.get(session), redoStates: 0,
+    }; },
+    pendingRenderRegion() { return { x: 1, y: 1, width: 1, height: 1 }; },
+    evictOldestUndo(session) {
+      if (undoStates.get(session) <= 1) return false;
+      undoStates.set(session, undoStates.get(session) - 1);
+      histories.set(session, histories.get(session) - 16 * MIB);
+      return true;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  assert.deepEqual(await host.dispatch({ method: "setMemoryBudget",
+    documentBytes: 24 * MIB, globalBytes: 32 * MIB }),
+  { memoryBudget: { documentBytes: 24 * MIB, globalBytes: 32 * MIB } });
+  const first = await host.dispatch({ method: "create", width: 1, height: 1, name: "First" });
+  const second = await host.dispatch({ method: "create", width: 1, height: 1, name: "Second" });
+  assert.equal(first.memory.historyRetainedBytes, 24 * MIB);
+  assert.equal(second.documents.reduce((sum, item) => sum + item.historyBytes, 0), 32 * MIB);
+  assert.ok([...undoStates.values()].every((count) => count >= 1));
+  assert.deepEqual(second.dirtyRegion, { x: 1, y: 1, width: 1, height: 1 });
+  await assert.rejects(host.dispatch({ method: "setMemoryBudget",
+    documentBytes: 8 * MIB, globalBytes: 32 * MIB }), /Memory budgets/);
+  host.dispose();
+});
+
+test("browser memory policy preflights working sets and selects bounded dirty renders", () => {
+  assert.equal(browserWorkingSetLimit({ heapLimitBytes: 2 * 1024 * MIB, deviceMemoryGiB: 8 }),
+    Math.floor(2 * 1024 * MIB * 0.7));
+  assert.equal(documentPreflight({ width: 1000, height: 1000, limitBytes: 256 * MIB }).allowed, true);
+  assert.equal(documentPreflight({ sourceBytes: 512 * MIB, limitBytes: 2 * 1024 * MIB }).allowed, false);
+  assert.deepEqual(chooseRenderRegion({ width: 100, height: 100, dirtyRegion: { x: 4, y: 5, width: 10, height: 12 } },
+    { documentId: 1, currentDocumentId: 1, width: 100, height: 100 }),
+  { x: 4, y: 5, width: 10, height: 12 });
+  assert.equal(chooseRenderRegion({ width: 100, height: 100, dirtyRegion: null },
+    { documentId: 1, currentDocumentId: 1, width: 100, height: 100 }), null);
+  assert.deepEqual(chooseRenderRegion({ width: 100, height: 100, dirtyRegion: null },
+    { documentId: 1, currentDocumentId: 2, width: 100, height: 100 }),
+  { x: 0, y: 0, width: 100, height: 100 });
 });
 
 class FakeWorker extends EventTarget {

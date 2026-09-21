@@ -145,6 +145,12 @@ typed editing commands.
   selection container/mask ownership is reported conservatively per snapshot.
   The desktop history budget consumes this engine-owned census instead of
   walking canonical snapshots from Qt;
+- the versioned host ABI projects the same retained-memory census, undo/redo
+  counts and pending render region without exposing C++ ownership. A bounded
+  render clears the pending invalidation only when the rendered rectangle
+  covers it; an uncovered remainder stays pending. Hosts may evict the oldest
+  undo state through the ABI while current pixels, revision and state identity
+  remain unchanged;
 - `layers()` exposes a flat stable-ID projection for non-Qt clients;
 - `render` returns a bounded RGBA8 region tied to the session revision. The
   compositor clips directly to that document-space region and allocates only
@@ -319,10 +325,22 @@ its last confirmed PSD rather than being presented as current. Checkpoint
 queues from the dead runtime are discarded and recreated only after a new
 engine revision is accepted. The same versioned OPFS root stores bounded,
 schema-validated authoring preferences (active tool, brush size/colour,
-paint preset, font choice, selection tolerance and panel visibility). Malformed
+paint preset, font choice, selection tolerance, history-memory budget and
+panel visibility). Malformed
 preferences fall back to defaults. Recovery cleanup is user-triggered, protects
 all open workspace ids and retains the eight newest closed workspaces; no
 background policy silently deletes recovery data.
+
+The Worker enforces the selected retained-history budget after every snapshot:
+first per document, then across all open sessions by evicting the largest
+eligible history deterministically. It keeps one undo state when one exists.
+The editor surfaces current retained/history bytes, persists a 128/256/512/
+1024 MiB per-document choice and derives a capped aggregate limit. File/image
+preflight rejects working sets above the browser/device safety envelope before
+transferring or allocating decoded pixels. Ordinary mutations render the exact
+pending dirty rectangle into the existing canvas; initial, document-switch,
+geometry and majority-canvas invalidations fall back to a full render. Pan and
+zoom remain view-only and issue no engine render request.
 
 ## Desktop transition
 

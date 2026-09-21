@@ -138,6 +138,8 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .zoom-controls output { min-width: 38px; margin-left: 4px; }
 .privacy-label { margin-left: auto; display: flex; gap: 6px; align-items: center; color: var(--text-muted); }
 .privacy-label b { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.memory-control { display: inline-flex; align-items: center; gap: 5px; text-transform: uppercase; letter-spacing: .06em; }
+.memory-control select { height: 22px; padding: 0 5px; color: var(--text-muted); background: transparent; border: 1px solid var(--line); border-radius: 4px; font-size: 10px; }
 
 .inspector { min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--surface-0); display: block; overflow-y: auto; }
 .panel { min-height: 0; display: flex; flex-direction: column; }
@@ -255,7 +257,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
   .layers-panel { min-height: 230px; }
   .properties-panel { min-height: 214px; }
   .details-panel { display: none; }
-  .stage-footer #memoryLabel { display: none; }
+  .stage-footer #memoryLabel, .stage-footer .memory-control { display: none; }
   .stage-footer #recoveryLabel { max-width: 124px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tool-options { display: none; }
   .document-dialog { max-height: calc(100vh - 16px); overflow: auto; }

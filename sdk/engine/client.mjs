@@ -42,6 +42,9 @@ export class PatchyWorkerClient {
   listDocuments() { return this.#request("listDocuments"); }
   activateDocument(documentId) { return this.#request("activateDocument", { documentId }); }
   closeDocument(documentId) { return this.#request("closeDocument", { documentId }); }
+  setMemoryBudget(documentBytes, globalBytes) {
+    return this.#request("setMemoryBudget", { documentBytes, globalBytes });
+  }
   setLayerVisibility(layerId, visible) {
     return this.#request("setLayerVisibility", { layerId: String(layerId), visible });
   }

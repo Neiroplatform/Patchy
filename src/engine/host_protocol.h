@@ -40,6 +40,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_VECTOR_MASK_AUTHORING = UINT64_C(1) << 23,
   PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING = UINT64_C(1) << 24,
   PATCHY_ENGINE_CAP_SELECTION_AUTHORING = UINT64_C(1) << 25,
+  PATCHY_ENGINE_CAP_MEMORY_CONTROL = UINT64_C(1) << 26,
 };
 
 enum patchy_engine_error_code {
@@ -76,6 +77,21 @@ typedef struct patchy_engine_rect {
   int32_t width;
   int32_t height;
 } patchy_engine_rect;
+
+typedef struct patchy_engine_memory_usage {
+  uint32_t struct_size;
+  uint32_t protocol_version;
+  uint64_t document_pixel_bytes;
+  uint64_t history_pixel_bytes;
+  uint64_t preview_pixel_bytes;
+  uint64_t selection_bytes;
+  uint64_t history_selection_bytes;
+  uint64_t preview_selection_bytes;
+  uint64_t history_retained_bytes;
+  uint64_t total_retained_bytes;
+  uint64_t undo_states;
+  uint64_t redo_states;
+} patchy_engine_memory_usage;
 
 enum patchy_engine_color_mode {
   PATCHY_ENGINE_COLOR_MODE_GRAYSCALE = 0,
@@ -1010,6 +1026,15 @@ int patchy_engine_session_undo(patchy_engine_session *session,
 int patchy_engine_session_redo(patchy_engine_session *session,
                                patchy_engine_event *event,
                                patchy_engine_error *error);
+int patchy_engine_session_memory_usage(
+    const patchy_engine_session *session, patchy_engine_memory_usage *usage,
+    patchy_engine_error *error);
+int patchy_engine_session_pending_render_region(
+    const patchy_engine_session *session, patchy_engine_rect *region,
+    uint8_t *has_region, patchy_engine_error *error);
+int patchy_engine_session_evict_oldest_undo(
+    patchy_engine_session *session, uint8_t *evicted,
+    patchy_engine_error *error);
 int patchy_engine_session_render(patchy_engine_session *session,
                                  patchy_engine_rect region,
                                  patchy_engine_buffer *rgba,

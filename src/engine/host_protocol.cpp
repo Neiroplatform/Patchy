@@ -134,7 +134,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_ADJUSTMENT_AUTHORING |
     PATCHY_ENGINE_CAP_VECTOR_MASK_AUTHORING |
     PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING |
-    PATCHY_ENGINE_CAP_SELECTION_AUTHORING;
+    PATCHY_ENGINE_CAP_SELECTION_AUTHORING |
+    PATCHY_ENGINE_CAP_MEMORY_CONTROL;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -3261,6 +3262,66 @@ int patchy_engine_session_redo(patchy_engine_session *session,
                            [](DocumentSession &value) { return value.redo(); });
 }
 
+int patchy_engine_session_memory_usage(
+    const patchy_engine_session *session, patchy_engine_memory_usage *usage,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || usage == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and memory usage output are required");
+  }
+  if (usage->struct_size != sizeof(*usage)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "memory usage structure size mismatch");
+  }
+  const auto value = session->value->memory_usage();
+  *usage = {};
+  usage->struct_size = sizeof(*usage);
+  usage->protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  usage->document_pixel_bytes = value.document_pixel_bytes;
+  usage->history_pixel_bytes = value.history_pixel_bytes;
+  usage->preview_pixel_bytes = value.preview_pixel_bytes;
+  usage->selection_bytes = value.selection_bytes;
+  usage->history_selection_bytes = value.history_selection_bytes;
+  usage->preview_selection_bytes = value.preview_selection_bytes;
+  usage->history_retained_bytes = value.history_retained_bytes;
+  usage->total_retained_bytes = value.total_retained_bytes;
+  usage->undo_states = value.undo_states;
+  usage->redo_states = value.redo_states;
+  return 1;
+}
+
+int patchy_engine_session_pending_render_region(
+    const patchy_engine_session *session, patchy_engine_rect *region,
+    std::uint8_t *has_region, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || region == nullptr ||
+      has_region == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and dirty-region outputs are required");
+  }
+  *region = {};
+  *has_region = 0U;
+  const auto pending = session->value->pending_render_region();
+  if (pending.has_value()) {
+    *region = {pending->x, pending->y, pending->width, pending->height};
+    *has_region = 1U;
+  }
+  return 1;
+}
+
+int patchy_engine_session_evict_oldest_undo(
+    patchy_engine_session *session, std::uint8_t *evicted,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || evicted == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and eviction output are required");
+  }
+  *evicted = session->value->evict_oldest_undo() ? 1U : 0U;
+  return 1;
+}
+
 int patchy_engine_session_render(patchy_engine_session *session,
                                  patchy_engine_rect region,
                                  patchy_engine_buffer *rgba,
@@ -3303,6 +3364,17 @@ int patchy_engine_session_render_with_progress(
     }
     if (!copy_buffer(rendered.pixels.data(), rgba, error)) {
       return 0;
+    }
+    const auto pending = session->value->pending_render_region();
+    if (pending.has_value()) {
+      const auto render_right = static_cast<std::int64_t>(region.x) + region.width;
+      const auto render_bottom = static_cast<std::int64_t>(region.y) + region.height;
+      const auto pending_right = static_cast<std::int64_t>(pending->x) + pending->width;
+      const auto pending_bottom = static_cast<std::int64_t>(pending->y) + pending->height;
+      if (region.x <= pending->x && region.y <= pending->y &&
+          render_right >= pending_right && render_bottom >= pending_bottom) {
+        (void)session->value->take_pending_render_region();
+      }
     }
     publish_event(*session->value, CommandResult{}, event);
     return 1;
