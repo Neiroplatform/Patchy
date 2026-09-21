@@ -40,6 +40,13 @@ let rasterPreviewGeneration = 0;
 let rasterPreviewRestore = null;
 let rasterPreviewCancellation = null;
 let textEditingId = null;
+let textDialogRuns = [];
+let textDialogParagraphRuns = [];
+let textDialogOriginalValue = "";
+let textDialogOriginalRuns = [];
+let textDialogOriginalParagraphRuns = [];
+let textDialogStyleDirty = false;
+let textDialogParagraphDirty = false;
 let cloneSource = null;
 let gradientDraft = null;
 let lassoDraft = null;
@@ -2152,7 +2159,134 @@ function colorBytes(value) {
   return [(number >> 16) & 255, (number >> 8) & 255, number & 255];
 }
 
-function textLayerPayload(style, bounds, name) {
+function textStyleFromControls() {
+  const sizePixels = Number($("textSizeInput").value);
+  const font = $("textFontInput").value.trim();
+  const leading = Number($("textLeadingInput").value);
+  const tracking = Number($("textTrackingInput").value);
+  const horizontalScale = Number($("textHorizontalScaleInput").value) / 100;
+  const verticalScale = Number($("textVerticalScaleInput").value) / 100;
+  if (!font || !Number.isFinite(sizePixels) || sizePixels < 1 || sizePixels > 512 ||
+      !Number.isFinite(leading) || leading < 0 || leading > 4096 ||
+      !Number.isFinite(tracking) || tracking < -1000 || tracking > 1000 ||
+      !Number.isFinite(horizontalScale) || horizontalScale < .01 || horizontalScale > 10 ||
+      !Number.isFinite(verticalScale) || verticalScale < .01 || verticalScale > 10) {
+    throw new RangeError("Text style metrics are outside the supported range");
+  }
+  return { font, style: "", sizePixels, color: colorBytes($("textColorInput").value),
+    bold: $("textBoldInput").checked, italic: $("textItalicInput").checked,
+    fauxBold: false, fauxItalic: false, leading, autoLeading: leading === 0,
+    tracking, horizontalScale, verticalScale };
+}
+
+function sameTextStyle(left, right) {
+  return ["font", "style", "sizePixels", "bold", "italic", "fauxBold", "fauxItalic",
+    "leading", "autoLeading", "tracking", "horizontalScale", "verticalScale"]
+    .every((key) => left[key] === right[key]) && left.color.every((value, index) => value === right.color[index]);
+}
+
+function mergeTextRuns(runs) {
+  const merged = [];
+  for (const run of runs) {
+    const previous = merged.at(-1);
+    if (previous && previous.start + previous.length === run.start && sameTextStyle(previous, run))
+      previous.length += run.length;
+    else merged.push({ ...run, color: [...run.color] });
+  }
+  return merged;
+}
+
+function baseTextRun(value, style = textStyleFromControls()) {
+  return { start: 0, length: value.length, ...style };
+}
+
+function textRunsCover(value, runs) {
+  let covered = 0;
+  return value.length > 0 && Array.isArray(runs) && runs.length > 0 && runs.every((run) => {
+    const valid = run.start === covered && Number.isInteger(run.length) && run.length > 0;
+    covered += run.length;
+    return valid;
+  }) && covered === value.length;
+}
+
+function renderTextRunList() {
+  const list = $("textRunList"); list.replaceChildren();
+  for (const run of textDialogRuns) {
+    const row = document.createElement("div");
+    const range = document.createElement("code"); range.textContent = `${run.start}–${run.start + run.length}`;
+    const summary = document.createElement("span");
+    summary.textContent = `${run.font} ${run.sizePixels}px · rgb(${run.color.join(" ")})${run.bold ? " · bold" : ""}${run.italic ? " · italic" : ""}`;
+    row.append(range, summary); list.append(row);
+  }
+}
+
+function applyTextStyleRange(start, end) {
+  const value = $("textValueInput").value.replace(/\r\n?/g, "\n");
+  if (!textRunsCover(value, textDialogRuns)) textDialogRuns = [baseTextRun(value)];
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > value.length || start >= end)
+    throw new RangeError("Select a non-empty text range first");
+  const style = textStyleFromControls(); const next = [];
+  for (const run of textDialogRuns) {
+    const runEnd = run.start + run.length;
+    if (runEnd <= start || run.start >= end) { next.push(run); continue; }
+    if (run.start < start) next.push({ ...run, length: start - run.start });
+    const selectedStart = Math.max(run.start, start); const selectedEnd = Math.min(runEnd, end);
+    next.push({ start: selectedStart, length: selectedEnd - selectedStart, ...style });
+    if (runEnd > end) next.push({ ...run, start: end, length: runEnd - end });
+  }
+  textDialogRuns = mergeTextRuns(next);
+  textDialogStyleDirty = false;
+  renderTextRunList();
+}
+
+function paragraphFromControls(length) {
+  const values = ["textFirstIndentInput", "textStartIndentInput", "textEndIndentInput",
+    "textSpaceBeforeInput", "textSpaceAfterInput"].map((id) => Number($(id).value));
+  const autoLeadingFraction = Number($("textAutoLeadingInput").value) / 100;
+  const justification = Number($("textAlignmentInput").value);
+  if (!values.every(Number.isFinite) || !Number.isFinite(autoLeadingFraction) ||
+      autoLeadingFraction < .01 || autoLeadingFraction > 10 || ![0, 1, 2, 3].includes(justification))
+    throw new RangeError("Paragraph metrics are outside the supported range");
+  return { start: 0, length, justification, firstLineIndent: values[0], startIndent: values[1],
+    endIndent: values[2], spaceBefore: values[3], spaceAfter: values[4], autoLeadingFraction };
+}
+
+function canvasFont(run) {
+  const family = String(run.font).replace(/["\\]/g, "");
+  return `${run.italic ? "italic " : ""}${run.bold ? "700 " : ""}${run.sizePixels}px "${family}"`;
+}
+
+function paragraphForOffset(paragraphs, offset) {
+  return paragraphs.find((run) => offset >= run.start && offset < run.start + run.length) || paragraphs.at(-1);
+}
+
+function lineSegments(value, start, length, runs) {
+  const end = start + length; const result = [];
+  for (const run of runs) {
+    const segmentStart = Math.max(start, run.start); const segmentEnd = Math.min(end, run.start + run.length);
+    if (segmentStart < segmentEnd) result.push({ ...run, value: value.slice(segmentStart, segmentEnd) });
+  }
+  return result;
+}
+
+function segmentAdvance(ctx, segment) {
+  ctx.font = canvasFont(segment);
+  const glyphs = Array.from(segment.value);
+  const tracking = segment.sizePixels * segment.tracking / 1000;
+  return (ctx.measureText(segment.value).width + Math.max(0, glyphs.length - 1) * tracking) * segment.horizontalScale;
+}
+
+function drawTextSegment(ctx, segment, x, y) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(segment.horizontalScale, segment.verticalScale);
+  ctx.font = canvasFont(segment); ctx.fillStyle = `rgb(${segment.color.join(" ")})`;
+  const tracking = segment.sizePixels * segment.tracking / 1000; let localX = 0;
+  for (const glyph of Array.from(segment.value)) {
+    ctx.fillText(glyph, localX, 0); localX += ctx.measureText(glyph).width + tracking;
+  }
+  ctx.restore();
+}
+
+function textLayerPayload(style, bounds, name, runs, paragraphs) {
   const byteLength = bounds.width * bounds.height * 4;
   if (!Number.isSafeInteger(byteLength) || byteLength <= 0 || byteLength > 512 * 1024 * 1024) {
     throw new RangeError("Text raster exceeds the 512 MB browser editing limit");
@@ -2162,15 +2296,35 @@ function textLayerPayload(style, bounds, name) {
   scratch.height = bounds.height;
   const scratchContext = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
   scratchContext.clearRect(0, 0, bounds.width, bounds.height);
-  scratchContext.fillStyle = `rgb(${style.color.join(" ")})`;
   scratchContext.textBaseline = "top";
-  scratchContext.font = `${style.italic ? "italic " : ""}${style.bold ? "700 " : ""}${style.sizePixels}px ${style.font}`;
-  const lineHeight = style.sizePixels * 1.2;
-  String(style.value).split(/\r?\n/).forEach((line, index) =>
-    scratchContext.fillText(line || " ", 0, index * lineHeight, bounds.width));
+  let offset = 0; let y = 0;
+  const lines = String(style.value).split("\n");
+  lines.forEach((line, lineIndex) => {
+    const paragraph = paragraphForOffset(paragraphs, Math.min(offset, Math.max(0, style.value.length - 1))) ||
+      { justification: 0, firstLineIndent: 0, startIndent: 0, endIndent: 0,
+        spaceBefore: 0, spaceAfter: 0, autoLeadingFraction: 1.2 };
+    const segments = lineSegments(style.value, offset, line.length, runs);
+    const effective = segments.length ? segments : [{ ...runs[0], value: " " }];
+    y += paragraph.spaceBefore;
+    const width = effective.reduce((sum, segment) => sum + segmentAdvance(scratchContext, segment), 0);
+    const firstIndent = offset === paragraph.start ? paragraph.firstLineIndent : 0;
+    let x = paragraph.startIndent + firstIndent;
+    const available = Math.max(0, bounds.width - paragraph.startIndent - paragraph.endIndent - firstIndent);
+    if (paragraph.justification === 2) x += Math.max(0, (available - width) / 2);
+    else if (paragraph.justification === 1) x += Math.max(0, available - width);
+    for (const segment of effective) {
+      drawTextSegment(scratchContext, segment, x, y);
+      x += segmentAdvance(scratchContext, segment);
+    }
+    const lineHeight = Math.max(...effective.map((segment) =>
+      (segment.leading > 0 ? segment.leading : segment.sizePixels * paragraph.autoLeadingFraction) * segment.verticalScale));
+    y += lineHeight + paragraph.spaceAfter;
+    offset += line.length + (lineIndex + 1 < lines.length ? 1 : 0);
+  });
   return { name, text: style.value, font: style.font, sizePixels: style.sizePixels,
     color: style.color, bold: style.bold, italic: style.italic, boxText: true,
     width: bounds.width, height: bounds.height, bounds,
+    styleRuns: runs, paragraphRuns: paragraphs,
     rgba: new Uint8Array(scratchContext.getImageData(0, 0, bounds.width, bounds.height).data) };
 }
 
@@ -2194,6 +2348,36 @@ function openTextDialog() {
   $("textColorInput").value = `#${style.color.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
   $("textBoldInput").checked = style.bold;
   $("textItalicInput").checked = style.italic;
+  textDialogOriginalValue = style.value;
+  textDialogRuns = textRunsCover(style.value, style.styleRuns) ? style.styleRuns.map((run) =>
+    ({ ...run, color: [...run.color] })) : [baseTextRun(style.value, {
+      font: style.font, style: "", sizePixels: style.sizePixels, color: [...style.color],
+      bold: style.bold, italic: style.italic, fauxBold: false, fauxItalic: false,
+      leading: 0, autoLeading: true, tracking: 0, horizontalScale: 1, verticalScale: 1 })];
+  textDialogParagraphRuns = Array.isArray(style.paragraphRuns) && style.paragraphRuns.length
+    ? style.paragraphRuns.map((run) => ({ ...run }))
+    : [{ start: 0, length: style.value.length, justification: 0, firstLineIndent: 0,
+      startIndent: 0, endIndent: 0, spaceBefore: 0, spaceAfter: 0, autoLeadingFraction: 1.2 }];
+  textDialogOriginalRuns = textDialogRuns.map((run) => ({ ...run, color: [...run.color] }));
+  textDialogOriginalParagraphRuns = textDialogParagraphRuns.map((run) => ({ ...run }));
+  const firstRun = textDialogRuns[0];
+  $("textFontInput").value = firstRun.font;
+  $("textSizeInput").value = String(firstRun.sizePixels);
+  $("textColorInput").value = `#${firstRun.color.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
+  $("textBoldInput").checked = firstRun.bold;
+  $("textItalicInput").checked = firstRun.italic;
+  $("textTrackingInput").value = String(firstRun.tracking || 0);
+  $("textLeadingInput").value = String(firstRun.autoLeading ? 0 : firstRun.leading || 0);
+  $("textHorizontalScaleInput").value = String((firstRun.horizontalScale || 1) * 100);
+  $("textVerticalScaleInput").value = String((firstRun.verticalScale || 1) * 100);
+  const paragraph = textDialogParagraphRuns[0];
+  $("textAlignmentInput").value = String(paragraph.justification || 0);
+  for (const [id, value] of [["textFirstIndentInput", paragraph.firstLineIndent],
+    ["textStartIndentInput", paragraph.startIndent], ["textEndIndentInput", paragraph.endIndent],
+    ["textSpaceBeforeInput", paragraph.spaceBefore], ["textSpaceAfterInput", paragraph.spaceAfter]])
+    $(id).value = String(value || 0);
+  $("textAutoLeadingInput").value = String((paragraph.autoLeadingFraction || 1.2) * 100);
+  textDialogStyleDirty = false; textDialogParagraphDirty = false; renderTextRunList();
   for (const [id, value] of [["textXInput", bounds.x], ["textYInput", bounds.y],
     ["textWidthInput", bounds.width], ["textHeightInput", bounds.height]]) $(id).value = String(value);
   $("textDialog").showModal();
@@ -2202,17 +2386,20 @@ function openTextDialog() {
 async function commitTextDialog() {
   const x = integerInput("textXInput"); const y = integerInput("textYInput");
   const width = integerInput("textWidthInput", true); const height = integerInput("textHeightInput", true);
-  const sizePixels = Number($("textSizeInput").value);
-  const value = $("textValueInput").value; const font = $("textFontInput").value.trim();
-  if ([x, y, width, height].some((item) => item == null) || !value || !font ||
-      !Number.isFinite(sizePixels) || sizePixels <= 0) return;
+  const value = $("textValueInput").value.replace(/\r\n?/g, "\n");
+  if ([x, y, width, height].some((item) => item == null) || !value) return;
   const layer = selectedLayer();
   let payload;
   try {
-    payload = textLayerPayload({ value, font, sizePixels,
-      color: colorBytes($("textColorInput").value), bold: $("textBoldInput").checked,
-      italic: $("textItalicInput").checked }, { x, y, width, height },
-      textEditingId ? layer?.name || "Text" : value.split(/\s+/)[0] || "Text");
+    if (!textRunsCover(value, textDialogRuns) || textDialogStyleDirty)
+      textDialogRuns = [baseTextRun(value)];
+    if (textDialogParagraphDirty || !textRunsCover(value, textDialogParagraphRuns))
+      textDialogParagraphRuns = [paragraphFromControls(value.length)];
+    const primary = textDialogRuns[0];
+    payload = textLayerPayload({ value, font: primary.font, sizePixels: primary.sizePixels,
+      color: primary.color, bold: primary.bold, italic: primary.italic }, { x, y, width, height },
+      textEditingId ? layer?.name || "Text" : value.split(/\s+/)[0] || "Text",
+      textDialogRuns, textDialogParagraphRuns);
   } catch (error) { showError("Could not prepare text", error); return; }
   $("textDialog").close();
   const editing = textEditingId; textEditingId = null;
@@ -2579,6 +2766,37 @@ $("commitSmartFilterButton").addEventListener("click", commitSmartFilter);
 $("layerTransformButton").addEventListener("click", openLayerTransformDialog);
 $("layerWarpButton").addEventListener("click", openLayerWarpDialog);
 $("commitTextButton").addEventListener("click", commitTextDialog);
+for (const id of ["textFontInput", "textSizeInput", "textColorInput", "textBoldInput",
+  "textItalicInput", "textTrackingInput", "textLeadingInput", "textHorizontalScaleInput",
+  "textVerticalScaleInput"]) $(id).addEventListener("input", () => { textDialogStyleDirty = true; });
+for (const id of ["textAlignmentInput", "textFirstIndentInput", "textStartIndentInput",
+  "textEndIndentInput", "textSpaceBeforeInput", "textSpaceAfterInput", "textAutoLeadingInput"])
+  $(id).addEventListener("input", () => { textDialogParagraphDirty = true; });
+$("textValueInput").addEventListener("input", () => {
+  const value = $("textValueInput").value.replace(/\r\n?/g, "\n");
+  if (value === textDialogOriginalValue) {
+    textDialogRuns = textDialogOriginalRuns.map((run) => ({ ...run, color: [...run.color] }));
+    textDialogParagraphRuns = textDialogOriginalParagraphRuns.map((run) => ({ ...run }));
+    textDialogStyleDirty = false; textDialogParagraphDirty = false; renderTextRunList();
+    return;
+  }
+  textDialogRuns = []; textDialogParagraphRuns = [];
+  textDialogStyleDirty = true; textDialogParagraphDirty = true; renderTextRunList();
+});
+$("applyTextRangeButton").addEventListener("click", () => {
+  try { applyTextStyleRange($("textValueInput").selectionStart, $("textValueInput").selectionEnd); }
+  catch (error) { showError("Could not apply text range", error); }
+});
+$("applyTextAllButton").addEventListener("click", () => {
+  try { applyTextStyleRange(0, $("textValueInput").value.replace(/\r\n?/g, "\n").length); }
+  catch (error) { showError("Could not apply text style", error); }
+});
+$("resetTextRunsButton").addEventListener("click", () => {
+  try {
+    const value = $("textValueInput").value.replace(/\r\n?/g, "\n");
+    textDialogRuns = [baseTextRun(value)]; textDialogStyleDirty = false; renderTextRunList();
+  } catch (error) { showError("Could not reset text ranges", error); }
+});
 $("commitLayerTransformButton").addEventListener("click", () => {
   const draft = transformDialogDraft;
   if (!draft?.layer || !Array.isArray(draft.quad) ||

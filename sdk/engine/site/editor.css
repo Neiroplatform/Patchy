@@ -223,6 +223,12 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .dialog-field { display: grid; gap: 6px; margin-bottom: 12px; color: var(--text-faint); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .dialog-field textarea { resize: vertical; min-height: 84px; padding: 9px; color: var(--text); background: var(--surface-1); border: 1px solid var(--line); border-radius: 5px; font: inherit; text-transform: none; }
 .text-style-row { grid-template-columns: 1fr auto auto; align-items: end; margin-block: 10px; }
+.text-range-actions { justify-content: flex-start; flex-wrap: wrap; }
+.text-run-list { display: grid; gap: 6px; max-height: 132px; overflow: auto; }
+.text-run-list > div { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px;
+  color: var(--text-faint); font-size: 12px; }
+.text-run-list code { color: var(--text); }
 .check-field { display: flex !important; grid-auto-flow: column; align-items: center; justify-content: start; min-height: 36px; }
 .field-row input:focus { border-color: var(--focus); outline: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 11px; }

@@ -658,6 +658,17 @@ std::vector<RgbColor> imported_text_declared_fill_colors(const LayerRecord& reco
 
 }  // namespace
 
+std::vector<PsdTextStyleRun> parse_patchy_text_runs(
+    std::string_view runs_text, std::string_view plain_text,
+    const PsdTextStyleRun& fallback) {
+  return parse_patchy_text_runs_metadata(runs_text, plain_text, fallback);
+}
+
+std::vector<PsdTextParagraphRun> parse_patchy_paragraph_runs(
+    std::string_view runs_text, std::string_view plain_text) {
+  return parse_patchy_paragraph_runs_metadata(runs_text, plain_text);
+}
+
 bool should_regenerate_imported_text_preview(const LayerRecord& record, const PixelBuffer& pixels) {
   if (!record.text.has_value() || !record.text_source_block.has_value() || !has_visible_alpha(pixels)) {
     return false;

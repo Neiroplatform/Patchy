@@ -72,6 +72,15 @@ std::string serialize_patchy_paragraph_runs(std::span<const PsdTextParagraphRun>
 std::string html_from_text_runs(std::string_view text, std::span<const PsdTextStyleRun> runs,
                                 std::span<const PsdTextParagraphRun> paragraph_runs = {});
 
+// Parse the versioned metadata representation used by editable text layers.
+// These are intentionally part of the Qt-free text contract so engine hosts
+// can project imported Photoshop runs without exposing raw metadata strings.
+std::vector<PsdTextStyleRun> parse_patchy_text_runs(
+    std::string_view runs_text, std::string_view plain_text,
+    const PsdTextStyleRun& fallback = {});
+std::vector<PsdTextParagraphRun> parse_patchy_paragraph_runs(
+    std::string_view runs_text, std::string_view plain_text);
+
 // Display family + style flags derived from a PostScript font name by suffix
 // stripping and camel-case humanizing ("ArialNarrow" -> "Arial Narrow",
 // "TimesNewRomanPS-BoldMT" -> "Times New Roman" bold). The PSD reader's

@@ -34,6 +34,8 @@
   "_patchy_engine_session_add_text_layer",
   "_patchy_engine_session_update_text_layer",
   "_patchy_engine_session_text",
+  "_patchy_engine_session_text_style_run_at",
+  "_patchy_engine_session_text_paragraph_run_at",
   "_patchy_engine_session_add_alpha_channel",
   "_patchy_engine_session_path_count",
   "_patchy_engine_session_path_at",

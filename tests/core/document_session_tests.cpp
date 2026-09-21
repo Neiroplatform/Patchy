@@ -3302,6 +3302,44 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   text.blue = 56;
   text.bold = 1;
   text.box_text = 1;
+  std::array<patchy_engine_text_style_run, 2> style_runs{};
+  const auto set_style_run = [](patchy_engine_text_style_run& run, int start,
+                                int length, const char* family, double size,
+                                std::array<std::uint8_t, 3> color, bool bold,
+                                bool italic) {
+    run.struct_size = sizeof(run);
+    run.start = start;
+    run.length = length;
+    run.font_size = static_cast<std::uint32_t>(std::strlen(family));
+    std::memcpy(run.font, family, run.font_size);
+    run.size_pixels = size;
+    run.leading = size * 1.25;
+    run.tracking = start == 0 ? 25.0 : -10.0;
+    run.horizontal_scale = 1.0;
+    run.vertical_scale = 1.0;
+    run.red = color[0];
+    run.green = color[1];
+    run.blue = color[2];
+    run.bold = bold ? 1U : 0U;
+    run.italic = italic ? 1U : 0U;
+  };
+  set_style_run(style_runs[0], 0, 6, "Inter", 24.0, {12, 34, 56}, true, false);
+  set_style_run(style_runs[1], 6, 7, "Georgia", 18.0, {90, 80, 70}, false, true);
+  patchy_engine_text_paragraph_run paragraph{};
+  paragraph.struct_size = sizeof(paragraph);
+  paragraph.start = 0;
+  paragraph.length = 13;
+  paragraph.justification = PATCHY_ENGINE_TEXT_CENTER;
+  paragraph.first_line_indent = 3.0;
+  paragraph.start_indent = 4.0;
+  paragraph.end_indent = 5.0;
+  paragraph.space_before = 2.0;
+  paragraph.space_after = 6.0;
+  paragraph.auto_leading_fraction = 1.3;
+  text.style_runs = style_runs.data();
+  text.style_run_count = style_runs.size();
+  text.paragraph_runs = &paragraph;
+  text.paragraph_run_count = 1;
   CHECK(patchy_engine_session_add_text_layer(session, &text, &event, &error) ==
         1);
   const auto text_id = event.affected_layer_id;
@@ -3315,6 +3353,34 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   CHECK(projected_text.size_pixels == 24.0);
   CHECK(projected_text.red == 12);
   CHECK(projected_text.bold == 1);
+  CHECK(projected_text.style_run_count == 2);
+  CHECK(projected_text.paragraph_run_count == 1);
+  patchy_engine_text_projection legacy_projected_text{};
+  legacy_projected_text.struct_size = static_cast<std::uint32_t>(
+      offsetof(patchy_engine_text_projection, style_run_count));
+  legacy_projected_text.style_run_count = 0xfeedU;
+  legacy_projected_text.paragraph_run_count = 0xbeefU;
+  CHECK(patchy_engine_session_text(
+            session, text_id, &legacy_projected_text, &error) == 1);
+  CHECK(std::string(legacy_projected_text.text,
+                    legacy_projected_text.text_size) == "Hello browser");
+  CHECK(legacy_projected_text.style_run_count == 0xfeedU);
+  CHECK(legacy_projected_text.paragraph_run_count == 0xbeefU);
+  patchy_engine_text_style_run projected_style{};
+  projected_style.struct_size = sizeof(projected_style);
+  CHECK(patchy_engine_session_text_style_run_at(
+            session, text_id, 1, &projected_style, &error) == 1);
+  CHECK(projected_style.start == 6);
+  CHECK(projected_style.length == 7);
+  CHECK(std::string(projected_style.font, projected_style.font_size) == "Georgia");
+  CHECK(projected_style.italic == 1);
+  CHECK(projected_style.tracking == -10.0);
+  patchy_engine_text_paragraph_run projected_paragraph{};
+  projected_paragraph.struct_size = sizeof(projected_paragraph);
+  CHECK(patchy_engine_session_text_paragraph_run_at(
+            session, text_id, 0, &projected_paragraph, &error) == 1);
+  CHECK(projected_paragraph.justification == PATCHY_ENGINE_TEXT_CENTER);
+  CHECK(projected_paragraph.start_indent == 4.0);
   patchy_engine_buffer text_pixels{};
   CHECK(patchy_engine_session_layer_rgba8_pixels(
             session, text_id, &text_pixels, &error) == 1);
@@ -3338,6 +3404,11 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   text.blue = 70;
   text.bold = 0;
   text.italic = 1;
+  set_style_run(style_runs[0], 0, 7, "Arial", 30.0, {90, 80, 70}, false, true);
+  set_style_run(style_runs[1], 7, 12, "Courier New", 16.0, {10, 120, 210}, true, false);
+  paragraph.length = 19;
+  paragraph.justification = PATCHY_ENGINE_TEXT_RIGHT;
+  paragraph.start_indent = 8.0;
   CHECK(patchy_engine_session_update_text_layer(
             session, text_id, &text, &event, &error) == 1);
   projected_text = {};
@@ -3346,9 +3417,18 @@ void engine_host_protocol_authors_text_and_smart_objects() {
         1);
   CHECK(std::string(projected_text.text, projected_text.text_size) ==
         "Edited browser text");
+  CHECK(projected_text.style_run_count == 2);
+  CHECK(projected_text.paragraph_run_count == 1);
   CHECK(std::string(projected_text.font, projected_text.font_size) == "Arial");
   CHECK(projected_text.size_pixels == 30.0);
   CHECK(projected_text.italic == 1);
+  projected_style = {};
+  projected_style.struct_size = sizeof(projected_style);
+  CHECK(patchy_engine_session_text_style_run_at(
+            session, text_id, 1, &projected_style, &error) == 1);
+  CHECK(std::string(projected_style.font, projected_style.font_size) ==
+        "Courier New");
+  CHECK(projected_style.start == 7);
   CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
   projected_text = {};
   projected_text.struct_size = sizeof(projected_text);
@@ -3356,6 +3436,11 @@ void engine_host_protocol_authors_text_and_smart_objects() {
         1);
   CHECK(std::string(projected_text.text, projected_text.text_size) ==
         "Hello browser");
+  projected_paragraph = {};
+  projected_paragraph.struct_size = sizeof(projected_paragraph);
+  CHECK(patchy_engine_session_text_paragraph_run_at(
+            session, text_id, 0, &projected_paragraph, &error) == 1);
+  CHECK(projected_paragraph.justification == PATCHY_ENGINE_TEXT_CENTER);
   CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
   projected_text = {};
   projected_text.struct_size = sizeof(projected_text);
@@ -3363,6 +3448,21 @@ void engine_host_protocol_authors_text_and_smart_objects() {
         1);
   CHECK(std::string(projected_text.text, projected_text.text_size) ==
         "Edited browser text");
+  projected_paragraph = {};
+  projected_paragraph.struct_size = sizeof(projected_paragraph);
+  CHECK(patchy_engine_session_text_paragraph_run_at(
+            session, text_id, 0, &projected_paragraph, &error) == 1);
+  CHECK(projected_paragraph.justification == PATCHY_ENGINE_TEXT_RIGHT);
+
+  const auto before_invalid_runs = project();
+  text.expected_state_id = before_invalid_runs.state_id;
+  text.expected_revision = before_invalid_runs.revision;
+  style_runs[1].start = 8;
+  CHECK(patchy_engine_session_update_text_layer(
+            session, text_id, &text, &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  CHECK(project().state_id == before_invalid_runs.state_id);
+  style_runs[1].start = 7;
 
   auto *source_session = patchy_engine_session_create_rgba8(runtime, 2, 2, &error);
   CHECK(source_session != nullptr);
@@ -3502,6 +3602,20 @@ void engine_host_protocol_authors_text_and_smart_objects() {
         1);
   CHECK(std::string(projected_text.text, projected_text.text_size) ==
         "Edited browser text");
+  CHECK(projected_text.style_run_count == 2);
+  CHECK(projected_text.paragraph_run_count == 1);
+  projected_style = {};
+  projected_style.struct_size = sizeof(projected_style);
+  CHECK(patchy_engine_session_text_style_run_at(
+            reopened, text_id, 1, &projected_style, &error) == 1);
+  CHECK(std::string(projected_style.font, projected_style.font_size) ==
+        "Courier New");
+  projected_paragraph = {};
+  projected_paragraph.struct_size = sizeof(projected_paragraph);
+  CHECK(patchy_engine_session_text_paragraph_run_at(
+            reopened, text_id, 0, &projected_paragraph, &error) == 1);
+  CHECK(projected_paragraph.justification == PATCHY_ENGINE_TEXT_RIGHT);
+  CHECK(projected_paragraph.start_indent == 8.0);
   projected_smart = {};
   projected_smart.struct_size = sizeof(projected_smart);
   CHECK(patchy_engine_session_smart_object(
@@ -3516,6 +3630,21 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   CHECK(after_reopen.size == before_save.size);
   CHECK(std::equal(after_reopen.data, after_reopen.data + after_reopen.size,
                    before_save.data));
+
+  patchy_engine_buffer psb{};
+  CHECK(patchy_engine_session_save_psd_as(session, 1, &psb, &event, &error) ==
+        1);
+  auto *reopened_psb = patchy_engine_session_open_psd(
+      runtime, psb.data, psb.size, &error);
+  CHECK(reopened_psb != nullptr);
+  projected_style = {};
+  projected_style.struct_size = sizeof(projected_style);
+  CHECK(patchy_engine_session_text_style_run_at(
+            reopened_psb, text_id, 1, &projected_style, &error) == 1);
+  CHECK(std::string(projected_style.font, projected_style.font_size) ==
+        "Courier New");
+  patchy_engine_session_destroy(reopened_psb);
+  patchy_engine_buffer_release(&psb);
 
   patchy_engine_buffer_release(&after_reopen);
   patchy_engine_buffer_release(&before_save);

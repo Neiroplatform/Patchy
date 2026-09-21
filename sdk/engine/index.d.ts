@@ -260,6 +260,18 @@ export interface TextLayerInput {
   name: string; text: string; font: string; sizePixels: number;
   color: [number, number, number]; bold: boolean; italic: boolean;
   boxText: boolean; width: number; height: number; bounds: Rect; rgba: Uint8Array;
+  styleRuns?: TextStyleRun[]; paragraphRuns?: TextParagraphRun[];
+}
+export interface TextStyleRun {
+  start: number; length: number; font: string; style?: string; sizePixels: number;
+  color: [number, number, number]; bold?: boolean; italic?: boolean;
+  fauxBold?: boolean; fauxItalic?: boolean; leading?: number; autoLeading?: boolean;
+  tracking?: number; horizontalScale?: number; verticalScale?: number;
+}
+export interface TextParagraphRun {
+  start: number; length: number; justification: 0 | 1 | 2 | 3;
+  firstLineIndent?: number; startIndent?: number; endIndent?: number;
+  spaceBefore?: number; spaceAfter?: number; autoLeadingFraction?: number;
 }
 export interface VectorAnchor { x: number; y: number; inX?: number; inY?: number;
   outX?: number; outY?: number; smooth?: boolean }

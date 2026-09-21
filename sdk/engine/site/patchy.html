@@ -315,6 +315,30 @@
             <label class="check-field"><input id="textItalicInput" type="checkbox"><span>Italic</span></label>
           </div>
           <div class="field-row field-row-four">
+            <label><span>Tracking</span><input id="textTrackingInput" type="number" min="-1000" max="1000" step="1" value="0"></label>
+            <label><span>Leading</span><input id="textLeadingInput" type="number" min="0" max="4096" step="0.1" value="0"></label>
+            <label><span>H scale %</span><input id="textHorizontalScaleInput" type="number" min="1" max="1000" step="1" value="100"></label>
+            <label><span>V scale %</span><input id="textVerticalScaleInput" type="number" min="1" max="1000" step="1" value="100"></label>
+          </div>
+          <div class="dialog-actions text-range-actions">
+            <button class="button" id="applyTextRangeButton" type="button">Apply style to selection</button>
+            <button class="button" id="applyTextAllButton" type="button">Apply style to all</button>
+            <button class="button" id="resetTextRunsButton" type="button">Reset ranges</button>
+          </div>
+          <div class="text-run-list" id="textRunList" aria-live="polite"></div>
+          <h3>Paragraph</h3>
+          <div class="field-row field-row-four">
+            <label><span>Align</span><select id="textAlignmentInput"><option value="0">Left</option><option value="2">Center</option><option value="1">Right</option><option value="3">Justify</option></select></label>
+            <label><span>First indent</span><input id="textFirstIndentInput" type="number" step="0.1" value="0"></label>
+            <label><span>Start indent</span><input id="textStartIndentInput" type="number" step="0.1" value="0"></label>
+            <label><span>End indent</span><input id="textEndIndentInput" type="number" step="0.1" value="0"></label>
+          </div>
+          <div class="field-row field-row-four">
+            <label><span>Space before</span><input id="textSpaceBeforeInput" type="number" step="0.1" value="0"></label>
+            <label><span>Space after</span><input id="textSpaceAfterInput" type="number" step="0.1" value="0"></label>
+            <label><span>Auto leading %</span><input id="textAutoLeadingInput" type="number" min="1" max="1000" step="1" value="120"></label>
+          </div>
+          <div class="field-row field-row-four">
             <label><span>X</span><input id="textXInput" type="number" step="1" required></label>
             <label><span>Y</span><input id="textYInput" type="number" step="1" required></label>
             <label><span>Width</span><input id="textWidthInput" type="number" min="1" step="1" required></label>

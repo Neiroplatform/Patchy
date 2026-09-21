@@ -49,6 +49,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE = UINT64_C(1) << 32,
   PATCHY_ENGINE_CAP_PSB_SAVE_AS = UINT64_C(1) << 33,
   PATCHY_ENGINE_CAP_LAYER_MASK_STROKE = UINT64_C(1) << 34,
+  PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING = UINT64_C(1) << 35,
 };
 
 enum patchy_engine_error_code {
@@ -540,6 +541,49 @@ typedef struct patchy_engine_filter_input {
   size_t selection_count;
 } patchy_engine_filter_input;
 
+typedef struct patchy_engine_text_style_run {
+  uint32_t struct_size;
+  int32_t start;
+  int32_t length;
+  uint32_t font_size;
+  char font[256];
+  uint32_t style_size;
+  char style[128];
+  double size_pixels;
+  double leading;
+  double tracking;
+  double horizontal_scale;
+  double vertical_scale;
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t bold;
+  uint8_t italic;
+  uint8_t faux_bold;
+  uint8_t faux_italic;
+  uint8_t auto_leading;
+} patchy_engine_text_style_run;
+
+enum patchy_engine_text_justification {
+  PATCHY_ENGINE_TEXT_LEFT = 0,
+  PATCHY_ENGINE_TEXT_RIGHT = 1,
+  PATCHY_ENGINE_TEXT_CENTER = 2,
+  PATCHY_ENGINE_TEXT_JUSTIFY = 3,
+};
+
+typedef struct patchy_engine_text_paragraph_run {
+  uint32_t struct_size;
+  int32_t start;
+  int32_t length;
+  uint32_t justification;
+  double first_line_indent;
+  double start_indent;
+  double end_indent;
+  double space_before;
+  double space_after;
+  double auto_leading_fraction;
+} patchy_engine_text_paragraph_run;
+
 typedef struct patchy_engine_text_layer_input {
   uint32_t struct_size;
   uint64_t expected_state_id;
@@ -562,6 +606,10 @@ typedef struct patchy_engine_text_layer_input {
   uint8_t bold;
   uint8_t italic;
   uint8_t box_text;
+  const patchy_engine_text_style_run *style_runs;
+  size_t style_run_count;
+  const patchy_engine_text_paragraph_run *paragraph_runs;
+  size_t paragraph_run_count;
 } patchy_engine_text_layer_input;
 
 enum patchy_engine_smart_object_source_kind {
@@ -607,6 +655,8 @@ typedef struct patchy_engine_text_projection {
   uint8_t bold;
   uint8_t italic;
   uint8_t box_text;
+  uint32_t style_run_count;
+  uint32_t paragraph_run_count;
 } patchy_engine_text_projection;
 
 typedef struct patchy_engine_smart_object_projection {
@@ -1235,6 +1285,12 @@ int patchy_engine_session_update_text_layer(
 int patchy_engine_session_text(
     const patchy_engine_session *session, uint64_t layer_id,
     patchy_engine_text_projection *text, patchy_engine_error *error);
+int patchy_engine_session_text_style_run_at(
+    const patchy_engine_session *session, uint64_t layer_id, size_t index,
+    patchy_engine_text_style_run *run, patchy_engine_error *error);
+int patchy_engine_session_text_paragraph_run_at(
+    const patchy_engine_session *session, uint64_t layer_id, size_t index,
+    patchy_engine_text_paragraph_run *run, patchy_engine_error *error);
 int patchy_engine_session_add_smart_object(
     patchy_engine_session *session,
     const patchy_engine_smart_object_input *input,

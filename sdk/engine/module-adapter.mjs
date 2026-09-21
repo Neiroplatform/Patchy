@@ -19,8 +19,10 @@ const POINT_SIZE = 8;
 const RECT_SIZE = 16;
 const LAYER_MASK_INPUT_SIZE = 72;
 const LAYER_MASK_SIZE = 24;
-const TEXT_INPUT_SIZE = 96;
-const TEXT_PROJECTION_SIZE = 1312;
+const TEXT_INPUT_SIZE = 112;
+const TEXT_PROJECTION_SIZE = 1320;
+const TEXT_STYLE_RUN_SIZE = 456;
+const TEXT_PARAGRAPH_RUN_SIZE = 64;
 const SMART_OBJECT_INPUT_SIZE = 112;
 const SMART_OBJECT_PROJECTION_SIZE = 288;
 const ADJUSTMENT_INPUT_SIZE = 88;
@@ -41,6 +43,7 @@ const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
 const CAP_PSB_SAVE_AS = 1n << 33n;
 const CAP_LAYER_MASK_STROKE = 1n << 34n;
+const CAP_RICH_TEXT_AUTHORING = 1n << 35n;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -1386,6 +1389,8 @@ export class EmscriptenPatchyEngine {
     const style = this.#alloc(ESSENTIAL_LAYER_STYLE_SIZE);
     const mask = this.#alloc(LAYER_MASK_SIZE);
     const text = this.#alloc(TEXT_PROJECTION_SIZE);
+    const textStyleRun = this.#alloc(TEXT_STYLE_RUN_SIZE);
+    const textParagraphRun = this.#alloc(TEXT_PARAGRAPH_RUN_SIZE);
     const adjustment = this.#alloc(ADJUSTMENT_PROJECTION_SIZE);
     const curvePoint = this.#alloc(8);
     const smartObject = this.#alloc(SMART_OBJECT_PROJECTION_SIZE);
@@ -1429,7 +1434,54 @@ export class EmscriptenPatchyEngine {
             color: [textView.getUint8(1304), textView.getUint8(1305), textView.getUint8(1306)],
             bold: textView.getUint8(1307) !== 0, italic: textView.getUint8(1308) !== 0,
             boxText: textView.getUint8(1309) !== 0,
+            styleRuns: [], paragraphRuns: [],
           };
+          const styleRunCount = textView.getUint32(1312, true);
+          const paragraphRunCount = textView.getUint32(1316, true);
+          if (styleRunCount > 128 || paragraphRunCount > 128 ||
+              !(this.#capabilities & CAP_RICH_TEXT_AUTHORING) ||
+              typeof this.#module._patchy_engine_session_text_style_run_at !== "function" ||
+              typeof this.#module._patchy_engine_session_text_paragraph_run_at !== "function") {
+            throw new PatchyEngineError(2, "Rich text projection capability is unavailable or invalid");
+          }
+          for (let runIndex = 0; runIndex < styleRunCount; ++runIndex) {
+            const runView = this.#view(textStyleRun, TEXT_STYLE_RUN_SIZE);
+            runView.setUint32(0, TEXT_STYLE_RUN_SIZE, true);
+            this.#check(this.#module._patchy_engine_session_text_style_run_at(
+              session, u64(view, 0), runIndex, textStyleRun, error), error);
+            const fontSize = runView.getUint32(12, true);
+            const styleSize = runView.getUint32(272, true);
+            textValue.styleRuns.push({ start: runView.getInt32(4, true),
+              length: runView.getInt32(8, true),
+              font: decodeHeap(this.#module.HEAPU8.subarray(
+                textStyleRun + 16, textStyleRun + 16 + fontSize)),
+              style: decodeHeap(this.#module.HEAPU8.subarray(
+                textStyleRun + 276, textStyleRun + 276 + styleSize)),
+              sizePixels: runView.getFloat64(408, true),
+              leading: runView.getFloat64(416, true),
+              tracking: runView.getFloat64(424, true),
+              horizontalScale: runView.getFloat64(432, true),
+              verticalScale: runView.getFloat64(440, true),
+              color: [runView.getUint8(448), runView.getUint8(449), runView.getUint8(450)],
+              bold: runView.getUint8(451) !== 0, italic: runView.getUint8(452) !== 0,
+              fauxBold: runView.getUint8(453) !== 0,
+              fauxItalic: runView.getUint8(454) !== 0,
+              autoLeading: runView.getUint8(455) !== 0 });
+          }
+          for (let runIndex = 0; runIndex < paragraphRunCount; ++runIndex) {
+            const runView = this.#view(textParagraphRun, TEXT_PARAGRAPH_RUN_SIZE);
+            runView.setUint32(0, TEXT_PARAGRAPH_RUN_SIZE, true);
+            this.#check(this.#module._patchy_engine_session_text_paragraph_run_at(
+              session, u64(view, 0), runIndex, textParagraphRun, error), error);
+            textValue.paragraphRuns.push({ start: runView.getInt32(4, true),
+              length: runView.getInt32(8, true), justification: runView.getUint32(12, true),
+              firstLineIndent: runView.getFloat64(16, true),
+              startIndent: runView.getFloat64(24, true),
+              endIndent: runView.getFloat64(32, true),
+              spaceBefore: runView.getFloat64(40, true),
+              spaceAfter: runView.getFloat64(48, true),
+              autoLeadingFraction: runView.getFloat64(56, true) });
+          }
         }
         if (kind === 2) {
           this.#view(adjustment, ADJUSTMENT_PROJECTION_SIZE).setUint32(0, ADJUSTMENT_PROJECTION_SIZE, true);
@@ -1530,6 +1582,8 @@ export class EmscriptenPatchyEngine {
       this.#module._free(adjustment);
       this.#module._free(curvePoint);
       this.#module._free(text);
+      this.#module._free(textStyleRun);
+      this.#module._free(textParagraphRun);
       this.#module._free(mask);
       this.#module._free(layer);
     }
@@ -1679,6 +1733,9 @@ export class EmscriptenPatchyEngine {
   }
 
   #textLayerMutation(symbol, session, snapshot, layerId, input) {
+    if (!(this.#capabilities & CAP_RICH_TEXT_AUTHORING)) {
+      throw new PatchyEngineError(2, "Rich text authoring capability is unavailable");
+    }
     const name = this.#text(input.name);
     const text = this.#text(input.text, "Text content", 1024);
     const font = this.#text(input.font, "Font family", 256);
@@ -1692,7 +1749,15 @@ export class EmscriptenPatchyEngine {
       throw new TypeError("Complete text layer input is required");
     }
     this.#rect(input.bounds);
+    const styleRuns = input.styleRuns ?? [];
+    const paragraphRuns = input.paragraphRuns ?? [];
+    if (!Array.isArray(styleRuns) || styleRuns.length > 128 ||
+        !Array.isArray(paragraphRuns) || paragraphRuns.length > 128) {
+      throw new TypeError("Text runs must be bounded arrays");
+    }
     const pointers = [rgba, name, text, font].map((bytes) => this.#alloc(bytes.byteLength || 1));
+    const stylePointer = this.#alloc(Math.max(1, styleRuns.length * TEXT_STYLE_RUN_SIZE));
+    const paragraphPointer = this.#alloc(Math.max(1, paragraphRuns.length * TEXT_PARAGRAPH_RUN_SIZE));
     const value = this.#alloc(TEXT_INPUT_SIZE);
     try {
       [rgba, name, text, font].forEach((bytes, index) => this.#module.HEAPU8.set(bytes, pointers[index]));
@@ -1710,11 +1775,71 @@ export class EmscriptenPatchyEngine {
       color.forEach((component, index) => view.setUint8(88 + index, component));
       view.setUint8(91, input.bold ? 1 : 0); view.setUint8(92, input.italic ? 1 : 0);
       view.setUint8(93, input.boxText ? 1 : 0);
+      let covered = 0;
+      styleRuns.forEach((run, index) => {
+        const runFont = this.#text(run.font, "Text run font", 256);
+        const runStyle = this.#text(run.style ?? "", "Text run style", 128);
+        if (!Number.isInteger(run.start) || !Number.isInteger(run.length) ||
+            run.start !== covered || run.length <= 0 ||
+            !Number.isFinite(run.sizePixels) || run.sizePixels < 1 || run.sizePixels > 512 ||
+            !Number.isFinite(run.leading ?? 0) || !Number.isFinite(run.tracking ?? 0) ||
+            !Number.isFinite(run.horizontalScale ?? 1) || !Number.isFinite(run.verticalScale ?? 1) ||
+            !Array.isArray(run.color) || run.color.length !== 3 ||
+            !run.color.every((component) => Number.isInteger(component) && component >= 0 && component <= 255)) {
+          throw new TypeError("Text style runs must be contiguous and finite");
+        }
+        const runView = this.#view(stylePointer + index * TEXT_STYLE_RUN_SIZE, TEXT_STYLE_RUN_SIZE);
+        runView.setUint32(0, TEXT_STYLE_RUN_SIZE, true);
+        runView.setInt32(4, run.start, true); runView.setInt32(8, run.length, true);
+        runView.setUint32(12, runFont.byteLength, true);
+        this.#module.HEAPU8.set(runFont, stylePointer + index * TEXT_STYLE_RUN_SIZE + 16);
+        runView.setUint32(272, runStyle.byteLength, true);
+        this.#module.HEAPU8.set(runStyle, stylePointer + index * TEXT_STYLE_RUN_SIZE + 276);
+        runView.setFloat64(408, run.sizePixels, true);
+        runView.setFloat64(416, run.leading ?? 0, true);
+        runView.setFloat64(424, run.tracking ?? 0, true);
+        runView.setFloat64(432, run.horizontalScale ?? 1, true);
+        runView.setFloat64(440, run.verticalScale ?? 1, true);
+        run.color.forEach((component, colorIndex) => runView.setUint8(448 + colorIndex, component));
+        runView.setUint8(451, run.bold ? 1 : 0); runView.setUint8(452, run.italic ? 1 : 0);
+        runView.setUint8(453, run.fauxBold ? 1 : 0); runView.setUint8(454, run.fauxItalic ? 1 : 0);
+        runView.setUint8(455, run.autoLeading ? 1 : 0);
+        covered += run.length;
+      });
+      if (styleRuns.length && covered !== input.text.length) {
+        throw new TypeError("Text style runs must cover the complete UTF-16 story");
+      }
+      covered = 0;
+      paragraphRuns.forEach((run, index) => {
+        const metrics = [run.firstLineIndent ?? 0, run.startIndent ?? 0, run.endIndent ?? 0,
+          run.spaceBefore ?? 0, run.spaceAfter ?? 0, run.autoLeadingFraction ?? 1.2];
+        if (!Number.isInteger(run.start) || !Number.isInteger(run.length) || run.start !== covered ||
+            run.length <= 0 || !Number.isInteger(run.justification) ||
+            run.justification < 0 || run.justification > 3 || !metrics.every(Number.isFinite)) {
+          throw new TypeError("Text paragraph runs must be contiguous and finite");
+        }
+        const runView = this.#view(paragraphPointer + index * TEXT_PARAGRAPH_RUN_SIZE,
+          TEXT_PARAGRAPH_RUN_SIZE);
+        runView.setUint32(0, TEXT_PARAGRAPH_RUN_SIZE, true);
+        runView.setInt32(4, run.start, true); runView.setInt32(8, run.length, true);
+        runView.setUint32(12, run.justification, true);
+        metrics.forEach((metric, metricIndex) => runView.setFloat64(16 + metricIndex * 8, metric, true));
+        covered += run.length;
+      });
+      if (paragraphRuns.length && covered !== input.text.length) {
+        throw new TypeError("Text paragraph runs must cover the complete UTF-16 story");
+      }
+      view.setUint32(96, styleRuns.length ? stylePointer : 0, true);
+      view.setUint32(100, styleRuns.length, true);
+      view.setUint32(104, paragraphRuns.length ? paragraphPointer : 0, true);
+      view.setUint32(108, paragraphRuns.length, true);
       return this.#mutation((event, error) => layerId == null
         ? this.#module[symbol](session, value, event, error)
         : this.#module[symbol](session, layerId, value, event, error));
     } finally {
-      this.#module._free(value); pointers.forEach((pointer) => this.#module._free(pointer));
+      this.#module._free(value); this.#module._free(stylePointer);
+      this.#module._free(paragraphPointer);
+      pointers.forEach((pointer) => this.#module._free(pointer));
     }
   }
 

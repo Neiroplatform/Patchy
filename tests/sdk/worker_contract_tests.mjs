@@ -43,7 +43,11 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "lassoToolButton", "polygonToolButton", "magicToolButton", "quickSelectToolButton",
     "magneticToolButton", "quickMaskToolButton", "selectionToleranceInput", "edgeContrastInput",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton", "layerWarpButton",
-    "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
+    "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "textRunList",
+    "applyTextRangeButton", "applyTextAllButton", "resetTextRunsButton", "textAlignmentInput",
+    "textTrackingInput", "textLeadingInput", "textHorizontalScaleInput", "textVerticalScaleInput",
+    "textFirstIndentInput", "textStartIndentInput", "textEndIndentInput", "textSpaceBeforeInput",
+    "textSpaceAfterInput", "textAutoLeadingInput", "layerTransformDialog", "commitLayerTransformButton",
     "layerWarpDialog", "layerWarpStyleInput", "layerWarpBendInput", "commitLayerWarpButton",
     "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "openSmartObjectButton", "smartFilterButton",
     "filterLayerButton", "filterDialog", "filterKindInput", "filterParameterFields", "commitFilterButton",
@@ -160,10 +164,15 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   }
   assert.match(script, /mode: 7/);
   assert.match(script, /pattern\.kind === "checker" \? 8 : 9/);
+  assert.match(script, /function applyTextStyleRange/);
+  assert.match(script, /styleRuns: runs, paragraphRuns: paragraphs/);
+  assert.match(script, /value === textDialogOriginalValue[\s\S]*textDialogOriginalRuns\.map/);
+  assert.match(script, /client\.updateTextLayer/);
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
     "quickSelect(", "magneticLasso(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
-    "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel("]) {
+    "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel(",
+    "TextStyleRun", "TextParagraphRun"]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
   assert.match(types, /addStateListener\(listener:/);
@@ -326,7 +335,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 35n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 36n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -397,11 +406,30 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       return 1;
     },
     _patchy_engine_session_text(session, layerId, output) {
-      assert.equal(layerId, 7n); assert.equal(view.getUint32(output, true), 1312);
+      assert.equal(layerId, 7n); assert.equal(view.getUint32(output, true), 1320);
       const value = new TextEncoder().encode("Hello"); const font = new TextEncoder().encode("Arial");
       view.setUint32(output + 4, value.length, true); heap.set(value, output + 8);
       view.setUint32(output + 1032, font.length, true); heap.set(font, output + 1036);
       view.setFloat64(output + 1296, 18, true); heap.set([10, 20, 30, 1, 0, 1], output + 1304);
+      view.setUint32(output + 1312, 1, true); view.setUint32(output + 1316, 1, true);
+      return 1;
+    },
+    _patchy_engine_session_text_style_run_at(session, layerId, index, output) {
+      assert.equal(layerId, 7n); assert.equal(index, 0);
+      assert.equal(view.getUint32(output, true), 456);
+      const font = new TextEncoder().encode("Arial");
+      view.setInt32(output + 4, 0, true); view.setInt32(output + 8, 5, true);
+      view.setUint32(output + 12, font.length, true); heap.set(font, output + 16);
+      view.setFloat64(output + 408, 18, true); view.setFloat64(output + 416, 22, true);
+      view.setFloat64(output + 424, 20, true); view.setFloat64(output + 432, 1, true);
+      view.setFloat64(output + 440, 1, true); heap.set([10, 20, 30, 1, 0, 0, 0, 0], output + 448);
+      return 1;
+    },
+    _patchy_engine_session_text_paragraph_run_at(session, layerId, index, output) {
+      assert.equal(layerId, 7n); assert.equal(index, 0);
+      assert.equal(view.getUint32(output, true), 64);
+      view.setInt32(output + 4, 0, true); view.setInt32(output + 8, 5, true);
+      view.setUint32(output + 12, 2, true); view.setFloat64(output + 56, 1.2, true);
       return 1;
     },
     _patchy_engine_session_adjustment(session, layerId, output) {
@@ -585,8 +613,15 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.equal(view.getBigUint64(maskInput + 24, true), 7n); return 1;
     },
     _patchy_engine_session_add_text_layer(session, input) {
-      assert.equal(view.getUint32(input, true), 96);
-      assert.equal(view.getFloat64(input + 80, true), 12); return 1;
+      assert.equal(view.getUint32(input, true), 112);
+      assert.equal(view.getFloat64(input + 80, true), 12);
+      assert.equal(view.getUint32(input + 100, true), 2);
+      const runs = view.getUint32(input + 96, true);
+      assert.equal(view.getUint32(runs, true), 456);
+      assert.equal(view.getInt32(runs + 4, true), 0);
+      assert.equal(view.getInt32(runs + 456 + 4, true), 1);
+      assert.equal(view.getUint32(input + 108, true), 1);
+      return 1;
     },
     _patchy_engine_session_update_text_layer(session, layerId, input) {
       assert.equal(layerId, 7n); assert.equal(heap[input + 91], 1); return 1;
@@ -657,7 +692,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 35n) - 1n);
+  assert.equal(engine.capabilities, (1n << 36n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -666,7 +701,14 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(snapshot.layers[0].layerStyle.innerShadow.color, [30, 40, 50]);
   assert.ok(Math.abs(snapshot.layers[0].layerStyle.innerShadow.choke - .1) < .0001);
   assert.deepEqual(snapshot.layers[0].text, { value: "Hello", font: "Arial", sizePixels: 18,
-    color: [10, 20, 30], bold: true, italic: false, boxText: true });
+    color: [10, 20, 30], bold: true, italic: false, boxText: true,
+    styleRuns: [{ start: 0, length: 5, font: "Arial", style: "", sizePixels: 18,
+      leading: 22, tracking: 20, horizontalScale: 1, verticalScale: 1,
+      color: [10, 20, 30], bold: true, italic: false, fauxBold: false,
+      fauxItalic: false, autoLeading: false }],
+    paragraphRuns: [{ start: 0, length: 5, justification: 2,
+      firstLineIndent: 0, startIndent: 0, endIndent: 0, spaceBefore: 0,
+      spaceAfter: 0, autoLeadingFraction: 1.2 }] });
   projectedLayerKind = 2;
   assert.deepEqual(engine.snapshot(session).layers[0].adjustment.curvePoints,
     [{ input: 0, output: 0 }, { input: 255, output: 255 }]);
@@ -743,7 +785,11 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       gray: new Uint8Array([255]), defaultColor: 0, disabled: false });
   const textInput = { name: "Text", text: "Hi", font: "Arial", sizePixels: 12,
     color: [1, 2, 3], bold: true, italic: false, boxText: true, width: 1, height: 1,
-    bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) };
+    bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]),
+    styleRuns: [{ start: 0, length: 1, font: "Arial", sizePixels: 12,
+      color: [1, 2, 3], bold: true }, { start: 1, length: 1, font: "Georgia",
+      sizePixels: 14, color: [4, 5, 6], italic: true }],
+    paragraphRuns: [{ start: 0, length: 2, justification: 2 }] };
   engine.addTextLayer(session, snapshot, textInput);
   engine.updateTextLayer(session, snapshot, 7n, textInput);
   engine.addAdjustment(session, snapshot, { name: "Brightness", kind: 7, values: [10, 5] });

@@ -15,6 +15,7 @@
 #include "formats/document_flatten.hpp"
 #include "psd/psd_filter_effects.hpp"
 #include "psd/psd_smart_objects.hpp"
+#include "psd/psd_text_runs.hpp"
 
 #include <algorithm>
 #include <array>
@@ -174,7 +175,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_LAYER_WARP |
     PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE |
     PATCHY_ENGINE_CAP_PSB_SAVE_AS |
-    PATCHY_ENGINE_CAP_LAYER_MASK_STROKE;
+    PATCHY_ENGINE_CAP_LAYER_MASK_STROKE |
+    PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -378,6 +380,225 @@ std::optional<std::string_view> metadata_value(const patchy::Layer &layer,
     return std::nullopt;
   }
   return found->second;
+}
+
+int utf16_code_units(std::string_view text) noexcept {
+  int units = 0;
+  for (std::size_t index = 0; index < text.size();) {
+    const auto lead = static_cast<unsigned char>(text[index]);
+    std::size_t consumed = 1;
+    std::uint32_t codepoint = 0xFFFDU;
+    if (lead < 0x80U) {
+      codepoint = lead;
+    } else if ((lead & 0xE0U) == 0xC0U && index + 1U < text.size()) {
+      codepoint = ((lead & 0x1FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 1U]) & 0x3FU);
+      consumed = 2;
+    } else if ((lead & 0xF0U) == 0xE0U && index + 2U < text.size()) {
+      codepoint = ((lead & 0x0FU) << 12U) |
+                  ((static_cast<unsigned char>(text[index + 1U]) & 0x3FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 2U]) & 0x3FU);
+      consumed = 3;
+    } else if ((lead & 0xF8U) == 0xF0U && index + 3U < text.size()) {
+      codepoint = ((lead & 0x07U) << 18U) |
+                  ((static_cast<unsigned char>(text[index + 1U]) & 0x3FU) << 12U) |
+                  ((static_cast<unsigned char>(text[index + 2U]) & 0x3FU) << 6U) |
+                  (static_cast<unsigned char>(text[index + 3U]) & 0x3FU);
+      consumed = 4;
+    }
+    units += codepoint > 0xFFFFU ? 2 : 1;
+    index += consumed;
+  }
+  return units;
+}
+
+bool finite_text_metric(double value, double minimum, double maximum) noexcept {
+  return std::isfinite(value) && value >= minimum && value <= maximum;
+}
+
+bool collect_text_runs(const patchy_engine_text_layer_input &input,
+                       std::string_view text,
+                       const patchy::psd::PsdTextStyleRun &fallback,
+                       std::vector<patchy::psd::PsdTextStyleRun> &styles,
+                       std::vector<patchy::psd::PsdTextParagraphRun> &paragraphs,
+                       patchy_engine_error *error) {
+  constexpr std::size_t kMaximumRuns = 128U;
+  constexpr std::uint32_t kLegacyInputSize = static_cast<std::uint32_t>(
+      offsetof(patchy_engine_text_layer_input, style_runs));
+  const bool has_typed_runs = input.struct_size > kLegacyInputSize;
+  const auto style_run_count = has_typed_runs ? input.style_run_count : 0U;
+  const auto paragraph_run_count = has_typed_runs ? input.paragraph_run_count : 0U;
+  const auto story_length = utf16_code_units(text);
+  if (story_length <= 0) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "text story must not be empty");
+    return false;
+  }
+  if (style_run_count > kMaximumRuns || paragraph_run_count > kMaximumRuns ||
+      (style_run_count != 0U && input.style_runs == nullptr) ||
+      (paragraph_run_count != 0U && input.paragraph_runs == nullptr)) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "text run arrays exceed the supported bounds");
+    return false;
+  }
+  if (style_run_count == 0U) {
+    auto run = fallback;
+    run.start = 0;
+    run.length = story_length;
+    styles.push_back(std::move(run));
+  } else {
+    styles.reserve(style_run_count);
+    int covered = 0;
+    for (std::size_t index = 0; index < style_run_count; ++index) {
+      const auto &source = input.style_runs[index];
+      if (source.struct_size != sizeof(source) || source.start != covered ||
+          source.length <= 0 || source.start > story_length - source.length ||
+          source.font_size == 0U || source.font_size > sizeof(source.font) ||
+          source.style_size > sizeof(source.style) ||
+          std::memchr(source.font, '\0', source.font_size) != nullptr ||
+          std::memchr(source.style, '\0', source.style_size) != nullptr ||
+          !finite_text_metric(source.size_pixels, 1.0, 512.0) ||
+          !finite_text_metric(source.leading, 0.0, 4096.0) ||
+          !finite_text_metric(source.tracking, -10000.0, 10000.0) ||
+          !finite_text_metric(source.horizontal_scale, 0.01, 100.0) ||
+          !finite_text_metric(source.vertical_scale, 0.01, 100.0)) {
+        fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+             "text style runs must be finite, contiguous, and bounded");
+        return false;
+      }
+      patchy::psd::PsdTextStyleRun run;
+      run.start = source.start;
+      run.length = source.length;
+      run.family.assign(source.font, source.font + source.font_size);
+      run.style.assign(source.style, source.style + source.style_size);
+      run.size = source.size_pixels;
+      run.color = {source.red, source.green, source.blue};
+      run.bold = source.bold != 0;
+      run.italic = source.italic != 0;
+      run.faux_bold = source.faux_bold != 0;
+      run.faux_italic = source.faux_italic != 0;
+      run.auto_leading = source.auto_leading != 0;
+      if (!run.auto_leading && source.leading > 0.0) run.leading = source.leading;
+      run.tracking = source.tracking;
+      run.horizontal_scale = source.horizontal_scale;
+      run.vertical_scale = source.vertical_scale;
+      styles.push_back(std::move(run));
+      covered += source.length;
+    }
+    if (covered != story_length) {
+      fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+           "text style runs must cover the complete UTF-16 story");
+      return false;
+    }
+  }
+  if (paragraph_run_count == 0U) {
+    paragraphs.push_back({0, story_length, PATCHY_ENGINE_TEXT_LEFT});
+  } else {
+    paragraphs.reserve(paragraph_run_count);
+    int covered = 0;
+    for (std::size_t index = 0; index < paragraph_run_count; ++index) {
+      const auto &source = input.paragraph_runs[index];
+      const bool metrics_valid =
+          finite_text_metric(source.first_line_indent, -1000000.0, 1000000.0) &&
+          finite_text_metric(source.start_indent, -1000000.0, 1000000.0) &&
+          finite_text_metric(source.end_indent, -1000000.0, 1000000.0) &&
+          finite_text_metric(source.space_before, -1000000.0, 1000000.0) &&
+          finite_text_metric(source.space_after, -1000000.0, 1000000.0) &&
+          finite_text_metric(source.auto_leading_fraction, 0.01, 10.0);
+      if (source.struct_size != sizeof(source) || source.start != covered ||
+          source.length <= 0 || source.start > story_length - source.length ||
+          source.justification > PATCHY_ENGINE_TEXT_JUSTIFY || !metrics_valid) {
+        fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+             "text paragraph runs must be finite, contiguous, and bounded");
+        return false;
+      }
+      paragraphs.push_back({source.start, source.length,
+                            static_cast<int>(source.justification),
+                            source.first_line_indent, source.start_indent,
+                            source.end_indent, source.space_before,
+                            source.space_after, source.auto_leading_fraction});
+      covered += source.length;
+    }
+    if (covered != story_length) {
+      fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+           "text paragraph runs must cover the complete UTF-16 story");
+      return false;
+    }
+  }
+  return true;
+}
+
+patchy::psd::PsdTextStyleRun text_fallback(const patchy::Layer &layer) {
+  patchy::psd::PsdTextStyleRun run;
+  if (const auto value = metadata_value(layer, patchy::kLayerMetadataTextFont))
+    run.family = std::string(*value);
+  if (const auto value = metadata_value(layer, patchy::kLayerMetadataTextSize))
+    run.size = std::stod(std::string(*value));
+  if (const auto value = metadata_value(layer, patchy::kLayerMetadataTextColor)) {
+    unsigned red = 0, green = 0, blue = 0;
+    std::sscanf(std::string(*value).c_str(), "#%02x%02x%02x", &red, &green, &blue);
+    run.color = {static_cast<std::uint8_t>(red), static_cast<std::uint8_t>(green),
+                 static_cast<std::uint8_t>(blue)};
+  }
+  run.bold = metadata_value(layer, patchy::kLayerMetadataTextBold)
+                 .value_or(std::string_view{}) == "true";
+  run.italic = metadata_value(layer, patchy::kLayerMetadataTextItalic)
+                   .value_or(std::string_view{}) == "true";
+  return run;
+}
+
+std::vector<patchy::psd::PsdTextStyleRun> projected_style_runs(
+    const patchy::Layer &layer) {
+  const auto text = metadata_value(layer, patchy::kLayerMetadataText)
+                        .value_or(std::string_view{});
+  return patchy::psd::parse_patchy_text_runs(
+      metadata_value(layer, patchy::kLayerMetadataTextRuns)
+          .value_or(std::string_view{}),
+      text, text_fallback(layer));
+}
+
+std::vector<patchy::psd::PsdTextParagraphRun> projected_paragraph_runs(
+    const patchy::Layer &layer) {
+  const auto text = metadata_value(layer, patchy::kLayerMetadataText)
+                        .value_or(std::string_view{});
+  return patchy::psd::parse_patchy_paragraph_runs(
+      metadata_value(layer, patchy::kLayerMetadataTextParagraphRuns)
+          .value_or(std::string_view{}),
+      text);
+}
+
+void store_authored_text_metadata(
+    patchy::Layer &layer, const patchy_engine_text_layer_input &input,
+    std::string_view text,
+    std::span<const patchy::psd::PsdTextStyleRun> styles,
+    std::span<const patchy::psd::PsdTextParagraphRun> paragraphs) {
+  auto &metadata = layer.metadata();
+  const auto &primary = styles.front();
+  metadata[patchy::kLayerMetadataText] = text;
+  metadata[patchy::kLayerMetadataTextFont] = primary.family;
+  metadata[patchy::kLayerMetadataTextSize] = std::to_string(primary.size);
+  char color[8]{};
+  std::snprintf(color, sizeof(color), "#%02x%02x%02x", primary.color.red,
+                primary.color.green, primary.color.blue);
+  metadata[patchy::kLayerMetadataTextColor] = color;
+  metadata[patchy::kLayerMetadataTextBold] = primary.bold ? "true" : "false";
+  metadata[patchy::kLayerMetadataTextItalic] = primary.italic ? "true" : "false";
+  metadata[patchy::kLayerMetadataTextFlow] = input.box_text != 0 ? "box" : "point";
+  metadata[patchy::kLayerMetadataTextBoxWidth] = std::to_string(input.bounds.width);
+  metadata[patchy::kLayerMetadataTextBoxHeight] = std::to_string(input.bounds.height);
+  metadata[patchy::kLayerMetadataTextRuns] =
+      patchy::psd::serialize_patchy_text_runs(styles);
+  metadata[patchy::kLayerMetadataTextParagraphRuns] =
+      patchy::psd::serialize_patchy_paragraph_runs(paragraphs);
+  metadata[patchy::kLayerMetadataTextHtml] =
+      patchy::psd::html_from_text_runs(text, styles, paragraphs);
+  metadata[patchy::kLayerMetadataTextAntiAlias] = "3";
+  metadata[patchy::kLayerMetadataTextRasterStatus] = "patchy_raster";
+  if (!metadata.contains(patchy::kLayerMetadataTextTransform)) {
+    metadata[patchy::kLayerMetadataTextTransform] =
+        "1 0 0 1 " + std::to_string(input.bounds.x) + " " +
+        std::to_string(input.bounds.y);
+  }
 }
 
 std::vector<patchy::Rect> rects_from_gray8(const patchy::PixelBuffer &pixels,
@@ -1973,7 +2194,9 @@ int patchy_engine_session_add_text_layer(
     patchy_engine_event *event, patchy_engine_error *error) {
   clear_error(error);
   if (session == nullptr || session->value == nullptr || input == nullptr ||
-      input->struct_size != sizeof(*input) || input->size_pixels <= 0.0 ||
+      (input->struct_size != offsetof(patchy_engine_text_layer_input, style_runs) &&
+       input->struct_size != sizeof(*input)) ||
+      input->size_pixels <= 0.0 ||
       !std::isfinite(input->size_pixels) ||
       !valid_rgba_payload(input->rgba, input->rgba_size, input->width,
                           input->height, input->bounds, error)) {
@@ -1993,6 +2216,18 @@ int patchy_engine_session_add_text_layer(
       !copy_command_text(input->font, input->font_size, 256U, font, error)) {
     return 0;
   }
+  patchy::psd::PsdTextStyleRun fallback;
+  fallback.family = font;
+  fallback.size = input->size_pixels;
+  fallback.color = {input->red, input->green, input->blue};
+  fallback.bold = input->bold != 0;
+  fallback.italic = input->italic != 0;
+  std::vector<patchy::psd::PsdTextStyleRun> styles;
+  std::vector<patchy::psd::PsdTextParagraphRun> paragraphs;
+  if (!collect_text_runs(*input, text_value, fallback, styles, paragraphs,
+                         error)) {
+    return 0;
+  }
   try {
     patchy::PixelBuffer pixels(input->width, input->height,
                                patchy::PixelFormat::rgba8());
@@ -2002,28 +2237,8 @@ int patchy_engine_session_add_text_layer(
     patchy::Layer layer(layer_id, std::move(name), std::move(pixels));
     layer.set_bounds({input->bounds.x, input->bounds.y, input->bounds.width,
                       input->bounds.height});
-    auto &metadata = layer.metadata();
-    metadata[patchy::kLayerMetadataText] = std::move(text_value);
-    metadata[patchy::kLayerMetadataTextFont] = std::move(font);
-    metadata[patchy::kLayerMetadataTextSize] =
-        std::to_string(input->size_pixels);
-    char color[8]{};
-    std::snprintf(color, sizeof(color), "#%02x%02x%02x", input->red,
-                  input->green, input->blue);
-    metadata[patchy::kLayerMetadataTextColor] = color;
-    metadata[patchy::kLayerMetadataTextBold] = input->bold != 0 ? "true" : "false";
-    metadata[patchy::kLayerMetadataTextItalic] =
-        input->italic != 0 ? "true" : "false";
-    metadata[patchy::kLayerMetadataTextFlow] =
-        input->box_text != 0 ? "box" : "point";
-    metadata[patchy::kLayerMetadataTextBoxWidth] =
-        std::to_string(input->bounds.width);
-    metadata[patchy::kLayerMetadataTextBoxHeight] =
-        std::to_string(input->bounds.height);
-    metadata[patchy::kLayerMetadataTextRasterStatus] = "patchy_raster";
-    metadata[patchy::kLayerMetadataTextTransform] =
-        "1 0 0 1 " + std::to_string(input->bounds.x) + " " +
-        std::to_string(input->bounds.y);
+    store_authored_text_metadata(layer, *input, text_value, styles,
+                                 paragraphs);
     prepared.add_layer(std::move(layer));
     auto result = session->value->execute(
         patchy::engine::CommitPreparedDocumentState{
@@ -2054,7 +2269,9 @@ int patchy_engine_session_update_text_layer(
     patchy_engine_event *event, patchy_engine_error *error) {
   clear_error(error);
   if (session == nullptr || session->value == nullptr || input == nullptr ||
-      layer_id == 0 || input->struct_size != sizeof(*input) ||
+      layer_id == 0 ||
+      (input->struct_size != offsetof(patchy_engine_text_layer_input, style_runs) &&
+       input->struct_size != sizeof(*input)) ||
       input->size_pixels <= 0.0 || !std::isfinite(input->size_pixels) ||
       !valid_rgba_payload(input->rgba, input->rgba_size, input->width,
                           input->height, input->bounds, error)) {
@@ -2074,6 +2291,18 @@ int patchy_engine_session_update_text_layer(
       !copy_command_text(input->font, input->font_size, 256U, font, error)) {
     return 0;
   }
+  patchy::psd::PsdTextStyleRun fallback;
+  fallback.family = font;
+  fallback.size = input->size_pixels;
+  fallback.color = {input->red, input->green, input->blue};
+  fallback.bold = input->bold != 0;
+  fallback.italic = input->italic != 0;
+  std::vector<patchy::psd::PsdTextStyleRun> styles;
+  std::vector<patchy::psd::PsdTextParagraphRun> paragraphs;
+  if (!collect_text_runs(*input, text_value, fallback, styles, paragraphs,
+                         error)) {
+    return 0;
+  }
   try {
     auto prepared = session->value->document();
     auto *layer = prepared.find_layer(layer_id);
@@ -2084,31 +2313,29 @@ int patchy_engine_session_update_text_layer(
     patchy::PixelBuffer pixels(input->width, input->height,
                                patchy::PixelFormat::rgba8());
     std::copy_n(input->rgba, input->rgba_size, pixels.data().begin());
+    const auto previous_bounds = layer->bounds();
+    const auto previous_transform = metadata_value(
+        *layer, patchy::kLayerMetadataTextTransform);
+    auto translated_transform = previous_transform.has_value()
+        ? patchy::parse_layer_affine_transform(*previous_transform)
+        : std::nullopt;
+    if (translated_transform.has_value()) {
+      (*translated_transform)[4] += input->bounds.x - previous_bounds.x;
+      (*translated_transform)[5] += input->bounds.y - previous_bounds.y;
+    }
     layer->set_name(std::move(name));
     layer->set_pixels(std::move(pixels));
     layer->set_bounds({input->bounds.x, input->bounds.y, input->bounds.width,
                        input->bounds.height});
     auto &metadata = layer->metadata();
-    metadata.erase(patchy::kLayerMetadataTextHtml);
-    metadata.erase(patchy::kLayerMetadataTextRuns);
-    metadata.erase(patchy::kLayerMetadataTextParagraphRuns);
     metadata.erase(patchy::kLayerMetadataTextSourceBlock);
-    metadata[patchy::kLayerMetadataText] = std::move(text_value);
-    metadata[patchy::kLayerMetadataTextFont] = std::move(font);
-    metadata[patchy::kLayerMetadataTextSize] = std::to_string(input->size_pixels);
-    char color[8]{};
-    std::snprintf(color, sizeof(color), "#%02x%02x%02x", input->red,
-                  input->green, input->blue);
-    metadata[patchy::kLayerMetadataTextColor] = color;
-    metadata[patchy::kLayerMetadataTextBold] = input->bold != 0 ? "true" : "false";
-    metadata[patchy::kLayerMetadataTextItalic] = input->italic != 0 ? "true" : "false";
-    metadata[patchy::kLayerMetadataTextFlow] = input->box_text != 0 ? "box" : "point";
-    metadata[patchy::kLayerMetadataTextBoxWidth] = std::to_string(input->bounds.width);
-    metadata[patchy::kLayerMetadataTextBoxHeight] = std::to_string(input->bounds.height);
-    metadata[patchy::kLayerMetadataTextRasterStatus] = "patchy_raster";
-    metadata[patchy::kLayerMetadataTextTransform] =
-        "1 0 0 1 " + std::to_string(input->bounds.x) + " " +
-        std::to_string(input->bounds.y);
+    metadata.erase(patchy::kLayerMetadataTextLayoutMode);
+    if (translated_transform.has_value()) {
+      metadata[patchy::kLayerMetadataTextTransform] =
+          patchy::serialize_layer_affine_transform(*translated_transform);
+    }
+    store_authored_text_metadata(*layer, *input, text_value, styles,
+                                 paragraphs);
     const patchy::Rect affected{0, 0, prepared.width(), prepared.height()};
     auto result = session->value->execute(
         patchy::engine::CommitPreparedDocumentState{
@@ -2135,7 +2362,9 @@ int patchy_engine_session_text(const patchy_engine_session *session,
                                patchy_engine_error *error) {
   clear_error(error);
   if (session == nullptr || session->value == nullptr || text == nullptr ||
-      text->struct_size != sizeof(*text)) {
+      (text->struct_size != offsetof(patchy_engine_text_projection,
+                                     style_run_count) &&
+       text->struct_size != sizeof(*text))) {
     return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
                 "session and initialized text projection are required");
   }
@@ -2146,7 +2375,7 @@ int patchy_engine_session_text(const patchy_engine_session *session,
   }
   try {
     const auto struct_size = text->struct_size;
-    *text = {};
+    std::memset(text, 0, struct_size);
     text->struct_size = struct_size;
     project_text(metadata_value(*layer, patchy::kLayerMetadataText)
                      .value_or(std::string_view{}),
@@ -2177,12 +2406,113 @@ int patchy_engine_session_text(const patchy_engine_session *session,
     text->box_text =
         metadata_value(*layer, patchy::kLayerMetadataTextFlow)
             .value_or(std::string_view{}) == "box";
+    const auto styles = projected_style_runs(*layer);
+    const auto paragraphs = projected_paragraph_runs(*layer);
+    if (struct_size == sizeof(*text)) {
+      text->style_run_count = static_cast<std::uint32_t>(styles.size());
+      text->paragraph_run_count =
+          static_cast<std::uint32_t>(paragraphs.size());
+    }
     return 1;
   } catch (const std::exception &exception) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown text projection failure");
+  }
+}
+
+int patchy_engine_session_text_style_run_at(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    std::size_t index, patchy_engine_text_style_run *run,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || run == nullptr ||
+      run->struct_size != sizeof(*run)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and initialized text style run are required");
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  if (layer == nullptr || !patchy::layer_is_text(*layer)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer is not text");
+  }
+  try {
+    const auto styles = projected_style_runs(*layer);
+    if (index >= styles.size()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "text style run index is out of range");
+    }
+    const auto struct_size = run->struct_size;
+    *run = {};
+    run->struct_size = struct_size;
+    const auto &source = styles[index];
+    run->start = source.start;
+    run->length = source.length;
+    project_text(source.family, run->font, run->font_size);
+    project_text(source.style, run->style, run->style_size);
+    run->size_pixels = source.size;
+    run->leading = source.leading.value_or(0.0);
+    run->tracking = source.tracking;
+    run->horizontal_scale = source.horizontal_scale;
+    run->vertical_scale = source.vertical_scale;
+    run->red = source.color.red;
+    run->green = source.color.green;
+    run->blue = source.color.blue;
+    run->bold = source.bold ? 1U : 0U;
+    run->italic = source.italic ? 1U : 0U;
+    run->faux_bold = source.faux_bold ? 1U : 0U;
+    run->faux_italic = source.faux_italic ? 1U : 0U;
+    run->auto_leading = source.auto_leading ? 1U : 0U;
+    return 1;
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown text style projection failure");
+  }
+}
+
+int patchy_engine_session_text_paragraph_run_at(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    std::size_t index, patchy_engine_text_paragraph_run *run,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || run == nullptr ||
+      run->struct_size != sizeof(*run)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and initialized text paragraph run are required");
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  if (layer == nullptr || !patchy::layer_is_text(*layer)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer is not text");
+  }
+  try {
+    const auto paragraphs = projected_paragraph_runs(*layer);
+    if (index >= paragraphs.size()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "text paragraph run index is out of range");
+    }
+    const auto struct_size = run->struct_size;
+    *run = {};
+    run->struct_size = struct_size;
+    const auto &source = paragraphs[index];
+    run->start = source.start;
+    run->length = source.length;
+    run->justification = static_cast<std::uint32_t>(source.justification);
+    run->first_line_indent = source.first_line_indent;
+    run->start_indent = source.start_indent;
+    run->end_indent = source.end_indent;
+    run->space_before = source.space_before;
+    run->space_after = source.space_after;
+    run->auto_leading_fraction = source.auto_leading_fraction;
+    return 1;
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown text paragraph projection failure");
   }
 }
 
