@@ -151,6 +151,13 @@ typed editing commands.
   covers it; an uncovered remainder stays pending. Hosts may evict the oldest
   undo state through the ABI while current pixels, revision and state identity
   remain unchanged;
+- ordinary synchronous region renders reuse a session-owned 256px RGBA tile
+  cache capped at 64 MiB. Dirty command bounds invalidate only intersecting
+  tiles; preview changes invalidate their preview bounds and preview rollback
+  clears transient entries. Deterministic least-recently-used eviction keeps
+  the cache within budget, and retained bytes, entries, hits, misses and
+  evictions are included in the memory projection. Progressive/cancellable
+  render deliberately bypasses the cache and remains the parity oracle;
 - `layers()` exposes a flat stable-ID projection for non-Qt clients;
 - `render` returns a bounded RGBA8 region tied to the session revision. The
   compositor clips directly to that document-space region and allocates only

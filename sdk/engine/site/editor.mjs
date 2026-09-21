@@ -591,7 +591,7 @@ function renderMetadata() {
   $("detailRevision").textContent = snapshot ? String(snapshot.revision) : "-";
   const memory = snapshot?.memory;
   $("memoryLabel").textContent = memory
-    ? `${formatBytes(memory.totalRetainedBytes)} retained · ${formatBytes(memory.historyRetainedBytes)} history`
+    ? `${formatBytes(memory.totalRetainedBytes)} retained · ${formatBytes(memory.historyRetainedBytes)} history · ${formatBytes(memory.renderCacheBytes)} cache`
     : "Memory ready";
   updateControls();
 }
@@ -640,6 +640,7 @@ async function renderDocument() {
   applyViewport();
   renderSelection();
   renderTransformOverlay();
+  await acceptSnapshot(await client.snapshot(), false);
 }
 
 function applyViewport() {

@@ -147,12 +147,25 @@ void plugin_host_and_legacy_probe_work() {
 }
 
 void tile_cache_stores_and_invalidates() {
-  patchy::TileCache cache(128);
-  patchy::TileKey key{0, 0, 0};
-  cache.put(key, solid_rgb(2, 2, 9, 8, 7));
-  CHECK(cache.find(key).has_value());
-  cache.invalidate(key);
-  CHECK(!cache.find(key).has_value());
+  patchy::TileCache cache(2, 24);
+  const patchy::TileKey first{0, 0, 0};
+  const patchy::TileKey second{1, 0, 0};
+  const patchy::TileKey third{2, 0, 0};
+  cache.put(first, solid_rgb(2, 2, 9, 8, 7));
+  cache.put(second, solid_rgb(2, 2, 6, 5, 4));
+  CHECK(cache.retained_bytes() == 24);
+  CHECK(cache.find(first).has_value());
+  cache.put(third, solid_rgb(2, 2, 3, 2, 1));
+  CHECK(cache.find(first).has_value());
+  CHECK(!cache.find(second).has_value());
+  CHECK(cache.evictions() == 1);
+  CHECK(cache.hits() == 2);
+  CHECK(cache.misses() == 1);
+  cache.invalidate(patchy::Rect{4, 0, 2, 2});
+  CHECK(!cache.find(third).has_value());
+  cache.set_maximum_bytes(0);
+  CHECK(cache.size() == 0);
+  CHECK(cache.retained_bytes() == 0);
 }
 
 void color_manager_assigns_profiles() {

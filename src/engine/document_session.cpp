@@ -975,6 +975,7 @@ void DocumentSession::schedule_render(
   if (clipped.empty()) {
     return;
   }
+  render_cache_.invalidate(clipped);
   if (pending_render_region_.has_value()) {
     const auto clipped_pending = intersect_rect(*pending_render_region_, canvas);
     pending_render_region_ = clipped_pending.empty()
@@ -997,6 +998,11 @@ SessionMemoryUsage DocumentSession::memory_usage() const {
   SessionMemoryUsage usage;
   usage.undo_states = undo_stack_.size();
   usage.redo_states = redo_stack_.size();
+  usage.render_cache_bytes = render_cache_.retained_bytes();
+  usage.render_cache_entries = render_cache_.size();
+  usage.render_cache_hits = render_cache_.hits();
+  usage.render_cache_misses = render_cache_.misses();
+  usage.render_cache_evictions = render_cache_.evictions();
 
   const PixelStorageSet excluded;
   PixelStorageSet seen;
@@ -1027,7 +1033,8 @@ SessionMemoryUsage DocumentSession::memory_usage() const {
   usage.total_retained_bytes =
       usage.document_pixel_bytes + usage.history_pixel_bytes +
       usage.preview_pixel_bytes + usage.selection_bytes +
-      usage.history_selection_bytes + usage.preview_selection_bytes;
+      usage.history_selection_bytes + usage.preview_selection_bytes +
+      usage.render_cache_bytes;
   return usage;
 }
 
@@ -1073,6 +1080,8 @@ CommandResult DocumentSession::update_preview(Rect affected_region,
   const auto region = affected_region.empty()
                           ? std::nullopt
                           : std::optional<Rect>{affected_region};
+  if (region.has_value()) render_cache_.invalidate(*region);
+  else render_cache_.clear();
   publish(SessionEventKind::PreviewUpdated, layer_id, region);
   return CommandResult{true, {}, layer_id, region};
 }
@@ -1087,6 +1096,7 @@ CommandResult DocumentSession::end_preview() {
   preview_state_.reset();
   document_ = std::move(baseline.document);
   selection_ = std::move(baseline.selection);
+  render_cache_.clear();
   publish(SessionEventKind::PreviewEnded);
   return CommandResult{true, {}};
 }
@@ -3210,8 +3220,36 @@ DocumentSession::render(Rect region, const CancellationToken *cancellation,
   }
   try {
     if (progress == nullptr && cancellation == nullptr) {
-      return RenderResult{flatten_document_region_rgba8(document_, region),
-                          region, revision_, {}};
+      PixelBuffer output(region.width, region.height, PixelFormat::rgba8());
+      const auto tile_size = render_cache_.tile_size();
+      const auto first_tile_x = region.x / tile_size;
+      const auto first_tile_y = region.y / tile_size;
+      const auto last_tile_x = (region.x + region.width - 1) / tile_size;
+      const auto last_tile_y = (region.y + region.height - 1) / tile_size;
+      for (auto tile_y = first_tile_y; tile_y <= last_tile_y; ++tile_y) {
+        for (auto tile_x = first_tile_x; tile_x <= last_tile_x; ++tile_x) {
+          const TileKey key{tile_x, tile_y, 0};
+          const Rect tile_region{
+              tile_x * tile_size, tile_y * tile_size,
+              std::min(tile_size, document_.width() - tile_x * tile_size),
+              std::min(tile_size, document_.height() - tile_y * tile_size)};
+          auto cached = render_cache_.find(key);
+          if (!cached.has_value()) {
+            cached = flatten_document_region_rgba8(document_, tile_region);
+            render_cache_.put(key, *cached);
+          }
+          const auto copy = intersect_rect(region, tile_region);
+          for (std::int32_t row = 0; row < copy.height; ++row) {
+            const auto *source = cached->pixel(copy.x - tile_region.x,
+                                               copy.y - tile_region.y + row);
+            auto *destination = output.pixel(copy.x - region.x,
+                                             copy.y - region.y + row);
+            std::copy_n(source, static_cast<std::size_t>(copy.width) * 4U,
+                        destination);
+          }
+        }
+      }
+      return RenderResult{std::move(output), region, revision_, {}};
     }
 
     constexpr std::int32_t kRenderBandRows = 64;

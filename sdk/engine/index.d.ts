@@ -30,6 +30,8 @@ export interface MemoryUsage {
   selectionBytes: number; historySelectionBytes: number; previewSelectionBytes: number;
   historyRetainedBytes: number; totalRetainedBytes: number;
   undoStates: number; redoStates: number;
+  renderCacheBytes: number; renderCacheEntries: number; renderCacheHits: number;
+  renderCacheMisses: number; renderCacheEvictions: number;
 }
 export interface DocumentTabProjection { id: number; name: string; dirty: boolean;
   revision: bigint; active: boolean; retainedBytes: number; historyBytes: number }

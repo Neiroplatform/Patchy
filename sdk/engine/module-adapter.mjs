@@ -3,7 +3,7 @@ const ERROR_SIZE = 260;
 const PROTOCOL_INFO_SIZE = 16;
 const EVENT_SIZE = 64;
 const DOCUMENT_SIZE = 56;
-const MEMORY_USAGE_SIZE = 88;
+const MEMORY_USAGE_SIZE = 128;
 const LAYER_SIZE = 320;
 const BUFFER_SIZE = 8;
 const COMMAND_SIZE = 304;
@@ -832,7 +832,9 @@ export class EmscriptenPatchyEngine {
         this.#check(this.#module._patchy_engine_session_memory_usage(session, output, error), error);
         const names = ["documentPixelBytes", "historyPixelBytes", "previewPixelBytes",
           "selectionBytes", "historySelectionBytes", "previewSelectionBytes",
-          "historyRetainedBytes", "totalRetainedBytes", "undoStates", "redoStates"];
+          "historyRetainedBytes", "totalRetainedBytes", "undoStates", "redoStates",
+          "renderCacheBytes", "renderCacheEntries", "renderCacheHits",
+          "renderCacheMisses", "renderCacheEvictions"];
         return Object.fromEntries(names.map((name, index) =>
           [name, safeNumber(u64(view, 8 + index * 8), name)]));
       } finally { this.#module._free(output); }

@@ -91,6 +91,11 @@ typedef struct patchy_engine_memory_usage {
   uint64_t total_retained_bytes;
   uint64_t undo_states;
   uint64_t redo_states;
+  uint64_t render_cache_bytes;
+  uint64_t render_cache_entries;
+  uint64_t render_cache_hits;
+  uint64_t render_cache_misses;
+  uint64_t render_cache_evictions;
 } patchy_engine_memory_usage;
 
 enum patchy_engine_color_mode {

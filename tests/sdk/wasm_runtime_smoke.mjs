@@ -100,8 +100,12 @@ try {
       "partial render cleared an uncovered dirty region");
     const rendered = await client.render({ x: 0, y: 0, width: 4, height: 3 });
     check(rendered.length === rgba.length, "bounded render byte count mismatch");
-    check((await client.snapshot()).dirtyRegion == null,
+    const renderedSnapshot = await client.snapshot();
+    check(renderedSnapshot.dirtyRegion == null,
       "complete render did not clear the covered dirty region");
+    check(renderedSnapshot.memory?.renderCacheEntries === 1 &&
+      renderedSnapshot.memory?.renderCacheHits >= 1,
+    "render tile cache was not reused or projected through wasm32");
     const saved = await client.saveDocument(first.documentId);
     check(saved.length > 26 && String.fromCharCode(...saved.subarray(0, 4)) === "8BPS",
       "layered PSD encoding mismatch");

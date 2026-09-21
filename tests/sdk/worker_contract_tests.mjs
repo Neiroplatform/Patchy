@@ -342,8 +342,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       view.setUint32(output, data, true); view.setUint32(output + 4, 4, true); return 1;
     },
     _patchy_engine_session_memory_usage(session, output) {
-      assert.equal(view.getUint32(output, true), 88);
-      for (let index = 0; index < 10; ++index) view.setBigUint64(output + 8 + index * 8, BigInt(index + 1), true);
+      assert.equal(view.getUint32(output, true), 128);
+      for (let index = 0; index < 15; ++index) view.setBigUint64(output + 8 + index * 8, BigInt(index + 1), true);
       return 1;
     },
     _patchy_engine_session_pending_render_region(session, region, hasRegion) {
@@ -372,6 +372,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(snapshot.paths[0].anchors[2],
     { x: 3, y: 2, inX: 3, inY: 2, outX: 3, outY: 2, smooth: false });
   assert.equal(engine.memoryUsage(session).totalRetainedBytes, 8);
+  assert.equal(engine.memoryUsage(session).renderCacheEvictions, 15);
   assert.deepEqual(engine.pendingRenderRegion(session), { x: 1, y: 0, width: 2, height: 2 });
   assert.equal(engine.evictOldestUndo(session), true);
   engine.setLayerVisibility(session, snapshot, 7n, false);

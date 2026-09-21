@@ -7,6 +7,7 @@
 #include "core/smart_filter.hpp"
 #include "core/smart_filter_effects.hpp"
 #include "filters/filter_registry.hpp"
+#include "render/tile_cache.hpp"
 
 #include <atomic>
 #include <array>
@@ -548,6 +549,11 @@ struct SessionMemoryUsage {
   std::size_t total_retained_bytes{0};
   std::size_t undo_states{0};
   std::size_t redo_states{0};
+  std::size_t render_cache_bytes{0};
+  std::size_t render_cache_entries{0};
+  std::uint64_t render_cache_hits{0};
+  std::uint64_t render_cache_misses{0};
+  std::uint64_t render_cache_evictions{0};
 };
 
 class DocumentSession {
@@ -670,6 +676,7 @@ private:
   EventSink event_sink_{};
   std::optional<PreviewState> preview_state_{};
   std::optional<Rect> pending_render_region_{};
+  mutable TileCache render_cache_{256, 64U * 1024U * 1024U};
 };
 
 struct OpenResult {

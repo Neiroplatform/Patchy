@@ -3288,6 +3288,11 @@ int patchy_engine_session_memory_usage(
   usage->total_retained_bytes = value.total_retained_bytes;
   usage->undo_states = value.undo_states;
   usage->redo_states = value.redo_states;
+  usage->render_cache_bytes = value.render_cache_bytes;
+  usage->render_cache_entries = value.render_cache_entries;
+  usage->render_cache_hits = value.render_cache_hits;
+  usage->render_cache_misses = value.render_cache_misses;
+  usage->render_cache_evictions = value.render_cache_evictions;
   return 1;
 }
 

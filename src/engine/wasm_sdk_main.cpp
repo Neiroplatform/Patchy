@@ -7,9 +7,11 @@
 static_assert(sizeof(patchy_engine_error) == 260);
 static_assert(sizeof(patchy_engine_protocol_info) == 16);
 static_assert(sizeof(patchy_engine_buffer) == 8);
-static_assert(sizeof(patchy_engine_memory_usage) == 88);
+static_assert(sizeof(patchy_engine_memory_usage) == 128);
 static_assert(offsetof(patchy_engine_memory_usage, document_pixel_bytes) == 8);
 static_assert(offsetof(patchy_engine_memory_usage, redo_states) == 80);
+static_assert(offsetof(patchy_engine_memory_usage, render_cache_bytes) == 88);
+static_assert(offsetof(patchy_engine_memory_usage, render_cache_evictions) == 120);
 static_assert(sizeof(patchy_engine_document_projection) == 56);
 static_assert(offsetof(patchy_engine_document_projection, layer_count) == 48);
 static_assert(sizeof(patchy_engine_layer_projection) == 320);

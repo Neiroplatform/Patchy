@@ -582,9 +582,15 @@ void engine_session_coalesces_dirty_render_regions_and_publishes_them() {
   session.set_event_sink(
       [&events](const SessionEvent &event) { events.push_back(event); });
   CHECK(!session.pending_render_region().has_value());
+  CHECK(static_cast<bool>(session.render({0, 0, 12, 10})));
+  CHECK(session.memory_usage().render_cache_entries == 1);
+  CHECK(session.memory_usage().render_cache_misses == 1);
+  CHECK(static_cast<bool>(session.render({2, 2, 2, 2})));
+  CHECK(session.memory_usage().render_cache_hits == 1);
 
   const auto first_result = session.execute(SetLayerOpacity{first_id, 0.5F});
   CHECK(static_cast<bool>(first_result));
+  CHECK(session.memory_usage().render_cache_entries == 0);
   CHECK(first_result.affected_region.has_value());
   CHECK(events.back().affected_region.has_value());
   CHECK(events.back().affected_region->x == first_result.affected_region->x);
@@ -651,6 +657,45 @@ void engine_session_coalesces_dirty_render_regions_and_publishes_them() {
   CHECK(replaced_pending->y == 0);
   CHECK(replaced_pending->width == 2);
   CHECK(replaced_pending->height == 2);
+}
+
+void engine_session_tile_cache_reuses_and_invalidates_dirty_tiles() {
+  Document document(520, 300, PixelFormat::rgba8());
+  PixelBuffer background(520, 300, PixelFormat::rgba8());
+  background.clear(23);
+  document.add_pixel_layer("Background", std::move(background));
+  PixelBuffer patch(12, 10, PixelFormat::rgba8());
+  patch.clear(201);
+  const auto patch_id = document.allocate_layer_id();
+  patchy::Layer layer(patch_id, "Patch", std::move(patch));
+  layer.set_bounds({10, 12, 12, 10});
+  document.add_layer(std::move(layer));
+  DocumentSession session(std::move(document));
+
+  const auto first = session.render({0, 0, 520, 300});
+  CHECK(static_cast<bool>(first));
+  const auto populated = session.memory_usage();
+  CHECK(populated.render_cache_entries == 6);
+  CHECK(populated.render_cache_misses == 6);
+  CHECK(populated.render_cache_bytes == 520U * 300U * 4U);
+
+  CHECK(static_cast<bool>(session.render({300, 20, 16, 16})));
+  CHECK(session.memory_usage().render_cache_hits == 1);
+  CHECK(static_cast<bool>(session.execute(SetLayerOpacity{patch_id, 0.5F})));
+  CHECK(session.memory_usage().render_cache_entries == 5);
+
+  const auto second = session.render({0, 0, 520, 300});
+  CHECK(static_cast<bool>(second));
+  const auto reused = session.memory_usage();
+  CHECK(reused.render_cache_entries == 6);
+  CHECK(reused.render_cache_misses == 7);
+  CHECK(reused.render_cache_hits == 6);
+  const OperationProgress progress{[](std::int32_t, std::int32_t) { return true; }};
+  const auto uncached = session.render({0, 0, 520, 300}, nullptr, &progress);
+  CHECK(static_cast<bool>(uncached));
+  CHECK(uncached.pixels.data().size() == second.pixels.data().size());
+  CHECK(std::equal(uncached.pixels.data().begin(), uncached.pixels.data().end(),
+                   second.pixels.data().begin()));
 }
 
 void engine_session_external_shell_adapter_preserves_state_identity() {
@@ -3748,6 +3793,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_renders_bounded_rgba_regions_and_cancels},
       {"engine_session_coalesces_dirty_render_regions_and_publishes_them",
        engine_session_coalesces_dirty_render_regions_and_publishes_them},
+      {"engine_session_tile_cache_reuses_and_invalidates_dirty_tiles",
+       engine_session_tile_cache_reuses_and_invalidates_dirty_tiles},
       {"engine_session_external_shell_adapter_preserves_state_identity",
        engine_session_external_shell_adapter_preserves_state_identity},
       {"engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes",
