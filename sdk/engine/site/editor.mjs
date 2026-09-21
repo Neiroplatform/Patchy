@@ -1809,12 +1809,15 @@ function captureLayerReference() {
 async function transferLayerReference(reference, targetDocumentId) {
   if (busy || !snapshot || !reference) return;
   const count = reference.layerIds?.length || 0;
+  const originalDocumentId = snapshot.documentId;
+  let activatedTarget = false;
   clearError(); setBusy(true, count === 1 ? "Copying editable layer" : "Copying editable layers",
     "Committing one canonical target revision");
   try {
     let target = snapshot;
     if (target.documentId !== targetDocumentId) {
       target = await client.activateDocument(targetDocumentId);
+      activatedTarget = true;
       clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     }
     const priorTargetIds = new Set(target.layers.map((layer) => layer.id));
@@ -1822,7 +1825,8 @@ async function transferLayerReference(reference, targetDocumentId) {
       targetDocumentId, expectedTargetStateId: target.stateId,
       expectedTargetRevision: target.revision });
     recordHistoryMutation(target, next, count === 1 ? "Copying editable layer" : "Copying editable layers");
-    const copiedIds = next.layers.filter((layer) => !priorTargetIds.has(layer.id)).map((layer) => layer.id);
+    const copiedIds = next.layers.filter((layer) =>
+      !priorTargetIds.has(layer.id) && layer.parentId === 0n).map((layer) => layer.id);
     selectedLayerIds = new Set(copiedIds);
     selectedLayerId = copiedIds.includes(next.activeLayerId) ? next.activeLayerId : copiedIds.at(-1) ?? null;
     layerSelectionAnchorId = selectedLayerId;
@@ -1831,7 +1835,20 @@ async function transferLayerReference(reference, targetDocumentId) {
       reference.expectedSourceRevision = next.revision;
     }
     await acceptSnapshot(next); scheduleCheckpoint(next);
-  } catch (error) { showError("Could not copy editable layers", error); }
+  } catch (error) {
+    if (activatedTarget) {
+      try {
+        const restored = await client.activateDocument(originalDocumentId);
+        await acceptSnapshot(restored);
+      } catch (restoreError) {
+        try { await acceptSnapshot(await client.snapshot()); }
+        catch { /* Keep the original transfer error visible; Worker recovery remains available. */ }
+        error = new AggregateError([error, restoreError],
+          `${error?.message || error}; could not restore the source document`);
+      }
+    }
+    showError("Could not copy editable layers", error);
+  }
   finally { setBusy(false); }
 }
 

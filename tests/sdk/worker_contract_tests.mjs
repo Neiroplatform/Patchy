@@ -178,6 +178,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /event\.shiftKey && layerSelectionAnchorId != null/);
   assert.match(script, /event\.metaKey \|\| event\.ctrlKey/);
   assert.match(script, /selectedLayerIdsTopToBottom\(\{ rootsOnly: true \}\)/);
+  assert.match(script, /!priorTargetIds\.has\(layer\.id\) && layer\.parentId === 0n/);
+  assert.match(script, /client\.activateDocument\(originalDocumentId\)/);
   assert.match(script, /client\.moveLayers\(ids, layer\.id, position\)/);
   assert.match(script, /client\.editLayers\(ids, 0/);
   assert.match(script, /selectedLayerIds = new Set\(\[\.\.\.selectedLayerIds\][\s\S]*if \(!selectedLayerIds\.size\)/);

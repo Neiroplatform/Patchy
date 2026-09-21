@@ -141,6 +141,57 @@ try {
   check(selectedRows().length === 2,
     "same-document Paste did not retain the newest copied selection");
 
+  const targetBeforeRejectedDrop = revision();
+  await activateTab(0);
+  const sourceBeforeRejectedDrop = revision();
+  clickLayer("Shape");
+  const unsupportedRow = rowByName("Shape");
+  const rejectedTransfer = new view.DataTransfer();
+  unsupportedRow.dispatchEvent(new view.DragEvent("dragstart", {
+    bubbles: true, cancelable: true, view, dataTransfer: rejectedTransfer,
+  }));
+  const rejectedTargetTab = tabs()[1];
+  rejectedTargetTab.dispatchEvent(new view.DragEvent("dragover", {
+    bubbles: true, cancelable: true, view, dataTransfer: rejectedTransfer,
+  }));
+  rejectedTargetTab.dispatchEvent(new view.DragEvent("drop", {
+    bubbles: true, cancelable: true, view, dataTransfer: rejectedTransfer,
+  }));
+  unsupportedRow.dispatchEvent(new view.DragEvent("dragend", {
+    bubbles: true, view, dataTransfer: rejectedTransfer,
+  }));
+  await waitFor(() => idle() && !byId("errorBanner").hidden,
+    "unsupported cross-tab transfer did not fail closed");
+  check(activeTabIndex() === 0 && revision() === sourceBeforeRejectedDrop && rows().length === 3,
+    "failed cross-tab transfer did not restore the source UI/Worker session");
+  byId("dismissErrorButton").click();
+  byId("layerOpacityInput").value = "55";
+  byId("layerOpacityInput").dispatchEvent(new view.Event("input", { bubbles: true }));
+  byId("layerOpacityInput").dispatchEvent(new view.Event("change", { bubbles: true }));
+  await waitFor(() => idle() && activeTabIndex() === 0 &&
+    revision() === sourceBeforeRejectedDrop + 1n,
+  "post-failure implicit edit did not mutate the visible source document");
+  clickLayer("Text");
+  clickLayer("Brightness / Contrast", { metaKey: true, ctrlKey: true });
+  const sourceBeforeGroup = revision();
+  byId("groupLayerButton").click();
+  await waitFor(() => idle() && revision() === sourceBeforeGroup + 1n && rowByName("Group"),
+    "source group was not authored for transfer");
+  clickLayer("Group");
+  shortcut("c");
+  await waitFor(() => byId("sessionIndicator").textContent.includes("1 editable layer copied"),
+    "group root was not copied");
+  await activateTab(1);
+  check(revision() === targetBeforeRejectedDrop,
+    "failed cross-tab transfer or source edit mutated the target document");
+  const targetBeforeGroupPaste = revision();
+  shortcut("v");
+  await waitFor(() => { failOnEditorError(); return idle() &&
+    revision() === targetBeforeGroupPaste + 1n && rows().length === 11; },
+  "group tree Paste did not copy the complete forest");
+  check(selectedRows().length === 1 && rowName(selectedRows()[0]) === "Group",
+    "group tree Paste selected descendants instead of only the copied root");
+
   body.dataset.result = "PASS";
   body.dataset.revision = String(revision());
   body.dataset.layers = String(rows().length);
