@@ -5,6 +5,7 @@ const EVENT_SIZE = 64;
 const DOCUMENT_SIZE = 56;
 const MEMORY_USAGE_SIZE = 128;
 const LAYER_SIZE = 320;
+const ESSENTIAL_LAYER_STYLE_SIZE = 128;
 const BUFFER_SIZE = 8;
 const COMMAND_SIZE = 304;
 const PIXEL_LAYER_INPUT_SIZE = 80;
@@ -57,6 +58,10 @@ function safeNumber(value, label) {
   const number = Number(value);
   if (!Number.isSafeInteger(number)) throw new RangeError(`${label} exceeds JavaScript integer precision`);
   return number;
+}
+
+function unpackRgb(value) {
+  return [(value >>> 16) & 255, (value >>> 8) & 255, value & 255];
 }
 
 export class PatchyEngineError extends Error {
@@ -202,6 +207,71 @@ export class EmscriptenPatchyEngine {
     return this.#command(session, snapshot, 35, (view, command) => {
       view.setBigUint64(32, layerId, true); view.setUint32(40, bytes.byteLength, true);
       this.#module.HEAPU8.set(bytes, command + 44);
+    });
+  }
+
+  setEssentialLayerStyle(session, snapshot, layerId, input) {
+    if (!input || typeof input !== "object") {
+      throw new TypeError("Essential layer style input is required");
+    }
+    const packRgb = (color, subject) => {
+      const [red, green, blue] = this.#rgb(color, subject);
+      return (red << 16) | (green << 8) | blue;
+    };
+    const finite = (value, subject) => {
+      if (!Number.isFinite(value)) throw new TypeError(`${subject} must be finite`);
+      return value;
+    };
+    const opacity = (value, subject) => {
+      value = finite(value, subject);
+      if (value < 0 || value > 1) throw new TypeError(`${subject} must be in [0, 1]`);
+      return value;
+    };
+    const blend = (value, subject) => {
+      if (!Number.isInteger(value) || value < 0 || value > 27) {
+        throw new TypeError(`${subject} blend mode is invalid`);
+      }
+      return value;
+    };
+    const shadow = input.dropShadow ?? null;
+    const overlay = input.colorOverlay ?? null;
+    const stroke = input.stroke ?? null;
+    if (stroke && (!Number.isInteger(stroke.position) || stroke.position < 0 || stroke.position > 2)) {
+      throw new TypeError("Stroke position is invalid");
+    }
+    return this.#command(session, snapshot, 36, (view) => {
+      view.setBigUint64(32, layerId, true);
+      view.setUint32(40, input.effectsVisible === false ? 0 : 1, true);
+      view.setUint32(44, input.layerMaskHidesEffects ? 1 : 0, true);
+      view.setUint32(48, shadow ? 1 : 0, true);
+      if (shadow) {
+        view.setUint32(52, shadow.enabled === false ? 0 : 1, true);
+        view.setUint32(56, blend(shadow.blendMode ?? 2, "Drop Shadow"), true);
+        view.setUint32(60, packRgb(shadow.color ?? [0, 0, 0], "Drop Shadow color"), true);
+        view.setFloat32(64, opacity(shadow.opacity ?? 0.75, "Drop Shadow opacity"), true);
+        view.setFloat32(68, finite(shadow.angle ?? 120, "Drop Shadow angle"), true);
+        view.setFloat32(72, Math.max(0, finite(shadow.distance ?? 5, "Drop Shadow distance")), true);
+        view.setFloat32(76, opacity(shadow.spread ?? 0, "Drop Shadow spread"), true);
+        view.setFloat32(80, Math.max(0, finite(shadow.size ?? 5, "Drop Shadow size")), true);
+        view.setUint32(84, shadow.layerConceals === false ? 0 : 1, true);
+      }
+      view.setUint32(88, overlay ? 1 : 0, true);
+      if (overlay) {
+        view.setUint32(92, overlay.enabled === false ? 0 : 1, true);
+        view.setUint32(96, blend(overlay.blendMode ?? 1, "Color Overlay"), true);
+        view.setUint32(100, packRgb(overlay.color ?? [255, 0, 0], "Color Overlay color"), true);
+        view.setFloat32(104, opacity(overlay.opacity ?? 1, "Color Overlay opacity"), true);
+      }
+      view.setUint32(108, stroke ? 1 : 0, true);
+      if (stroke) {
+        view.setUint32(112, stroke.enabled === false ? 0 : 1, true);
+        view.setUint32(116, blend(stroke.blendMode ?? 1, "Stroke"), true);
+        view.setUint32(120, packRgb(stroke.color ?? [0, 0, 0], "Stroke color"), true);
+        view.setFloat32(124, opacity(stroke.opacity ?? 1, "Stroke opacity"), true);
+        view.setFloat32(128, Math.max(0, finite(stroke.size ?? 3, "Stroke size")), true);
+        view.setUint32(132, stroke.position ?? 0, true);
+        view.setUint32(136, stroke.overprint ? 1 : 0, true);
+      }
     });
   }
 
@@ -1199,6 +1269,7 @@ export class EmscriptenPatchyEngine {
 
   #layers(session, count, error) {
     const layer = this.#alloc(LAYER_SIZE);
+    const style = this.#alloc(ESSENTIAL_LAYER_STYLE_SIZE);
     const mask = this.#alloc(LAYER_MASK_SIZE);
     const text = this.#alloc(TEXT_PROJECTION_SIZE);
     const adjustment = this.#alloc(ADJUSTMENT_PROJECTION_SIZE);
@@ -1211,6 +1282,17 @@ export class EmscriptenPatchyEngine {
           session, index, layer, error), error);
         const view = this.#view(layer, LAYER_SIZE);
         const nameSize = view.getUint32(28, true);
+        this.#view(style, ESSENTIAL_LAYER_STYLE_SIZE).setUint32(
+          0, ESSENTIAL_LAYER_STYLE_SIZE, true);
+        this.#check(this.#module._patchy_engine_session_essential_layer_style(
+          session, u64(view, 0), style, error), error);
+        const styleView = this.#view(style, ESSENTIAL_LAYER_STYLE_SIZE);
+        const projectedEffect = (presentOffset, enabledOffset, blendOffset,
+          colorOffset, values) => styleView.getUint32(presentOffset, true) ? {
+            enabled: styleView.getUint32(enabledOffset, true) !== 0,
+            blendMode: styleView.getUint32(blendOffset, true),
+            color: unpackRgb(styleView.getUint32(colorOffset, true)), ...values,
+          } : null;
         this.#view(mask, LAYER_MASK_SIZE).setUint32(0, LAYER_MASK_SIZE, true);
         this.#check(this.#module._patchy_engine_session_layer_mask(
           session, u64(view, 0), mask, error), error);
@@ -1287,10 +1369,29 @@ export class EmscriptenPatchyEngine {
           text: textValue,
           adjustment: adjustmentValue,
           smartObject: smartObjectValue,
+          layerStyle: {
+            effectsVisible: styleView.getUint32(16, true) !== 0,
+            layerMaskHidesEffects: styleView.getUint32(20, true) !== 0,
+            counts: { dropShadow: styleView.getUint32(24, true),
+              colorOverlay: styleView.getUint32(28, true),
+              stroke: styleView.getUint32(32, true) },
+            dropShadow: projectedEffect(36, 40, 44, 48, {
+              opacity: styleView.getFloat32(52, true), angle: styleView.getFloat32(56, true),
+              distance: styleView.getFloat32(60, true), spread: styleView.getFloat32(64, true),
+              size: styleView.getFloat32(68, true),
+              layerConceals: styleView.getUint32(72, true) !== 0 }),
+            colorOverlay: projectedEffect(76, 80, 84, 88, {
+              opacity: styleView.getFloat32(92, true) }),
+            stroke: projectedEffect(96, 100, 104, 108, {
+              opacity: styleView.getFloat32(112, true), size: styleView.getFloat32(116, true),
+              position: styleView.getUint32(120, true),
+              overprint: styleView.getUint32(124, true) !== 0 }),
+          },
         });
       }
       return layers;
     } finally {
+      this.#module._free(style);
       this.#module._free(smartObject);
       this.#module._free(adjustment);
       this.#module._free(curvePoint);

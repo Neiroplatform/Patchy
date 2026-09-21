@@ -46,6 +46,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_RASTER_STROKE = UINT64_C(1) << 29,
   PATCHY_ENGINE_CAP_RASTER_FILL = UINT64_C(1) << 30,
   PATCHY_ENGINE_CAP_LAYER_WARP = UINT64_C(1) << 31,
+  PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE = UINT64_C(1) << 32,
 };
 
 enum patchy_engine_error_code {
@@ -279,6 +280,42 @@ typedef struct patchy_engine_layer_projection {
   uint32_t lock_flags;
   patchy_engine_rect bounds;
 } patchy_engine_layer_projection;
+
+/* Editable first-instance projection for the browser's essential Layer Style
+ * workflow. Counts disclose preserved stacked instances to the shell. */
+typedef struct patchy_engine_essential_layer_style_projection {
+  uint32_t struct_size;
+  uint32_t reserved;
+  uint64_t layer_id;
+  uint32_t effects_visible;
+  uint32_t layer_mask_hides_effects;
+  uint32_t drop_shadow_count;
+  uint32_t color_overlay_count;
+  uint32_t stroke_count;
+  uint32_t drop_shadow_present;
+  uint32_t drop_shadow_enabled;
+  uint32_t drop_shadow_blend_mode;
+  uint32_t drop_shadow_rgb;
+  float drop_shadow_opacity;
+  float drop_shadow_angle;
+  float drop_shadow_distance;
+  float drop_shadow_spread;
+  float drop_shadow_size;
+  uint32_t drop_shadow_layer_conceals;
+  uint32_t color_overlay_present;
+  uint32_t color_overlay_enabled;
+  uint32_t color_overlay_blend_mode;
+  uint32_t color_overlay_rgb;
+  float color_overlay_opacity;
+  uint32_t stroke_present;
+  uint32_t stroke_enabled;
+  uint32_t stroke_blend_mode;
+  uint32_t stroke_rgb;
+  float stroke_opacity;
+  float stroke_size;
+  uint32_t stroke_position;
+  uint32_t stroke_overprint;
+} patchy_engine_essential_layer_style_projection;
 
 typedef struct patchy_engine_document_projection {
   uint32_t struct_size;
@@ -786,6 +823,7 @@ enum patchy_engine_command_type {
   PATCHY_ENGINE_COMMAND_GROW_SELECTION = 33,
   PATCHY_ENGINE_COMMAND_SELECT_SIMILAR = 34,
   PATCHY_ENGINE_COMMAND_SET_LAYER_STYLE_PRESET = 35,
+  PATCHY_ENGINE_COMMAND_SET_ESSENTIAL_LAYER_STYLE = 36,
 };
 
 typedef struct patchy_engine_command {
@@ -889,6 +927,34 @@ typedef struct patchy_engine_command {
       uint32_t preset_id_size;
       char preset_id[64];
     } set_layer_style_preset;
+    struct {
+      uint64_t layer_id;
+      uint32_t effects_visible;
+      uint32_t layer_mask_hides_effects;
+      uint32_t drop_shadow_present;
+      uint32_t drop_shadow_enabled;
+      uint32_t drop_shadow_blend_mode;
+      uint32_t drop_shadow_rgb;
+      float drop_shadow_opacity;
+      float drop_shadow_angle;
+      float drop_shadow_distance;
+      float drop_shadow_spread;
+      float drop_shadow_size;
+      uint32_t drop_shadow_layer_conceals;
+      uint32_t color_overlay_present;
+      uint32_t color_overlay_enabled;
+      uint32_t color_overlay_blend_mode;
+      uint32_t color_overlay_rgb;
+      float color_overlay_opacity;
+      uint32_t stroke_present;
+      uint32_t stroke_enabled;
+      uint32_t stroke_blend_mode;
+      uint32_t stroke_rgb;
+      float stroke_opacity;
+      float stroke_size;
+      uint32_t stroke_position;
+      uint32_t stroke_overprint;
+    } set_essential_layer_style;
     struct {
       uint64_t channel_id;
     } select_channel;
@@ -1017,6 +1083,10 @@ int patchy_engine_session_layer_at(const patchy_engine_session *session,
                                    size_t index,
                                    patchy_engine_layer_projection *layer,
                                    patchy_engine_error *error);
+int patchy_engine_session_essential_layer_style(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_essential_layer_style_projection *style,
+    patchy_engine_error *error);
 int patchy_engine_session_channel_count(const patchy_engine_session *session,
                                         size_t *count,
                                         patchy_engine_error *error);

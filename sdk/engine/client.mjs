@@ -150,6 +150,9 @@ export class PatchyWorkerClient {
   setLayerStylePreset(layerId, presetId) {
     return this.#request("setLayerStylePreset", { layerId: String(layerId), presetId });
   }
+  setEssentialLayerStyle(layerId, input) {
+    return this.#request("setEssentialLayerStyle", { layerId: String(layerId), input });
+  }
   setLayerBlendMode(layerId, blendMode) {
     return this.#request("setLayerBlendMode", { layerId: String(layerId), blendMode });
   }

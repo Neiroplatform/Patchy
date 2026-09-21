@@ -50,7 +50,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
     "penToolButton", "shapeKindInput",
     "layerFillInput", "layerClipInput", "layerLockInput", "layerStyleSelect",
-    "applyLayerStyleButton", "invertSelectionButton",
+    "applyLayerStyleButton", "editLayerStyleButton", "layerStyleDialog",
+    "styleShadowEnabledInput", "styleStrokeEnabledInput", "styleOverlayEnabledInput",
+    "commitLayerStyleButton", "invertSelectionButton",
     "expandSelectionButton", "contractSelectionButton", "borderSelectionButton",
     "growSelectionButton", "similarSelectionButton", "smoothSelectionButton", "featherSelectionButton",
     "saveChannelButton", "savePathButton", "channelList", "pathList",
@@ -87,7 +89,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.replaceSmartObject", "client.openSmartObjectContents", "client.applyFilter",
     "client.saveSmartObjectContents", "client.setSmartFilter",
     "client.setLayerFillOpacity", "client.setLayerLocks", "client.setLayerClipping",
-    "client.setLayerStylePreset",
+    "client.setLayerStylePreset", "client.setEssentialLayerStyle",
     "client.invertSelection", "client.expandSelection", "client.contractSelection",
     "client.borderSelection", "client.growSelection", "client.selectSimilar",
     "client.addAlphaChannel", "client.addDocumentPath",
@@ -325,6 +327,18 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       view.setUint32(output + 28, 5, true); heap.set(new TextEncoder().encode("Layer"), output + 32);
       view.setFloat32(output + 292, 1, true); view.setInt32(output + 312, 3, true);
       view.setInt32(output + 316, 2, true); return 1;
+    },
+    _patchy_engine_session_essential_layer_style(session, layerId, output) {
+      assert.equal(layerId, 7n); assert.equal(view.getUint32(output, true), 128);
+      view.setBigUint64(output + 8, layerId, true);
+      view.setUint32(output + 16, 1, true);
+      view.setUint32(output + 24, 2, true);
+      view.setUint32(output + 36, 1, true); view.setUint32(output + 40, 1, true);
+      view.setUint32(output + 44, 2, true); view.setUint32(output + 48, 0x0c2238, true);
+      view.setFloat32(output + 52, 0.5, true); view.setFloat32(output + 56, 33, true);
+      view.setFloat32(output + 60, 9, true); view.setFloat32(output + 64, 0.2, true);
+      view.setFloat32(output + 68, 7, true); view.setUint32(output + 72, 1, true);
+      return 1;
     },
     _patchy_engine_session_layer_mask(session, layerId, output) {
       assert.equal(layerId, 7n); view.setUint32(output, 24, true); return 1;
@@ -608,6 +622,11 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.setLayerLocks(session, snapshot, 7n, 7);
   engine.setLayerClipping(session, snapshot, 7n, true);
   engine.setLayerStylePreset(session, snapshot, 7n, "57a1e500-0015-4c6d-8f2a-9b3d4e55c015");
+  engine.setEssentialLayerStyle(session, snapshot, 7n, {
+    effectsVisible: true,
+    dropShadow: { color: [12, 34, 56], opacity: .5, angle: 33, distance: 9, spread: .2, size: 7 },
+    stroke: { color: [1, 2, 3], opacity: .8, size: 4, position: 1 },
+  });
   engine.setLayerBlendMode(session, snapshot, 7n, 2);
   engine.renameLayer(session, snapshot, 7n, "Renamed");
   engine.removeLayer(session, snapshot, 7n);
@@ -700,7 +719,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   Atomics.store(cancellation, 0, 1);
   engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", [], cancellation);
   assert.deepEqual(callbackReturns, [1, 1, 1, 0, 0]);
-  assert.deepEqual(commandTypes, [2, 3, 6, 7, 35, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
+  assert.deepEqual(commandTypes, [2, 3, 6, 7, 35, 36, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
@@ -746,6 +765,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     setLayerClipping(session, before, layerId, clipped) { calls.push(["clipping", layerId, clipped]); revision++; },
     setLayerStylePreset(session, before, layerId, presetId) {
       calls.push(["stylePreset", layerId, presetId]); revision++;
+    },
+    setEssentialLayerStyle(session, before, layerId, input) {
+      calls.push(["essentialStyle", layerId, input]); revision++;
     },
     setLayerBlendMode(session, before, layerId, mode) { calls.push(["blend", layerId, mode]); revision++; },
     renameLayer(session, before, layerId, name) { calls.push(["rename", layerId, name]); revision++; },
@@ -834,6 +856,10 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "setLayerLocks", layerId: "7", lockFlags: 7 });
   await host.dispatch({ method: "setLayerClipping", layerId: "7", clipped: true });
   await host.dispatch({ method: "setLayerStylePreset", layerId: "7", presetId: "" });
+  await host.dispatch({ method: "setEssentialLayerStyle", layerId: "7", input: {
+    effectsVisible: true, dropShadow: { color: [0, 0, 0], opacity: .75 },
+    stroke: null, colorOverlay: null,
+  } });
   await host.dispatch({ method: "setLayerBlendMode", layerId: "7", blendMode: 2 });
   await host.dispatch({ method: "renameLayer", layerId: "7", name: "Renamed" });
   await host.dispatch({ method: "removeLayer", layerId: "7" });

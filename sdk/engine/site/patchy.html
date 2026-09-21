@@ -186,6 +186,7 @@
               <option value="57a1e500-001a-4c6d-8f2a-9b3d4e55c01a">Letterpress</option>
             </select></label>
             <button id="applyLayerStyleButton" type="button" disabled>Apply style</button>
+            <button id="editLayerStyleButton" type="button" disabled>Edit effects…</button>
           </div>
         </section>
         <section class="panel history-panel" aria-labelledby="historyTitle">
@@ -362,6 +363,45 @@
           </div>
           <p class="dialog-note">Preview and final pixels use the same bounded engine warp. Smart Objects retain editable preset metadata.</p>
           <div class="dialog-actions"><button class="button button-primary" id="commitLayerWarpButton" type="button">Apply warp</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog layer-style-dialog" id="layerStyleDialog" aria-labelledby="layerStyleDialogTitle">
+      <form method="dialog"><header><div><p class="eyebrow">LAYER STYLE</p><h2 id="layerStyleDialogTitle">Essential effects</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section><div class="field-row">
+          <label class="check-field"><input id="styleEffectsVisibleInput" type="checkbox" checked><span>Effects visible</span></label>
+          <label class="check-field"><input id="styleMaskHidesInput" type="checkbox"><span>Layer mask hides effects</span></label>
+        </div><p class="dialog-note" id="styleStackedEffectsNote"></p></section>
+        <section><h3>Drop Shadow</h3><label class="check-field"><input id="styleShadowEnabledInput" type="checkbox"><span>Enable Drop Shadow</span></label>
+          <div class="field-row field-row-four">
+            <label><span>Blend</span><select id="styleShadowBlendInput"><option value="1">Normal</option><option value="2">Multiply</option><option value="3">Screen</option><option value="4">Overlay</option></select></label>
+            <label><span>Color</span><input id="styleShadowColorInput" type="color" value="#000000"></label>
+            <label><span>Opacity %</span><input id="styleShadowOpacityInput" type="number" min="0" max="100" step="1" value="75"></label>
+            <label><span>Angle°</span><input id="styleShadowAngleInput" type="number" min="-360" max="360" step="1" value="120"></label>
+            <label><span>Distance</span><input id="styleShadowDistanceInput" type="number" min="0" max="1000" step="1" value="5"></label>
+            <label><span>Spread %</span><input id="styleShadowSpreadInput" type="number" min="0" max="100" step="1" value="0"></label>
+            <label><span>Size</span><input id="styleShadowSizeInput" type="number" min="0" max="1000" step="1" value="5"></label>
+            <label class="check-field"><input id="styleShadowConcealsInput" type="checkbox" checked><span>Layer knocks out</span></label>
+          </div>
+        </section>
+        <section><h3>Stroke</h3><label class="check-field"><input id="styleStrokeEnabledInput" type="checkbox"><span>Enable Stroke</span></label>
+          <div class="field-row field-row-four">
+            <label><span>Blend</span><select id="styleStrokeBlendInput"><option value="1">Normal</option><option value="2">Multiply</option><option value="3">Screen</option><option value="4">Overlay</option></select></label>
+            <label><span>Color</span><input id="styleStrokeColorInput" type="color" value="#000000"></label>
+            <label><span>Opacity %</span><input id="styleStrokeOpacityInput" type="number" min="0" max="100" step="1" value="100"></label>
+            <label><span>Size</span><input id="styleStrokeSizeInput" type="number" min="0" max="1000" step="1" value="3"></label>
+            <label><span>Position</span><select id="styleStrokePositionInput"><option value="0">Outside</option><option value="1">Inside</option><option value="2">Center</option></select></label>
+            <label class="check-field"><input id="styleStrokeOverprintInput" type="checkbox"><span>Overprint</span></label>
+          </div>
+        </section>
+        <section><h3>Color Overlay</h3><label class="check-field"><input id="styleOverlayEnabledInput" type="checkbox"><span>Enable Color Overlay</span></label>
+          <div class="field-row field-row-four">
+            <label><span>Blend</span><select id="styleOverlayBlendInput"><option value="1">Normal</option><option value="2">Multiply</option><option value="3">Screen</option><option value="4">Overlay</option></select></label>
+            <label><span>Color</span><input id="styleOverlayColorInput" type="color" value="#ff0000"></label>
+            <label><span>Opacity %</span><input id="styleOverlayOpacityInput" type="number" min="0" max="100" step="1" value="100"></label>
+          </div>
+          <p class="dialog-note">Apply commits all three families as one undo step. Additional imported instances and every other effect family remain intact.</p>
+          <div class="dialog-actions"><button class="button button-primary" id="commitLayerStyleButton" type="button">Apply effects</button></div>
         </section>
       </form>
     </dialog>

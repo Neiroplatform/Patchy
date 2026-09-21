@@ -248,6 +248,7 @@ function updateControls() {
   $("layerLockInput").disabled = busy || !layer;
   $("layerStyleSelect").disabled = busy || !layer;
   $("applyLayerStyleButton").disabled = busy || !layer;
+  $("editLayerStyleButton").disabled = busy || !layer;
   for (const id of ["invertSelectionButton", "expandSelectionButton", "contractSelectionButton",
     "borderSelectionButton", "growSelectionButton", "similarSelectionButton",
     "smoothSelectionButton", "featherSelectionButton", "saveChannelButton", "savePathButton"]) {
@@ -735,6 +736,88 @@ function renderLayerProperties() {
   }
   blendSelect.value = layer ? String(layer.blendMode) : "1";
   updateControls();
+}
+
+function colorHex(color, fallback) {
+  if (!Array.isArray(color) || color.length !== 3) return fallback;
+  return `#${color.map((value) => Math.max(0, Math.min(255, value)).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function setEffectBlend(id, value) {
+  const select = $(id);
+  select.querySelectorAll("[data-imported-mode]").forEach((option) => option.remove());
+  if (![...select.options].some((option) => Number(option.value) === value)) {
+    const option = new Option(`Imported mode ${value}`, String(value));
+    option.dataset.importedMode = "true";
+    select.append(option);
+  }
+  select.value = String(value);
+}
+
+function openLayerStyleDialog() {
+  const style = selectedLayer()?.layerStyle;
+  if (busy || !style) return;
+  $("styleEffectsVisibleInput").checked = style.effectsVisible;
+  $("styleMaskHidesInput").checked = style.layerMaskHidesEffects;
+  const shadow = style.dropShadow;
+  $("styleShadowEnabledInput").checked = Boolean(shadow?.enabled);
+  setEffectBlend("styleShadowBlendInput", shadow?.blendMode ?? 2);
+  $("styleShadowColorInput").value = colorHex(shadow?.color, "#000000");
+  $("styleShadowOpacityInput").value = String(Math.round((shadow?.opacity ?? .75) * 100));
+  $("styleShadowAngleInput").value = String(shadow?.angle ?? 120);
+  $("styleShadowDistanceInput").value = String(shadow?.distance ?? 5);
+  $("styleShadowSpreadInput").value = String(Math.round((shadow?.spread ?? 0) * 100));
+  $("styleShadowSizeInput").value = String(shadow?.size ?? 5);
+  $("styleShadowConcealsInput").checked = shadow?.layerConceals !== false;
+  const stroke = style.stroke;
+  $("styleStrokeEnabledInput").checked = Boolean(stroke?.enabled);
+  setEffectBlend("styleStrokeBlendInput", stroke?.blendMode ?? 1);
+  $("styleStrokeColorInput").value = colorHex(stroke?.color, "#000000");
+  $("styleStrokeOpacityInput").value = String(Math.round((stroke?.opacity ?? 1) * 100));
+  $("styleStrokeSizeInput").value = String(stroke?.size ?? 3);
+  $("styleStrokePositionInput").value = String(stroke?.position ?? 0);
+  $("styleStrokeOverprintInput").checked = Boolean(stroke?.overprint);
+  const overlay = style.colorOverlay;
+  $("styleOverlayEnabledInput").checked = Boolean(overlay?.enabled);
+  setEffectBlend("styleOverlayBlendInput", overlay?.blendMode ?? 1);
+  $("styleOverlayColorInput").value = colorHex(overlay?.color, "#ff0000");
+  $("styleOverlayOpacityInput").value = String(Math.round((overlay?.opacity ?? 1) * 100));
+  const extras = Object.entries(style.counts || {}).filter(([, count]) => count > 1)
+    .map(([family, count]) => `${family}: ${count - 1} additional`);
+  $("styleStackedEffectsNote").textContent = extras.length
+    ? `Imported stacked effects preserved — ${extras.join(", ")}.`
+    : "The first instance of each essential family is editable.";
+  $("layerStyleDialog").showModal();
+}
+
+function essentialLayerStyleInput() {
+  const form = $("layerStyleDialog").querySelector("form");
+  if (!form.reportValidity()) return null;
+  const percent = (id) => Number($(id).value) / 100;
+  return {
+    effectsVisible: $("styleEffectsVisibleInput").checked,
+    layerMaskHidesEffects: $("styleMaskHidesInput").checked,
+    dropShadow: $("styleShadowEnabledInput").checked ? {
+      enabled: true, blendMode: Number($("styleShadowBlendInput").value),
+      color: colorBytes($("styleShadowColorInput").value),
+      opacity: percent("styleShadowOpacityInput"), angle: Number($("styleShadowAngleInput").value),
+      distance: Number($("styleShadowDistanceInput").value),
+      spread: percent("styleShadowSpreadInput"), size: Number($("styleShadowSizeInput").value),
+      layerConceals: $("styleShadowConcealsInput").checked,
+    } : null,
+    stroke: $("styleStrokeEnabledInput").checked ? {
+      enabled: true, blendMode: Number($("styleStrokeBlendInput").value),
+      color: colorBytes($("styleStrokeColorInput").value),
+      opacity: percent("styleStrokeOpacityInput"), size: Number($("styleStrokeSizeInput").value),
+      position: Number($("styleStrokePositionInput").value),
+      overprint: $("styleStrokeOverprintInput").checked,
+    } : null,
+    colorOverlay: $("styleOverlayEnabledInput").checked ? {
+      enabled: true, blendMode: Number($("styleOverlayBlendInput").value),
+      color: colorBytes($("styleOverlayColorInput").value),
+      opacity: percent("styleOverlayOpacityInput"),
+    } : null,
+  };
 }
 
 function renderStructure() {
@@ -2420,6 +2503,14 @@ $("applyLayerStyleButton").addEventListener("click", () => {
   const layer = selectedLayer();
   if (layer) mutate("Applying layer style", () =>
     client.setLayerStylePreset(layer.id, $("layerStyleSelect").value));
+});
+$("editLayerStyleButton").addEventListener("click", openLayerStyleDialog);
+$("commitLayerStyleButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  const input = essentialLayerStyleInput();
+  if (!layer || !input) return;
+  $("layerStyleDialog").close();
+  mutate("Editing layer effects", () => client.setEssentialLayerStyle(layer.id, input));
 });
 $("invertSelectionButton").addEventListener("click", () => mutate("Inverting selection", () => client.invertSelection()));
 $("expandSelectionButton").addEventListener("click", () => mutate("Expanding selection", () => client.expandSelection(4)));

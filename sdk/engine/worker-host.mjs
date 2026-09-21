@@ -298,6 +298,10 @@ export class PatchyWorkerHost {
         this.#engine.setLayerStylePreset(this.#requireSession(), this.#snapshot(),
           BigInt(message.layerId), message.presetId);
         return this.#snapshot();
+      case "setEssentialLayerStyle":
+        this.#engine.setEssentialLayerStyle(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.input);
+        return this.#snapshot();
       case "setLayerBlendMode":
         this.#engine.setLayerBlendMode(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),

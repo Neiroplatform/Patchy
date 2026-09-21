@@ -4523,6 +4523,68 @@ void core_raster_fill_respects_soft_selection_locks_and_presets() {
   CHECK(point_gradient.find_layer(gradient_id)->pixels().pixel(1, 0)[3] == 0);
 }
 
+void engine_session_essential_layer_style_is_atomic_preserving_and_round_trips() {
+  Document document(8, 8, PixelFormat::rgba8());
+  PixelBuffer pixels(8, 8, PixelFormat::rgba8()); pixels.clear(255);
+  auto &source = document.add_pixel_layer("Styled", std::move(pixels));
+  patchy::LayerDropShadow original{}; original.enabled = true;
+  original.distance = 4.0F;
+  patchy::LayerDropShadow stacked{}; stacked.enabled = true;
+  stacked.color = {20, 30, 40}; stacked.distance = 12.0F;
+  source.layer_style().drop_shadows = {original, stacked};
+  patchy::LayerInnerGlow glow{}; glow.enabled = true;
+  source.layer_style().inner_glows = {glow};
+  source.unknown_psd_blocks().push_back({"lfx2", {1, 2, 3}});
+  const auto layer_id = source.id();
+  DocumentSession session(std::move(document));
+
+  patchy::LayerDropShadow shadow{}; shadow.enabled = true;
+  shadow.color = {12, 34, 56}; shadow.opacity = 0.42F;
+  shadow.angle_degrees = 33.0F; shadow.distance = 9.0F;
+  shadow.spread = 0.18F; shadow.size = 7.0F;
+  patchy::LayerColorOverlay overlay{}; overlay.enabled = true;
+  overlay.color = {90, 80, 70}; overlay.opacity = 0.65F;
+  patchy::LayerStroke stroke{}; stroke.enabled = true;
+  stroke.color = {200, 100, 50}; stroke.opacity = 0.8F;
+  stroke.size = 6.0F; stroke.position = patchy::LayerStrokePosition::Inside;
+  const auto before_revision = session.revision();
+  auto result = session.execute(patchy::engine::SetEssentialLayerStyle{
+      layer_id, true, true, shadow, overlay, stroke});
+  CHECK(result && result.changed);
+  CHECK(session.revision() == before_revision + 1U);
+  const auto *edited = session.document().find_layer(layer_id);
+  CHECK(edited != nullptr);
+  CHECK(edited->layer_style().drop_shadows.size() == 2U);
+  CHECK(edited->layer_style().drop_shadows.front() == shadow);
+  CHECK(edited->layer_style().drop_shadows[1] == stacked);
+  CHECK(edited->layer_style().inner_glows.size() == 1U);
+  CHECK(edited->layer_style().color_overlays ==
+        std::vector<patchy::LayerColorOverlay>{overlay});
+  CHECK(edited->layer_style().strokes == std::vector<patchy::LayerStroke>{stroke});
+  CHECK(edited->layer_style().layer_mask_hides_effects);
+  CHECK(std::none_of(edited->unknown_psd_blocks().begin(),
+                     edited->unknown_psd_blocks().end(),
+                     [](const patchy::UnknownPsdBlock &block) {
+                       return block.key == "lfx2";
+                     }));
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(layer_id)->layer_style().drop_shadows.front() ==
+        original);
+  CHECK(static_cast<bool>(session.redo()));
+
+  const auto saved = session.encode_psd();
+  CHECK(static_cast<bool>(saved));
+  const auto reopened = open_psd(saved.bytes);
+  CHECK(static_cast<bool>(reopened));
+  const auto *round_trip = reopened.session->document().find_layer(layer_id);
+  CHECK(round_trip != nullptr);
+  CHECK(round_trip->layer_style().drop_shadows.size() == 2U);
+  CHECK(round_trip->layer_style().drop_shadows.front().color == shadow.color);
+  CHECK(round_trip->layer_style().color_overlays.front().color == overlay.color);
+  CHECK(round_trip->layer_style().strokes.front().position == stroke.position);
+  CHECK(round_trip->layer_style().inner_glows.size() == 1U);
+}
+
 void engine_host_protocol_previews_and_commits_one_layer_warp() {
   patchy_engine_error error{};
   auto *runtime = patchy_engine_runtime_create(
@@ -4876,6 +4938,8 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_previews_and_commits_one_raster_fill},
       {"core_raster_fill_respects_soft_selection_locks_and_presets",
        core_raster_fill_respects_soft_selection_locks_and_presets},
+      {"engine_session_essential_layer_style_is_atomic_preserving_and_round_trips",
+       engine_session_essential_layer_style_is_atomic_preserving_and_round_trips},
       {"engine_host_protocol_previews_and_commits_one_layer_warp",
        engine_host_protocol_previews_and_commits_one_layer_warp},
       {"engine_host_protocol_commits_advanced_selection_gestures",

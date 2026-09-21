@@ -117,6 +117,16 @@ static_assert(static_cast<std::uint32_t>(patchy::PathCombineOp::Intersect) ==
 static_assert(static_cast<std::uint32_t>(
                   patchy::engine::SelectionCombineMode::Intersect) ==
               PATCHY_ENGINE_SELECTION_INTERSECT);
+static_assert(sizeof(patchy_engine_essential_layer_style_projection) == 128U);
+static_assert(offsetof(patchy_engine_essential_layer_style_projection,
+                       drop_shadow_present) == 36U);
+static_assert(offsetof(patchy_engine_essential_layer_style_projection,
+                       stroke_overprint) == 124U);
+static_assert(offsetof(patchy_engine_command,
+                       payload.set_essential_layer_style.layer_id) == 32U);
+static_assert(offsetof(patchy_engine_command,
+                       payload.set_essential_layer_style.stroke_overprint) ==
+              136U);
 
 constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_LAYER_PROJECTION |
@@ -148,7 +158,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_LAYER_TRANSFORM |
     PATCHY_ENGINE_CAP_RASTER_STROKE |
     PATCHY_ENGINE_CAP_RASTER_FILL |
-    PATCHY_ENGINE_CAP_LAYER_WARP;
+    PATCHY_ENGINE_CAP_LAYER_WARP |
+    PATCHY_ENGINE_CAP_ESSENTIAL_LAYER_STYLE;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -1242,6 +1253,82 @@ int patchy_engine_session_layer_at(const patchy_engine_session *session,
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown layer projection failure");
+  }
+}
+
+int patchy_engine_session_essential_layer_style(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_essential_layer_style_projection *style,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || style == nullptr ||
+      style->struct_size != sizeof(*style)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and exact essential layer style output are required");
+  }
+  try {
+    const auto *layer = session->value->document().find_layer(layer_id);
+    if (layer == nullptr) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "layer style target does not exist");
+    }
+    const auto pack_rgb = [](patchy::RgbColor color) {
+      return (static_cast<std::uint32_t>(color.red) << 16U) |
+             (static_cast<std::uint32_t>(color.green) << 8U) |
+             static_cast<std::uint32_t>(color.blue);
+    };
+    const auto &source = layer->layer_style();
+    *style = {};
+    style->struct_size = sizeof(*style);
+    style->layer_id = layer_id;
+    style->effects_visible = source.effects_visible ? 1U : 0U;
+    style->layer_mask_hides_effects =
+        source.layer_mask_hides_effects ? 1U : 0U;
+    style->drop_shadow_count =
+        static_cast<std::uint32_t>(source.drop_shadows.size());
+    style->color_overlay_count =
+        static_cast<std::uint32_t>(source.color_overlays.size());
+    style->stroke_count = static_cast<std::uint32_t>(source.strokes.size());
+    if (!source.drop_shadows.empty()) {
+      const auto &value = source.drop_shadows.front();
+      style->drop_shadow_present = 1U;
+      style->drop_shadow_enabled = value.enabled ? 1U : 0U;
+      style->drop_shadow_blend_mode =
+          static_cast<std::uint32_t>(value.blend_mode);
+      style->drop_shadow_rgb = pack_rgb(value.color);
+      style->drop_shadow_opacity = value.opacity;
+      style->drop_shadow_angle = value.angle_degrees;
+      style->drop_shadow_distance = value.distance;
+      style->drop_shadow_spread = value.spread;
+      style->drop_shadow_size = value.size;
+      style->drop_shadow_layer_conceals = value.layer_conceals ? 1U : 0U;
+    }
+    if (!source.color_overlays.empty()) {
+      const auto &value = source.color_overlays.front();
+      style->color_overlay_present = 1U;
+      style->color_overlay_enabled = value.enabled ? 1U : 0U;
+      style->color_overlay_blend_mode =
+          static_cast<std::uint32_t>(value.blend_mode);
+      style->color_overlay_rgb = pack_rgb(value.color);
+      style->color_overlay_opacity = value.opacity;
+    }
+    if (!source.strokes.empty()) {
+      const auto &value = source.strokes.front();
+      style->stroke_present = 1U;
+      style->stroke_enabled = value.enabled ? 1U : 0U;
+      style->stroke_blend_mode = static_cast<std::uint32_t>(value.blend_mode);
+      style->stroke_rgb = pack_rgb(value.color);
+      style->stroke_opacity = value.opacity;
+      style->stroke_size = value.size;
+      style->stroke_position = static_cast<std::uint32_t>(value.position);
+      style->stroke_overprint = value.overprint ? 1U : 0U;
+    }
+    return 1;
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown essential layer style projection failure");
   }
 }
 
@@ -3431,6 +3518,58 @@ int patchy_engine_session_execute(patchy_engine_session *session,
       result = session->value->execute(patchy::engine::SetLayerStylePreset{
           command->payload.set_layer_style_preset.layer_id,
           std::move(preset_id)});
+      break;
+    }
+    case PATCHY_ENGINE_COMMAND_SET_ESSENTIAL_LAYER_STYLE: {
+      const auto &input = command->payload.set_essential_layer_style;
+      const auto rgb = [](std::uint32_t value) {
+        return patchy::RgbColor{
+            static_cast<std::uint8_t>((value >> 16U) & 0xFFU),
+            static_cast<std::uint8_t>((value >> 8U) & 0xFFU),
+            static_cast<std::uint8_t>(value & 0xFFU)};
+      };
+      patchy::engine::SetEssentialLayerStyle value{};
+      value.layer_id = input.layer_id;
+      value.effects_visible = input.effects_visible != 0U;
+      value.layer_mask_hides_effects =
+          input.layer_mask_hides_effects != 0U;
+      if (input.drop_shadow_present != 0U) {
+        patchy::LayerDropShadow shadow{};
+        shadow.enabled = input.drop_shadow_enabled != 0U;
+        shadow.blend_mode =
+            static_cast<patchy::BlendMode>(input.drop_shadow_blend_mode);
+        shadow.color = rgb(input.drop_shadow_rgb);
+        shadow.opacity = input.drop_shadow_opacity;
+        shadow.angle_degrees = input.drop_shadow_angle;
+        shadow.distance = input.drop_shadow_distance;
+        shadow.spread = input.drop_shadow_spread;
+        shadow.size = input.drop_shadow_size;
+        shadow.layer_conceals = input.drop_shadow_layer_conceals != 0U;
+        value.drop_shadow = shadow;
+      }
+      if (input.color_overlay_present != 0U) {
+        patchy::LayerColorOverlay overlay{};
+        overlay.enabled = input.color_overlay_enabled != 0U;
+        overlay.blend_mode =
+            static_cast<patchy::BlendMode>(input.color_overlay_blend_mode);
+        overlay.color = rgb(input.color_overlay_rgb);
+        overlay.opacity = input.color_overlay_opacity;
+        value.color_overlay = overlay;
+      }
+      if (input.stroke_present != 0U) {
+        patchy::LayerStroke stroke{};
+        stroke.enabled = input.stroke_enabled != 0U;
+        stroke.blend_mode =
+            static_cast<patchy::BlendMode>(input.stroke_blend_mode);
+        stroke.color = rgb(input.stroke_rgb);
+        stroke.opacity = input.stroke_opacity;
+        stroke.size = input.stroke_size;
+        stroke.position =
+            static_cast<patchy::LayerStrokePosition>(input.stroke_position);
+        stroke.overprint = input.stroke_overprint != 0U;
+        value.stroke = stroke;
+      }
+      result = session->value->execute(value);
       break;
     }
     case PATCHY_ENGINE_COMMAND_SELECT_CHANNEL: {

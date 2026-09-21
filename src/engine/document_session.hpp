@@ -124,6 +124,18 @@ struct SetLayerStylePreset {
   std::string preset_id{};
 };
 
+// Browser-facing essential Layer Style editor. Each optional value owns the
+// first effect instance of its family; any additional imported instances and
+// every other modeled effect family are preserved verbatim.
+struct SetEssentialLayerStyle {
+  LayerId layer_id{0};
+  bool effects_visible{true};
+  bool layer_mask_hides_effects{false};
+  std::optional<LayerDropShadow> drop_shadow{};
+  std::optional<LayerColorOverlay> color_overlay{};
+  std::optional<LayerStroke> stroke{};
+};
+
 struct SetLayerMaskState {
   LayerId layer_id{0};
   std::optional<LayerMask> mask{};
@@ -439,7 +451,7 @@ using DocumentCommand =
                  RotateCanvas, CropDocument, WrapOffsetDocument,
                  SetLayersOpacity, SetLayersFillOpacity, SetLayersBlendMode,
                  SetLayersVisibility, SetLayerLockStates, SetLayerClipping,
-                 SetLayerStylePreset,
+                 SetLayerStylePreset, SetEssentialLayerStyle,
                  SetLayerMaskState, UngroupLayers, FlipLayers, PlaceLayers,
                  ReplaceLayerPixels, ApplyFilter, SetSelection,
                  CommitPreparedSelection,

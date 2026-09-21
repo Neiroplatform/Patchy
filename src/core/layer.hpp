@@ -280,6 +280,8 @@ struct LayerDropShadow {
   // Photoshop's "Use Global Light". Only meaningful while importing: the PSD reader
   // resolves the document's global angle into angle_degrees and clears this flag.
   bool use_global_light{false};
+
+  friend bool operator==(const LayerDropShadow&, const LayerDropShadow&) = default;
 };
 
 struct LayerInnerShadow {
@@ -342,6 +344,8 @@ struct LayerColorOverlay {
   BlendMode blend_mode{BlendMode::Normal};
   RgbColor color{255, 0, 0};
   float opacity{1.0F};
+
+  friend bool operator==(const LayerColorOverlay&, const LayerColorOverlay&) = default;
 };
 
 struct LayerGradientFill {
@@ -370,6 +374,8 @@ struct LayerStroke {
   // knocks out the layer's own content and blends against the layers below.
   // On: the stroke blends over the layer's own content.
   bool overprint{false};
+
+  friend bool operator==(const LayerStroke&, const LayerStroke&) = default;
 };
 
 // A layer-effect contour curve (the descriptor ShpC/CrPt shape shared by the

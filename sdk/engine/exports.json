@@ -9,6 +9,7 @@
   "_patchy_engine_session_destroy",
   "_patchy_engine_session_document",
   "_patchy_engine_session_layer_at",
+  "_patchy_engine_session_essential_layer_style",
   "_patchy_engine_session_channel_count",
   "_patchy_engine_session_channel_at",
   "_patchy_engine_session_channel_pixels",

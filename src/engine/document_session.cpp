@@ -2980,6 +2980,83 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
               }
               affected_region = unite_rect(before, layer_effect_bounds(*layer));
               changed = true;
+            } else if constexpr (std::is_same_v<Command,
+                                                SetEssentialLayerStyle>) {
+              const auto valid_opacity = [](float value) {
+                return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+              };
+              const auto valid_blend = [](BlendMode value) {
+                return static_cast<std::uint32_t>(value) <=
+                       static_cast<std::uint32_t>(BlendMode::Dissolve);
+              };
+              if ((concrete.drop_shadow.has_value() &&
+                   (!valid_blend(concrete.drop_shadow->blend_mode) ||
+                    !valid_opacity(concrete.drop_shadow->opacity) ||
+                    !std::isfinite(concrete.drop_shadow->angle_degrees) ||
+                    !std::isfinite(concrete.drop_shadow->distance) ||
+                    concrete.drop_shadow->distance < 0.0F ||
+                    !std::isfinite(concrete.drop_shadow->spread) ||
+                    concrete.drop_shadow->spread < 0.0F ||
+                    concrete.drop_shadow->spread > 1.0F ||
+                    !std::isfinite(concrete.drop_shadow->size) ||
+                    concrete.drop_shadow->size < 0.0F)) ||
+                  (concrete.color_overlay.has_value() &&
+                   (!valid_blend(concrete.color_overlay->blend_mode) ||
+                    !valid_opacity(concrete.color_overlay->opacity))) ||
+                  (concrete.stroke.has_value() &&
+                   (!valid_blend(concrete.stroke->blend_mode) ||
+                    !valid_opacity(concrete.stroke->opacity) ||
+                    !std::isfinite(concrete.stroke->size) ||
+                    concrete.stroke->size < 0.0F ||
+                    static_cast<std::uint32_t>(concrete.stroke->position) >
+                        static_cast<std::uint32_t>(
+                            LayerStrokePosition::Center)))) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "essential layer style values are invalid");
+                return;
+              }
+
+              auto style = static_cast<const Layer &>(*layer).layer_style();
+              const auto replace_first = [](auto &values, const auto &value) {
+                if (value.has_value()) {
+                  if (values.empty()) {
+                    values.push_back(*value);
+                  } else {
+                    values.front() = *value;
+                  }
+                } else if (!values.empty()) {
+                  values.erase(values.begin());
+                }
+              };
+              replace_first(style.drop_shadows, concrete.drop_shadow);
+              replace_first(style.color_overlays, concrete.color_overlay);
+              replace_first(style.strokes, concrete.stroke);
+              style.effects_visible = concrete.effects_visible;
+              style.layer_mask_hides_effects =
+                  concrete.layer_mask_hides_effects;
+
+              const auto &current =
+                  static_cast<const Layer &>(*layer).layer_style();
+              if (current.effects_visible == style.effects_visible &&
+                  current.layer_mask_hides_effects ==
+                      style.layer_mask_hides_effects &&
+                  current.drop_shadows == style.drop_shadows &&
+                  current.color_overlays == style.color_overlays &&
+                  current.strokes == style.strokes) {
+                return;
+              }
+
+              const auto before = layer_effect_bounds(*layer);
+              prepare_mutation(record_history);
+              layer = document_.find_layer(concrete.layer_id);
+              layer->layer_style() = std::move(style);
+              auto &blocks = layer->unknown_psd_blocks();
+              std::erase_if(blocks, [](const UnknownPsdBlock &block) {
+                return block.key == "lfx2" || block.key == "lrFX" ||
+                       block.key == "plFX" || block.key == "lmfx";
+              });
+              affected_region = unite_rect(before, layer_effect_bounds(*layer));
+              changed = true;
             } else if constexpr (std::is_same_v<Command, SetLayerClipping>) {
               const auto location =
                   find_layer_location(document_.layers(), concrete.layer_id);
