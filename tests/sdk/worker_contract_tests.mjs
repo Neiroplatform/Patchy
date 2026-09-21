@@ -6,7 +6,7 @@ import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "../../sdk/engine/memory-policy.mjs";
 import { createRenderFrame } from "../../sdk/engine/frame-transport.mjs";
-import { inspectPsdBlob, MAX_BROWSER_SOURCE_BYTES, parsePsdHeader,
+import { createPsdBlob, inspectPsdBlob, MAX_BROWSER_SOURCE_BYTES, parsePsdHeader,
   readBlobInput } from "../../sdk/engine/blob-ingress.mjs";
 
 test("WASM export manifest covers every engine symbol used by the adapter", async () => {
@@ -83,7 +83,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
-    "client.undo", "client.redo", "client.renderFrame", "client.save", "client.saveDocument",
+    "client.undo", "client.redo", "client.renderFrame", "client.saveBlob", "client.saveDocument",
     "client.setMemoryBudget", "client.openBlob", "client.inspectBlob"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -94,6 +94,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(worker, /method === "renderFrame"/);
   assert.match(worker, /method === "openBlob"/);
   assert.match(worker, /method === "inspectBlob"/);
+  assert.match(worker, /method === "saveBlob"/);
   assert.match(worker, /createRenderFrame\(bytes, payload\.region\)/);
   assert.match(script, /context\.drawImage\(frame\.bitmap/);
   assert.match(script, /frame\.bitmap\.close\(\)/);
@@ -165,6 +166,15 @@ test("bounded PSD header inspection enables dimension-aware 500 MiB admission", 
   assert.throws(() => parsePsdHeader(psdHeader({ width: 30001 }), 26), /dimensions/);
   const hostile = psdHeader(); hostile[0] = 0;
   assert.throws(() => parsePsdHeader(hostile, 26), /not a PSD/);
+});
+
+test("Worker PSD output Blob validates encoded bytes and retains no Uint8Array field", async () => {
+  const encoded = new Uint8Array(40); encoded.set(psdHeader({ width: 2, height: 3 }));
+  const blob = createPsdBlob(encoded);
+  assert.equal(blob.type, "image/vnd.adobe.photoshop");
+  assert.equal(blob.size, encoded.byteLength);
+  assert.deepEqual([...new Uint8Array(await blob.slice(0, 4).arrayBuffer())], [56, 66, 80, 83]);
+  assert.throws(() => createPsdBlob(new Uint8Array(26)), /not a PSD/);
 });
 
 test("Worker frame transport transfers ImageBitmap without exposing RGBA bytes", () => {
@@ -919,6 +929,19 @@ test("client sends Blob handles without main-thread byte materialization", async
   worker.reply({ id: 2, ok: true, value: { version: 1, width: 1, height: 1,
     channels: 4, depth: 8, colorMode: 3, sourceBytes: 4 } });
   assert.equal((await inspected).width, 1);
+});
+
+test("client receives Worker-native PSD Blobs without byte transfer lists", async () => {
+  const worker = new FakeWorker(); const client = new PatchyWorkerClient(worker);
+  const saved = client.saveBlob();
+  assert.equal(worker.sent[0].message.method, "saveBlob");
+  worker.reply({ id: 1, ok: true, value: new Blob([psdHeader()]) });
+  assert.ok((await saved) instanceof Blob);
+  const documentSaved = client.saveDocumentBlob(17);
+  assert.equal(worker.sent[1].message.method, "saveDocumentBlob");
+  assert.equal(worker.sent[1].message.documentId, 17);
+  worker.reply({ id: 2, ok: true, value: new Blob([psdHeader()]) });
+  assert.equal((await documentSaved).size, 26);
 });
 
 test("client correlates RPC, transfers input and rejects all requests on crash", async () => {

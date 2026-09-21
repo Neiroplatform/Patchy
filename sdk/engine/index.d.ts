@@ -147,6 +147,8 @@ export class PatchyWorkerClient {
   renderFrame(region: Rect): Promise<RenderFrame>;
   save(): Promise<Uint8Array>;
   saveDocument(documentId: number): Promise<Uint8Array>;
+  saveBlob(): Promise<Blob>;
+  saveDocumentBlob(documentId: number): Promise<Blob>;
   close(): Promise<null>;
   terminate(): void;
 }

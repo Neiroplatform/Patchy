@@ -58,6 +58,14 @@ export async function inspectPsdBlob(blob, maximumBytes = MAX_BROWSER_SOURCE_BYT
   return parsePsdHeader(new Uint8Array(header), size);
 }
 
+export function createPsdBlob(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < PSD_HEADER_BYTES) {
+    throw new TypeError("PSD Blob output requires complete encoded bytes");
+  }
+  parsePsdHeader(bytes.subarray(0, PSD_HEADER_BYTES), bytes.byteLength);
+  return new Blob([bytes], { type: "image/vnd.adobe.photoshop" });
+}
+
 export async function readBlobInput(blob, maximumBytes = MAX_BROWSER_SOURCE_BYTES) {
   const size = validateBlob(blob, maximumBytes);
   const buffer = await blob.arrayBuffer();

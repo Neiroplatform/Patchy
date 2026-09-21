@@ -127,6 +127,10 @@ try {
     const inspected = await client.inspectBlob(new Blob([saved]));
     check(inspected.width === 4 && inspected.height === 3 && inspected.sourceBytes === saved.length,
       "bounded PSD header inspection mismatch");
+    const workerSavedBlob = await client.saveDocumentBlob(first.documentId);
+    check(workerSavedBlob.type === "image/vnd.adobe.photoshop" &&
+      workerSavedBlob.size === saved.length,
+    "Worker-native PSD Blob save mismatch");
     await workspaceStore.checkpoint({ id: workspaceOne, name: "First.psd",
       revision: styled.revision, dirty: true, bytes: saved });
     const opacity = await client.setLayerOpacity(layerId, 0.75);

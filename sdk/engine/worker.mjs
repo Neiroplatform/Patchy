@@ -1,6 +1,6 @@
 import { createWorkerHost } from "./worker-host.mjs";
 import { createRenderFrame } from "./frame-transport.mjs";
-import { inspectPsdBlob, readBlobInput } from "./blob-ingress.mjs";
+import { createPsdBlob, inspectPsdBlob, readBlobInput } from "./blob-ingress.mjs";
 import { documentPreflight } from "./memory-policy.mjs";
 
 const WORKER_WORKING_SET_LIMIT = 3 * 1024 * 1024 * 1024;
@@ -33,6 +33,14 @@ self.onmessage = async ({ data }) => {
       const bytes = await readBlobInput(payload.blob);
       const value = await host.dispatch({ method: "open", bytes: bytes.buffer, name: payload.name });
       self.postMessage({ id, ok: true, value });
+      return;
+    }
+    if (method === "saveBlob" || method === "saveDocumentBlob") {
+      const bytes = await host.dispatch({
+        method: method === "saveBlob" ? "save" : "saveDocument",
+        ...(method === "saveDocumentBlob" ? { documentId: payload.documentId } : {}),
+      });
+      self.postMessage({ id, ok: true, value: createPsdBlob(bytes) });
       return;
     }
     if (method === "renderFrame") {

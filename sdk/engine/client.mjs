@@ -225,6 +225,10 @@ export class PatchyWorkerClient {
   renderFrame(region) { return this.#request("renderFrame", { region }); }
   save() { return this.#request("save"); }
   saveDocument(documentId) { return this.#request("saveDocument", { documentId }); }
+  saveBlob() { return this.#request("saveBlob"); }
+  saveDocumentBlob(documentId) {
+    return this.#request("saveDocumentBlob", { documentId });
+  }
   close() { return this.#request("close"); }
 
   #textLayerRequest(method, layerId, input, transferOwnership = false) {

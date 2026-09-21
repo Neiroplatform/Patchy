@@ -939,13 +939,9 @@ async function saveDocument() {
   clearError();
   setBusy(true, "Encoding PSD", "Preparing a local browser download");
   try {
-    const bytes = await client.save();
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = documentName.toLowerCase().endsWith(".psd") ? documentName : `${documentName}.psd`;
-    anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
+    const blob = await client.saveBlob();
+    downloadBlob(blob,
+      documentName.toLowerCase().endsWith(".psd") ? documentName : `${documentName}.psd`);
   } catch (error) { showError("Could not encode PSD", error); }
   finally { setBusy(false); }
 }
