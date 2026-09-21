@@ -309,6 +309,21 @@ Recovery preserves the layered document represented by PSD. In-memory undo
 history and transient, non-dirty selection state remain session-local and are
 not represented as durable recovery data.
 
+Worker lifecycle is observable without exposing the Worker or Wasm instance.
+An uncaught Worker failure starts one replacement runtime, validates and opens
+each tab's latest confirmed recovery generation in its prior order, remaps the
+fresh engine document ids and reactivates the previous workspace. A corrupt or
+missing workspace is isolated from the remaining restores, while a tab that
+failed during a pending checkpoint is explicitly reported as rolled back to
+its last confirmed PSD rather than being presented as current. Checkpoint
+queues from the dead runtime are discarded and recreated only after a new
+engine revision is accepted. The same versioned OPFS root stores bounded,
+schema-validated authoring preferences (active tool, brush size/colour,
+paint preset, font choice, selection tolerance and panel visibility). Malformed
+preferences fall back to defaults. Recovery cleanup is user-triggered, protects
+all open workspace ids and retains the eight newest closed workspaces; no
+background policy silently deletes recovery data.
+
 ## Desktop transition
 
 The Qt shell now stores its canonical document, committed selection and all

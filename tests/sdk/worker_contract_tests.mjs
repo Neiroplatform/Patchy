@@ -51,7 +51,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "createVectorMaskButton", "smartObjectInput", "shapeDialog", "commitShapeButton",
     "adjustmentDialog", "commitAdjustmentButton", "smartFilterDialog", "commitSmartFilterButton",
     "undoButton", "redoButton", "saveButton", "errorBanner", "recoveryButton",
-    "recoveryCount", "recoveryLabel", "recoveryDialog", "recoveryList", "recoveryQuota"]) {
+    "recoveryCount", "recoveryLabel", "recoveryDialog", "recoveryList", "recoveryQuota",
+    "cleanupRecoveryButton"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
@@ -83,6 +84,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
   assert.match(script, /from "\.\/engine\/workspace-store\.mjs"/);
   assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
+  assert.match(script, /recoverWorkerSession/);
+  assert.match(script, /loadPreferences/);
+  assert.match(script, /cleanupRecoveryWorkspaces/);
   assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
   assert.match(script, /const commandRegistry = new Map\(\)/);
   assert.match(script, /registerCommand\("selection\.all"/);
@@ -100,6 +104,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "activateDocument(", "closeDocument(", "saveDocument(", "growSelection(", "selectSimilar(", "setLayerStylePreset("]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
+  assert.match(types, /addStateListener\(listener:/);
   assert.doesNotMatch(`${html}\n${css}\n${script}`, /https?:\/\//);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 560px\)/);
@@ -698,6 +703,9 @@ class FakeWorker extends EventTarget {
 test("client correlates RPC, transfers input and rejects all requests on crash", async () => {
   const worker = new FakeWorker();
   const client = new PatchyWorkerClient(worker);
+  const states = [];
+  const removeStateListener = client.addStateListener((state, error) =>
+    states.push([state, error?.message]));
   const init = client.initialize("./patchy-engine.mjs");
   worker.reply({ id: 1, ok: true, value: { capabilities: (1n << 26n) - 1n } });
   await init;
@@ -734,5 +742,7 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   worker.fail("worker trap");
   await assert.rejects(pending, /worker trap/);
   assert.equal(client.state, "crashed");
+  assert.deepEqual(states, [["ready", undefined], ["crashed", "worker trap"]]);
+  removeStateListener();
   await assert.rejects(client.undo(), /crashed/);
 });

@@ -1,4 +1,5 @@
 import { PatchyWorkerClient } from "../../build/wasm-sdk/site/engine/client.mjs";
+import { recoverWorkerSession } from "../../build/wasm-sdk/site/engine/recovery-controller.mjs";
 import { PatchyWorkspaceStore } from "../../build/wasm-sdk/site/engine/workspace-store.mjs";
 
 const body = document.body;
@@ -9,6 +10,12 @@ const phaseKey = "patchy-wasm-runtime-recovery-phase";
 const workspaceOne = "wasm-runtime-first-v1";
 const workspaceTwo = "wasm-runtime-second-v1";
 let client = null;
+let createdClients = 0;
+
+function createClient() {
+  createdClients++;
+  return new PatchyWorkerClient(new Worker(workerUrl, { type: "module" }));
+}
 
 function check(value, message) {
   if (!value) throw new Error(message);
@@ -16,29 +23,45 @@ function check(value, message) {
 
 try {
   check(await workspaceStore.available(), "origin-private workspace storage is unavailable");
-  client = new PatchyWorkerClient(new Worker(workerUrl, { type: "module" }));
+  client = createClient();
   await client.initialize(moduleUrl.href);
   if (sessionStorage.getItem(phaseKey) === "restore") {
     const listed = await workspaceStore.list();
     check(listed.some(({ id }) => id === workspaceOne) && listed.some(({ id }) => id === workspaceTwo),
       "reload did not retain both isolated workspaces");
-    const recoveredOne = await workspaceStore.restore(workspaceOne);
-    const recoveredTwo = await workspaceStore.restore(workspaceTwo);
-    check(recoveredOne.manifest.generation === 2 && recoveredOne.manifest.revision === "4",
+    client.terminate();
+    const recovered = await recoverWorkerSession({ createClient, moduleUrl: moduleUrl.href,
+      workspaceStore, documents: [
+        { documentId: 11, workspaceId: workspaceOne, active: true },
+        { documentId: 12, workspaceId: workspaceTwo, active: false },
+      ] });
+    client = recovered.client;
+    check(createdClients === 2, "crash recovery did not create exactly one replacement Worker");
+    check(recovered.restored.length === 2 && recovered.failed.length === 0,
+      "multi-document crash recovery was incomplete");
+    const first = recovered.restored[0].snapshot;
+    const second = recovered.restored[1].snapshot;
+    check(recovered.restored[0].manifest.generation === 2 &&
+      recovered.restored[0].manifest.revision === "4",
       "latest complete first generation was not selected");
-    check(recoveredTwo.manifest.generation === 1,
+    check(recovered.restored[1].manifest.generation === 1,
       "second workspace generation was not isolated");
-    const first = await client.open(recoveredOne.bytes, recoveredOne.manifest.name);
-    const second = await client.open(recoveredTwo.bytes, recoveredTwo.manifest.name);
     check(first.width === 4 && first.height === 3 && first.layers.length === 1,
       "first recovered PSD lost authored state");
     check(second.width === 2 && second.height === 2 && second.documents.length === 2,
       "second recovered PSD or multi-document isolation failed");
+    check(recovered.activeSnapshot.documentId === first.documentId,
+      "prior active workspace was not reactivated after id remap");
+    await workspaceStore.savePreferences({ tool: "brush", brushSize: 37,
+      color: "#123456", paintPreset: "ocean", font: "Georgia",
+      selectionTolerance: 28, panelsHidden: true });
+    check((await workspaceStore.loadPreferences()).brushSize === 37,
+      "browser preferences did not survive OPFS round-trip");
     await workspaceStore.remove(workspaceOne);
     await workspaceStore.remove(workspaceTwo);
     sessionStorage.removeItem(phaseKey);
     body.dataset.result = "PASS";
-    body.textContent = `PASS reload-recovery documents=${second.documents.length} generations=2,1`;
+    body.textContent = `PASS crash-recovery documents=${second.documents.length} generations=2,1 workers=${createdClients}`;
   } else {
     for (const id of [workspaceOne, workspaceTwo]) {
       try { await workspaceStore.remove(id); } catch { /* A clean smoke run has no prior fixture. */ }

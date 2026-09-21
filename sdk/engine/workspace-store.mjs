@@ -2,7 +2,13 @@ const ROOT_NAME = "patchy-workspaces-v1";
 const MANIFEST_VERSION = 1;
 const MANIFEST_FILES = ["manifest-a.json", "manifest-b.json"];
 const SNAPSHOT_FILES = ["snapshot-a.psd", "snapshot-b.psd"];
+const PREFERENCES_FILE = "preferences.json";
+const PREFERENCES_VERSION = 1;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const TOOL_IDS = new Set(["move", "marquee", "lasso", "polygon", "magic", "pan",
+  "brush", "eraser", "clone", "heal", "gradient", "text"]);
+const PAINT_PRESETS = new Set(["solid", "foreground-transparent", "black-white",
+  "sunset", "ocean", "checker", "dots"]);
 
 export class PatchyCheckpointQueue {
   #save;
@@ -130,6 +136,36 @@ export class PatchyWorkspaceStore {
     await root.removeEntry(id, { recursive: true });
   }
 
+  async cleanup({ protectedIds = [], keepNewest = 8 } = {}) {
+    if (!Number.isSafeInteger(keepNewest) || keepNewest < 0 || keepNewest > 128) {
+      throw new RangeError("Workspace cleanup keepNewest must be between 0 and 128");
+    }
+    const protectedSet = new Set(protectedIds);
+    for (const id of protectedSet) validateId(id);
+    const candidates = (await this.list()).filter((manifest) => !protectedSet.has(manifest.id));
+    const removed = candidates.slice(keepNewest);
+    for (const manifest of removed) await this.remove(manifest.id);
+    return removed;
+  }
+
+  async loadPreferences(fallback = {}) {
+    try {
+      const root = await this.#root(false);
+      const value = JSON.parse(new TextDecoder().decode(await readBytes(root, PREFERENCES_FILE)));
+      return { ...fallback, ...normalizePreferences(value, true) };
+    } catch {
+      return { ...fallback };
+    }
+  }
+
+  async savePreferences(value) {
+    const preferences = normalizePreferences(value, false);
+    const root = await this.#root(true);
+    await writeFile(root, PREFERENCES_FILE,
+      new TextEncoder().encode(JSON.stringify({ version: PREFERENCES_VERSION, ...preferences })));
+    return preferences;
+  }
+
   async estimate() {
     const estimate = await globalThis.navigator?.storage?.estimate?.();
     return { usage: Number(estimate?.usage || 0), quota: Number(estimate?.quota || 0) };
@@ -215,4 +251,47 @@ function validManifest(value, id) {
     Number.isSafeInteger(value.snapshotSize) && value.snapshotSize > 0 &&
     /^[0-9a-f]{64}$/.test(value.snapshotSha256) &&
     typeof value.updatedAt === "string";
+}
+
+function normalizePreferences(value, stored) {
+  if (!value || typeof value !== "object" || (stored && value.version !== PREFERENCES_VERSION)) {
+    throw new TypeError("Invalid workspace preferences");
+  }
+  const result = {};
+  if (value.tool !== undefined) {
+    if (!TOOL_IDS.has(value.tool)) throw new TypeError("Invalid preferred tool");
+    result.tool = value.tool;
+  }
+  if (value.brushSize !== undefined) {
+    const brushSize = Number(value.brushSize);
+    if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > 512) {
+      throw new RangeError("Preferred brush size must be between 1 and 512");
+    }
+    result.brushSize = brushSize;
+  }
+  if (value.color !== undefined) {
+    if (typeof value.color !== "string" || !/^#[0-9a-f]{6}$/i.test(value.color)) {
+      throw new TypeError("Invalid preferred colour");
+    }
+    result.color = value.color.toLowerCase();
+  }
+  for (const [key, limit] of [["paintPreset", 64], ["font", 256]]) {
+    if (value[key] === undefined) continue;
+    if (typeof value[key] !== "string" || !value[key].trim() || value[key].length > limit) {
+      throw new TypeError(`Invalid preferred ${key}`);
+    }
+    result[key] = value[key].trim();
+  }
+  if (result.paintPreset !== undefined && !PAINT_PRESETS.has(result.paintPreset)) {
+    throw new TypeError("Invalid preferred paint preset");
+  }
+  if (value.selectionTolerance !== undefined) {
+    const tolerance = Number(value.selectionTolerance);
+    if (!Number.isInteger(tolerance) || tolerance < 0 || tolerance > 255) {
+      throw new RangeError("Selection tolerance must be between 0 and 255");
+    }
+    result.selectionTolerance = tolerance;
+  }
+  if (value.panelsHidden !== undefined) result.panelsHidden = Boolean(value.panelsHidden);
+  return result;
 }

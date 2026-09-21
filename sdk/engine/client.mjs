@@ -4,6 +4,7 @@ export class PatchyWorkerClient {
   #pending = new Map();
   #state = "starting";
   #capabilities = 0n;
+  #stateListeners = new Set();
 
   constructor(worker) {
     this.#worker = worker;
@@ -15,13 +16,19 @@ export class PatchyWorkerClient {
   get state() { return this.#state; }
   get capabilities() { return this.#capabilities; }
 
+  addStateListener(listener) {
+    if (typeof listener !== "function") throw new TypeError("Worker state listener must be a function");
+    this.#stateListeners.add(listener);
+    return () => this.#stateListeners.delete(listener);
+  }
+
   async initialize(moduleUrl, moduleOptions = {}) {
     if (typeof window !== "undefined" && !globalThis.crossOriginIsolated) {
       throw new Error("Patchy Worker requires COOP/COEP cross-origin isolation");
     }
     const info = await this.#request("initialize", { moduleUrl, moduleOptions });
     this.#capabilities = info.capabilities;
-    this.#state = "ready";
+    this.#setState("ready");
   }
 
   open(bytes, name = "Document.psd") {
@@ -240,8 +247,16 @@ export class PatchyWorkerClient {
   }
 
   #crash(error, state = "crashed") {
-    this.#state = state;
+    this.#setState(state, error);
     for (const pending of this.#pending.values()) pending.reject(error);
     this.#pending.clear();
+  }
+
+  #setState(state, error = null) {
+    if (this.#state === state) return;
+    this.#state = state;
+    for (const listener of this.#stateListeners) {
+      try { listener(state, error); } catch { /* Lifecycle observers cannot break RPC cleanup. */ }
+    }
   }
 }

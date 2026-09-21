@@ -200,3 +200,28 @@ test("invalid ids and empty checkpoints fail closed", async () => {
   await assert.rejects(store.checkpoint({ id: "valid", revision: 1n,
     bytes: new Uint8Array() }), /non-empty PSD bytes/);
 });
+
+test("preferences round-trip with validation and malformed-data fallback", async () => {
+  const { root, store } = fixture();
+  const saved = await store.savePreferences({ tool: "brush", brushSize: 42,
+    color: "#AABBCC", paintPreset: "ocean", font: "Georgia",
+    selectionTolerance: 31, panelsHidden: true });
+  assert.deepEqual(saved, { tool: "brush", brushSize: 42, color: "#aabbcc",
+    paintPreset: "ocean", font: "Georgia", selectionTolerance: 31, panelsHidden: true });
+  assert.deepEqual(await store.loadPreferences({ brushSize: 12 }), saved);
+  await assert.rejects(store.savePreferences({ tool: "unknown" }), /Invalid preferred tool/);
+  const base = await root.getDirectoryHandle("patchy-workspaces-v1");
+  base.files.set("preferences.json", new TextEncoder().encode("not-json"));
+  assert.deepEqual(await store.loadPreferences({ tool: "marquee" }), { tool: "marquee" });
+});
+
+test("explicit cleanup keeps newest recovery items and protects open workspaces", async () => {
+  const { store } = fixture();
+  for (const id of ["oldest", "protected", "newer", "newest"]) {
+    await store.checkpoint({ id, name: `${id}.psd`, revision: 1n,
+      bytes: new Uint8Array([56, 66, 80, 83, id.length]) });
+  }
+  const removed = await store.cleanup({ protectedIds: ["protected"], keepNewest: 2 });
+  assert.deepEqual(removed.map((item) => item.id), ["oldest"]);
+  assert.deepEqual((await store.list()).map((item) => item.id), ["newest", "newer", "protected"]);
+});

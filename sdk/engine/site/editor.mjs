@@ -1,10 +1,11 @@
 import { PatchyWorkerClient } from "./engine/client.mjs";
+import { recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
-const worker = new Worker(new URL("./engine/worker.mjs", import.meta.url), { type: "module", name: "patchy-engine" });
-const client = new PatchyWorkerClient(worker);
+const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
+let client = null;
 const workspaceStore = new PatchyWorkspaceStore();
 const canvas = $("documentCanvas");
 const context = canvas.getContext("2d", { alpha: true });
@@ -30,6 +31,9 @@ let lassoDraft = null;
 let polygonDraft = null;
 let clipboardImageBlob = null;
 let workspaceAvailable = false;
+let automaticRecoveryEnabled = false;
+let recoveryPromise = null;
+let preferenceTimer = null;
 const workspaceIds = new Map();
 const checkpointStates = new Map();
 const checkpointQueues = new Map();
@@ -38,6 +42,17 @@ const knownWorkspaceIds = new Set();
 const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
 const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
 const commandRegistry = new Map();
+
+function createEngineClient() {
+  const next = new PatchyWorkerClient(new Worker(
+    new URL("./engine/worker.mjs", import.meta.url), { type: "module", name: "patchy-engine" }));
+  next.addStateListener((state) => {
+    if (state === "crashed" && automaticRecoveryEnabled && client === next) {
+      queueMicrotask(() => recoverEngineAfterCrash());
+    }
+  });
+  return next;
+}
 
 function registerCommand(id, buttonId, run, enabled = () => true) {
   commandRegistry.set(id, { run, enabled, button: buttonId ? $(buttonId) : null });
@@ -232,6 +247,83 @@ function renderRecoveryStatus(documentId = snapshot?.documentId) {
 
 function updateRecoveryCount() { $("recoveryCount").textContent = String(knownWorkspaceIds.size); }
 
+function preferenceSnapshot() {
+  return {
+    tool: canvasTool,
+    brushSize: Number($("brushSizeInput").value),
+    color: $("brushColorInput").value,
+    paintPreset: $("paintPresetSelect").value,
+    font: $("textFontInput").value.trim() || "Arial",
+    selectionTolerance: Number($("selectionToleranceInput").value),
+    panelsHidden: shell.classList.contains("panels-hidden"),
+  };
+}
+
+function persistPreferences() {
+  if (!workspaceAvailable) return;
+  clearTimeout(preferenceTimer);
+  preferenceTimer = setTimeout(async () => {
+    try { await workspaceStore.savePreferences(preferenceSnapshot()); }
+    catch (error) { showError("Could not save local preferences", error); }
+  }, 120);
+}
+
+function applyPreferences(preferences) {
+  $("brushSizeInput").value = String(preferences.brushSize);
+  $("brushSizeOutput").textContent = `${preferences.brushSize} px`;
+  $("brushColorInput").value = preferences.color;
+  $("paintPresetSelect").value = preferences.paintPreset;
+  $("textFontInput").value = preferences.font;
+  $("selectionToleranceInput").value = String(preferences.selectionTolerance);
+  $("selectionToleranceOutput").textContent = String(preferences.selectionTolerance);
+  shell.classList.toggle("panels-hidden", preferences.panelsHidden);
+  $("togglePanelsButton").setAttribute("aria-pressed", String(preferences.panelsHidden));
+  setCanvasTool(preferences.tool);
+}
+
+async function recoverEngineAfterCrash() {
+  if (recoveryPromise) return recoveryPromise;
+  const documents = (snapshot?.documents || []).map((documentTab) => ({
+    documentId: documentTab.id,
+    workspaceId: workspaceIds.get(documentTab.id),
+    active: documentTab.active,
+    confirmed: checkpointStates.get(documentTab.id) === "confirmed",
+  })).filter((documentTab) => documentTab.workspaceId);
+  automaticRecoveryEnabled = false;
+  recoveryPromise = (async () => {
+    setBusy(true, "Restarting editor engine", "Restoring confirmed local workspaces");
+    setSessionState("crashed", "Worker crashed · recovering");
+    try {
+      const result = await recoverWorkerSession({ createClient: createEngineClient,
+        moduleUrl, workspaceStore, documents });
+      client = result.client;
+      workspaceIds.clear(); checkpointStates.clear(); checkpointQueues.clear();
+      for (const item of result.restored) {
+        workspaceIds.set(item.documentId, item.workspaceId);
+        checkpointStates.set(item.documentId, "confirmed");
+      }
+      selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+      await acceptSnapshot(result.activeSnapshot);
+      automaticRecoveryEnabled = true;
+      const reverted = result.restored.filter((item) => !item.confirmedAtCrash);
+      if (result.failed.length || reverted.length) {
+        const names = result.failed.map((item) => item.workspaceId).join(", ");
+        showError("Editor restarted with partial recovery",
+          new Error(`${result.restored.length} workspace(s) restored from confirmed snapshots; ${result.failed.length} could not be restored${names ? `: ${names}` : ""}${reverted.length ? `; ${reverted.length} had unconfirmed changes and were rolled back` : ""}.`));
+      } else {
+        setSessionState(result.activeSnapshot ? "document" : "ready",
+          result.restored.length ? `Recovered ${result.restored.length} workspace${result.restored.length === 1 ? "" : "s"}` : "Engine restarted");
+      }
+    } catch (error) {
+      showError("Could not restart editor engine", error);
+    } finally {
+      setBusy(false);
+      recoveryPromise = null;
+    }
+  })();
+  return recoveryPromise;
+}
+
 function scheduleCheckpoint(next) {
   if (!workspaceAvailable || !next?.documentId) { renderRecoveryStatus(next?.documentId); return Promise.resolve(); }
   const workspaceId = workspaceIds.get(next.documentId) || newWorkspaceId();
@@ -351,6 +443,22 @@ async function openRecoveryDialog() {
   if (busy) return;
   $("recoveryDialog").showModal();
   await refreshRecoveryList();
+}
+
+async function cleanupRecoveryWorkspaces() {
+  if (busy || !workspaceAvailable) return;
+  const protectedIds = [...new Set(workspaceIds.values())];
+  const removable = (await workspaceStore.list()).filter((item) => !protectedIds.includes(item.id)).slice(8);
+  if (!removable.length) {
+    $("recoverySummary").textContent = "No older recovery workspaces are outside the keep-newest boundary.";
+    return;
+  }
+  if (!confirm(`Delete ${removable.length} older recovery workspace${removable.length === 1 ? "" : "s"}? Open workspaces and the 8 newest closed workspaces are protected.`)) return;
+  try {
+    const removed = await workspaceStore.cleanup({ protectedIds, keepNewest: 8 });
+    for (const manifest of removed) knownWorkspaceIds.delete(manifest.id);
+    await refreshRecoveryList();
+  } catch (error) { showError("Could not clean recovery workspaces", error); }
 }
 
 function formatKind(layer) { return layerKinds[layer.kind] || `Layer ${layer.kind}`; }
@@ -531,6 +639,7 @@ function setCanvasTool(tool) {
     ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
   }
+  persistPreferences();
 }
 
 function fullSelectionMask() {
@@ -1439,7 +1548,11 @@ $("commitLayerTransformButton").addEventListener("click", () => {
 });
 $("brushSizeInput").addEventListener("input", () => {
   $("brushSizeOutput").textContent = `${$("brushSizeInput").value} px`;
+  persistPreferences();
 });
+$("brushColorInput").addEventListener("input", persistPreferences);
+$("paintPresetSelect").addEventListener("change", persistPreferences);
+$("textFontInput").addEventListener("change", persistPreferences);
 $("createMaskButton").addEventListener("click", () => {
   const layer = selectedLayer();
   if (layer) mutate("Creating layer mask", () => client.createLayerMask(layer.id));
@@ -1539,6 +1652,7 @@ $("featherSelectionButton").addEventListener("click", () => commitSelectionMask(
   "Feathering selection", boxBlurMask(fullSelectionMask(), snapshot.width, snapshot.height, 4)));
 $("selectionToleranceInput").addEventListener("input", () => {
   $("selectionToleranceOutput").textContent = $("selectionToleranceInput").value;
+  persistPreferences();
 });
 $("saveChannelButton").addEventListener("click", () => mutate("Saving alpha channel", () => client.addAlphaChannel(`Alpha ${snapshot.channels.length + 1}`)));
 $("savePathButton").addEventListener("click", () => {
@@ -1604,7 +1718,9 @@ $("layerBlendSelect").addEventListener("change", () => {
 $("togglePanelsButton").addEventListener("click", () => {
   const hidden = shell.classList.toggle("panels-hidden");
   $("togglePanelsButton").setAttribute("aria-pressed", String(hidden));
+  persistPreferences();
 });
+$("cleanupRecoveryButton").addEventListener("click", cleanupRecoveryWorkspaces);
 
 canvas.addEventListener("pointerdown", (event) => {
   if (busy || !snapshot || event.button !== 0) return;
@@ -1783,14 +1899,22 @@ window.addEventListener("drop", (event) => {
 });
 
 try {
-  await client.initialize(new URL("./patchy-engine.mjs", location.href).href);
+  client = createEngineClient();
+  await client.initialize(moduleUrl);
   workspaceAvailable = await workspaceStore.available();
-  if (workspaceAvailable) await refreshRecoveryList();
+  if (workspaceAvailable) {
+    applyPreferences(await workspaceStore.loadPreferences({ tool: "marquee", brushSize: 24,
+      color: "#111111", paintPreset: "solid", font: "Arial",
+      selectionTolerance: 32, panelsHidden: false }));
+    await refreshRecoveryList();
+  } else {
+    setCanvasTool("marquee");
+  }
+  automaticRecoveryEnabled = true;
   renderRecoveryStatus();
   setSessionState("ready", "Engine ready");
   $("busyState").hidden = true;
   updateControls();
-  setCanvasTool("marquee");
 } catch (error) {
   showError("Could not start engine", error);
   $("busyState").hidden = true;

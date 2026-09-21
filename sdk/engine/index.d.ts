@@ -35,6 +35,7 @@ export class PatchyWorkerClient {
   constructor(worker: Worker);
   readonly state: WorkerState;
   readonly capabilities: bigint;
+  addStateListener(listener: (state: WorkerState, error: Error | null) => void): () => void;
   initialize(moduleUrl: string, moduleOptions?: object): Promise<void>;
   open(bytes: Uint8Array, name?: string): Promise<DocumentProjection>;
   create(width: number, height: number, name?: string): Promise<DocumentProjection>;
