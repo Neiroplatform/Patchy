@@ -21,6 +21,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const html = await readFile(new URL("sdk/engine/site/patchy.html", root), "utf8");
   const css = await readFile(new URL("sdk/engine/site/editor.css", root), "utf8");
   const script = await readFile(new URL("sdk/engine/site/editor.mjs", root), "utf8");
+  const types = await readFile(new URL("sdk/engine/index.d.ts", root), "utf8");
   const nodeServer = await readFile(new URL("scripts/wasm/serve.mjs", root), "utf8");
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "layerList",
@@ -81,6 +82,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /registerCommand\("selection\.all"/);
   assert.match(script, /registerCommand\("tool\.clone"/);
   assert.match(script, /registerCommand\("tool\.gradient"/);
+  for (const contract of ["selectionMask:", "setSelectionMask(", "growSelection(", "selectSimilar("]) {
+    assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
+  }
   assert.doesNotMatch(`${html}\n${css}\n${script}`, /https?:\/\//);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 560px\)/);

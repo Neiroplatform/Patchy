@@ -15,7 +15,9 @@ export interface DocumentProjection {
   channels: number; activeLayerId: bigint; revision: bigint; stateId: bigint;
   layerCount: number; hasActiveLayer: boolean; dirty: boolean;
   canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
-  selection: Rect[]; channels: Array<{ id: bigint; kind: number; name: string }>;
+  selection: Rect[];
+  selectionMask: null | { bounds: Rect; gray: Uint8Array };
+  channels: Array<{ id: bigint; kind: number; name: string }>;
   paths: Array<{ id: bigint; kind: number; name: string; subpathCount: number;
     anchorCount: number; clipping: boolean; anchors: VectorAnchor[];
     subpaths: VectorSubpathInput[] }>;
@@ -47,11 +49,14 @@ export class PatchyWorkerClient {
   rotateCanvas(clockwiseDegrees: number): Promise<DocumentProjection>;
   cropDocument(crop: Rect): Promise<DocumentProjection>;
   setSelection(rects: Rect[]): Promise<DocumentProjection>;
+  setSelectionMask(bounds: Rect, gray: Uint8Array): Promise<DocumentProjection>;
   clearSelection(): Promise<DocumentProjection>;
   invertSelection(): Promise<DocumentProjection>;
   expandSelection(pixels: number): Promise<DocumentProjection>;
   contractSelection(pixels: number): Promise<DocumentProjection>;
   borderSelection(pixels: number): Promise<DocumentProjection>;
+  growSelection(tolerance: number): Promise<DocumentProjection>;
+  selectSimilar(tolerance: number): Promise<DocumentProjection>;
   addAlphaChannel(name?: string): Promise<DocumentProjection>;
   addDocumentPath(input: { name: string; kind?: number; clipping?: boolean;
     path: VectorPathInput }): Promise<DocumentProjection>;
