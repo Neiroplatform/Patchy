@@ -72,7 +72,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.setSelection", "client.setSelectionMask", "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
     "client.layerPixels", "client.replacePixelLayer", "client.previewLayerTransform",
-    "client.transformLayer", "client.addTextLayer",
+    "client.transformLayer", "client.previewRasterStroke", "client.applyRasterStroke",
+    "client.addTextLayer",
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
     "client.updateVectorShape",
     "client.addAdjustment", "client.updateAdjustment", "client.addSmartObject",
@@ -91,6 +92,14 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.setMemoryBudget", "client.openBlob", "client.inspectBlob", "client.placePsdSmartObject"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
+  const rasterPreviewFlow = script.slice(script.indexOf("function rasterStrokePayload"),
+    script.indexOf("async function fillSelectedPixels"));
+  const rasterCommitFlow = script.slice(script.indexOf("function movePaint"),
+    script.indexOf("function escapeHtml"));
+  assert.doesNotMatch(`${rasterPreviewFlow}\n${rasterCommitFlow}`,
+    /client\.(?:layerPixels|replacePixelLayer)/);
+  assert.match(rasterPreviewFlow, /client\.previewRasterStroke/);
+  assert.match(rasterCommitFlow, /client\.applyRasterStroke/);
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
   assert.match(script, /from "\.\/engine\/workspace-store\.mjs"/);
   assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
@@ -963,6 +972,38 @@ test("worker previews without mutation and commits one stale-guarded layer trans
   await assert.rejects(host.dispatch({ method: "transformLayer", layerId: "7", quad,
     interpolation: 1, expectedStateId: "4", expectedRevision: "4" }),
   (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
+  host.dispose();
+});
+
+test("worker previews and commits one exact-state raster stroke", async () => {
+  let revision = 4n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 29n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision }; },
+    previewRasterStroke(session, before, input) {
+      calls.push(["preview", session, before.revision, input]);
+      return { region: { x: 1, y: 1, width: 3, height: 2 }, rgba: new Uint8Array(24) };
+    },
+    applyRasterStroke(session, before, input) {
+      calls.push(["commit", session, before.revision, input]); revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 8, height: 4, name: "Paint.psd" });
+  const message = { layerId: "7", mode: 0, brushSize: 4, color: [255, 0, 0, 255],
+    points: [[1, 1], [4, 2]], source: [0, 0], expectedStateId: "4",
+    expectedRevision: "4" };
+  const preview = await host.dispatch({ method: "previewRasterStroke", ...message,
+    cancellation: new SharedArrayBuffer(4) });
+  assert.equal(preview.rgba.byteLength, 24); assert.equal(revision, 4n);
+  const committed = await host.dispatch({ method: "applyRasterStroke", ...message });
+  assert.equal(committed.revision, 5n);
+  await assert.rejects(host.dispatch({ method: "applyRasterStroke", ...message }),
+    (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
   host.dispose();
 });

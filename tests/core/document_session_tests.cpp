@@ -5,6 +5,7 @@
 #include "core/smart_object.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/layer_transform.hpp"
+#include "core/raster_stroke.hpp"
 #include "core/vector_raster.hpp"
 #include "core/vector_live_shapes.hpp"
 #include "psd/psd_document_io.hpp"
@@ -2144,6 +2145,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_MEMORY_CONTROL) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_TRANSFORM) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_STROKE) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -4200,6 +4202,132 @@ void core_layer_transform_preserves_editable_text_and_fails_closed() {
                    before_rejection.pixels().data().begin()));
 }
 
+void core_raster_stroke_respects_selection_and_immutable_clone_source() {
+  Document document(14, 4, PixelFormat::rgba8());
+  PixelBuffer pixels(14, 4, PixelFormat::rgba8());
+  pixels.clear(0);
+  pixels.pixel(1, 1)[2] = 255; pixels.pixel(1, 1)[3] = 255;
+  const auto layer_id = document.add_pixel_layer("Raster", std::move(pixels)).id();
+  patchy::RasterStrokeRequest brush;
+  brush.mode = patchy::RasterStrokeMode::Brush;
+  brush.brush_size = 1;
+  brush.color = {255, 0, 0, 255};
+  brush.points = {{2.0, 1.0}, {6.0, 1.0}};
+  brush.selection = {{0, 0, 4, 4}};
+  patchy::RasterStrokeResult result;
+  std::string error;
+  CHECK(patchy::apply_raster_stroke(document, layer_id, brush, &result, &error));
+  CHECK(document.find_layer(layer_id)->pixels().pixel(2, 1)[0] == 255);
+  CHECK(document.find_layer(layer_id)->pixels().pixel(6, 1)[3] == 0);
+
+  patchy::RasterStrokeRequest clone;
+  clone.mode = patchy::RasterStrokeMode::Clone;
+  clone.brush_size = 1;
+  clone.source = {1.0, 1.0};
+  clone.points = {{6.0, 2.0}, {11.0, 2.0}};
+  CHECK(patchy::apply_raster_stroke(document, layer_id, clone, &result, &error));
+  const auto *layer = document.find_layer(layer_id);
+  CHECK(layer->pixels().pixel(6, 2)[2] == 255);
+  CHECK(layer->pixels().pixel(7, 2)[0] == 255);
+  CHECK(layer->pixels().pixel(11, 2)[3] == 0);
+
+  auto heal = clone;
+  heal.mode = patchy::RasterStrokeMode::Heal;
+  heal.points = {{12.0, 2.0}};
+  CHECK(patchy::apply_raster_stroke(document, layer_id, heal, &result, &error));
+  CHECK(document.find_layer(layer_id)->pixels().pixel(12, 2)[2] > 0);
+  CHECK(document.find_layer(layer_id)->pixels().pixel(12, 2)[2] < 255);
+
+  PixelBuffer selection_mask(14, 4, PixelFormat::gray8());
+  selection_mask.clear(0); selection_mask.pixel(13, 0)[0] = 128;
+  auto soft_brush = brush;
+  soft_brush.points = {{13.0, 0.0}}; soft_brush.selection.clear();
+  soft_brush.selection_mask_bounds = {0, 0, 14, 4};
+  soft_brush.selection_mask = std::move(selection_mask);
+  CHECK(patchy::apply_raster_stroke(document, layer_id, soft_brush, &result, &error));
+  CHECK(document.find_layer(layer_id)->pixels().pixel(13, 0)[3] > 0);
+  CHECK(document.find_layer(layer_id)->pixels().pixel(13, 0)[3] < 255);
+
+  document.find_layer(layer_id)->set_lock_flags(patchy::kLayerLockTransparentPixels);
+  auto transparent_locked = brush;
+  transparent_locked.points = {{0.0, 3.0}}; transparent_locked.selection.clear();
+  const auto before_transparent_span = document.find_layer(layer_id)->pixels().data();
+  const std::vector<std::uint8_t> before_transparent(
+      before_transparent_span.begin(), before_transparent_span.end());
+  CHECK(!patchy::apply_raster_stroke(document, layer_id, transparent_locked,
+                                     nullptr, &error));
+  CHECK(std::equal(document.find_layer(layer_id)->pixels().data().begin(),
+                   document.find_layer(layer_id)->pixels().data().end(),
+                   before_transparent.begin()));
+
+  auto locked = document.find_layer(layer_id)->lock_flags() |
+                patchy::kLayerLockImagePixels;
+  document.find_layer(layer_id)->set_lock_flags(locked);
+  const auto before_span = document.find_layer(layer_id)->pixels().data();
+  const std::vector<std::uint8_t> before(before_span.begin(), before_span.end());
+  CHECK(!patchy::apply_raster_stroke(document, layer_id, brush, nullptr, &error));
+  CHECK(std::equal(document.find_layer(layer_id)->pixels().data().begin(),
+                   document.find_layer(layer_id)->pixels().data().end(), before.begin()));
+}
+
+void engine_host_protocol_previews_and_commits_one_raster_stroke() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 8, 4, &error);
+  CHECK(session != nullptr);
+  patchy_engine_document_projection before{}; before.struct_size = sizeof(before);
+  CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+  std::array<std::uint8_t, 8 * 4 * 4> rgba{};
+  patchy_engine_pixel_layer_input input{}; input.struct_size = sizeof(input);
+  input.expected_state_id = before.state_id; input.expected_revision = before.revision;
+  input.bounds = {0, 0, 8, 4}; input.width = 8; input.height = 4;
+  input.rgba = rgba.data(); input.rgba_size = rgba.size();
+  input.name = "Stroke"; input.name_size = std::strlen(input.name);
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event, &error) == 1);
+  const auto layer_id = event.affected_layer_id;
+  patchy_engine_document_projection ready{}; ready.struct_size = sizeof(ready);
+  CHECK(patchy_engine_session_document(session, &ready, &error) == 1);
+  const std::array<patchy_engine_stroke_point, 2> points{{{1.0, 1.0}, {6.0, 1.0}}};
+  patchy_engine_raster_stroke stroke{}; stroke.struct_size = sizeof(stroke);
+  stroke.mode = PATCHY_ENGINE_RASTER_BRUSH; stroke.layer_id = layer_id;
+  stroke.brush_size = 2; stroke.red = 220; stroke.alpha = 255;
+  stroke.points = points.data(); stroke.point_count = points.size();
+  patchy_engine_rect region{}; patchy_engine_buffer preview{};
+  const auto cancel = [](std::int32_t, std::int32_t, void*) { return 0; };
+  CHECK(patchy_engine_session_preview_raster_stroke(
+            session, ready.state_id, ready.revision, &stroke, cancel, nullptr,
+            &region, &preview, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(patchy_engine_session_preview_raster_stroke(
+            session, ready.state_id, ready.revision, &stroke, nullptr, nullptr,
+            &region, &preview, &error) == 1);
+  CHECK(region.width > 0 && region.height > 0 && preview.size > 0);
+  patchy_engine_buffer_release(&preview);
+  patchy_engine_document_projection unchanged{}; unchanged.struct_size = sizeof(unchanged);
+  CHECK(patchy_engine_session_document(session, &unchanged, &error) == 1);
+  CHECK(unchanged.revision == ready.revision);
+  CHECK(patchy_engine_session_apply_raster_stroke(
+            session, ready.state_id, ready.revision, &stroke, &event, &error) == 1);
+  CHECK(event.revision == ready.revision + 1U && event.affected_layer_id == layer_id);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  patchy_engine_buffer saved{};
+  CHECK(patchy_engine_session_save_psd(session, &saved, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(runtime, saved.data, saved.size, &error);
+  CHECK(reopened != nullptr);
+  patchy_engine_buffer reopened_pixels{};
+  CHECK(patchy_engine_session_layer_rgba8_pixels(
+            reopened, layer_id, &reopened_pixels, &error) == 1);
+  CHECK(std::any_of(reopened_pixels.data, reopened_pixels.data + reopened_pixels.size,
+                    [](std::uint8_t value) { return value != 0; }));
+  patchy_engine_buffer_release(&reopened_pixels);
+  patchy_engine_session_destroy(reopened); patchy_engine_buffer_release(&saved);
+  patchy_engine_session_destroy(session); patchy_engine_runtime_destroy(runtime);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -4288,5 +4416,9 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_transforms_layers_with_engine_preview_and_atomic_commit},
       {"core_layer_transform_preserves_editable_text_and_fails_closed",
        core_layer_transform_preserves_editable_text_and_fails_closed},
+      {"core_raster_stroke_respects_selection_and_immutable_clone_source",
+       core_raster_stroke_respects_selection_and_immutable_clone_source},
+      {"engine_host_protocol_previews_and_commits_one_raster_stroke",
+       engine_host_protocol_previews_and_commits_one_raster_stroke},
   };
 }

@@ -92,6 +92,18 @@ export class PatchyWorkerClient {
       expectedRevision: String(input.expectedRevision),
     });
   }
+  previewRasterStroke(input) {
+    const cancellation = input.cancellation instanceof Int32Array
+      ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
+    return this.#request("previewRasterStroke", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision), cancellation: cancellation.buffer });
+  }
+  applyRasterStroke(input) {
+    return this.#request("applyRasterStroke", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
   closeDocument(documentId) { return this.#request("closeDocument", { documentId }); }
   setMemoryBudget(documentBytes, globalBytes) {
     return this.#request("setMemoryBudget", { documentBytes, globalBytes });

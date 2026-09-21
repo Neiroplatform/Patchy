@@ -32,6 +32,11 @@ let transformPreviewGeneration = 0;
 let transformPreviewRestore = null;
 let transformPreviewCancellation = null;
 let paintDraft = null;
+let rasterPreviewPending = null;
+let rasterPreviewInFlight = false;
+let rasterPreviewGeneration = 0;
+let rasterPreviewRestore = null;
+let rasterPreviewCancellation = null;
 let textEditingId = null;
 let cloneSource = null;
 let gradientDraft = null;
@@ -1729,35 +1734,78 @@ function commitLayerQuad(layer, quad, title = "Transforming layer") {
 }
 
 function drawPaintSegment(draft, from, to) {
-  const size = Number($("brushSizeInput").value);
+  const size = draft.brushSize;
   const erase = draft.tool === "eraser";
-  const localFrom = { x: from.x - draft.layer.bounds.x, y: from.y - draft.layer.bounds.y };
-  const localTo = { x: to.x - draft.layer.bounds.x, y: to.y - draft.layer.bounds.y };
   const paint = (target, a, b, color, composite) => {
     target.save(); target.lineCap = "round"; target.lineJoin = "round";
     target.lineWidth = size; target.globalCompositeOperation = composite;
     target.strokeStyle = color; target.beginPath(); target.moveTo(a.x, a.y); target.lineTo(b.x, b.y); target.stroke();
     target.beginPath(); target.arc(b.x, b.y, size / 2, 0, Math.PI * 2); target.fillStyle = color; target.fill(); target.restore();
   };
-  if (draft.tool === "clone" || draft.tool === "heal") {
-    const offset = { x: draft.source.x - draft.start.x, y: draft.source.y - draft.start.y };
-    const sample = { x: to.x + offset.x - draft.layer.bounds.x,
-      y: to.y + offset.y - draft.layer.bounds.y };
-    draft.context.save();
-    draft.context.beginPath(); draft.context.arc(localTo.x, localTo.y, size / 2, 0, Math.PI * 2);
-    draft.context.clip(); draft.context.globalAlpha = draft.tool === "heal" ? .65 : 1;
-    draft.context.drawImage(draft.original, sample.x - size / 2, sample.y - size / 2, size, size,
-      localTo.x - size / 2, localTo.y - size / 2, size, size);
-    draft.context.restore();
-  } else {
-    paint(draft.context, localFrom, localTo, $("brushColorInput").value,
-      erase ? "destination-out" : "source-over");
-  }
   paint(draft.overlay, from, to, erase ? "#ffffff88" : $("brushColorInput").value,
     "source-over");
 }
 
-async function beginPaint(event) {
+function rasterStrokePayload(draft) {
+  return { layerId: draft.layer.id,
+    mode: { brush: 0, eraser: 1, clone: 2, heal: 3 }[draft.tool],
+    brushSize: draft.brushSize, color: draft.color,
+    points: draft.points.map(({ x, y }) => [x, y]),
+    source: draft.source ? [draft.source.x, draft.source.y] : [0, 0],
+    expectedStateId: draft.stateId, expectedRevision: draft.revision };
+}
+
+function clearRasterPreview() {
+  ++rasterPreviewGeneration; rasterPreviewPending = null;
+  if (rasterPreviewCancellation) Atomics.store(rasterPreviewCancellation, 0, 1);
+  rasterPreviewCancellation = null;
+  if (rasterPreviewRestore) {
+    context.putImageData(rasterPreviewRestore.pixels,
+      rasterPreviewRestore.region.x, rasterPreviewRestore.region.y);
+    rasterPreviewRestore = null;
+  }
+  $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+}
+
+async function drainRasterPreview() {
+  if (rasterPreviewInFlight) return;
+  rasterPreviewInFlight = true;
+  try {
+    while (rasterPreviewPending) {
+      const pending = rasterPreviewPending; rasterPreviewPending = null;
+      try {
+        const preview = await client.previewRasterStroke({ ...pending.payload,
+          cancellation: pending.cancellation });
+        if (pending.generation !== rasterPreviewGeneration || rasterPreviewPending) continue;
+        if (rasterPreviewRestore) {
+          context.putImageData(rasterPreviewRestore.pixels,
+            rasterPreviewRestore.region.x, rasterPreviewRestore.region.y);
+          rasterPreviewRestore = null;
+        }
+        if (preview.region.width <= 0 || preview.region.height <= 0) continue;
+        rasterPreviewRestore = { region: preview.region,
+          pixels: context.getImageData(preview.region.x, preview.region.y,
+            preview.region.width, preview.region.height) };
+        context.putImageData(new ImageData(new Uint8ClampedArray(preview.rgba),
+          preview.region.width, preview.region.height), preview.region.x, preview.region.y);
+      } catch (error) {
+        if (error?.code !== 7 && pending.generation === rasterPreviewGeneration) {
+          showError("Raster preview failed", error);
+        }
+      }
+    }
+  } finally { rasterPreviewInFlight = false; }
+}
+
+function scheduleRasterPreview(draft) {
+  if (rasterPreviewCancellation) Atomics.store(rasterPreviewCancellation, 0, 1);
+  rasterPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
+  rasterPreviewPending = { payload: rasterStrokePayload(draft),
+    cancellation: rasterPreviewCancellation, generation: ++rasterPreviewGeneration };
+  drainRasterPreview();
+}
+
+function beginPaint(event) {
   const layer = selectedLayer();
   if (busy || layer?.kind !== 0 || event.button !== 0) return;
   const point = canvasPoint(event);
@@ -1769,24 +1817,13 @@ async function beginPaint(event) {
   }
   canvas.setPointerCapture(event.pointerId);
   const draft = { pointerId: event.pointerId, tool: canvasTool, layer, last: point,
-    start: point, source: cloneSource, ready: false };
+    start: point, source: cloneSource, ready: true, points: [point],
+    stateId: snapshot.stateId, revision: snapshot.revision,
+    brushSize: Math.round(Number($("brushSizeInput").value)),
+    color: [...colorBytes($("brushColorInput").value), 255],
+    overlay: $("gestureCanvas").getContext("2d") };
   paintDraft = draft;
-  try {
-    const bytes = await client.layerPixels(layer.id);
-    if (paintDraft !== draft) return;
-    const scratch = document.createElement("canvas");
-    scratch.width = layer.bounds.width; scratch.height = layer.bounds.height;
-    draft.context = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
-    draft.context.putImageData(new ImageData(
-      new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-      scratch.width, scratch.height), 0, 0);
-    draft.original = document.createElement("canvas");
-    draft.original.width = scratch.width; draft.original.height = scratch.height;
-    draft.original.getContext("2d").drawImage(scratch, 0, 0);
-    draft.overlay = $("gestureCanvas").getContext("2d");
-    draft.ready = true;
-    drawPaintSegment(draft, point, point);
-  } catch (error) { paintDraft = null; showError("Could not start painting", error); }
+  drawPaintSegment(draft, point, point); scheduleRasterPreview(draft);
 }
 
 async function fillSelectedPixels() {
@@ -1865,21 +1902,25 @@ async function finishGradient(event) {
 
 function movePaint(event) {
   if (!paintDraft?.ready || event.pointerId !== paintDraft.pointerId) return;
-  const point = canvasPoint(event); drawPaintSegment(paintDraft, paintDraft.last, point); paintDraft.last = point;
+  const point = canvasPoint(event);
+  if (Math.hypot(point.x - paintDraft.last.x, point.y - paintDraft.last.y) < .5) return;
+  if (paintDraft.points.length >= 65536) {
+    finishPaint(event, true);
+    showError("Raster stroke cancelled", new Error("A stroke cannot exceed 65,536 sampled points."));
+    return;
+  }
+  drawPaintSegment(paintDraft, paintDraft.last, point); paintDraft.last = point;
+  paintDraft.points.push(point); scheduleRasterPreview(paintDraft);
 }
 
 function finishPaint(event, cancelled = false) {
   const draft = paintDraft;
   if (!draft || event.pointerId !== draft.pointerId) return;
   paintDraft = null;
-  $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  clearRasterPreview();
   if (cancelled || !draft.ready) return;
-  const rgba = new Uint8Array(draft.context.getImageData(
-    0, 0, draft.layer.bounds.width, draft.layer.bounds.height).data);
   mutate(draft.tool === "eraser" ? "Erasing pixels" : "Painting pixels", () =>
-    client.replacePixelLayer(draft.layer.id, { name: draft.layer.name,
-      width: draft.layer.bounds.width, height: draft.layer.bounds.height,
-      bounds: draft.layer.bounds, rgba }, { transferOwnership: true }));
+    client.applyRasterStroke(rasterStrokePayload(draft)));
 }
 
 function escapeHtml(value) {

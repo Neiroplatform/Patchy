@@ -77,6 +77,28 @@ export class PatchyWorkerHost {
           BigInt(message.layerId), message.quad, message.interpolation);
         return this.#snapshot();
       }
+      case "previewRasterStroke": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Raster stroke was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        return this.#engine.previewRasterStroke(this.#requireSession(), before,
+          { ...message, layerId: BigInt(message.layerId) },
+          new Int32Array(message.cancellation));
+      }
+      case "applyRasterStroke": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Raster stroke was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        this.#engine.applyRasterStroke(this.#requireSession(), before,
+          { ...message, layerId: BigInt(message.layerId) });
+        return this.#snapshot();
+      }
       case "closeDocument": return this.#closeDocument(message.documentId);
       case "addPsdSmartObject": {
         const parent = this.#sessions.get(this.#activeDocumentId);

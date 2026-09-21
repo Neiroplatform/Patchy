@@ -42,7 +42,7 @@ try {
     const first = recovered.restored[0].snapshot;
     const second = recovered.restored[1].snapshot;
     check(recovered.restored[0].manifest.generation === 2 &&
-      recovered.restored[0].manifest.revision === "10",
+      recovered.restored[0].manifest.revision === "11",
       "latest complete first generation was not selected");
     check(recovered.restored[1].manifest.generation === 1,
       "second workspace generation was not isolated");
@@ -144,6 +144,18 @@ try {
     check(transformed.revision === renderedSnapshot.revision + 1n &&
       transformedLayer.bounds.width === 3 && transformedLayer.bounds.height === 2,
     "layer transform was not one canonical wasm32 revision");
+    const strokeInput = { layerId, mode: 0, brushSize: 2,
+      color: [255, 0, 0, 255], points: [[1, 1], [2, 1]], source: [0, 0],
+      expectedStateId: transformed.stateId, expectedRevision: transformed.revision };
+    const strokePreview = await client.previewRasterStroke(strokeInput);
+    check(strokePreview.region.width > 0 && strokePreview.rgba.length > 0,
+      "engine-owned raster preview did not cross wasm32");
+    const previewAfterStroke = await client.snapshot();
+    check(previewAfterStroke.revision === transformed.revision,
+      "raster preview mutated canonical state");
+    const painted = await client.applyRasterStroke(strokeInput);
+    check(painted.revision === transformed.revision + 1n,
+      "raster stroke was not one canonical wasm32 revision");
     const saved = await client.saveDocument(first.documentId);
     check(saved.length > 26 && String.fromCharCode(...saved.subarray(0, 4)) === "8BPS",
       "layered PSD encoding mismatch");

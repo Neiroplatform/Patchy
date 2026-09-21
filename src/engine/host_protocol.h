@@ -43,6 +43,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_MEMORY_CONTROL = UINT64_C(1) << 26,
   PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS = UINT64_C(1) << 27,
   PATCHY_ENGINE_CAP_LAYER_TRANSFORM = UINT64_C(1) << 28,
+  PATCHY_ENGINE_CAP_RASTER_STROKE = UINT64_C(1) << 29,
 };
 
 enum patchy_engine_error_code {
@@ -96,6 +97,33 @@ typedef struct patchy_engine_layer_transform {
 typedef int (*patchy_engine_transform_progress_fn)(int32_t completed_rows,
                                                    int32_t total_rows,
                                                    void *user_data);
+
+enum patchy_engine_raster_stroke_mode {
+  PATCHY_ENGINE_RASTER_BRUSH = 0,
+  PATCHY_ENGINE_RASTER_ERASER = 1,
+  PATCHY_ENGINE_RASTER_CLONE = 2,
+  PATCHY_ENGINE_RASTER_HEAL = 3,
+};
+
+typedef struct patchy_engine_stroke_point {
+  double x;
+  double y;
+} patchy_engine_stroke_point;
+
+typedef struct patchy_engine_raster_stroke {
+  uint32_t struct_size;
+  uint32_t mode;
+  uint64_t layer_id;
+  int32_t brush_size;
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t alpha;
+  double source_x;
+  double source_y;
+  const patchy_engine_stroke_point *points;
+  size_t point_count;
+} patchy_engine_raster_stroke;
 
 typedef struct patchy_engine_memory_usage {
   uint32_t struct_size;
@@ -1059,6 +1087,16 @@ int patchy_engine_session_preview_layer_transform(
 int patchy_engine_session_transform_layer(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const patchy_engine_layer_transform *transform,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_preview_raster_stroke(
+    const patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_raster_stroke *stroke,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error);
+int patchy_engine_session_apply_raster_stroke(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_raster_stroke *stroke,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,
