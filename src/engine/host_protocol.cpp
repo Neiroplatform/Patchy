@@ -117,6 +117,10 @@ static_assert(static_cast<std::uint32_t>(patchy::PathCombineOp::Intersect) ==
 static_assert(static_cast<std::uint32_t>(
                   patchy::engine::SelectionCombineMode::Intersect) ==
               PATCHY_ENGINE_SELECTION_INTERSECT);
+static_assert(sizeof(patchy_engine_raster_fill) == 64U);
+static_assert(offsetof(patchy_engine_raster_fill, secondary_red) == 20U);
+static_assert(offsetof(patchy_engine_raster_fill, pattern_size) == 24U);
+static_assert(offsetof(patchy_engine_raster_fill, start_x) == 32U);
 static_assert(sizeof(patchy_engine_essential_layer_style_projection) == 296U);
 static_assert(offsetof(patchy_engine_essential_layer_style_projection,
                        drop_shadow_present) == 36U);
@@ -622,7 +626,9 @@ std::optional<patchy::RasterFillRequest> raster_fill_request(
     const patchy_engine_session *session,
     const patchy_engine_raster_fill *input, patchy_engine_error *error) {
   if (input == nullptr || input->struct_size != sizeof(*input) ||
-      input->layer_id == 0 || input->mode > 6U) {
+      input->layer_id == 0 || input->mode > 9U || input->pattern_size > 256U ||
+      (input->mode >= PATCHY_ENGINE_RASTER_FILL_CUSTOM_CHECKER &&
+       input->pattern_size < 1U)) {
     fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
          "a bounded versioned raster fill is required");
     return std::nullopt;
@@ -630,6 +636,11 @@ std::optional<patchy::RasterFillRequest> raster_fill_request(
   patchy::RasterFillRequest request;
   request.mode = static_cast<patchy::RasterFillMode>(input->mode);
   request.color = {input->red, input->green, input->blue, input->alpha};
+  request.secondary_color = {input->secondary_red, input->secondary_green,
+                             input->secondary_blue, input->secondary_alpha};
+  request.pattern_size = input->pattern_size == 0U
+                             ? 8
+                             : static_cast<std::int32_t>(input->pattern_size);
   request.start = {input->start_x, input->start_y};
   request.end = {input->end_x, input->end_y};
   const auto &selection = session->value->selection();

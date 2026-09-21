@@ -271,7 +271,10 @@ Wasm, so cancellation remains responsive without concurrent session access.
 The same one-owner path now covers selection-aware solid/gradient fills,
 one-gesture Clone/Heal commits, numeric rectangle-anchor shape edits and an
 atomic RGBA8 plus linked raster-mask transform. Unlinked or unsupported masked
-transforms still fail closed.
+transforms still fail closed. Raster fill additionally accepts bounded custom
+two-colour gradients plus checker/dot pattern colours and scale. Preview and
+commit consume the same engine request, so a saved browser preset cannot move
+committed pixel generation into JavaScript.
 Channels and saved/work paths project into the browser snapshot; selection can
 be saved as an alpha channel or rectangular path and restored from either.
 Invert/expand/contract/border selection plus layer fill opacity, lock flags and
@@ -299,7 +302,9 @@ close those engine sessions without moving canonical state into the UI. Rendered
 pixels travel through the browser clipboard between open documents; copy
 preserves the exact committed soft selection as alpha and keeps an in-memory
 fallback when system clipboard permission is unavailable. The screen can also
-apply built-in layer-style, gradient, pattern and font presets, then
+apply built-in layer-style, gradient, pattern and font presets, author local
+two-colour gradient and procedural pattern presets, install browser-validated
+TTF/OTF/WOFF fonts, then
 select/remove/group/ungroup/reorder/rename layers and edit
 visibility, opacity and common blend modes before undo/redo and render. Every
 document can also be scaled, canvas-resized around the center, rotated or
@@ -328,6 +333,14 @@ snapshot; page reload opens recovered PSD bytes in a new Worker session.
 Recovery preserves the layered document represented by PSD. In-memory undo
 history and transient, non-dirty selection state remain session-local and are
 not represented as durable recovery data.
+
+The same origin-private root stores the local asset library in alternating,
+fully validated JSON generations. Gradient and pattern definitions are bounded
+declarative values; font files are capped at 16 MiB and published only after
+the browser font parser accepts them. Font metadata binds byte count and
+SHA-256, and every reload revalidates bytes before adding a `FontFace`.
+Removing a font publishes the manifest first, so interruption can leave only a
+harmless orphan rather than a live entry whose bytes are missing.
 
 Worker lifecycle is observable without exposing the Worker or Wasm instance.
 An uncaught Worker failure starts one replacement runtime, validates and opens

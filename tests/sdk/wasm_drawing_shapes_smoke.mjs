@@ -13,7 +13,9 @@ try {
     bounds: { x: 0, y: 0, width: 8, height: 4 }, rgba: new Uint8Array(8 * 4 * 4) },
   { transferOwnership: true });
   const layerId = authored.activeLayerId;
-  const fill = { layerId, mode: 2, color: [230, 40, 90, 255], start: [0, 0], end: [7, 0],
+  const fill = { layerId, mode: 7, color: [10, 20, 30, 255],
+    secondaryColor: [210, 220, 230, 255], patternSize: 8,
+    start: [0, 0], end: [7, 0],
     expectedStateId: authored.stateId, expectedRevision: authored.revision };
   const cancelled = new Int32Array(new SharedArrayBuffer(4)); Atomics.store(cancelled, 0, 1);
   let cancelCode = 0;
@@ -128,7 +130,7 @@ try {
     reopened.layers.some((layer) => layer.kind === 3),
   "drawing/path/shape/editable transform state did not survive PSD reopen");
   body.dataset.result = "PASS";
-  body.textContent = `PASS fillCancel=${cancelCode} warpCancel=${warpCancelCode} warp=${warpPreview.region.width}x${warpPreview.region.height} smartTransform=1 textWarp=1 paths=${reopened.paths.length} layers=${reopened.layers.length}`;
+  body.textContent = `PASS assetFill=1 fillCancel=${cancelCode} warpCancel=${warpCancelCode} warp=${warpPreview.region.width}x${warpPreview.region.height} smartTransform=1 textWarp=1 paths=${reopened.paths.length} layers=${reopened.layers.length}`;
 } catch (error) {
   body.dataset.result = "FAIL"; body.textContent = `FAIL ${error?.stack || error}`;
 } finally { client.terminate(); }

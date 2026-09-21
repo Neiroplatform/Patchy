@@ -50,6 +50,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
     "penToolButton", "shapeKindInput",
     "layerFillInput", "layerClipInput", "layerLockInput", "layerStyleSelect",
+    "assetsButton", "assetsDialog", "saveGradientAssetButton", "savePatternAssetButton",
+    "installFontAssetButton", "assetLibraryList",
     "applyLayerStyleButton", "editLayerStyleButton", "layerStyleDialog",
     "styleShadowEnabledInput", "styleStrokeEnabledInput", "styleOverlayEnabledInput",
     "styleInnerShadowEnabledInput", "styleOuterGlowEnabledInput",
@@ -127,6 +129,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /frame\.bitmap\.close\(\)/);
   assert.match(script, /transferOwnership: true/);
   assert.match(script, /loadPreferences/);
+  assert.match(script, /loadAssetLibrary/);
+  assert.match(script, /installFont/);
+  assert.match(script, /new FontFace/);
   assert.match(script, /cleanupRecoveryWorkspaces/);
   assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
   assert.match(script, /const commandRegistry = new Map\(\)/);
@@ -143,6 +148,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   for (const preset of ["foreground-transparent", "black-white", "sunset", "ocean", "checker", "dots"]) {
     assert.match(html, new RegExp(`value="${preset}"`));
   }
+  assert.match(script, /mode: 7/);
+  assert.match(script, /pattern\.kind === "checker" \? 8 : 9/);
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
     "quickSelect(", "magneticLasso(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
@@ -1151,7 +1158,8 @@ test("worker previews and commits one exact-state raster fill", async () => {
   };
   const host = new PatchyWorkerHost(engine);
   await host.dispatch({ method: "create", width: 8, height: 4, name: "Fill.psd" });
-  const message = { layerId: "7", mode: 5, color: [20, 40, 60, 255],
+  const message = { layerId: "7", mode: 8, color: [20, 40, 60, 255],
+    secondaryColor: [220, 210, 200, 255], patternSize: 12,
     start: [0, 0], end: [8, 0], expectedStateId: "4", expectedRevision: "4" };
   const preview = await host.dispatch({ method: "previewRasterFill", ...message,
     cancellation: new SharedArrayBuffer(4) });
@@ -1161,6 +1169,8 @@ test("worker previews and commits one exact-state raster fill", async () => {
   await assert.rejects(host.dispatch({ method: "applyRasterFill", ...message }),
     (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
+  assert.deepEqual(calls[0][3].secondaryColor, [220, 210, 200, 255]);
+  assert.equal(calls[0][3].patternSize, 12);
   host.dispose();
 });
 

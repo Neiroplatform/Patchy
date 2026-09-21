@@ -67,6 +67,10 @@ static_assert(sizeof(patchy_engine_selection_input) == 32);
 static_assert(offsetof(patchy_engine_selection_input, rects) == 24);
 static_assert(sizeof(patchy_engine_selection_mask_input) == 56);
 static_assert(offsetof(patchy_engine_selection_mask_input, gray) == 48);
+static_assert(sizeof(patchy_engine_raster_fill) == 64);
+static_assert(offsetof(patchy_engine_raster_fill, secondary_red) == 20);
+static_assert(offsetof(patchy_engine_raster_fill, pattern_size) == 24);
+static_assert(offsetof(patchy_engine_raster_fill, start_x) == 32);
 static_assert(sizeof(patchy_engine_essential_layer_style_projection) == 296);
 static_assert(offsetof(patchy_engine_essential_layer_style_projection,
                        inner_shadow_count) == 128);

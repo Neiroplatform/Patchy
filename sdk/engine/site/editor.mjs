@@ -54,6 +54,8 @@ let workspaceAvailable = false;
 let automaticRecoveryEnabled = false;
 let recoveryPromise = null;
 let preferenceTimer = null;
+let assetLibrary = { version: 1, generation: 0, gradients: [], patterns: [], fonts: [] };
+const loadedFontFaces = new Map();
 let renderedDocument = null;
 let frameTransport = "waiting";
 let layerWindowFrame = 0;
@@ -368,6 +370,98 @@ function preferenceSnapshot() {
     historyBudgetMiB: Number($("memoryBudgetSelect").value),
     panelsHidden: shell.classList.contains("panels-hidden"),
   };
+}
+
+function assetId(prefix) {
+  const suffix = crypto.randomUUID ? crypto.randomUUID() :
+    [...crypto.getRandomValues(new Uint32Array(4))].map((value) => value.toString(16)).join("-");
+  return `${prefix}-${suffix}`;
+}
+
+function renderAssetLibrary() {
+  const select = $("paintPresetSelect");
+  for (const option of [...select.querySelectorAll('option[data-local-asset="true"]')]) option.remove();
+  for (const asset of [...assetLibrary.gradients, ...assetLibrary.patterns]) {
+    const option = document.createElement("option"); option.value = `asset:${asset.id}`;
+    option.dataset.localAsset = "true";
+    option.textContent = `${assetLibrary.gradients.includes(asset) ? "Gradient" : "Pattern"}: ${asset.name}`;
+    select.append(option);
+  }
+  const fonts = $("fontPresetList");
+  for (const option of [...fonts.querySelectorAll('option[data-local-asset="true"]')]) option.remove();
+  for (const font of assetLibrary.fonts) {
+    const option = document.createElement("option"); option.value = font.family;
+    option.dataset.localAsset = "true"; fonts.append(option);
+  }
+  const list = $("assetLibraryList"); list.replaceChildren();
+  for (const [kind, assets] of [["gradients", assetLibrary.gradients],
+    ["patterns", assetLibrary.patterns], ["fonts", assetLibrary.fonts]]) {
+    for (const asset of assets) {
+      const row = document.createElement("div"); row.className = "dialog-actions";
+      const label = document.createElement("span"); label.textContent =
+        `${kind.slice(0, -1)} · ${asset.name || asset.family}`;
+      const remove = document.createElement("button"); remove.type = "button";
+      remove.className = "button"; remove.textContent = "Remove";
+      remove.addEventListener("click", async () => {
+        try {
+          assetLibrary = await workspaceStore.removeAsset(kind, asset.id);
+          if (kind === "fonts") {
+            const face = loadedFontFaces.get(asset.id);
+            if (face) document.fonts.delete(face);
+            loadedFontFaces.delete(asset.id);
+          }
+          renderAssetLibrary(); persistPreferences();
+        } catch (error) { showError("Could not remove local asset", error); }
+      });
+      row.append(label, remove); list.append(row);
+    }
+  }
+  if (!list.children.length) list.textContent = "No local assets yet.";
+}
+
+async function loadLocalAssets() {
+  assetLibrary = await workspaceStore.loadAssetLibrary();
+  for (const font of assetLibrary.fonts) {
+    try {
+      const stored = await workspaceStore.loadFont(font.id);
+      const face = await new FontFace(font.family, stored.bytes.buffer).load();
+      document.fonts.add(face); loadedFontFaces.set(font.id, face);
+    } catch { /* Invalid local fonts stay unavailable and visible for removal. */ }
+  }
+  renderAssetLibrary();
+}
+
+async function saveFillAsset(kind) {
+  const isGradient = kind === "gradient";
+  const asset = isGradient ? {
+    id: assetId("gradient"), name: $("assetGradientNameInput").value,
+    start: $("assetGradientStartInput").value, end: $("assetGradientEndInput").value,
+  } : {
+    id: assetId("pattern"), name: $("assetPatternNameInput").value,
+    kind: $("assetPatternKindInput").value,
+    foreground: $("assetPatternForegroundInput").value,
+    background: $("assetPatternBackgroundInput").value,
+    size: Number($("assetPatternSizeInput").value),
+  };
+  const key = isGradient ? "gradients" : "patterns";
+  assetLibrary = await workspaceStore.saveAssetLibrary({ ...assetLibrary,
+    [key]: [...assetLibrary[key], asset] });
+  renderAssetLibrary(); $("paintPresetSelect").value = `asset:${asset.id}`; persistPreferences();
+}
+
+async function installFontAsset() {
+  const file = $("assetFontFileInput").files?.[0];
+  if (!file) throw new Error("Choose a TTF, OTF, WOFF or WOFF2 font file.");
+  if (file.size <= 0 || file.size > 16 * 1024 * 1024) throw new Error("Font must be between 1 byte and 16 MiB.");
+  const family = $("assetFontFamilyInput").value.trim();
+  if (!family) throw new Error("Enter a font family name.");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const face = await new FontFace(family, bytes.buffer.slice(0)).load();
+  const id = assetId("font");
+  const metadata = await workspaceStore.installFont({ id, family, filename: file.name, bytes });
+  document.fonts.add(face); loadedFontFaces.set(id, face);
+  assetLibrary = await workspaceStore.loadAssetLibrary();
+  renderAssetLibrary(); $("textFontInput").value = metadata.family; persistPreferences();
 }
 
 function persistPreferences() {
@@ -2252,7 +2346,18 @@ function scheduleRasterPreview(draft) {
 function rasterFillPayload(draft) {
   const modes = { "foreground-transparent": 0, "black-white": 1, sunset: 2,
     ocean: 3, solid: 4, checker: 5, dots: 6 };
-  return { layerId: draft.layer.id, mode: modes[draft.preset], color: draft.color,
+  const assetId = draft.preset.startsWith("asset:") ? draft.preset.slice(6) : null;
+  const gradient = assetLibrary.gradients.find((item) => item.id === assetId);
+  const pattern = assetLibrary.patterns.find((item) => item.id === assetId);
+  const custom = gradient ? { mode: 7, color: [...colorBytes(gradient.start), 255],
+    secondaryColor: [...colorBytes(gradient.end), 255], patternSize: 8 } : pattern ? {
+    mode: pattern.kind === "checker" ? 8 : 9,
+    color: [...colorBytes(pattern.foreground), 255],
+    secondaryColor: [...colorBytes(pattern.background), 255], patternSize: pattern.size,
+  } : null;
+  return { layerId: draft.layer.id, mode: custom?.mode ?? modes[draft.preset],
+    color: custom?.color ?? draft.color,
+    secondaryColor: custom?.secondaryColor, patternSize: custom?.patternSize,
     start: [draft.start.x, draft.start.y], end: [draft.end.x, draft.end.y],
     expectedStateId: draft.stateId, expectedRevision: draft.revision };
 }
@@ -2347,6 +2452,8 @@ function openPicker() { if (!busy) $("fileInput").click(); }
 registerCommand("document.open", "openButton", openPicker, () => !busy);
 registerCommand("document.new", "newButton", newDocument, () => !busy);
 registerCommand("document.recovery", "recoveryButton", openRecoveryDialog, () => !busy);
+registerCommand("document.assets", "assetsButton", () => $("assetsDialog").showModal(),
+  () => !busy && workspaceAvailable);
 registerCommand("document.save", "saveButton", saveDocument, () => !busy && Boolean(snapshot));
 registerCommand("layer.openSmartObject", "openSmartObjectButton", openSmartObjectContents,
   () => !busy && Boolean(selectedLayer()?.smartObject?.contentsEditable));
@@ -2675,6 +2782,12 @@ $("togglePanelsButton").addEventListener("click", () => {
   persistPreferences();
 });
 $("cleanupRecoveryButton").addEventListener("click", cleanupRecoveryWorkspaces);
+$("saveGradientAssetButton").addEventListener("click", () => saveFillAsset("gradient")
+  .catch((error) => showError("Could not save gradient", error)));
+$("savePatternAssetButton").addEventListener("click", () => saveFillAsset("pattern")
+  .catch((error) => showError("Could not save pattern", error)));
+$("installFontAssetButton").addEventListener("click", () => installFontAsset()
+  .catch((error) => showError("Could not install font", error)));
 
 canvas.addEventListener("pointerdown", (event) => {
   if (busy || !snapshot || event.button !== 0) return;
@@ -2951,6 +3064,7 @@ try {
   await client.initialize(moduleUrl);
   workspaceAvailable = await workspaceStore.available();
   if (workspaceAvailable) {
+    await loadLocalAssets();
     applyPreferences(await workspaceStore.loadPreferences({ tool: "marquee", brushSize: 24,
       color: "#111111", paintPreset: "solid", font: "Arial",
       selectionTolerance: 32, historyBudgetMiB: 256, panelsHidden: false }));

@@ -37,7 +37,7 @@ const DOCUMENT_PATH_PROJECTION_SIZE = 288;
 const PATH_SUBPATH_PROJECTION_SIZE = 16;
 const LAYER_TRANSFORM_SIZE = 80;
 const RASTER_STROKE_SIZE = 48;
-const RASTER_FILL_SIZE = 56;
+const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
 
 const decoder = new TextDecoder();
@@ -1899,20 +1899,27 @@ export class EmscriptenPatchyEngine {
   #rasterFill(input) {
     const start = input.start ?? [0, 0]; const end = input.end ?? start;
     const color = input.color ?? [0, 0, 0, 255];
+    const secondaryColor = input.secondaryColor ?? [255, 255, 255, 255];
+    const patternSize = input.patternSize ?? 8;
     if (typeof input.layerId !== "bigint" || input.layerId <= 0n ||
-        ![0, 1, 2, 3, 4, 5, 6].includes(input.mode) ||
+        ![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].includes(input.mode) ||
         !Array.isArray(start) || start.length !== 2 || !start.every(Number.isFinite) ||
         !Array.isArray(end) || end.length !== 2 || !end.every(Number.isFinite) ||
         !Array.isArray(color) || color.length !== 4 ||
-        color.some((component) => !Number.isInteger(component) || component < 0 || component > 255)) {
+        !Array.isArray(secondaryColor) || secondaryColor.length !== 4 ||
+        [...color, ...secondaryColor].some((component) => !Number.isInteger(component) ||
+          component < 0 || component > 255) ||
+        !Number.isInteger(patternSize) || patternSize < 1 || patternSize > 256) {
       throw new TypeError("A bounded raster fill is required");
     }
     const fill = this.#alloc(RASTER_FILL_SIZE); const view = this.#view(fill, RASTER_FILL_SIZE);
     view.setUint32(0, RASTER_FILL_SIZE, true); view.setUint32(4, input.mode, true);
     view.setBigUint64(8, input.layerId, true);
     color.forEach((component, index) => view.setUint8(16 + index, component));
-    view.setFloat64(24, start[0], true); view.setFloat64(32, start[1], true);
-    view.setFloat64(40, end[0], true); view.setFloat64(48, end[1], true);
+    secondaryColor.forEach((component, index) => view.setUint8(20 + index, component));
+    view.setUint32(24, patternSize, true);
+    view.setFloat64(32, start[0], true); view.setFloat64(40, start[1], true);
+    view.setFloat64(48, end[0], true); view.setFloat64(56, end[1], true);
     return fill;
   }
 

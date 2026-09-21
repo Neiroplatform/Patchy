@@ -136,6 +136,9 @@ enum patchy_engine_raster_fill_mode {
   PATCHY_ENGINE_RASTER_FILL_SOLID = 4,
   PATCHY_ENGINE_RASTER_FILL_CHECKER = 5,
   PATCHY_ENGINE_RASTER_FILL_DOTS = 6,
+  PATCHY_ENGINE_RASTER_FILL_CUSTOM_GRADIENT = 7,
+  PATCHY_ENGINE_RASTER_FILL_CUSTOM_CHECKER = 8,
+  PATCHY_ENGINE_RASTER_FILL_CUSTOM_DOTS = 9,
 };
 
 typedef struct patchy_engine_raster_fill {
@@ -146,6 +149,11 @@ typedef struct patchy_engine_raster_fill {
   uint8_t green;
   uint8_t blue;
   uint8_t alpha;
+  uint8_t secondary_red;
+  uint8_t secondary_green;
+  uint8_t secondary_blue;
+  uint8_t secondary_alpha;
+  uint32_t pattern_size;
   double start_x;
   double start_y;
   double end_x;

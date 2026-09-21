@@ -19,6 +19,9 @@ enum class RasterFillMode : std::uint8_t {
   Solid,
   Checker,
   Dots,
+  CustomGradient,
+  CustomChecker,
+  CustomDots,
 };
 struct RasterStrokePoint { double x{0.0}; double y{0.0}; };
 struct RasterStrokeRequest {
@@ -36,6 +39,8 @@ struct RasterStrokeResult { Rect affected_region{}; };
 struct RasterFillRequest {
   RasterFillMode mode{RasterFillMode::Solid};
   EditColor color{};
+  EditColor secondary_color{255, 255, 255, 255};
+  std::int32_t pattern_size{8};
   RasterStrokePoint start{};
   RasterStrokePoint end{};
   std::vector<Rect> selection{};

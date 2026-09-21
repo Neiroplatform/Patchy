@@ -4521,6 +4521,32 @@ void core_raster_fill_respects_soft_selection_locks_and_presets() {
       point_gradient, gradient_id, gradient, &result, &error));
   CHECK(point_gradient.find_layer(gradient_id)->pixels().pixel(0, 0)[3] == 255);
   CHECK(point_gradient.find_layer(gradient_id)->pixels().pixel(1, 0)[3] == 0);
+
+  Document custom_assets(4, 2, PixelFormat::rgba8());
+  PixelBuffer custom_pixels(4, 2, PixelFormat::rgba8()); custom_pixels.clear(0);
+  const auto custom_id = custom_assets.add_pixel_layer(
+      "Assets", std::move(custom_pixels)).id();
+  patchy::RasterFillRequest custom_gradient;
+  custom_gradient.mode = patchy::RasterFillMode::CustomGradient;
+  custom_gradient.color = {10, 20, 30, 255};
+  custom_gradient.secondary_color = {210, 220, 230, 255};
+  custom_gradient.start = {0, 0}; custom_gradient.end = {3, 0};
+  CHECK(patchy::apply_raster_fill(
+      custom_assets, custom_id, custom_gradient, &result, &error));
+  CHECK(custom_assets.find_layer(custom_id)->pixels().pixel(0, 0)[0] == 10);
+  CHECK(custom_assets.find_layer(custom_id)->pixels().pixel(3, 0)[0] == 210);
+  patchy::RasterFillRequest custom_pattern;
+  custom_pattern.mode = patchy::RasterFillMode::CustomChecker;
+  custom_pattern.color = {1, 2, 3, 255};
+  custom_pattern.secondary_color = {250, 249, 248, 255};
+  custom_pattern.pattern_size = 2;
+  CHECK(patchy::apply_raster_fill(
+      custom_assets, custom_id, custom_pattern, &result, &error));
+  CHECK(custom_assets.find_layer(custom_id)->pixels().pixel(0, 0)[0] == 1);
+  CHECK(custom_assets.find_layer(custom_id)->pixels().pixel(2, 0)[0] == 250);
+  custom_pattern.pattern_size = 0;
+  CHECK(!patchy::apply_raster_fill(
+      custom_assets, custom_id, custom_pattern, nullptr, &error));
 }
 
 void engine_session_essential_layer_style_is_atomic_preserving_and_round_trips() {

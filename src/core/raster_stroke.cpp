@@ -43,10 +43,16 @@ float selection_coverage(const RasterFillRequest& request, std::int32_t x,
 EditColor fill_color(const RasterFillRequest& request, std::int32_t x,
                      std::int32_t y) {
   if (request.mode == RasterFillMode::Solid) return request.color;
-  if (request.mode == RasterFillMode::Checker) {
-    return ((x / 8) + (y / 8)) % 2 == 0
+  if (request.mode == RasterFillMode::Checker ||
+      request.mode == RasterFillMode::CustomChecker) {
+    const auto size = request.mode == RasterFillMode::Checker
+                          ? 8
+                          : request.pattern_size;
+    return ((x / size) + (y / size)) % 2 == 0
                ? request.color
-               : EditColor{241, 243, 245, 255};
+               : request.mode == RasterFillMode::Checker
+                     ? EditColor{241, 243, 245, 255}
+                     : request.secondary_color;
   }
   if (request.mode == RasterFillMode::Dots) {
     const auto dx = ((x % 16) + 16) % 16 - 4;
@@ -56,6 +62,16 @@ EditColor fill_color(const RasterFillRequest& request, std::int32_t x,
     return dx * dx + dy * dy <= 9 || dx2 * dx2 + dy2 * dy2 <= 9
                ? request.color
                : EditColor{0, 0, 0, 0};
+  }
+  if (request.mode == RasterFillMode::CustomDots) {
+    const auto cell = request.pattern_size * 2;
+    const auto radius = std::max(1, cell / 5);
+    const auto center = cell / 2;
+    const auto dx = ((x % cell) + cell) % cell - center;
+    const auto dy = ((y % cell) + cell) % cell - center;
+    return dx * dx + dy * dy <= radius * radius
+               ? request.color
+               : request.secondary_color;
   }
   auto vx = request.end.x - request.start.x;
   auto vy = request.end.y - request.start.y;
@@ -90,6 +106,8 @@ EditColor fill_color(const RasterFillRequest& request, std::int32_t x,
       const auto ch = [u](int p, int q) { return static_cast<std::uint8_t>(std::lround(p + (q-p)*u)); };
       return {ch(a.r,b.r), ch(a.g,b.g), ch(a.b,b.b), 255};
     }
+    case RasterFillMode::CustomGradient:
+      return interpolate(request.color, request.secondary_color, t);
     default: return request.color;
   }
 }
@@ -221,7 +239,9 @@ bool apply_raster_fill(Document& document, LayerId layer_id,
   if ((layer->lock_flags() & kLayerLockImagePixels) != 0U) {
     return fail(error, "raster fill target pixels are locked");
   }
-  if (request.mode > RasterFillMode::Dots || !std::isfinite(request.start.x) ||
+  if (request.mode > RasterFillMode::CustomDots ||
+      request.pattern_size < 1 || request.pattern_size > 256 ||
+      !std::isfinite(request.start.x) ||
       !std::isfinite(request.start.y) || !std::isfinite(request.end.x) ||
       !std::isfinite(request.end.y)) {
     return fail(error, "raster fill requires finite bounded input");

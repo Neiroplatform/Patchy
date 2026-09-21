@@ -19,6 +19,7 @@
         <button class="button button-primary" id="openButton" type="button">Open PSD</button>
         <button class="button" id="newButton" type="button">New</button>
         <button class="button" id="recoveryButton" type="button">Recovery <span id="recoveryCount">0</span></button>
+        <button class="button" id="assetsButton" type="button">Assets</button>
         <span class="action-divider" aria-hidden="true"></span>
         <button class="icon-button" id="undoButton" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>↶</button>
         <button class="icon-button" id="redoButton" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
@@ -448,6 +449,28 @@
           <p class="dialog-note">Apply commits all seven editable families as one undo step. Additional imported instances and Bevel, Gradient and Pattern effects remain intact.</p>
           <div class="dialog-actions"><button class="button button-primary" id="commitLayerStyleButton" type="button">Apply effects</button></div>
         </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="assetsDialog" aria-labelledby="assetsDialogTitle">
+      <form method="dialog"><header><div><p class="eyebrow">LOCAL ASSETS</p><h2 id="assetsDialogTitle">Presets, patterns & fonts</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section><h3>Custom gradient</h3><div class="field-row field-row-four">
+          <label><span>Name</span><input id="assetGradientNameInput" type="text" maxlength="128" value="Custom gradient"></label>
+          <label><span>Start</span><input id="assetGradientStartInput" type="color" value="#111111"></label>
+          <label><span>End</span><input id="assetGradientEndInput" type="color" value="#ffffff"></label>
+        </div><div class="dialog-actions"><button class="button" id="saveGradientAssetButton" type="button">Save gradient</button></div></section>
+        <section><h3>Custom pattern</h3><div class="field-row field-row-four">
+          <label><span>Name</span><input id="assetPatternNameInput" type="text" maxlength="128" value="Custom pattern"></label>
+          <label><span>Kind</span><select id="assetPatternKindInput"><option value="checker">Checker</option><option value="dots">Dots</option></select></label>
+          <label><span>Foreground</span><input id="assetPatternForegroundInput" type="color" value="#111111"></label>
+          <label><span>Background</span><input id="assetPatternBackgroundInput" type="color" value="#ffffff"></label>
+          <label><span>Size</span><input id="assetPatternSizeInput" type="number" min="1" max="128" value="8"></label>
+        </div><div class="dialog-actions"><button class="button" id="savePatternAssetButton" type="button">Save pattern</button></div></section>
+        <section><h3>Local font</h3><div class="field-row">
+          <label><span>Family name</span><input id="assetFontFamilyInput" type="text" maxlength="128" value="Local font"></label>
+          <label><span>Font file</span><input id="assetFontFileInput" type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2"></label>
+        </div><p class="dialog-note">Font files are capped at 16 MiB, validated by the browser font parser and kept only in origin-private storage.</p>
+        <div class="dialog-actions"><button class="button" id="installFontAssetButton" type="button">Install font</button></div></section>
+        <section><h3>Installed assets</h3><div class="property-fields" id="assetLibraryList"></div></section>
       </form>
     </dialog>
     <dialog class="document-dialog" id="shapeDialog" aria-labelledby="shapeDialogTitle">

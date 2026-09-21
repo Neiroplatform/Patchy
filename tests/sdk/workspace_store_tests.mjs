@@ -217,6 +217,38 @@ test("preferences round-trip with validation and malformed-data fallback", async
   assert.deepEqual(await store.loadPreferences({ tool: "marquee" }), { tool: "marquee" });
 });
 
+test("asset library alternates validated generations and preserves custom fills", async () => {
+  const { root, store } = fixture();
+  const first = await store.saveAssetLibrary({ generation: 0, gradients: [{ id: "gradient-sky",
+    name: "Sky", start: "#112233", end: "#aabbcc" }], patterns: [], fonts: [] });
+  assert.equal(first.generation, 1);
+  const second = await store.saveAssetLibrary({ ...first, patterns: [{ id: "pattern-grid",
+    name: "Grid", kind: "checker", foreground: "#010203", background: "#fefdfc", size: 12 }] });
+  assert.equal(second.generation, 2);
+  assert.deepEqual(await store.loadAssetLibrary(), second);
+  const base = await root.getDirectoryHandle("patchy-workspaces-v1");
+  base.files.set("assets-b.json", new TextEncoder().encode("torn"));
+  assert.deepEqual((await store.loadAssetLibrary()).gradients, first.gradients);
+});
+
+test("font assets publish digest metadata, verify bytes and remove atomically", async () => {
+  const { root, store } = fixture();
+  const bytes = new Uint8Array([0, 1, 0, 0, 4, 8, 15, 16, 23, 42]);
+  const metadata = await store.installFont({ id: "font-inter", family: "Inter Local",
+    filename: "Inter.ttf", bytes });
+  assert.equal(metadata.size, bytes.byteLength);
+  assert.deepEqual([...(await store.loadFont("font-inter")).bytes], [...bytes]);
+  await assert.rejects(store.installFont({ id: "font-inter", family: "Replacement",
+    filename: "other.ttf", bytes: new Uint8Array([7, 8, 9]) }), /already exists/);
+  assert.deepEqual([...(await store.loadFont("font-inter")).bytes], [...bytes]);
+  const base = await root.getDirectoryHandle("patchy-workspaces-v1");
+  const fonts = await base.getDirectoryHandle("fonts");
+  fonts.files.set("font-inter.font", new Uint8Array([9]));
+  await assert.rejects(store.loadFont("font-inter"), /integrity validation/);
+  await store.removeAsset("fonts", "font-inter");
+  assert.equal((await store.loadAssetLibrary()).fonts.length, 0);
+});
+
 test("explicit cleanup keeps newest recovery items and protects open workspaces", async () => {
   const { store } = fixture();
   for (const id of ["oldest", "protected", "newer", "newest"]) {

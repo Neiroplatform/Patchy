@@ -111,6 +111,13 @@ the wasm32 projection, undo/redo and layered PSD save/reopen. The native engine
 regression separately pins preservation of
 stacked instances and unrelated imported effect families.
 
+`tests/sdk/wasm_drawing_shapes_smoke.html` also pins the 64-byte custom-fill
+input through real pthread WASM. It authors a local-style two-colour gradient,
+then continues through Warp, editable Smart Object transform, text Warp,
+paths/shapes, undo/redo and layered PSD save/reopen. The staged editor gate
+separately creates a local gradient in the Assets dialog and proves that its
+validated OPFS generation is restored after page reload.
+
 ## wasm-core preset decisions (all in CMakePresets.json)
 
 - `-fwasm-exceptions`: format readers throw `std::runtime_error` and the
