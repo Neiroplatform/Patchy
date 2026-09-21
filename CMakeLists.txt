@@ -567,6 +567,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/patchy.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/text-layout.mjs"
             "${PROJECT_SOURCE_DIR}/packaging/web/.htaccess"
             "${PATCHY_WASM_SDK_SITE_DIR}"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different

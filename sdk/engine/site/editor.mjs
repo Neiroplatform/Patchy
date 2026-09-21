@@ -3,6 +3,7 @@ import { recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
+import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -2220,6 +2221,18 @@ function renderTextRunList() {
   }
 }
 
+function renderParagraphRunList() {
+  const list = $("textParagraphRunList"); list.replaceChildren();
+  const names = ["left", "right", "center", "justify"];
+  for (const run of textDialogParagraphRuns) {
+    const row = document.createElement("div");
+    const range = document.createElement("code"); range.textContent = `${run.start}–${run.start + run.length}`;
+    const summary = document.createElement("span");
+    summary.textContent = `${names[run.justification] || "left"} · indents ${run.firstLineIndent}/${run.startIndent}/${run.endIndent}`;
+    row.append(range, summary); list.append(row);
+  }
+}
+
 function applyTextStyleRange(start, end) {
   const value = $("textValueInput").value.replace(/\r\n?/g, "\n");
   if (!textRunsCover(value, textDialogRuns)) textDialogRuns = [baseTextRun(value)];
@@ -2239,7 +2252,7 @@ function applyTextStyleRange(start, end) {
   renderTextRunList();
 }
 
-function paragraphFromControls(length) {
+function paragraphFromControls(start, length) {
   const values = ["textFirstIndentInput", "textStartIndentInput", "textEndIndentInput",
     "textSpaceBeforeInput", "textSpaceAfterInput"].map((id) => Number($(id).value));
   const autoLeadingFraction = Number($("textAutoLeadingInput").value) / 100;
@@ -2247,8 +2260,26 @@ function paragraphFromControls(length) {
   if (!values.every(Number.isFinite) || !Number.isFinite(autoLeadingFraction) ||
       autoLeadingFraction < .01 || autoLeadingFraction > 10 || ![0, 1, 2, 3].includes(justification))
     throw new RangeError("Paragraph metrics are outside the supported range");
-  return { start: 0, length, justification, firstLineIndent: values[0], startIndent: values[1],
+  return { start, length, justification, firstLineIndent: values[0], startIndent: values[1],
     endIndent: values[2], spaceBefore: values[3], spaceAfter: values[4], autoLeadingFraction };
+}
+
+function applyParagraphRange(start, end) {
+  const value = $("textValueInput").value.replace(/\r\n?/g, "\n");
+  if (!textRunsCover(value, textDialogParagraphRuns))
+    textDialogParagraphRuns = [paragraphFromControls(0, value.length)];
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > value.length)
+    throw new RangeError("Text selection is outside the story");
+  const rangeStart = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+  const searchFrom = Math.max(rangeStart, end > start && value[end - 1] === "\n" ? end - 1 : end);
+  const newline = value.indexOf("\n", searchFrom);
+  const rangeEnd = newline < 0 ? value.length : newline + 1;
+  if (rangeStart >= rangeEnd) throw new RangeError("Select a paragraph first");
+  const paragraph = paragraphFromControls(rangeStart, rangeEnd - rangeStart);
+  textDialogParagraphRuns = applyParagraphStyleRange(
+    textDialogParagraphRuns, rangeStart, rangeEnd, paragraph);
+  textDialogParagraphDirty = false;
+  renderParagraphRunList();
 }
 
 function canvasFont(run) {
@@ -2269,19 +2300,23 @@ function lineSegments(value, start, length, runs) {
   return result;
 }
 
-function segmentAdvance(ctx, segment) {
+function segmentAdvance(ctx, segment, justifiedSpace = 0) {
   ctx.font = canvasFont(segment);
   const glyphs = Array.from(segment.value);
   const tracking = segment.sizePixels * segment.tracking / 1000;
-  return (ctx.measureText(segment.value).width + Math.max(0, glyphs.length - 1) * tracking) * segment.horizontalScale;
+  const spaces = glyphs.filter((glyph) => glyph === " ").length;
+  return (ctx.measureText(segment.value).width + Math.max(0, glyphs.length - 1) * tracking) *
+    segment.horizontalScale + spaces * justifiedSpace;
 }
 
-function drawTextSegment(ctx, segment, x, y) {
+function drawTextSegment(ctx, segment, x, y, justifiedSpace = 0) {
   ctx.save(); ctx.translate(x, y); ctx.scale(segment.horizontalScale, segment.verticalScale);
   ctx.font = canvasFont(segment); ctx.fillStyle = `rgb(${segment.color.join(" ")})`;
   const tracking = segment.sizePixels * segment.tracking / 1000; let localX = 0;
   for (const glyph of Array.from(segment.value)) {
-    ctx.fillText(glyph, localX, 0); localX += ctx.measureText(glyph).width + tracking;
+    ctx.fillText(glyph, localX, 0);
+    localX += ctx.measureText(glyph).width + tracking +
+      (glyph === " " ? justifiedSpace / segment.horizontalScale : 0);
   }
   ctx.restore();
 }
@@ -2312,9 +2347,11 @@ function textLayerPayload(style, bounds, name, runs, paragraphs) {
     const available = Math.max(0, bounds.width - paragraph.startIndent - paragraph.endIndent - firstIndent);
     if (paragraph.justification === 2) x += Math.max(0, (available - width) / 2);
     else if (paragraph.justification === 1) x += Math.max(0, available - width);
+    const justifiedSpace = justifiedSpaceAdvance(
+      paragraph.justification, available, width, effective);
     for (const segment of effective) {
-      drawTextSegment(scratchContext, segment, x, y);
-      x += segmentAdvance(scratchContext, segment);
+      drawTextSegment(scratchContext, segment, x, y, justifiedSpace);
+      x += segmentAdvance(scratchContext, segment, justifiedSpace);
     }
     const lineHeight = Math.max(...effective.map((segment) =>
       (segment.leading > 0 ? segment.leading : segment.sizePixels * paragraph.autoLeadingFraction) * segment.verticalScale));
@@ -2377,7 +2414,8 @@ function openTextDialog() {
     ["textSpaceBeforeInput", paragraph.spaceBefore], ["textSpaceAfterInput", paragraph.spaceAfter]])
     $(id).value = String(value || 0);
   $("textAutoLeadingInput").value = String((paragraph.autoLeadingFraction || 1.2) * 100);
-  textDialogStyleDirty = false; textDialogParagraphDirty = false; renderTextRunList();
+  textDialogStyleDirty = false; textDialogParagraphDirty = false;
+  renderTextRunList(); renderParagraphRunList();
   for (const [id, value] of [["textXInput", bounds.x], ["textYInput", bounds.y],
     ["textWidthInput", bounds.width], ["textHeightInput", bounds.height]]) $(id).value = String(value);
   $("textDialog").showModal();
@@ -2394,7 +2432,7 @@ async function commitTextDialog() {
     if (!textRunsCover(value, textDialogRuns) || textDialogStyleDirty)
       textDialogRuns = [baseTextRun(value)];
     if (textDialogParagraphDirty || !textRunsCover(value, textDialogParagraphRuns))
-      textDialogParagraphRuns = [paragraphFromControls(value.length)];
+      textDialogParagraphRuns = [paragraphFromControls(0, value.length)];
     const primary = textDialogRuns[0];
     payload = textLayerPayload({ value, font: primary.font, sizePixels: primary.sizePixels,
       color: primary.color, bold: primary.bold, italic: primary.italic }, { x, y, width, height },
@@ -2777,11 +2815,13 @@ $("textValueInput").addEventListener("input", () => {
   if (value === textDialogOriginalValue) {
     textDialogRuns = textDialogOriginalRuns.map((run) => ({ ...run, color: [...run.color] }));
     textDialogParagraphRuns = textDialogOriginalParagraphRuns.map((run) => ({ ...run }));
-    textDialogStyleDirty = false; textDialogParagraphDirty = false; renderTextRunList();
+    textDialogStyleDirty = false; textDialogParagraphDirty = false;
+    renderTextRunList(); renderParagraphRunList();
     return;
   }
   textDialogRuns = []; textDialogParagraphRuns = [];
-  textDialogStyleDirty = true; textDialogParagraphDirty = true; renderTextRunList();
+  textDialogStyleDirty = true; textDialogParagraphDirty = true;
+  renderTextRunList(); renderParagraphRunList();
 });
 $("applyTextRangeButton").addEventListener("click", () => {
   try { applyTextStyleRange($("textValueInput").selectionStart, $("textValueInput").selectionEnd); }
@@ -2796,6 +2836,17 @@ $("resetTextRunsButton").addEventListener("click", () => {
     const value = $("textValueInput").value.replace(/\r\n?/g, "\n");
     textDialogRuns = [baseTextRun(value)]; textDialogStyleDirty = false; renderTextRunList();
   } catch (error) { showError("Could not reset text ranges", error); }
+});
+$("applyParagraphRangeButton").addEventListener("click", () => {
+  try { applyParagraphRange($("textValueInput").selectionStart, $("textValueInput").selectionEnd); }
+  catch (error) { showError("Could not apply paragraph range", error); }
+});
+$("applyParagraphAllButton").addEventListener("click", () => {
+  try {
+    const value = $("textValueInput").value.replace(/\r\n?/g, "\n");
+    textDialogParagraphRuns = [paragraphFromControls(0, value.length)];
+    textDialogParagraphDirty = false; renderParagraphRunList();
+  } catch (error) { showError("Could not apply paragraph style", error); }
 });
 $("commitLayerTransformButton").addEventListener("click", () => {
   const draft = transformDialogDraft;

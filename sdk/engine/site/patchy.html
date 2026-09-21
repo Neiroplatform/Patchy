@@ -338,6 +338,11 @@
             <label><span>Space after</span><input id="textSpaceAfterInput" type="number" step="0.1" value="0"></label>
             <label><span>Auto leading %</span><input id="textAutoLeadingInput" type="number" min="1" max="1000" step="1" value="120"></label>
           </div>
+          <div class="dialog-actions text-range-actions">
+            <button class="button" id="applyParagraphRangeButton" type="button">Apply paragraph to selection</button>
+            <button class="button" id="applyParagraphAllButton" type="button">Apply paragraph to all</button>
+          </div>
+          <div class="text-run-list" id="textParagraphRunList" aria-live="polite"></div>
           <div class="field-row field-row-four">
             <label><span>X</span><input id="textXInput" type="number" step="1" required></label>
             <label><span>Y</span><input id="textYInput" type="number" step="1" required></label>

@@ -8,6 +8,23 @@ import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } fr
 import { createRenderFrame } from "../../sdk/engine/frame-transport.mjs";
 import { createPsdBlob, inspectPsdBlob, MAX_BROWSER_SOURCE_BYTES, parsePsdHeader,
   readBlobInput } from "../../sdk/engine/blob-ingress.mjs";
+import { applyParagraphStyleRange, justifiedSpaceAdvance } from
+  "../../sdk/engine/site/text-layout.mjs";
+
+test("browser paragraph ranges preserve neighbours and justify the raster cache", () => {
+  const base = { justification: 0, firstLineIndent: 0, startIndent: 0,
+    endIndent: 0, spaceBefore: 0, spaceAfter: 0, autoLeadingFraction: 1.2 };
+  const changed = { ...base, justification: 2, startIndent: 8 };
+  const runs = applyParagraphStyleRange(
+    [{ start: 0, length: 6, ...base }, { start: 6, length: 5, ...base }],
+    6, 11, { start: 6, length: 5, ...changed });
+  assert.deepEqual(runs, [
+    { start: 0, length: 6, ...base }, { start: 6, length: 5, ...changed },
+  ]);
+  assert.equal(justifiedSpaceAdvance(3, 100, 70,
+    [{ value: "one two" }, { value: " three" }]), 15);
+  assert.equal(justifiedSpaceAdvance(0, 100, 70, [{ value: "one two" }]), 0);
+});
 
 test("WASM export manifest covers every engine symbol used by the adapter", async () => {
   const root = new URL("../../", import.meta.url);
@@ -45,6 +62,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton", "layerWarpButton",
     "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "textRunList",
     "applyTextRangeButton", "applyTextAllButton", "resetTextRunsButton", "textAlignmentInput",
+    "textParagraphRunList", "applyParagraphRangeButton", "applyParagraphAllButton",
     "textTrackingInput", "textLeadingInput", "textHorizontalScaleInput", "textVerticalScaleInput",
     "textFirstIndentInput", "textStartIndentInput", "textEndIndentInput", "textSpaceBeforeInput",
     "textSpaceAfterInput", "textAutoLeadingInput", "layerTransformDialog", "commitLayerTransformButton",
@@ -165,6 +183,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /mode: 7/);
   assert.match(script, /pattern\.kind === "checker" \? 8 : 9/);
   assert.match(script, /function applyTextStyleRange/);
+  assert.match(script, /function applyParagraphRange/);
+  assert.match(script, /justifiedSpaceAdvance/);
   assert.match(script, /styleRuns: runs, paragraphRuns: paragraphs/);
   assert.match(script, /value === textDialogOriginalValue[\s\S]*textDialogOriginalRuns\.map/);
   assert.match(script, /client\.updateTextLayer/);
@@ -792,6 +812,11 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     paragraphRuns: [{ start: 0, length: 2, justification: 2 }] };
   engine.addTextLayer(session, snapshot, textInput);
   engine.updateTextLayer(session, snapshot, 7n, textInput);
+  assert.throws(() => engine.addTextLayer(session, snapshot, { ...textInput,
+    styleRuns: [{ ...textInput.styleRuns[0], start: 0, length: 2,
+      font: "x".repeat(256) }], paragraphRuns: textInput.paragraphRuns }), /at most 255 bytes/);
+  assert.throws(() => engine.addTextLayer(session, snapshot, { ...textInput,
+    text: "x".repeat(1024), styleRuns: [], paragraphRuns: [] }), /at most 1023 bytes/);
   engine.addAdjustment(session, snapshot, { name: "Brightness", kind: 7, values: [10, 5] });
   engine.updateAdjustment(session, snapshot, 7n, { kind: 7, values: [20, 10] });
   const path = { anchors: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };

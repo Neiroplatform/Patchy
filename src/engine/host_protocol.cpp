@@ -453,8 +453,8 @@ bool collect_text_runs(const patchy_engine_text_layer_input &input,
       const auto &source = input.style_runs[index];
       if (source.struct_size != sizeof(source) || source.start != covered ||
           source.length <= 0 || source.start > story_length - source.length ||
-          source.font_size == 0U || source.font_size > sizeof(source.font) ||
-          source.style_size > sizeof(source.style) ||
+          source.font_size == 0U || source.font_size >= sizeof(source.font) ||
+          source.style_size >= sizeof(source.style) ||
           std::memchr(source.font, '\0', source.font_size) != nullptr ||
           std::memchr(source.style, '\0', source.style_size) != nullptr ||
           !finite_text_metric(source.size_pixels, 1.0, 512.0) ||
@@ -2211,9 +2211,9 @@ int patchy_engine_session_add_text_layer(
   std::string text_value;
   std::string font;
   if (!copy_command_text(input->name, input->name_size, 256U, name, error) ||
-      !copy_command_text(input->text, input->text_size, 1024U, text_value,
+      !copy_command_text(input->text, input->text_size, 1023U, text_value,
                          error) ||
-      !copy_command_text(input->font, input->font_size, 256U, font, error)) {
+      !copy_command_text(input->font, input->font_size, 255U, font, error)) {
     return 0;
   }
   patchy::psd::PsdTextStyleRun fallback;
@@ -2286,9 +2286,9 @@ int patchy_engine_session_update_text_layer(
   std::string text_value;
   std::string font;
   if (!copy_command_text(input->name, input->name_size, 256U, name, error) ||
-      !copy_command_text(input->text, input->text_size, 1024U, text_value,
+      !copy_command_text(input->text, input->text_size, 1023U, text_value,
                          error) ||
-      !copy_command_text(input->font, input->font_size, 256U, font, error)) {
+      !copy_command_text(input->font, input->font_size, 255U, font, error)) {
     return 0;
   }
   patchy::psd::PsdTextStyleRun fallback;

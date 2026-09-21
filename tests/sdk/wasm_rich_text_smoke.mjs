@@ -1,4 +1,6 @@
 import { PatchyWorkerClient } from "../../build/wasm-sdk/site/engine/client.mjs";
+import { applyParagraphStyleRange, justifiedSpaceAdvance } from
+  "../../build/wasm-sdk/site/text-layout.mjs";
 
 const body = document.body;
 const workerUrl = new URL("../../build/wasm-sdk/site/engine/worker.mjs", import.meta.url);
@@ -14,6 +16,13 @@ const paragraph = (start, length, justification, extra = {}) => ({ start, length
   spaceBefore: 0, spaceAfter: 0, autoLeadingFraction: 1.2, ...extra });
 
 try {
+  const paragraphUiRuns = applyParagraphStyleRange(
+    [paragraph(0, 6, 0), paragraph(6, 5, 0)], 6, 11,
+    paragraph(6, 5, 2, { startIndent: 2 }));
+  check(paragraphUiRuns.length === 2 && paragraphUiRuns[0].justification === 0 &&
+    paragraphUiRuns[1].justification === 2 &&
+    justifiedSpaceAdvance(3, 100, 70, [{ value: "one two three" }]) === 15,
+  "browser paragraph range or justify layout contract failed");
   await client.initialize(moduleUrl.href);
   await client.create(12, 6, "Rich text.psd");
   const firstPixels = new Uint8Array(10 * 3 * 4);
@@ -69,7 +78,7 @@ try {
     reopenedLayer.text.paragraphRuns[1].autoLeadingFraction === 1.35,
   "PSB reopen lost rich text semantics");
   body.dataset.result = "PASS";
-  body.textContent = `PASS revision=${editedRevision} runs=${reopenedLayer.text.styleRuns.length} paragraphs=${reopenedLayer.text.paragraphRuns.length} psd=${psd.length} psb=${psb.length}`;
+  body.textContent = `PASS revision=${editedRevision} runs=${reopenedLayer.text.styleRuns.length} paragraphs=${reopenedLayer.text.paragraphRuns.length} paragraphUI=${paragraphUiRuns.length} psd=${psd.length} psb=${psb.length}`;
 } catch (error) {
   body.dataset.result = "FAIL"; body.textContent = `FAIL ${error?.stack || error}`;
 } finally { client.terminate(); }

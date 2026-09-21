@@ -1736,8 +1736,8 @@ export class EmscriptenPatchyEngine {
   #textLayerMutation(symbol, session, snapshot, layerId, input) {
     const richText = Boolean(this.#capabilities & CAP_RICH_TEXT_AUTHORING);
     const name = this.#text(input.name);
-    const text = this.#text(input.text, "Text content", 1024);
-    const font = this.#text(input.font, "Font family", 256);
+    const text = this.#text(input.text, "Text content", 1023);
+    const font = this.#text(input.font, "Font family", 255);
     const rgba = input.rgba;
     const expected = input.width * input.height * 4;
     const color = input.color;
@@ -1782,8 +1782,8 @@ export class EmscriptenPatchyEngine {
       view.setUint8(93, input.boxText ? 1 : 0);
       let covered = 0;
       styleRuns.forEach((run, index) => {
-        const runFont = this.#text(run.font, "Text run font", 256);
-        const runStyle = this.#text(run.style ?? "", "Text run style", 128);
+        const runFont = this.#text(run.font, "Text run font", 255);
+        const runStyle = this.#text(run.style ?? "", "Text run style", 127);
         if (!Number.isInteger(run.start) || !Number.isInteger(run.length) ||
             run.start !== covered || run.length <= 0 ||
             !Number.isFinite(run.sizePixels) || run.sizePixels < 1 || run.sizePixels > 512 ||

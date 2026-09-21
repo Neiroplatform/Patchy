@@ -3463,6 +3463,20 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
   CHECK(project().state_id == before_invalid_runs.state_id);
   style_runs[1].start = 7;
+  style_runs[1].font_size = sizeof(style_runs[1].font);
+  std::memset(style_runs[1].font, 'x', sizeof(style_runs[1].font));
+  CHECK(patchy_engine_session_update_text_layer(
+            session, text_id, &text, &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  CHECK(project().state_id == before_invalid_runs.state_id);
+  set_style_run(style_runs[1], 7, 12, "Courier New", 16.0,
+                {10, 120, 210}, true, false);
+  text.text_size = 1024;
+  CHECK(patchy_engine_session_update_text_layer(
+            session, text_id, &text, &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  CHECK(project().state_id == before_invalid_runs.state_id);
+  text.text_size = std::strlen(text.text);
 
   auto *source_session = patchy_engine_session_create_rgba8(runtime, 2, 2, &error);
   CHECK(source_session != nullptr);
