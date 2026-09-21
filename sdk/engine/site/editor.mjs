@@ -1,9 +1,11 @@
 import { PatchyWorkerClient } from "./engine/client.mjs";
+import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
 const worker = new Worker(new URL("./engine/worker.mjs", import.meta.url), { type: "module", name: "patchy-engine" });
 const client = new PatchyWorkerClient(worker);
+const workspaceStore = new PatchyWorkspaceStore();
 const canvas = $("documentCanvas");
 const context = canvas.getContext("2d", { alpha: true });
 let snapshot = null;
@@ -27,6 +29,11 @@ let gradientDraft = null;
 let lassoDraft = null;
 let polygonDraft = null;
 let clipboardImageBlob = null;
+let workspaceAvailable = false;
+const workspaceIds = new Map();
+const checkpointStates = new Map();
+const checkpointQueues = new Map();
+const knownWorkspaceIds = new Set();
 
 const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
 const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
@@ -73,7 +80,7 @@ function setBusy(active, title = "Working", detail = "The engine is updating the
     $("cancelOperationButton").disabled = false;
     $("busyProgress").value = 0;
   }
-  for (const button of [$("openButton"), $("newButton"), $("saveButton"), $("undoButton"), $("redoButton")]) {
+  for (const button of [$("openButton"), $("newButton"), $("recoveryButton"), $("saveButton"), $("undoButton"), $("redoButton")]) {
     button.dataset.busyDisabled = active ? "true" : "false";
   }
   updateControls();
@@ -91,6 +98,7 @@ function updateControls() {
   $("redoButton").disabled = busy || !snapshot?.canRedo;
   $("openButton").disabled = busy;
   $("newButton").disabled = busy;
+  $("recoveryButton").disabled = busy;
   $("importLayerButton").disabled = busy || !snapshot;
   $("groupLayerButton").disabled = busy || !layer;
   $("ungroupLayerButton").disabled = busy || layer?.kind !== 1;
@@ -179,7 +187,9 @@ async function invertSelectedLayer() {
   });
   cancelActiveOperation = operation.cancel;
   try {
-    await acceptSnapshot(await operation.promise);
+    const next = await operation.promise;
+    await acceptSnapshot(next);
+    scheduleCheckpoint(next);
   } catch (error) {
     if (error?.code !== 7) showError("Could not invert layer", error);
     else setSessionState("document", "Filter cancelled");
@@ -197,6 +207,151 @@ function showError(title, error) {
 }
 
 function clearError() { $("errorBanner").hidden = true; }
+
+function newWorkspaceId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const random = crypto.getRandomValues(new Uint32Array(4));
+  return `workspace-${[...random].map((value) => value.toString(16).padStart(8, "0")).join("")}`;
+}
+
+function setRecoveryLabel(state, label) {
+  const output = $("recoveryLabel");
+  output.dataset.state = state;
+  output.textContent = label;
+}
+
+function renderRecoveryStatus(documentId = snapshot?.documentId) {
+  if (!workspaceAvailable) { setRecoveryLabel("error", "Recovery unavailable"); return; }
+  if (!documentId) { setRecoveryLabel("confirmed", "Local recovery ready"); return; }
+  const state = checkpointStates.get(documentId);
+  if (state === "pending") setRecoveryLabel("pending", "Protecting revision…");
+  else if (state === "error") setRecoveryLabel("error", "Recovery needs attention");
+  else if (state === "confirmed") setRecoveryLabel("confirmed", "Document protected locally");
+  else setRecoveryLabel("pending", "Recovery not captured yet");
+}
+
+function updateRecoveryCount() { $("recoveryCount").textContent = String(knownWorkspaceIds.size); }
+
+function scheduleCheckpoint(next) {
+  if (!workspaceAvailable || !next?.documentId) { renderRecoveryStatus(next?.documentId); return Promise.resolve(); }
+  const workspaceId = workspaceIds.get(next.documentId) || newWorkspaceId();
+  workspaceIds.set(next.documentId, workspaceId);
+  let queue = checkpointQueues.get(next.documentId);
+  if (!queue) {
+    queue = new PatchyCheckpointQueue({
+      save: (checkpoint) => client.saveDocument(checkpoint.documentId),
+      write: (checkpoint, bytes) => workspaceStore.checkpoint({ id: workspaceId,
+        name: checkpoint.documentName, revision: checkpoint.revision,
+        dirty: checkpoint.dirty, bytes }),
+      onState: (state, checkpoint, value) => {
+        checkpointStates.set(next.documentId, state);
+        if (state === "confirmed") {
+          knownWorkspaceIds.add(workspaceId); updateRecoveryCount();
+        } else if (state === "error") {
+          showError("Local recovery checkpoint failed", value);
+        }
+        renderRecoveryStatus(snapshot?.documentId);
+      },
+    });
+    checkpointQueues.set(next.documentId, queue);
+  }
+  return queue.schedule(next);
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+async function restoreWorkspace(id) {
+  if (busy) return;
+  $("recoveryDialog").close(); clearError();
+  setBusy(true, "Recovering document", "Validating and opening its latest complete local snapshot");
+  try {
+    const existing = [...workspaceIds.entries()].find(([, workspaceId]) => workspaceId === id);
+    if (existing) {
+      await acceptSnapshot(await client.activateDocument(existing[0]));
+      return;
+    }
+    const recovered = await workspaceStore.restore(id);
+    const next = await client.open(recovered.bytes, recovered.manifest.name);
+    workspaceIds.set(next.documentId, id);
+    checkpointStates.set(next.documentId, "confirmed");
+    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    await acceptSnapshot(next);
+  } catch (error) { showError("Could not recover workspace", error); }
+  finally { setBusy(false); }
+}
+
+async function removeWorkspace(manifest) {
+  if (!confirm(`Delete the local recovery snapshot for ${manifest.name}?`)) return;
+  try {
+    const activeDocument = [...workspaceIds.entries()].find(([, id]) => id === manifest.id)?.[0];
+    if (activeDocument) await checkpointQueues.get(activeDocument)?.whenIdle();
+    await workspaceStore.remove(manifest.id);
+    knownWorkspaceIds.delete(manifest.id);
+    for (const [documentId, workspaceId] of workspaceIds) {
+      if (workspaceId === manifest.id) checkpointStates.delete(documentId);
+    }
+    updateRecoveryCount();
+    await refreshRecoveryList();
+    renderRecoveryStatus();
+  } catch (error) { showError("Could not delete local recovery", error); }
+}
+
+async function refreshRecoveryList() {
+  const list = $("recoveryList"); list.replaceChildren();
+  if (!workspaceAvailable) {
+    $("recoverySummary").textContent = "Origin-private storage is unavailable in this browser context.";
+    list.append(Object.assign(document.createElement("p"), { className: "recovery-empty",
+      textContent: "Recovery snapshots cannot be stored here." }));
+    $("recoveryQuota").textContent = "Use a secure origin with persistent browser storage enabled.";
+    return;
+  }
+  try {
+    const manifests = await workspaceStore.list();
+    knownWorkspaceIds.clear();
+    for (const manifest of manifests) knownWorkspaceIds.add(manifest.id);
+    updateRecoveryCount();
+    $("recoverySummary").textContent = manifests.length
+      ? `${manifests.length} recoverable workspace${manifests.length === 1 ? "" : "s"} on this device.`
+      : "No recoverable workspaces are stored on this device yet.";
+    if (!manifests.length) list.append(Object.assign(document.createElement("p"), {
+      className: "recovery-empty", textContent: "Completed checkpoints will appear here." }));
+    for (const manifest of manifests) {
+      const row = document.createElement("article"); row.className = "recovery-row";
+      const copy = document.createElement("div"); copy.className = "recovery-copy";
+      const title = document.createElement("strong"); title.textContent = manifest.name;
+      const details = document.createElement("span");
+      details.textContent = `Revision ${manifest.revision} · ${formatBytes(manifest.snapshotSize)} · ${new Date(manifest.updatedAt).toLocaleString()}`;
+      copy.append(title, details);
+      const actions = document.createElement("div"); actions.className = "recovery-actions";
+      const restore = document.createElement("button"); restore.type = "button";
+      restore.className = "button button-primary"; restore.textContent = "Recover";
+      restore.addEventListener("click", () => restoreWorkspace(manifest.id));
+      const remove = document.createElement("button"); remove.type = "button";
+      remove.className = "button"; remove.textContent = "Delete";
+      remove.addEventListener("click", () => removeWorkspace(manifest));
+      actions.append(restore, remove); row.append(copy, actions); list.append(row);
+    }
+    const estimate = await workspaceStore.estimate();
+    $("recoveryQuota").textContent = estimate.quota
+      ? `${formatBytes(estimate.usage)} used of approximately ${formatBytes(estimate.quota)} browser storage.`
+      : "The browser did not report a storage quota.";
+  } catch (error) {
+    $("recoverySummary").textContent = "Recovery storage could not be read.";
+    list.append(Object.assign(document.createElement("p"), { className: "recovery-empty",
+      textContent: error?.message || String(error) }));
+  }
+}
+
+async function openRecoveryDialog() {
+  if (busy) return;
+  $("recoveryDialog").showModal();
+  await refreshRecoveryList();
+}
 
 function formatKind(layer) { return layerKinds[layer.kind] || `Layer ${layer.kind}`; }
 
@@ -513,6 +668,7 @@ async function acceptSnapshot(next, rerender = true) {
     snapshot = null; selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     $("emptyState").hidden = false; setSessionState("ready", "Engine ready");
     renderLayers(); renderLayerProperties(); renderStructure(); renderMetadata(); renderDocumentTabs();
+    renderRecoveryStatus();
     return;
   }
   snapshot = next;
@@ -529,6 +685,7 @@ async function acceptSnapshot(next, rerender = true) {
   renderStructure();
   renderMetadata();
   renderDocumentTabs();
+  renderRecoveryStatus(snapshot.documentId);
   if (rerender) await renderDocument();
 }
 
@@ -545,13 +702,20 @@ async function activateDocumentTab(documentId) {
 
 async function closeDocumentTab(documentTab) {
   if (busy) return;
-  if (documentTab.dirty && !confirm(`Close ${documentTab.name} without saving?`)) return;
+  const recoveryWarning = checkpointStates.get(documentTab.id) === "confirmed"
+    ? "Its latest confirmed local recovery snapshot will remain available."
+    : "Local recovery is not confirmed, so recent changes may be lost.";
+  if (documentTab.dirty && !confirm(`Close ${documentTab.name}? ${recoveryWarning}`)) return;
   clearError(); setBusy(true, "Closing document", "Releasing its canonical Worker session");
   try {
     if (snapshot?.documentId === documentTab.id) {
       selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     }
-    await acceptSnapshot(await client.closeDocument(documentTab.id));
+    await checkpointQueues.get(documentTab.id)?.whenIdle();
+    const next = await client.closeDocument(documentTab.id);
+    workspaceIds.delete(documentTab.id); checkpointStates.delete(documentTab.id);
+    checkpointQueues.delete(documentTab.id);
+    await acceptSnapshot(next);
   } catch (error) { showError("Could not close document", error); }
   finally { setBusy(false); }
 }
@@ -560,7 +724,11 @@ async function mutate(title, operation) {
   if (busy || !snapshot) return;
   clearError();
   setBusy(true, title, "Committing one canonical engine revision");
-  try { await acceptSnapshot(await operation()); }
+  try {
+    const next = await operation();
+    await acceptSnapshot(next);
+    scheduleCheckpoint(next);
+  }
   catch (error) { showError(`${title} failed`, error); }
   finally { setBusy(false); }
 }
@@ -574,6 +742,7 @@ async function openFile(file) {
     const next = await client.open(bytes, file.name || "Document.psd");
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
+    scheduleCheckpoint(next);
   } catch (error) { showError("Could not open document", error); }
   finally { setBusy(false); }
 }
@@ -586,6 +755,7 @@ async function newDocument() {
     const next = await client.create(1600, 1000, "Untitled.psd");
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
+    scheduleCheckpoint(next);
   } catch (error) { showError("Could not create document", error); }
   finally { setBusy(false); }
 }
@@ -730,10 +900,12 @@ async function importPixelLayer(file, createDocument = false) {
     if (!snapshot) {
       await acceptSnapshot(await client.create(image.width, image.height, `${name}.psd`));
     }
-    await acceptSnapshot(await client.addPixelLayer({
+    const next = await client.addPixelLayer({
       name, width: image.width, height: image.height,
       bounds: { x: 0, y: 0, width: image.width, height: image.height }, rgba,
-    }));
+    });
+    await acceptSnapshot(next);
+    scheduleCheckpoint(next);
   } catch (error) { showError("Could not import pixels", error); }
   finally { image?.close?.(); setBusy(false); }
 }
@@ -1194,6 +1366,7 @@ function escapeHtml(value) {
 function openPicker() { if (!busy) $("fileInput").click(); }
 registerCommand("document.open", "openButton", openPicker, () => !busy);
 registerCommand("document.new", "newButton", newDocument, () => !busy);
+registerCommand("document.recovery", "recoveryButton", openRecoveryDialog, () => !busy);
 registerCommand("document.save", "saveButton", saveDocument, () => !busy && Boolean(snapshot));
 registerCommand("document.export", "exportButton", exportDocument, () => !busy && Boolean(snapshot));
 registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
@@ -1553,6 +1726,9 @@ $("canvasViewport").addEventListener("wheel", (event) => {
   setZoom(zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15));
 }, { passive: false });
 window.addEventListener("resize", applyViewport);
+window.addEventListener("beforeunload", (event) => {
+  if ([...checkpointStates.values()].some((state) => state === "pending")) event.preventDefault();
+});
 
 window.addEventListener("keydown", (event) => {
   if (!(event.ctrlKey || event.metaKey)) return;
@@ -1608,6 +1784,9 @@ window.addEventListener("drop", (event) => {
 
 try {
   await client.initialize(new URL("./patchy-engine.mjs", location.href).href);
+  workspaceAvailable = await workspaceStore.available();
+  if (workspaceAvailable) await refreshRecoveryList();
+  renderRecoveryStatus();
   setSessionState("ready", "Engine ready");
   $("busyState").hidden = true;
   updateControls();

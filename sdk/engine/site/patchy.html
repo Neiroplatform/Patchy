@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:,">
   <title>Patchy Local Editor</title>
   <link rel="stylesheet" href="./editor.css">
 </head>
@@ -17,6 +18,7 @@
       <nav class="document-actions" aria-label="Document actions">
         <button class="button button-primary" id="openButton" type="button">Open PSD</button>
         <button class="button" id="newButton" type="button">New</button>
+        <button class="button" id="recoveryButton" type="button">Recovery <span id="recoveryCount">0</span></button>
         <span class="action-divider" aria-hidden="true"></span>
         <button class="icon-button" id="undoButton" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>↶</button>
         <button class="icon-button" id="redoButton" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
@@ -107,6 +109,7 @@
         <footer class="stage-footer">
           <span class="zoom-controls"><button id="zoomOutButton" type="button" aria-label="Zoom out">−</button><button id="zoomFitButton" type="button">Fit</button><button id="zoomInButton" type="button" aria-label="Zoom in">+</button><output id="zoomLabel">Fit</output></span>
           <span class="privacy-label"><b></b>Local session</span>
+          <span id="recoveryLabel" aria-live="polite">Recovery starting</span>
           <span id="memoryLabel">Worker isolated</span>
         </footer>
       </section>
@@ -220,6 +223,16 @@
     <input id="fileInput" type="file" accept=".psd,.psb,application/octet-stream" hidden>
     <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
     <input id="smartObjectInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
+    <dialog class="document-dialog recovery-dialog" id="recoveryDialog" aria-labelledby="recoveryDialogTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">LOCAL RECOVERY</p><h2 id="recoveryDialogTitle">Recover workspaces</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section>
+          <p class="dialog-note" id="recoverySummary">Checking origin-private storage…</p>
+          <div class="recovery-list" id="recoveryList"></div>
+          <p class="dialog-note" id="recoveryQuota">Storage estimate unavailable</p>
+        </section>
+      </form>
+    </dialog>
     <dialog class="document-dialog" id="documentDialog" aria-labelledby="documentDialogTitle">
       <form method="dialog">
         <header><div><p class="eyebrow">DOCUMENT</p><h2 id="documentDialogTitle">Canvas operations</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>

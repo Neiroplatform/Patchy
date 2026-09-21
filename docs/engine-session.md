@@ -295,6 +295,20 @@ mask geometry can commit atomically. Empty, busy, drop, engine-error and Worker-
 explicit. Download completion deliberately does not acknowledge durable save
 because the browser cannot prove the file was kept.
 
+The self-hosted shell also maintains a versioned OPFS recovery store without
+uploading document bytes. Each open document has an opaque local workspace id.
+Its per-document queue snapshots the owning Worker session, serializes writes,
+and coalesces superseded pending revisions. Alternating PSD and manifest slots
+publish only after byte-count and SHA-256 verification, so discovery chooses
+the newest complete generation and can fall back to the prior generation after
+a torn or corrupt write. The Recovery dialog validates, lists, restores and
+explicitly deletes isolated workspaces and exposes browser quota, unavailable
+storage and write-failure states. Closing a tab retains its confirmed local
+snapshot; page reload opens recovered PSD bytes in a new Worker session.
+Recovery preserves the layered document represented by PSD. In-memory undo
+history and transient, non-dirty selection state remain session-local and are
+not represented as durable recovery data.
+
 ## Desktop transition
 
 The Qt shell now stores its canonical document, committed selection and all

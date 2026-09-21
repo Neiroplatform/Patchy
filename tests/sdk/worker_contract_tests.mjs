@@ -50,7 +50,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "pathDeleteButton", "pathAnchorXInput", "pathAnchorYInput", "pathAnchorApplyButton",
     "createVectorMaskButton", "smartObjectInput", "shapeDialog", "commitShapeButton",
     "adjustmentDialog", "commitAdjustmentButton", "smartFilterDialog", "commitSmartFilterButton",
-    "undoButton", "redoButton", "saveButton", "errorBanner"]) {
+    "undoButton", "redoButton", "saveButton", "errorBanner", "recoveryButton",
+    "recoveryCount", "recoveryLabel", "recoveryDialog", "recoveryList", "recoveryQuota"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
@@ -76,10 +77,11 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
-    "client.undo", "client.redo", "client.render", "client.save"]) {
+    "client.undo", "client.redo", "client.render", "client.save", "client.saveDocument"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
+  assert.match(script, /from "\.\/engine\/workspace-store\.mjs"/);
   assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
   assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
   assert.match(script, /const commandRegistry = new Map\(\)/);
@@ -95,7 +97,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     assert.match(html, new RegExp(`value="${preset}"`));
   }
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
-    "activateDocument(", "closeDocument(", "growSelection(", "selectSimilar(", "setLayerStylePreset("]) {
+    "activateDocument(", "closeDocument(", "saveDocument(", "growSelection(", "selectSimilar(", "setLayerStylePreset("]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
   assert.doesNotMatch(`${html}\n${css}\n${script}`, /https?:\/\//);
@@ -656,6 +658,7 @@ test("one Worker owns isolated switchable document sessions", async () => {
       assert.equal(before.revision, BigInt(revisions.get(session)));
       visibility.set(session, visible); revisions.set(session, revisions.get(session) + 1);
     },
+    save(session) { return new Uint8Array([session]); },
     close(session) { closed.push(session); revisions.delete(session); visibility.delete(session); },
     dispose() {},
   };
@@ -666,6 +669,7 @@ test("one Worker owns isolated switchable document sessions", async () => {
   const second = await host.dispatch({ method: "create", width: 3, height: 3, name: "Second.psd" });
   assert.equal(second.revision, 1n);
   assert.equal(second.documents.length, 2);
+  assert.deepEqual([...await host.dispatch({ method: "saveDocument", documentId: first.documentId })], [100]);
   const restoredFirst = await host.dispatch({ method: "activateDocument", documentId: first.documentId });
   assert.equal(restoredFirst.revision, 2n);
   assert.equal(restoredFirst.layers[0].visible, false);
@@ -721,6 +725,11 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   assert.equal(Atomics.load(new Int32Array(filterMessage.cancellation), 0), 1);
   worker.reply({ id: 4, ok: true, value: projection(3) });
   await filter.promise;
+  const savedDocument = client.saveDocument(23);
+  assert.equal(worker.sent[4].message.method, "saveDocument");
+  assert.equal(worker.sent[4].message.documentId, 23);
+  worker.reply({ id: 5, ok: true, value: new Uint8Array([56, 66, 80, 83]) });
+  assert.equal((await savedDocument).byteLength, 4);
   const pending = client.save();
   worker.fail("worker trap");
   await assert.rejects(pending, /worker trap/);

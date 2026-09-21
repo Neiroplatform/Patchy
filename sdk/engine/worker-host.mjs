@@ -271,6 +271,11 @@ export class PatchyWorkerHost {
       case "render":
         return this.#engine.render(this.#requireSession(), message.region);
       case "save": return this.#engine.save(this.#requireSession());
+      case "saveDocument": {
+        const record = this.#sessions.get(Number(message.documentId));
+        if (!record) throw new Error("Patchy document does not exist");
+        return this.#engine.save(record.session);
+      }
       case "close": return this.#closeDocument(this.#activeDocumentId);
       default: throw new TypeError(`Unknown Patchy worker method: ${message.method}`);
     }

@@ -117,6 +117,7 @@ export class PatchyWorkerClient {
     CancellableOperation<DocumentProjection>;
   render(region: Rect): Promise<Uint8Array>;
   save(): Promise<Uint8Array>;
+  saveDocument(documentId: number): Promise<Uint8Array>;
   close(): Promise<null>;
   terminate(): void;
 }

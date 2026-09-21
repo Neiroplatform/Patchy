@@ -195,6 +195,7 @@ export class PatchyWorkerClient {
   }
   render(region) { return this.#request("render", { region }); }
   save() { return this.#request("save"); }
+  saveDocument(documentId) { return this.#request("saveDocument", { documentId }); }
   close() { return this.#request("close"); }
 
   #textLayerRequest(method, layerId, input) {

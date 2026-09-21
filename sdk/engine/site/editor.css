@@ -206,6 +206,20 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .check-field { display: flex !important; grid-auto-flow: column; align-items: center; justify-content: start; min-height: 36px; }
 .field-row input:focus { border-color: var(--focus); outline: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 11px; }
+.dialog-note { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.recovery-dialog { width: min(680px, calc(100vw - 28px)); }
+.recovery-list { display: grid; gap: 8px; margin-block: 13px; }
+.recovery-empty { padding: 18px; color: var(--text-faint); text-align: center; border: 1px dashed var(--line); border-radius: 7px; font-size: 11px; }
+.recovery-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-1); }
+.recovery-copy { min-width: 0; display: grid; gap: 4px; }
+.recovery-copy strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.recovery-copy span { color: var(--text-faint); font-size: 10px; }
+.recovery-actions { display: flex; gap: 6px; }
+.recovery-actions .button { min-height: 30px; }
+#recoveryCount { display: inline-grid; min-width: 17px; height: 17px; margin-left: 4px; place-items: center; border-radius: 99px; background: #ffffff12; font-size: 9px; }
+#recoveryLabel[data-state="pending"] { color: #eab75c; }
+#recoveryLabel[data-state="confirmed"] { color: var(--accent); }
+#recoveryLabel[data-state="error"] { color: var(--danger); }
 [hidden] { display: none !important; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -242,6 +256,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
   .properties-panel { min-height: 214px; }
   .details-panel { display: none; }
   .stage-footer #memoryLabel { display: none; }
+  .stage-footer #recoveryLabel { max-width: 124px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tool-options { display: none; }
   .document-dialog { max-height: calc(100vh - 16px); overflow: auto; }
   .field-row-four { grid-template-columns: repeat(2, minmax(0, 1fr)); }

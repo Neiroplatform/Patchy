@@ -570,6 +570,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker-host.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/module-adapter.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/workspace-store.mjs"
             "${PATCHY_WASM_SDK_SITE_DIR}/engine"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "$<TARGET_FILE:patchy_engine_wasm_sdk>"
@@ -584,7 +585,8 @@ if(PATCHY_BUILD_TESTS)
   if(PATCHY_NODE_EXECUTABLE)
     add_test(NAME patchy_sdk_contract_tests
       COMMAND "${PATCHY_NODE_EXECUTABLE}" --test
-              "${PROJECT_SOURCE_DIR}/tests/sdk/worker_contract_tests.mjs")
+              "${PROJECT_SOURCE_DIR}/tests/sdk/worker_contract_tests.mjs"
+              "${PROJECT_SOURCE_DIR}/tests/sdk/workspace_store_tests.mjs")
   endif()
 endif()
 
