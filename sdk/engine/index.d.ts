@@ -114,6 +114,12 @@ export class PatchyWorkerClient {
   setSelection(rects: Rect[]): Promise<DocumentProjection>;
   setSelectionMask(bounds: Rect, gray: Uint8Array,
     options?: TransferOptions): Promise<DocumentProjection>;
+  quickSelect(input: { points: Array<[number, number] | { x: number; y: number }>;
+    brushRadius: number; spread: number; subtract?: boolean; enhanceEdge?: boolean;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
+  magneticLasso(input: { anchors: Array<[number, number] | { x: number; y: number }>;
+    width: number; edgeContrast: number; nodeBudget: number; combine: 0 | 1 | 2 | 3;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   clearSelection(): Promise<DocumentProjection>;
   invertSelection(): Promise<DocumentProjection>;
   expandSelection(pixels: number): Promise<DocumentProjection>;

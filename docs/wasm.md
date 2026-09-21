@@ -73,8 +73,8 @@ skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
 `wasm-sdk` is a no-entry Worker module/site with BigInt IDs. It opens PSD,
 authors layers/text, renders and downloads layered PSD or flattened
 PNG/JPEG/WebP/SVG. One toolbar/key registry covers
-geometry, zoom/pan, marquee/freehand/polygon/magic selection, soft-mask
-refinement, move/transform, paint and text. The inspector authors masks,
+geometry, zoom/pan, marquee/freehand/polygon/magic/Quick Select/Magnetic Lasso,
+Quick Mask, soft-mask refinement, move/transform, paint and text. The inspector authors masks,
 shapes, adjustments, Smart Objects/Filters, channels/paths, rasterize and
 merge, while built-in style, gradient, pattern and font presets cover common
 appearance work without remote assets. Raster images and SVG decode locally,
@@ -99,6 +99,10 @@ three isolated switchable sessions; the body reports `PASS` only after the
 whole sequence. Its shared-heap adapter regression uses `SharedArrayBuffer`,
 pins the 56-byte wasm32 selection-mask input and copies bounded projected text
 before `TextDecoder`, matching the actual threaded runtime.
+`tests/sdk/wasm_advanced_selection_smoke.html` is the focused whole-flow
+fixture: real pthread WASM executes Quick Select, Magnetic Lasso and Quick
+Mask, then undo/redo and layered PSD save/reopen. It must report `PASS`; the
+Node contract alone cannot substitute for this browser run.
 
 ## wasm-core preset decisions (all in CMakePresets.json)
 

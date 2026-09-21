@@ -338,6 +338,26 @@ export class PatchyWorkerHost {
           bounds: message.bounds, gray: new Uint8Array(message.gray),
         });
         return this.#snapshot();
+      case "quickSelect": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Quick Select was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        this.#engine.quickSelect(this.#requireSession(), before, message);
+        return this.#snapshot();
+      }
+      case "magneticLasso": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Magnetic Lasso was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        this.#engine.magneticLasso(this.#requireSession(), before, message);
+        return this.#snapshot();
+      }
       case "modifySelection":
         this.#engine.modifySelection(this.#requireSession(), this.#snapshot(), message.type, message.pixels);
         return this.#snapshot();

@@ -5,6 +5,8 @@
 #include "core/layer_metadata.hpp"
 #include "core/layer_transform.hpp"
 #include "core/layer_warp.hpp"
+#include "core/magnetic_lasso.hpp"
+#include "core/quick_select.hpp"
 #include "core/raster_stroke.hpp"
 #include "core/pattern_resource.hpp"
 #include "core/rect_utils.hpp"
@@ -407,6 +409,39 @@ patchy::engine::SelectionSnapshot selection_from_mask(
     result.mask_bounds = bounds;
     result.mask_alpha = std::move(pixels);
   }
+  return result;
+}
+
+constexpr std::size_t kAdvancedSelectionPixelLimit = 16U * 1024U * 1024U;
+constexpr std::size_t kQuickSelectPointLimit = 65536U;
+constexpr std::size_t kMagneticAnchorLimit = 256U;
+constexpr std::size_t kMagneticPathPointLimit = 262144U;
+
+std::vector<std::uint8_t> materialize_selection_mask(
+    const patchy::engine::SelectionSnapshot &selection, std::int32_t width,
+    std::int32_t height) {
+  std::vector<std::uint8_t> result(static_cast<std::size_t>(width) * height, 0U);
+  if (!selection.mask_alpha.empty()) {
+    const auto bounds = selection.mask_bounds;
+    for (std::int32_t y = 0; y < bounds.height; ++y) {
+      std::copy_n(selection.mask_alpha.pixel(0, y), bounds.width,
+                  result.data() + static_cast<std::size_t>(bounds.y + y) * width + bounds.x);
+    }
+    return result;
+  }
+  for (const auto rect : selection.selection) {
+    for (std::int32_t y = rect.y; y < rect.y + rect.height; ++y) {
+      std::fill_n(result.data() + static_cast<std::size_t>(y) * width + rect.x,
+                  rect.width, 255U);
+    }
+  }
+  return result;
+}
+
+patchy::PathAnchor corner_anchor(patchy::PointI32 point) {
+  patchy::PathAnchor result;
+  result.anchor_x = result.in_x = result.out_x = point.x + 0.5;
+  result.anchor_y = result.in_y = result.out_y = point.y + 0.5;
   return result;
 }
 
@@ -946,6 +981,190 @@ int patchy_engine_session_set_selection_mask(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown selection mask authoring failure");
+  }
+}
+
+int patchy_engine_session_quick_select(
+    patchy_engine_session *session,
+    const patchy_engine_quick_select_input *input,
+    patchy_engine_cancellation *cancellation,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->points == nullptr ||
+      input->point_count == 0 || input->point_count > kQuickSelectPointLimit ||
+      input->brush_radius < 1 || input->brush_radius > 256 ||
+      input->spread < 0 || input->spread > 100) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "bounded Quick Select input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  if (cancellation != nullptr && cancellation->value.cancelled()) {
+    return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
+                "Quick Select was cancelled");
+  }
+  const auto &document = session->value->document();
+  const auto width = document.width();
+  const auto height = document.height();
+  const auto pixel_count = static_cast<std::size_t>(width) * height;
+  if (pixel_count > kAdvancedSelectionPixelLimit) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "Quick Select canvas exceeds the browser safety limit");
+  }
+  try {
+    const auto before = session->value->selection();
+    auto base = materialize_selection_mask(before, width, height);
+    std::vector<std::uint8_t> seeds(pixel_count, 0U);
+    patchy::Rect seed_bounds{};
+    bool has_seed = false;
+    const auto radius = input->brush_radius;
+    for (std::size_t index = 0; index < input->point_count; ++index) {
+      const auto point = input->points[index];
+      if (point.x < 0 || point.y < 0 || point.x >= width || point.y >= height) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "Quick Select points must be inside the document");
+      }
+      const auto left = std::max(0, point.x - radius);
+      const auto top = std::max(0, point.y - radius);
+      const auto right = std::min(width - 1, point.x + radius);
+      const auto bottom = std::min(height - 1, point.y + radius);
+      const auto circle = patchy::Rect{left, top, right - left + 1, bottom - top + 1};
+      seed_bounds = has_seed ? patchy::unite_rect(seed_bounds, circle) : circle;
+      has_seed = true;
+      const auto squared_radius = radius * radius;
+      for (std::int32_t y = top; y <= bottom; ++y) {
+        for (std::int32_t x = left; x <= right; ++x) {
+          const auto dx = x - point.x;
+          const auto dy = y - point.y;
+          if (dx * dx + dy * dy <= squared_radius) {
+            seeds[static_cast<std::size_t>(y) * width + x] = 255U;
+          }
+        }
+      }
+    }
+    const auto flattened = patchy::flatten_document_rgba8(document);
+    patchy::QuickSelectParams params;
+    params.brush_radius = radius;
+    params.spread = input->spread;
+    params.subtract = input->subtract != 0;
+    params.enhance_edge = input->enhance_edge != 0;
+    const auto segmented = patchy::quick_select_segment(
+        flattened.data().data(), width, height,
+        static_cast<std::ptrdiff_t>(flattened.stride_bytes()), base.data(),
+        seeds.data(), seed_bounds, params);
+    if (cancellation != nullptr && cancellation->value.cancelled()) {
+      return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
+                  "Quick Select was cancelled");
+    }
+    for (const auto run : segmented.delta_runs) {
+      std::fill(base.begin() + static_cast<std::size_t>(run.y) * width + run.x0,
+                base.begin() + static_cast<std::size_t>(run.y) * width + run.x1 + 1,
+                input->subtract != 0 ? 0U : 255U);
+    }
+    patchy::PixelBuffer mask(width, height, patchy::PixelFormat::gray8());
+    std::copy(base.begin(), base.end(), mask.data().begin());
+    auto result = session->value->execute(patchy::engine::CommitPreparedSelection{
+        before, selection_from_mask(std::move(mask), patchy::Rect::from_size(width, height))});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate Quick Select working memory");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_ENGINE, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown Quick Select failure");
+  }
+}
+
+int patchy_engine_session_magnetic_lasso(
+    patchy_engine_session *session,
+    const patchy_engine_magnetic_lasso_input *input,
+    patchy_engine_cancellation *cancellation,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->anchors == nullptr ||
+      input->anchor_count < 3 || input->anchor_count > kMagneticAnchorLimit ||
+      input->width < 1 || input->width > 256 || input->edge_contrast < 1 ||
+      input->edge_contrast > 100 || input->node_budget < 1024 ||
+      input->node_budget > 1000000 || input->combine > 3U) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "bounded Magnetic Lasso input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) return 0;
+  if (cancellation != nullptr && cancellation->value.cancelled()) {
+    return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
+                "Magnetic Lasso was cancelled");
+  }
+  const auto &document = session->value->document();
+  const auto width = document.width();
+  const auto height = document.height();
+  if (static_cast<std::size_t>(width) * height > kAdvancedSelectionPixelLimit) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "Magnetic Lasso canvas exceeds the browser safety limit");
+  }
+  try {
+    const auto flattened = patchy::flatten_document_rgba8(document);
+    patchy::LiveWireEngine live_wire;
+    live_wire.set_image(flattened.data().data(), width, height,
+                        static_cast<std::ptrdiff_t>(flattened.stride_bytes()));
+    live_wire.set_params({input->width, input->edge_contrast, input->node_budget});
+    std::vector<patchy::PointI32> anchors;
+    anchors.reserve(input->anchor_count);
+    for (std::size_t index = 0; index < input->anchor_count; ++index) {
+      const patchy::PointI32 point{input->anchors[index].x, input->anchors[index].y};
+      if (point.x < 0 || point.y < 0 || point.x >= width || point.y >= height) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "Magnetic Lasso anchors must be inside the document");
+      }
+      // Manual anchors are corrections chosen by the user. Keep them exact;
+      // only the live-wire segment between anchors is edge optimized.
+      anchors.push_back(point);
+    }
+    patchy::PathSubpath subpath;
+    for (std::size_t index = 0; index < anchors.size(); ++index) {
+      if (cancellation != nullptr && cancellation->value.cancelled()) {
+        return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
+                    "Magnetic Lasso was cancelled");
+      }
+      live_wire.set_anchor(anchors[index]);
+      const auto path = live_wire.path_to(anchors[(index + 1U) % anchors.size()]);
+      for (std::size_t point_index = 0; point_index + 1U < path.size(); ++point_index) {
+        if (subpath.anchors.size() >= kMagneticPathPointLimit) {
+          return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                      "Magnetic Lasso path exceeds the browser safety limit");
+        }
+        if (subpath.anchors.empty() ||
+            subpath.anchors.back().anchor_x != path[point_index].x + 0.5 ||
+            subpath.anchors.back().anchor_y != path[point_index].y + 0.5) {
+          subpath.anchors.push_back(corner_anchor(path[point_index]));
+        }
+      }
+    }
+    subpath.closed = true;
+    patchy::VectorPath path;
+    path.subpaths.push_back(std::move(subpath));
+    auto result = session->value->execute(patchy::engine::SelectVectorPath{
+        std::move(path), 0.0, true,
+        static_cast<patchy::engine::SelectionCombineMode>(input->combine)});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate Magnetic Lasso working memory");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_ENGINE, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown Magnetic Lasso failure");
   }
 }
 

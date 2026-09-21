@@ -93,6 +93,20 @@ try {
     check(gray.byteLength === 0, "owned selection input was not detached after Worker transfer");
     check(selected.selectionMask?.gray.length === grayLength,
       "soft selection did not cross the wasm32 ABI");
+    const quickSelected = await client.quickSelect({ points: [[1, 1], [2, 1]],
+      brushRadius: 1, spread: 50, subtract: false, enhanceEdge: true,
+      expectedStateId: selected.stateId, expectedRevision: selected.revision });
+    check(quickSelected.revision >= selected.revision && quickSelected.selection.length > 0,
+      "Quick Select did not cross the exact-state wasm32 ABI");
+    const magneticSelected = await client.magneticLasso({ anchors: [[0, 0], [3, 0], [2, 2]],
+      width: 4, edgeContrast: 10, nodeBudget: 4096, combine: 0,
+      expectedStateId: quickSelected.stateId, expectedRevision: quickSelected.revision });
+    check(magneticSelected.revision === quickSelected.revision + 1n && magneticSelected.selection.length > 0,
+      "Magnetic Lasso did not publish one canonical wasm32 revision");
+    const magneticUndone = await client.undo();
+    const magneticRedone = await client.redo();
+    check(magneticUndone.revision > magneticSelected.revision && magneticRedone.selection.length > 0,
+      "advanced selection history did not survive undo/redo");
     const styled = await client.setLayerStylePreset(
       layerId, "57a1e500-0015-4c6d-8f2a-9b3d4e55c015");
     check(styled.revision > authored.revision, "style preset did not publish a revision");

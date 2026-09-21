@@ -44,6 +44,9 @@ let gradientDraft = null;
 let lassoDraft = null;
 let polygonDraft = null;
 let penDraft = null;
+let quickSelectDraft = null;
+let magneticDraft = null;
+let quickMaskDraft = null;
 let clipboardImageBlob = null;
 let layerClipboard = null;
 let draggedLayer = null;
@@ -871,6 +874,7 @@ function applyViewport() {
 function renderSelection(rect = marqueeDraft) {
   const overlay = $("selectionOverlay");
   const rects = rect ? [rect] : snapshot?.selection || [];
+  if (canvasTool === "quickMask") { overlay.hidden = true; renderQuickMask(); return; }
   if (!snapshot || !rects.length) { overlay.hidden = true; return; }
   const left = Math.min(...rects.map((item) => item.x));
   const top = Math.min(...rects.map((item) => item.y));
@@ -883,18 +887,40 @@ function renderSelection(rect = marqueeDraft) {
   overlay.hidden = false;
 }
 
+function renderQuickMask(gray = null) {
+  const overlay = $("gestureCanvas");
+  const target = overlay.getContext("2d");
+  target.clearRect(0, 0, overlay.width, overlay.height);
+  if (!snapshot || canvasTool !== "quickMask") return;
+  gray ??= fullSelectionMask();
+  const image = target.createImageData(snapshot.width, snapshot.height);
+  for (let index = 0; index < gray.length; ++index) {
+    image.data[index * 4] = 232; image.data[index * 4 + 1] = 38;
+    image.data[index * 4 + 2] = 80;
+    image.data[index * 4 + 3] = Math.round((255 - gray[index]) * .48);
+  }
+  target.putImageData(image, 0, 0);
+}
+
 function setCanvasTool(tool) {
   if (tool !== "pen" && penDraft) { penDraft = null; previewPolygon([]); }
+  if (tool !== "magnetic") magneticDraft = null;
+  if (tool !== "quickSelect") quickSelectDraft = null;
+  if (tool !== "quickMask") quickMaskDraft = null;
   canvasTool = tool;
   $("canvasViewport").dataset.tool = tool;
   for (const [id, value] of [["moveToolButton", "move"], ["marqueeToolButton", "marquee"],
     ["lassoToolButton", "lasso"], ["polygonToolButton", "polygon"], ["magicToolButton", "magic"],
+    ["quickSelectToolButton", "quickSelect"], ["magneticToolButton", "magnetic"],
+    ["quickMaskToolButton", "quickMask"],
     ["panToolButton", "pan"], ["brushToolButton", "brush"],
     ["eraserToolButton", "eraser"], ["cloneToolButton", "clone"],
     ["healToolButton", "heal"], ["gradientToolButton", "gradient"], ["penToolButton", "pen"],
     ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
   }
+  if (tool === "quickMask") renderQuickMask();
+  else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   persistPreferences();
 }
 
@@ -935,6 +961,19 @@ function combinedSelectionMask(next, mode = "replace") {
 
 function selectionMode(event) {
   return event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" : "replace";
+}
+
+function selectionCombineValue(mode) {
+  return ({ replace: 0, add: 1, subtract: 2, intersect: 3 })[mode] ?? 0;
+}
+
+function paintMaskPoint(gray, point, radius, value) {
+  const centerX = Math.round(point.x); const centerY = Math.round(point.y);
+  for (let y = Math.max(0, centerY - radius); y <= Math.min(snapshot.height - 1, centerY + radius); ++y) {
+    for (let x = Math.max(0, centerX - radius); x <= Math.min(snapshot.width - 1, centerX + radius); ++x) {
+      if ((x - centerX) ** 2 + (y - centerY) ** 2 <= radius ** 2) gray[y * snapshot.width + x] = value;
+    }
+  }
 }
 
 function polygonMask(points) {
@@ -2168,6 +2207,9 @@ registerCommand("tool.marquee", "marqueeToolButton", () => setCanvasTool("marque
 registerCommand("tool.lasso", "lassoToolButton", () => setCanvasTool("lasso"));
 registerCommand("tool.polygon", "polygonToolButton", () => setCanvasTool("polygon"));
 registerCommand("tool.magic", "magicToolButton", () => setCanvasTool("magic"));
+registerCommand("tool.quickSelect", "quickSelectToolButton", () => setCanvasTool("quickSelect"));
+registerCommand("tool.magnetic", "magneticToolButton", () => setCanvasTool("magnetic"));
+registerCommand("tool.quickMask", "quickMaskToolButton", () => setCanvasTool("quickMask"));
 registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"));
 registerCommand("tool.brush", "brushToolButton", () => setCanvasTool("brush"));
 registerCommand("tool.eraser", "eraserToolButton", () => setCanvasTool("eraser"));
@@ -2398,6 +2440,9 @@ $("selectionToleranceInput").addEventListener("input", () => {
   $("selectionToleranceOutput").textContent = $("selectionToleranceInput").value;
   persistPreferences();
 });
+$("edgeContrastInput").addEventListener("input", () => {
+  $("edgeContrastOutput").textContent = `${$("edgeContrastInput").value}%`;
+});
 $("saveChannelButton").addEventListener("click", () => mutate("Saving alpha channel", () => client.addAlphaChannel(`Alpha ${snapshot.channels.length + 1}`)));
 $("savePathButton").addEventListener("click", () => {
   const path = selectionPath();
@@ -2481,6 +2526,29 @@ canvas.addEventListener("pointerdown", (event) => {
     }
     return;
   }
+  if (canvasTool === "quickSelect") {
+    canvas.setPointerCapture(event.pointerId);
+    quickSelectDraft = { pointerId: event.pointerId, points: [canvasPoint(event)], subtract: event.altKey };
+    previewPolygon(quickSelectDraft.points);
+    return;
+  }
+  if (canvasTool === "magnetic") {
+    const point = canvasPoint(event);
+    magneticDraft ??= { anchors: [], mode: selectionMode(event) };
+    const last = magneticDraft.anchors.at(-1);
+    if (magneticDraft.anchors.length < 256 &&
+        (!last || Math.hypot(point.x - last.x, point.y - last.y) >= 1)) magneticDraft.anchors.push(point);
+    previewPolygon(magneticDraft.anchors);
+    return;
+  }
+  if (canvasTool === "quickMask") {
+    canvas.setPointerCapture(event.pointerId);
+    const gray = fullSelectionMask(); const point = canvasPoint(event);
+    quickMaskDraft = { pointerId: event.pointerId, gray, value: event.altKey ? 0 : 255,
+      radius: Math.max(1, Math.round(Number($("brushSizeInput").value) / 2)), last: point };
+    paintMaskPoint(gray, point, quickMaskDraft.radius, quickMaskDraft.value); renderQuickMask(gray);
+    return;
+  }
   if (canvasTool === "magic") {
     commitSelectionMask("Selecting connected color", combinedSelectionMask(
       magicMask(canvasPoint(event)), selectionMode(event)));
@@ -2542,6 +2610,21 @@ canvas.addEventListener("pointermove", (event) => {
     if (Math.hypot(point.x - last.x, point.y - last.y) >= 1) lassoDraft.points.push(point);
     previewPolygon(lassoDraft.points);
   }
+  if (quickSelectDraft?.pointerId === event.pointerId) {
+    const point = canvasPoint(event); const last = quickSelectDraft.points.at(-1);
+    if (Math.hypot(point.x - last.x, point.y - last.y) >= 1 && quickSelectDraft.points.length < 65536) {
+      quickSelectDraft.points.push(point); previewPolygon(quickSelectDraft.points);
+    }
+  }
+  if (quickMaskDraft?.pointerId === event.pointerId) {
+    const point = canvasPoint(event); const distance = Math.hypot(point.x - quickMaskDraft.last.x, point.y - quickMaskDraft.last.y);
+    const steps = Math.max(1, Math.ceil(distance / Math.max(1, quickMaskDraft.radius / 2)));
+    for (let step = 1; step <= steps; ++step) paintMaskPoint(quickMaskDraft.gray, {
+      x: quickMaskDraft.last.x + (point.x - quickMaskDraft.last.x) * step / steps,
+      y: quickMaskDraft.last.y + (point.y - quickMaskDraft.last.y) * step / steps,
+    }, quickMaskDraft.radius, quickMaskDraft.value);
+    quickMaskDraft.last = point; renderQuickMask(quickMaskDraft.gray);
+  }
   if (gradientDraft?.pointerId === event.pointerId) {
     gradientDraft.end = canvasPoint(event); scheduleRasterFillPreview(gradientDraft);
   }
@@ -2560,15 +2643,40 @@ canvas.addEventListener("pointerup", (event) => {
     if (draft.points.length >= 3) commitSelectionMask("Selecting freehand area",
       combinedSelectionMask(polygonMask(draft.points), draft.mode));
   }
+  if (quickSelectDraft?.pointerId === event.pointerId) {
+    const draft = quickSelectDraft; quickSelectDraft = null; previewPolygon([]);
+    mutate(draft.subtract ? "Subtracting with Quick Select" : "Applying Quick Select", () => client.quickSelect({
+      points: draft.points.map((point) => [Math.round(point.x), Math.round(point.y)]),
+      brushRadius: Math.max(1, Math.round(Number($("brushSizeInput").value) / 2)),
+      spread: 50, subtract: draft.subtract, enhanceEdge: $("enhanceEdgeInput").checked,
+      expectedStateId: snapshot.stateId, expectedRevision: snapshot.revision,
+    }));
+  }
+  if (quickMaskDraft?.pointerId === event.pointerId) {
+    const draft = quickMaskDraft; quickMaskDraft = null;
+    commitSelectionMask("Committing Quick Mask stroke", draft.gray);
+  }
   if (!moveDraft) return;
   const draft = moveDraft; moveDraft = null;
   commitLayerQuad(draft.layer, draft.quad, "Moving layer");
 });
 canvas.addEventListener("pointercancel", (event) => {
   finishPaint(event, true); gradientDraft = null; clearRasterPreview(); moveDraft = null; lassoDraft = null;
-  previewPolygon([]); clearTransformPreview(true);
+  quickSelectDraft = null; quickMaskDraft = null; previewPolygon([]); clearTransformPreview(true);
+  if (canvasTool === "quickMask") renderQuickMask();
 });
 canvas.addEventListener("dblclick", (event) => {
+  if (canvasTool === "magnetic" && magneticDraft) {
+    event.preventDefault(); const draft = magneticDraft; magneticDraft = null; previewPolygon([]);
+    if (draft.anchors.length >= 3) mutate("Closing Magnetic Lasso", () => client.magneticLasso({
+      anchors: draft.anchors.map((point) => [Math.round(point.x), Math.round(point.y)]),
+      width: Math.max(1, Math.round(Number($("brushSizeInput").value))),
+      edgeContrast: Number($("edgeContrastInput").value), nodeBudget: 600000,
+      combine: selectionCombineValue(draft.mode),
+      expectedStateId: snapshot.stateId, expectedRevision: snapshot.revision,
+    }));
+    return;
+  }
   if (canvasTool !== "polygon" || !polygonDraft) return;
   event.preventDefault(); const draft = polygonDraft; polygonDraft = null; previewPolygon([]);
   if (draft.points.length >= 3) commitSelectionMask("Selecting polygonal area",
@@ -2624,8 +2732,9 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target?.matches?.("input, select, textarea")) return;
   if (event.key.toLowerCase() === "m") executeCommand("tool.marquee");
-  if (event.key.toLowerCase() === "l") executeCommand(event.shiftKey ? "tool.polygon" : "tool.lasso");
-  if (event.key.toLowerCase() === "w") executeCommand("tool.magic");
+  if (event.key.toLowerCase() === "l") executeCommand(event.shiftKey ? "tool.magnetic" : "tool.lasso");
+  if (event.key.toLowerCase() === "w") executeCommand(event.shiftKey ? "tool.quickSelect" : "tool.magic");
+  if (event.key.toLowerCase() === "q") executeCommand("tool.quickMask");
   if (event.key.toLowerCase() === "h") executeCommand("tool.pan");
   if (event.key.toLowerCase() === "v") executeCommand("tool.move");
   if (event.key.toLowerCase() === "b") executeCommand("tool.brush");
@@ -2637,7 +2746,18 @@ window.addEventListener("keydown", (event) => {
     if (draft.points.length >= 3) commitSelectionMask("Selecting polygonal area",
       combinedSelectionMask(polygonMask(draft.points), draft.mode));
   }
+  if (event.key === "Enter" && magneticDraft) {
+    const draft = magneticDraft; magneticDraft = null; previewPolygon([]);
+    if (draft.anchors.length >= 3) mutate("Closing Magnetic Lasso", () => client.magneticLasso({
+      anchors: draft.anchors.map((point) => [Math.round(point.x), Math.round(point.y)]),
+      width: Math.max(1, Math.round(Number($("brushSizeInput").value))),
+      edgeContrast: Number($("edgeContrastInput").value), nodeBudget: 600000,
+      combine: selectionCombineValue(draft.mode), expectedStateId: snapshot.stateId,
+      expectedRevision: snapshot.revision,
+    }));
+  }
   if (event.key === "Escape" && polygonDraft) { polygonDraft = null; previewPolygon([]); }
+  if (event.key === "Escape" && magneticDraft) { magneticDraft = null; previewPolygon([]); }
   if (event.key === "Enter" && penDraft) commitPenPath();
   if (event.key === "Escape" && penDraft) { penDraft = null; previewPolygon([]); }
 });

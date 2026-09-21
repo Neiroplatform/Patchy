@@ -379,6 +379,35 @@ typedef struct patchy_engine_selection_mask_input {
   size_t gray_size;
 } patchy_engine_selection_mask_input;
 
+typedef struct patchy_engine_point {
+  int32_t x;
+  int32_t y;
+} patchy_engine_point;
+
+typedef struct patchy_engine_quick_select_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const patchy_engine_point *points;
+  size_t point_count;
+  int32_t brush_radius;
+  int32_t spread;
+  uint8_t subtract;
+  uint8_t enhance_edge;
+} patchy_engine_quick_select_input;
+
+typedef struct patchy_engine_magnetic_lasso_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const patchy_engine_point *anchors;
+  size_t anchor_count;
+  int32_t width;
+  int32_t edge_contrast;
+  int32_t node_budget;
+  uint32_t combine;
+} patchy_engine_magnetic_lasso_input;
+
 typedef struct patchy_engine_layer_mask_projection {
   uint32_t struct_size;
   patchy_engine_rect bounds;
@@ -969,6 +998,16 @@ int patchy_engine_session_set_selection(
 int patchy_engine_session_set_selection_mask(
     patchy_engine_session *session,
     const patchy_engine_selection_mask_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_quick_select(
+    patchy_engine_session *session,
+    const patchy_engine_quick_select_input *input,
+    patchy_engine_cancellation *cancellation,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_magnetic_lasso(
+    patchy_engine_session *session,
+    const patchy_engine_magnetic_lasso_input *input,
+    patchy_engine_cancellation *cancellation,
     patchy_engine_event *event, patchy_engine_error *error);
 
 int patchy_engine_session_layer_count(const patchy_engine_session *session,

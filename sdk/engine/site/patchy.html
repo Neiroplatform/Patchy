@@ -44,6 +44,9 @@
         <button class="tool-button" id="lassoToolButton" type="button" aria-label="Freehand lasso" aria-pressed="false" title="Freehand lasso (L)">⌑</button>
         <button class="tool-button" id="polygonToolButton" type="button" aria-label="Polygonal lasso" aria-pressed="false" title="Polygonal lasso (Shift+L)">⬠</button>
         <button class="tool-button" id="magicToolButton" type="button" aria-label="Magic selection" aria-pressed="false" title="Magic selection (W)">✦</button>
+        <button class="tool-button" id="quickSelectToolButton" type="button" aria-label="Quick Select" aria-pressed="false" title="Quick Select (Shift+W)">◉</button>
+        <button class="tool-button" id="magneticToolButton" type="button" aria-label="Magnetic Lasso" aria-pressed="false" title="Magnetic Lasso (Shift+L)">⌁</button>
+        <button class="tool-button" id="quickMaskToolButton" type="button" aria-label="Quick Mask" aria-pressed="false" title="Quick Mask (Q)">◐</button>
         <button class="tool-button" id="panToolButton" type="button" aria-label="Pan canvas" aria-pressed="false" title="Pan canvas (H)">✋</button>
         <button class="tool-button" id="brushToolButton" type="button" aria-label="Brush" aria-pressed="false" title="Brush (B)">●</button>
         <button class="tool-button" id="eraserToolButton" type="button" aria-label="Eraser" aria-pressed="false" title="Eraser (E)">◇</button>
@@ -74,6 +77,8 @@
               <option value="checker">Checker pattern</option><option value="dots">Dot pattern</option>
             </select></label>
             <label>Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
+            <label>Edge <input id="edgeContrastInput" type="range" min="1" max="100" value="10"><output id="edgeContrastOutput">10%</output></label>
+            <label><input id="enhanceEdgeInput" type="checkbox"> Enhance edge</label>
           </span>
           <span id="documentMetrics"></span>
         </div>

@@ -13,6 +13,8 @@ const FILTER_PARAMETER_SIZE = 208;
 const SELECTION_SIZE = 32;
 const SELECTION_INPUT_SIZE = 32;
 const SELECTION_MASK_INPUT_SIZE = 56;
+const ADVANCED_SELECTION_INPUT_SIZE = 48;
+const POINT_SIZE = 8;
 const RECT_SIZE = 16;
 const LAYER_MASK_INPUT_SIZE = 72;
 const LAYER_MASK_SIZE = 24;
@@ -323,6 +325,42 @@ export class EmscriptenPatchyEngine {
       return this.#mutation((event, error) =>
         this.#module._patchy_engine_session_set_selection_mask(session, value, event, error));
     } finally { this.#module._free(value); this.#module._free(gray); }
+  }
+
+  quickSelect(session, snapshot, input) {
+    const points = this.#points(input?.points, 65536, "Quick Select");
+    if (!Number.isInteger(input.brushRadius) || input.brushRadius < 1 || input.brushRadius > 256 ||
+        !Number.isInteger(input.spread) || input.spread < 0 || input.spread > 100) {
+      throw new TypeError("Quick Select brush radius or spread is outside the supported range");
+    }
+    return this.#advancedSelection(session, snapshot, points, (value, pointsAddress) => {
+      const view = this.#view(value, ADVANCED_SELECTION_INPUT_SIZE);
+      view.setUint32(0, ADVANCED_SELECTION_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true); view.setBigUint64(16, snapshot.revision, true);
+      view.setUint32(24, pointsAddress, true); view.setUint32(28, points.length, true);
+      view.setInt32(32, input.brushRadius, true); view.setInt32(36, input.spread, true);
+      view.setUint8(40, input.subtract ? 1 : 0); view.setUint8(41, input.enhanceEdge ? 1 : 0);
+      return this.#module._patchy_engine_session_quick_select;
+    });
+  }
+
+  magneticLasso(session, snapshot, input) {
+    const anchors = this.#points(input?.anchors, 256, "Magnetic Lasso", 3);
+    if (!Number.isInteger(input.width) || input.width < 1 || input.width > 256 ||
+        !Number.isInteger(input.edgeContrast) || input.edgeContrast < 1 || input.edgeContrast > 100 ||
+        !Number.isInteger(input.nodeBudget) || input.nodeBudget < 1024 || input.nodeBudget > 1000000 ||
+        !Number.isInteger(input.combine) || input.combine < 0 || input.combine > 3) {
+      throw new TypeError("Magnetic Lasso settings are outside the supported range");
+    }
+    return this.#advancedSelection(session, snapshot, anchors, (value, pointsAddress) => {
+      const view = this.#view(value, ADVANCED_SELECTION_INPUT_SIZE);
+      view.setUint32(0, ADVANCED_SELECTION_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true); view.setBigUint64(16, snapshot.revision, true);
+      view.setUint32(24, pointsAddress, true); view.setUint32(28, anchors.length, true);
+      view.setInt32(32, input.width, true); view.setInt32(36, input.edgeContrast, true);
+      view.setInt32(40, input.nodeBudget, true); view.setUint32(44, input.combine, true);
+      return this.#module._patchy_engine_session_magnetic_lasso;
+    });
   }
 
   modifySelection(session, snapshot, type, pixels = 0) {
@@ -1571,6 +1609,37 @@ export class EmscriptenPatchyEngine {
       throw new TypeError("Fill color must contain four byte values");
     }
     return color;
+  }
+
+  #points(value, maximum, subject, minimum = 1) {
+    if (!Array.isArray(value) || value.length < minimum || value.length > maximum) {
+      throw new TypeError(`${subject} requires ${minimum}-${maximum} points`);
+    }
+    return value.map((point) => {
+      const x = Array.isArray(point) ? point[0] : point?.x;
+      const y = Array.isArray(point) ? point[1] : point?.y;
+      if (!Number.isInteger(x) || !Number.isInteger(y)) {
+        throw new TypeError(`${subject} points must use integer document coordinates`);
+      }
+      return [x, y];
+    });
+  }
+
+  #advancedSelection(session, snapshot, points, prepare) {
+    const pointValues = this.#alloc(points.length * POINT_SIZE);
+    const value = this.#alloc(ADVANCED_SELECTION_INPUT_SIZE);
+    try {
+      const pointView = this.#view(pointValues, points.length * POINT_SIZE);
+      points.forEach((point, index) => {
+        pointView.setInt32(index * POINT_SIZE, point[0], true);
+        pointView.setInt32(index * POINT_SIZE + 4, point[1], true);
+      });
+      const call = prepare(value, pointValues);
+      return this.#mutation((event, error) => call(session, value, 0, event, error));
+    } finally {
+      this.#module._free(value);
+      this.#module._free(pointValues);
+    }
   }
 
   #mutation(call) {

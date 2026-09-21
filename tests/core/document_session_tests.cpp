@@ -4580,6 +4580,82 @@ void engine_host_protocol_previews_and_commits_one_layer_warp() {
   patchy_engine_session_destroy(session); patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_commits_advanced_selection_gestures() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 64, 64, &error);
+  CHECK(session != nullptr);
+  const auto project = [&] {
+    patchy_engine_document_projection value{};
+    value.struct_size = sizeof(value);
+    CHECK(patchy_engine_session_document(session, &value, &error) == 1);
+    return value;
+  };
+
+  const std::array<patchy_engine_point, 3> stroke{{{28, 32}, {32, 32}, {36, 32}}};
+  const auto before_quick = project();
+  patchy_engine_quick_select_input quick{};
+  quick.struct_size = sizeof(quick);
+  quick.expected_state_id = before_quick.state_id;
+  quick.expected_revision = before_quick.revision;
+  quick.points = stroke.data();
+  quick.point_count = stroke.size();
+  quick.brush_radius = 5;
+  quick.spread = 50;
+  quick.enhance_edge = 1;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_quick_select(session, &quick, nullptr, &event,
+                                            &error) == 1);
+  CHECK(event.changed == 1);
+  CHECK(event.dirty == 0);
+  patchy_engine_selection_projection selection{};
+  selection.struct_size = sizeof(selection);
+  CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
+  CHECK(selection.empty == 0);
+
+  CHECK(patchy_engine_session_quick_select(session, &quick, nullptr, &event,
+                                            &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+
+  const std::array<patchy_engine_point, 3> triangle{{{10, 10}, {52, 12}, {30, 52}}};
+  const auto before_magnetic = project();
+  patchy_engine_magnetic_lasso_input magnetic{};
+  magnetic.struct_size = sizeof(magnetic);
+  magnetic.expected_state_id = before_magnetic.state_id;
+  magnetic.expected_revision = before_magnetic.revision;
+  magnetic.anchors = triangle.data();
+  magnetic.anchor_count = triangle.size();
+  magnetic.width = 10;
+  magnetic.edge_contrast = 10;
+  magnetic.node_budget = 600000;
+  magnetic.combine = PATCHY_ENGINE_SELECTION_REPLACE;
+  CHECK(patchy_engine_session_magnetic_lasso(session, &magnetic, nullptr,
+                                              &event, &error) == 1);
+  selection = {};
+  selection.struct_size = sizeof(selection);
+  CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
+  CHECK(selection.empty == 0);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+
+  auto *cancelled = patchy_engine_cancellation_create(&error);
+  CHECK(cancelled != nullptr);
+  patchy_engine_cancellation_cancel(cancelled);
+  const auto before_cancel = project();
+  magnetic.expected_state_id = before_cancel.state_id;
+  magnetic.expected_revision = before_cancel.revision;
+  CHECK(patchy_engine_session_magnetic_lasso(session, &magnetic, cancelled,
+                                              &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(project().state_id == before_cancel.state_id);
+  patchy_engine_cancellation_destroy(cancelled);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 void core_layer_warp_supports_linked_mask_and_fails_closed() {
   Document document(10, 8, PixelFormat::rgba8());
   PixelBuffer pixels(6, 4, PixelFormat::rgba8()); pixels.clear(255);
@@ -4802,6 +4878,8 @@ std::vector<TestCase> document_session_tests() {
        core_raster_fill_respects_soft_selection_locks_and_presets},
       {"engine_host_protocol_previews_and_commits_one_layer_warp",
        engine_host_protocol_previews_and_commits_one_layer_warp},
+      {"engine_host_protocol_commits_advanced_selection_gestures",
+       engine_host_protocol_commits_advanced_selection_gestures},
       {"core_layer_warp_supports_linked_mask_and_fails_closed",
        core_layer_warp_supports_linked_mask_and_fails_closed},
       {"core_layer_warp_authors_editable_text_metadata",

@@ -25,6 +25,13 @@ typed editing commands.
   canonical selection still matches the pre-gesture baseline. Semantic region
   comparison accepts equivalent Qt rectangle decompositions after undo/redo;
   stale completions are rejected and Canvas is resynchronized from the engine;
+- the versioned C boundary exposes completed Quick Select and Magnetic Lasso
+  gestures without moving their algorithms into a shell. Both operations are
+  exact-state, bounded and selection-only: Quick Select classifies once after
+  release and commits through `CommitPreparedSelection`; Magnetic Lasso traces
+  bounded live-wire segments and rasterizes one closed vector path. A cancelled
+  checkpoint or stale request leaves revision/history untouched. Quick Mask
+  continues through the shared `set_selection_mask` operation;
 - `ModifySelection` owns Select All, Deselect, Invert and square-radius
   Expand/Contract/Border morphology without Qt geometry. Desktop Select menu
   and scripting select-all/deselect project the resulting canonical snapshot

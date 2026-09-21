@@ -170,6 +170,16 @@ export class PatchyWorkerClient {
     const owned = transferableInput(gray, transferOwnership);
     return this.#request("setSelectionMask", { bounds, gray: owned.buffer }, [owned.buffer]);
   }
+  quickSelect(input) {
+    return this.#request("quickSelect", { ...input,
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
+  magneticLasso(input) {
+    return this.#request("magneticLasso", { ...input,
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
   clearSelection() { return this.#request("setSelection", { rects: [] }); }
   invertSelection() { return this.#request("modifySelection", { type: 19, pixels: 0 }); }
   expandSelection(pixels) { return this.#request("modifySelection", { type: 20, pixels }); }

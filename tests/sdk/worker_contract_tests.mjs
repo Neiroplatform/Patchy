@@ -39,7 +39,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "zoomOutButton", "zoomFitButton", "zoomInButton", "createMaskButton",
     "toggleMaskButton", "invertMaskButton", "removeMaskButton",
     "gestureCanvas", "transformOverlay", "moveToolButton", "brushToolButton",
-    "lassoToolButton", "polygonToolButton", "magicToolButton", "selectionToleranceInput",
+    "lassoToolButton", "polygonToolButton", "magicToolButton", "quickSelectToolButton",
+    "magneticToolButton", "quickMaskToolButton", "selectionToleranceInput", "edgeContrastInput",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton", "layerWarpButton",
     "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
     "layerWarpDialog", "layerWarpStyleInput", "layerWarpBendInput", "commitLayerWarpButton",
@@ -72,7 +73,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameLayer", "client.setLayerOpacity", "client.setLayerBlendMode",
     "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
     "client.cropDocument", "client.invertLayer",
-    "client.setSelection", "client.setSelectionMask", "client.clearSelection", "client.createLayerMask",
+    "client.setSelection", "client.setSelectionMask", "client.quickSelect", "client.magneticLasso",
+    "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
     "client.layerThumbnail", "client.previewLayerTransform",
     "client.transformLayer", "client.previewRasterStroke", "client.applyRasterStroke",
@@ -138,6 +140,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     assert.match(html, new RegExp(`value="${preset}"`));
   }
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
+    "quickSelect(", "magneticLasso(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel("]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
@@ -755,6 +758,8 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     setSelectionMask(session, before, input) {
       calls.push(["selectionMask", input.gray.byteLength]); selection = [{ x: 0, y: 0, width: 3, height: 2 }]; revision++;
     },
+    quickSelect(session, before, input) { calls.push(["quickSelect", input.points.length]); revision++; },
+    magneticLasso(session, before, input) { calls.push(["magneticLasso", input.anchors.length]); revision++; },
     modifySelection(session, before, type, pixels) { calls.push(["modifySelection", type, pixels]); revision++; },
     selectChannel(session, before, id) { calls.push(["selectChannel", id]); revision++; },
     selectPath(session, before, id) { calls.push(["selectPath", id]); revision++; },
@@ -839,6 +844,13 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "setSelection", rects: [{ x: 0, y: 0, width: 1, height: 1 }] });
   await host.dispatch({ method: "setSelectionMask", bounds: { x: 0, y: 0, width: 3, height: 2 },
     gray: new Uint8Array([0, 64, 255, 255, 64, 0]).buffer });
+  let advancedBefore = await host.dispatch({ method: "snapshot" });
+  await host.dispatch({ method: "quickSelect", points: [[1, 1]], brushRadius: 4, spread: 50,
+    expectedStateId: String(advancedBefore.stateId), expectedRevision: String(advancedBefore.revision) });
+  advancedBefore = await host.dispatch({ method: "snapshot" });
+  await host.dispatch({ method: "magneticLasso", anchors: [[0, 0], [2, 0], [1, 1]],
+    width: 10, edgeContrast: 10, nodeBudget: 600000, combine: 0,
+    expectedStateId: String(advancedBefore.stateId), expectedRevision: String(advancedBefore.revision) });
   await host.dispatch({ method: "modifySelection", type: 20, pixels: 4 });
   await host.dispatch({ method: "addAlphaChannel", name: "Alpha 1" });
   await host.dispatch({ method: "addDocumentPath", input: { path: { anchors: [{}, {}, {}] } } });
