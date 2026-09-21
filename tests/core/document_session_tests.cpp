@@ -2953,6 +2953,174 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
   patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_authors_text_and_smart_objects() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 4, 3, &error);
+  CHECK(session != nullptr);
+  const auto project = [&]() {
+    patchy_engine_document_projection document{};
+    document.struct_size = sizeof(document);
+    CHECK(patchy_engine_session_document(session, &document, &error) == 1);
+    return document;
+  };
+  const std::array<std::uint8_t, 16> pixels{
+      200, 40, 20, 255, 200, 40, 20, 255,
+      200, 40, 20, 255, 200, 40, 20, 255};
+  patchy_engine_event event{};
+
+  const auto before_text = project();
+  patchy_engine_text_layer_input text{};
+  text.struct_size = sizeof(text);
+  text.expected_state_id = before_text.state_id;
+  text.expected_revision = before_text.revision;
+  text.bounds = {0, 0, 2, 2};
+  text.width = 2;
+  text.height = 2;
+  text.rgba = pixels.data();
+  text.rgba_size = pixels.size();
+  text.name = "Browser text";
+  text.name_size = std::strlen(text.name);
+  text.text = "Hello browser";
+  text.text_size = std::strlen(text.text);
+  text.font = "Inter";
+  text.font_size = std::strlen(text.font);
+  text.size_pixels = 24.0;
+  text.red = 12;
+  text.green = 34;
+  text.blue = 56;
+  text.bold = 1;
+  text.box_text = 1;
+  CHECK(patchy_engine_session_add_text_layer(session, &text, &event, &error) ==
+        1);
+  const auto text_id = event.affected_layer_id;
+  patchy_engine_text_projection projected_text{};
+  projected_text.struct_size = sizeof(projected_text);
+  CHECK(patchy_engine_session_text(session, text_id, &projected_text, &error) ==
+        1);
+  CHECK(std::string(projected_text.text, projected_text.text_size) ==
+        "Hello browser");
+  CHECK(std::string(projected_text.font, projected_text.font_size) == "Inter");
+  CHECK(projected_text.size_pixels == 24.0);
+  CHECK(projected_text.red == 12);
+  CHECK(projected_text.bold == 1);
+
+  const std::array<std::uint8_t, 6> embedded_bytes{'8', 'B', 'P', 'S', 1, 2};
+  const auto before_embedded = project();
+  patchy_engine_smart_object_input smart{};
+  smart.struct_size = sizeof(smart);
+  smart.expected_state_id = before_embedded.state_id;
+  smart.expected_revision = before_embedded.revision;
+  smart.bounds = {2, 0, 2, 2};
+  smart.width = 2;
+  smart.height = 2;
+  smart.rgba = pixels.data();
+  smart.rgba_size = pixels.size();
+  smart.name = "Embedded art";
+  smart.name_size = std::strlen(smart.name);
+  smart.source_kind = PATCHY_ENGINE_SMART_OBJECT_EMBEDDED;
+  smart.filename = "art.psb";
+  smart.filename_size = std::strlen(smart.filename);
+  std::memcpy(smart.filetype, "8BPB", 4);
+  smart.source_bytes = embedded_bytes.data();
+  smart.source_size = embedded_bytes.size();
+  CHECK(patchy_engine_session_add_smart_object(session, &smart, &event,
+                                               &error) == 1);
+  const auto embedded_id = event.affected_layer_id;
+  patchy_engine_smart_object_projection projected_smart{};
+  projected_smart.struct_size = sizeof(projected_smart);
+  CHECK(patchy_engine_session_smart_object(
+            session, embedded_id, &projected_smart, &error) == 1);
+  CHECK(projected_smart.source_kind == PATCHY_ENGINE_SMART_OBJECT_EMBEDDED);
+  CHECK(projected_smart.editable == 1);
+  CHECK(projected_smart.source_size == embedded_bytes.size());
+  patchy_engine_buffer exported{};
+  CHECK(patchy_engine_session_smart_object_bytes(
+            session, embedded_id, &exported, &error) == 1);
+  CHECK(exported.size == embedded_bytes.size());
+  CHECK(std::equal(exported.data, exported.data + exported.size,
+                   embedded_bytes.data()));
+  patchy_engine_buffer_release(&exported);
+
+  const auto before_linked = project();
+  smart.expected_state_id = before_linked.state_id;
+  smart.expected_revision = before_linked.revision;
+  smart.bounds = {0, 2, 2, 1};
+  smart.width = 2;
+  smart.height = 1;
+  smart.rgba_size = 8;
+  smart.name = "Linked art";
+  smart.name_size = std::strlen(smart.name);
+  smart.source_kind = PATCHY_ENGINE_SMART_OBJECT_EXTERNAL;
+  smart.filename = "linked.png";
+  smart.filename_size = std::strlen(smart.filename);
+  std::memcpy(smart.filetype, "png ", 4);
+  smart.source_bytes = nullptr;
+  smart.source_size = 345;
+  smart.external_uri = "file:///assets/linked.png";
+  smart.external_uri_size = std::strlen(smart.external_uri);
+  smart.external_path = "/assets/linked.png";
+  smart.external_path_size = std::strlen(smart.external_path);
+  smart.relative_path = "assets/linked.png";
+  smart.relative_path_size = std::strlen(smart.relative_path);
+  CHECK(patchy_engine_session_add_smart_object(session, &smart, &event,
+                                               &error) == 1);
+  const auto linked_id = event.affected_layer_id;
+  projected_smart = {};
+  projected_smart.struct_size = sizeof(projected_smart);
+  CHECK(patchy_engine_session_smart_object(
+            session, linked_id, &projected_smart, &error) == 1);
+  CHECK(projected_smart.source_kind == PATCHY_ENGINE_SMART_OBJECT_EXTERNAL);
+  CHECK(projected_smart.editable == 0);
+  CHECK(projected_smart.source_size == 345);
+  CHECK(patchy_engine_session_smart_object_bytes(
+            session, linked_id, &exported, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+
+  patchy_engine_buffer before_save{};
+  CHECK(patchy_engine_session_render(session, {0, 0, 4, 3}, &before_save,
+                                     &event, &error) == 1);
+  patchy_engine_buffer psd{};
+  const auto saved =
+      patchy_engine_session_save_psd(session, &psd, &event, &error);
+  if (saved != 1) {
+    throw std::runtime_error(std::string("host PSD save failed: ") +
+                             error.message);
+  }
+  auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
+                                                  &error);
+  CHECK(reopened != nullptr);
+  projected_text = {};
+  projected_text.struct_size = sizeof(projected_text);
+  CHECK(patchy_engine_session_text(reopened, text_id, &projected_text, &error) ==
+        1);
+  CHECK(std::string(projected_text.text, projected_text.text_size) ==
+        "Hello browser");
+  projected_smart = {};
+  projected_smart.struct_size = sizeof(projected_smart);
+  CHECK(patchy_engine_session_smart_object(
+            reopened, embedded_id, &projected_smart, &error) == 1);
+  CHECK(projected_smart.source_size == embedded_bytes.size());
+  CHECK(patchy_engine_session_smart_object(
+            reopened, linked_id, &projected_smart, &error) == 1);
+  CHECK(projected_smart.source_kind == PATCHY_ENGINE_SMART_OBJECT_EXTERNAL);
+  patchy_engine_buffer after_reopen{};
+  CHECK(patchy_engine_session_render(reopened, {0, 0, 4, 3}, &after_reopen,
+                                     &event, &error) == 1);
+  CHECK(after_reopen.size == before_save.size);
+  CHECK(std::equal(after_reopen.data, after_reopen.data + after_reopen.size,
+                   before_save.data));
+
+  patchy_engine_buffer_release(&after_reopen);
+  patchy_engine_buffer_release(&before_save);
+  patchy_engine_session_destroy(reopened);
+  patchy_engine_buffer_release(&psd);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -3029,5 +3197,7 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_authors_pixels_channels_and_selection},
       {"engine_host_protocol_runs_mask_filter_async_lifecycle",
        engine_host_protocol_runs_mask_filter_async_lifecycle},
+      {"engine_host_protocol_authors_text_and_smart_objects",
+       engine_host_protocol_authors_text_and_smart_objects},
   };
 }

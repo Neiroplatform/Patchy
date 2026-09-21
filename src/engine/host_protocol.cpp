@@ -1,10 +1,14 @@
 #include "engine/host_protocol.h"
 
 #include "engine/document_session.hpp"
+#include "core/layer_metadata.hpp"
+#include "core/smart_object.hpp"
+#include "psd/psd_smart_objects.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -120,7 +124,9 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_LAYER_MASK_AUTHORING |
     PATCHY_ENGINE_CAP_FILTER_AUTHORING |
     PATCHY_ENGINE_CAP_PROGRESS_CANCELLATION |
-    PATCHY_ENGINE_CAP_EVENT_DRAIN;
+    PATCHY_ENGINE_CAP_EVENT_DRAIN |
+    PATCHY_ENGINE_CAP_TEXT_AUTHORING |
+    PATCHY_ENGINE_CAP_SMART_OBJECT_AUTHORING;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -237,6 +243,50 @@ bool expected_state(const patchy_engine_session *session,
     return false;
   }
   return true;
+}
+
+bool valid_rgba_payload(const std::uint8_t *rgba, std::size_t rgba_size,
+                        std::int32_t width, std::int32_t height,
+                        const patchy_engine_rect &bounds,
+                        patchy_engine_error *error) noexcept {
+  if (rgba == nullptr || width <= 0 || height <= 0 || bounds.width != width ||
+      bounds.height != height) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "RGBA8 pixels and matching geometry are required");
+    return false;
+  }
+  const auto pixel_width = static_cast<std::size_t>(width);
+  const auto pixel_height = static_cast<std::size_t>(height);
+  if (pixel_width > std::numeric_limits<std::size_t>::max() / pixel_height /
+                        4U ||
+      rgba_size != pixel_width * pixel_height * 4U) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "RGBA8 byte length does not match its geometry");
+    return false;
+  }
+  return true;
+}
+
+template <std::size_t Capacity>
+void project_text(std::string_view source, char (&destination)[Capacity],
+                  std::uint32_t &size) noexcept {
+  auto count = std::min(source.size(), Capacity - 1U);
+  while (count > 0 && count < source.size() &&
+         (static_cast<unsigned char>(source[count]) & 0xC0U) == 0x80U) {
+    --count;
+  }
+  std::memcpy(destination, source.data(), count);
+  destination[count] = '\0';
+  size = static_cast<std::uint32_t>(count);
+}
+
+std::optional<std::string_view> metadata_value(const patchy::Layer &layer,
+                                               const char *key) {
+  const auto found = layer.metadata().find(key);
+  if (found == layer.metadata().end()) {
+    return std::nullopt;
+  }
+  return found->second;
 }
 
 std::vector<patchy::Rect> rects_from_gray8(const patchy::PixelBuffer &pixels,
@@ -666,15 +716,19 @@ int patchy_engine_session_layer_at(const patchy_engine_session *session,
     *layer = {};
     layer->id = source.id;
     layer->parent_id = source.parent_id;
-    layer->kind = static_cast<std::uint32_t>(source.kind);
-    layer->visible = source.visible ? 1U : 0U;
-    layer->opacity = source.opacity;
     const auto *document_layer =
         session->value->document().find_layer(source.id);
     if (document_layer == nullptr) {
       return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                   "projected layer is missing from the document");
     }
+    layer->kind = patchy::layer_is_text(*document_layer)
+                      ? PATCHY_ENGINE_LAYER_TEXT
+                      : patchy::layer_is_smart_object(*document_layer)
+                            ? PATCHY_ENGINE_LAYER_SMART_OBJECT
+                            : static_cast<std::uint32_t>(source.kind);
+    layer->visible = source.visible ? 1U : 0U;
+    layer->opacity = source.opacity;
     auto count = std::min(source.name.size(), sizeof(layer->name) - 1U);
     while (count > 0 && count < source.name.size() &&
            (static_cast<unsigned char>(source.name[count]) & 0xC0U) == 0x80U) {
@@ -1027,6 +1081,356 @@ int patchy_engine_session_apply_filter(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown filter authoring failure");
+  }
+}
+
+int patchy_engine_session_add_text_layer(
+    patchy_engine_session *session,
+    const patchy_engine_text_layer_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->size_pixels <= 0.0 ||
+      !std::isfinite(input->size_pixels) ||
+      !valid_rgba_payload(input->rgba, input->rgba_size, input->width,
+                          input->height, input->bounds, error)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete text layer input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::string name;
+  std::string text_value;
+  std::string font;
+  if (!copy_command_text(input->name, input->name_size, 256U, name, error) ||
+      !copy_command_text(input->text, input->text_size, 1024U, text_value,
+                         error) ||
+      !copy_command_text(input->font, input->font_size, 256U, font, error)) {
+    return 0;
+  }
+  try {
+    patchy::PixelBuffer pixels(input->width, input->height,
+                               patchy::PixelFormat::rgba8());
+    std::copy_n(input->rgba, input->rgba_size, pixels.data().begin());
+    auto prepared = session->value->document();
+    const auto layer_id = prepared.allocate_layer_id();
+    patchy::Layer layer(layer_id, std::move(name), std::move(pixels));
+    layer.set_bounds({input->bounds.x, input->bounds.y, input->bounds.width,
+                      input->bounds.height});
+    auto &metadata = layer.metadata();
+    metadata[patchy::kLayerMetadataText] = std::move(text_value);
+    metadata[patchy::kLayerMetadataTextFont] = std::move(font);
+    metadata[patchy::kLayerMetadataTextSize] =
+        std::to_string(input->size_pixels);
+    char color[8]{};
+    std::snprintf(color, sizeof(color), "#%02x%02x%02x", input->red,
+                  input->green, input->blue);
+    metadata[patchy::kLayerMetadataTextColor] = color;
+    metadata[patchy::kLayerMetadataTextBold] = input->bold != 0 ? "true" : "false";
+    metadata[patchy::kLayerMetadataTextItalic] =
+        input->italic != 0 ? "true" : "false";
+    metadata[patchy::kLayerMetadataTextFlow] =
+        input->box_text != 0 ? "box" : "point";
+    metadata[patchy::kLayerMetadataTextBoxWidth] =
+        std::to_string(input->bounds.width);
+    metadata[patchy::kLayerMetadataTextBoxHeight] =
+        std::to_string(input->bounds.height);
+    metadata[patchy::kLayerMetadataTextRasterStatus] = "patchy_raster";
+    metadata[patchy::kLayerMetadataTextTransform] =
+        "1 0 0 1 " + std::to_string(input->bounds.x) + " " +
+        std::to_string(input->bounds.y);
+    prepared.add_layer(std::move(layer));
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::Text,
+            input->expected_state_id, std::move(prepared),
+            {input->bounds.x, input->bounds.y, input->bounds.width,
+             input->bounds.height}});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    result.affected_layer_id = layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate text layer payload");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown text layer authoring failure");
+  }
+}
+
+int patchy_engine_session_text(const patchy_engine_session *session,
+                               std::uint64_t layer_id,
+                               patchy_engine_text_projection *text,
+                               patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || text == nullptr ||
+      text->struct_size != sizeof(*text)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and initialized text projection are required");
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  if (layer == nullptr || !patchy::layer_is_text(*layer)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer is not text");
+  }
+  try {
+    const auto struct_size = text->struct_size;
+    *text = {};
+    text->struct_size = struct_size;
+    project_text(metadata_value(*layer, patchy::kLayerMetadataText)
+                     .value_or(std::string_view{}),
+                 text->text, text->text_size);
+    project_text(metadata_value(*layer, patchy::kLayerMetadataTextFont)
+                     .value_or(std::string_view{}),
+                 text->font, text->font_size);
+    const auto size = metadata_value(
+        *layer, patchy::kLayerMetadataTextSize);
+    text->size_pixels = size.has_value() ? std::stod(std::string(*size)) : 0.0;
+    unsigned red = 0;
+    unsigned green = 0;
+    unsigned blue = 0;
+    const auto color = metadata_value(
+        *layer, patchy::kLayerMetadataTextColor);
+    if (color.has_value()) {
+      std::sscanf(std::string(*color).c_str(), "#%02x%02x%02x", &red, &green,
+                  &blue);
+    }
+    text->red = static_cast<std::uint8_t>(red);
+    text->green = static_cast<std::uint8_t>(green);
+    text->blue = static_cast<std::uint8_t>(blue);
+    text->bold = metadata_value(*layer, patchy::kLayerMetadataTextBold)
+                         .value_or(std::string_view{}) == "true";
+    text->italic =
+        metadata_value(*layer, patchy::kLayerMetadataTextItalic)
+            .value_or(std::string_view{}) == "true";
+    text->box_text =
+        metadata_value(*layer, patchy::kLayerMetadataTextFlow)
+            .value_or(std::string_view{}) == "box";
+    return 1;
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown text projection failure");
+  }
+}
+
+int patchy_engine_session_add_smart_object(
+    patchy_engine_session *session,
+    const patchy_engine_smart_object_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) ||
+      input->source_kind > PATCHY_ENGINE_SMART_OBJECT_EXTERNAL ||
+      !valid_rgba_payload(input->rgba, input->rgba_size, input->width,
+                          input->height, input->bounds, error)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete smart object input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::string name;
+  std::string filename;
+  if (!copy_command_text(input->name, input->name_size, 256U, name, error) ||
+      !copy_command_text(input->filename, input->filename_size, 256U, filename,
+                         error)) {
+    return 0;
+  }
+  if (std::memchr(input->filetype, '\0', sizeof(input->filetype)) != nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "smart object filetype must contain four bytes");
+  }
+  try {
+    std::string external_uri;
+    std::string external_path;
+    std::string relative_path;
+    if (input->source_kind == PATCHY_ENGINE_SMART_OBJECT_EMBEDDED) {
+      if (input->source_bytes == nullptr || input->source_size == 0) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "embedded smart object bytes are required");
+      }
+    } else {
+      if (!copy_command_text(input->external_uri, input->external_uri_size,
+                             4096U, external_uri, error) ||
+          !copy_command_text(input->external_path, input->external_path_size,
+                             4096U, external_path, error) ||
+          !copy_command_text(input->relative_path, input->relative_path_size,
+                             4096U, relative_path, error)) {
+        return 0;
+      }
+    }
+    patchy::PixelBuffer pixels(input->width, input->height,
+                               patchy::PixelFormat::rgba8());
+    std::copy_n(input->rgba, input->rgba_size, pixels.data().begin());
+    auto prepared = session->value->document();
+    const auto source_uuid = patchy::generate_smart_object_uuid();
+    const std::string filetype(input->filetype, sizeof(input->filetype));
+    if (input->source_kind == PATCHY_ENGINE_SMART_OBJECT_EMBEDDED) {
+      prepared.metadata().smart_objects.add_embedded(
+          source_uuid, filename, filetype,
+          std::make_shared<const std::vector<std::uint8_t>>(
+              input->source_bytes, input->source_bytes + input->source_size));
+    } else {
+      patchy::SmartObjectSource source;
+      source.kind = patchy::SmartObjectSourceKind::ExternalFile;
+      source.uuid = source_uuid;
+      source.filename = filename;
+      source.filetype = filetype;
+      source.external_full_path = std::move(external_uri);
+      source.external_original_path = std::move(external_path);
+      source.external_rel_path = std::move(relative_path);
+      source.external_file_size = input->source_size;
+      source.dirty = true;
+      patchy::SmartObjectLinkBlock block;
+      block.key = "lnkE";
+      block.sources.push_back(std::move(source));
+      prepared.metadata().smart_objects.blocks.push_back(std::move(block));
+    }
+    const auto layer_id = prepared.allocate_layer_id();
+    patchy::Layer layer(layer_id, std::move(name), std::move(pixels));
+    layer.set_bounds({input->bounds.x, input->bounds.y, input->bounds.width,
+                      input->bounds.height});
+    patchy::SmartObjectPlacement placement;
+    placement.uuid = source_uuid;
+    placement.transform = {
+        static_cast<double>(input->bounds.x),
+        static_cast<double>(input->bounds.y),
+        static_cast<double>(input->bounds.x + input->bounds.width),
+        static_cast<double>(input->bounds.y),
+        static_cast<double>(input->bounds.x + input->bounds.width),
+        static_cast<double>(input->bounds.y + input->bounds.height),
+        static_cast<double>(input->bounds.x),
+        static_cast<double>(input->bounds.y + input->bounds.height)};
+    placement.width = input->width;
+    placement.height = input->height;
+    patchy::set_layer_smart_object_metadata(
+        layer, placement, patchy::generate_smart_object_uuid(),
+        input->source_kind == PATCHY_ENGINE_SMART_OBJECT_EMBEDDED ? "SoLd"
+                                                                  : "SoLE",
+        input->source_kind == PATCHY_ENGINE_SMART_OBJECT_EMBEDDED ? ""
+                                                                  : "external",
+        patchy::kSmartObjectRasterStatusPatchy);
+    const auto placed_uuid = patchy::smart_object_placed_uuid(layer);
+    layer.unknown_psd_blocks().push_back(patchy::UnknownPsdBlock{
+        input->source_kind == PATCHY_ENGINE_SMART_OBJECT_EMBEDDED ? "SoLd"
+                                                                  : "SoLE",
+        patchy::psd::author_placed_layer_sold_payload(placement, placed_uuid)});
+    patchy::mark_layer_smart_object_block_dirty(layer);
+    prepared.add_layer(std::move(layer));
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::SmartObject,
+            input->expected_state_id, std::move(prepared),
+            {input->bounds.x, input->bounds.y, input->bounds.width,
+             input->bounds.height}});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    result.affected_layer_id = layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate smart object payload");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown smart object authoring failure");
+  }
+}
+
+int patchy_engine_session_smart_object(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_smart_object_projection *smart_object,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr ||
+      smart_object == nullptr || smart_object->struct_size != sizeof(*smart_object)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and initialized smart object projection are required");
+  }
+  try {
+    const auto *layer = session->value->document().find_layer(layer_id);
+    if (layer == nullptr || !patchy::layer_is_smart_object(*layer)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "layer is not a smart object");
+    }
+    const auto *source =
+        session->value->document().metadata().smart_objects.find(
+            patchy::smart_object_source_uuid(*layer));
+    if (source == nullptr) {
+      return fail(error, PATCHY_ENGINE_ERROR_ENGINE,
+                  "smart object source is missing");
+    }
+    const auto struct_size = smart_object->struct_size;
+    *smart_object = {};
+    smart_object->struct_size = struct_size;
+    smart_object->source_kind =
+        source->kind == patchy::SmartObjectSourceKind::Embedded
+            ? PATCHY_ENGINE_SMART_OBJECT_EMBEDDED
+            : PATCHY_ENGINE_SMART_OBJECT_EXTERNAL;
+    project_text(source->filename, smart_object->filename,
+                 smart_object->filename_size);
+    std::copy_n(
+        source->filetype.data(),
+        std::min(source->filetype.size(), sizeof(smart_object->filetype)),
+        smart_object->filetype);
+    smart_object->source_size = source->file_bytes != nullptr
+                                    ? source->file_bytes->size()
+                                    : source->external_file_size;
+    smart_object->editable =
+        source->kind == patchy::SmartObjectSourceKind::Embedded &&
+        source->file_bytes != nullptr &&
+        patchy::smart_object_lock_reason(*layer).empty();
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate smart object projection");
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown smart object projection failure");
+  }
+}
+
+int patchy_engine_session_smart_object_bytes(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_buffer *bytes, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  try {
+    const auto *layer = session->value->document().find_layer(layer_id);
+    if (layer == nullptr || !patchy::layer_is_smart_object(*layer)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "layer is not a smart object");
+    }
+    const auto *source =
+        session->value->document().metadata().smart_objects.find(
+            patchy::smart_object_source_uuid(*layer));
+    if (source == nullptr || source->file_bytes == nullptr) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "smart object has no embedded bytes");
+    }
+    return copy_buffer(*source->file_bytes, bytes, error);
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not project smart object bytes");
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown smart object byte projection failure");
   }
 }
 

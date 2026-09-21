@@ -34,6 +34,8 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_FILTER_AUTHORING = UINT64_C(1) << 17,
   PATCHY_ENGINE_CAP_PROGRESS_CANCELLATION = UINT64_C(1) << 18,
   PATCHY_ENGINE_CAP_EVENT_DRAIN = UINT64_C(1) << 19,
+  PATCHY_ENGINE_CAP_TEXT_AUTHORING = UINT64_C(1) << 20,
+  PATCHY_ENGINE_CAP_SMART_OBJECT_AUTHORING = UINT64_C(1) << 21,
 };
 
 enum patchy_engine_error_code {
@@ -264,6 +266,85 @@ typedef struct patchy_engine_filter_input {
   const patchy_engine_rect *selection;
   size_t selection_count;
 } patchy_engine_filter_input;
+
+typedef struct patchy_engine_text_layer_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  patchy_engine_rect bounds;
+  int32_t width;
+  int32_t height;
+  const uint8_t *rgba;
+  size_t rgba_size;
+  const char *name;
+  size_t name_size;
+  const char *text;
+  size_t text_size;
+  const char *font;
+  size_t font_size;
+  double size_pixels;
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t bold;
+  uint8_t italic;
+  uint8_t box_text;
+} patchy_engine_text_layer_input;
+
+enum patchy_engine_smart_object_source_kind {
+  PATCHY_ENGINE_SMART_OBJECT_EMBEDDED = 0,
+  PATCHY_ENGINE_SMART_OBJECT_EXTERNAL = 1,
+};
+
+typedef struct patchy_engine_smart_object_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  patchy_engine_rect bounds;
+  int32_t width;
+  int32_t height;
+  const uint8_t *rgba;
+  size_t rgba_size;
+  const char *name;
+  size_t name_size;
+  uint32_t source_kind;
+  const char *filename;
+  size_t filename_size;
+  char filetype[4];
+  const uint8_t *source_bytes;
+  size_t source_size;
+  const char *external_uri;
+  size_t external_uri_size;
+  const char *external_path;
+  size_t external_path_size;
+  const char *relative_path;
+  size_t relative_path_size;
+} patchy_engine_smart_object_input;
+
+typedef struct patchy_engine_text_projection {
+  uint32_t struct_size;
+  uint32_t text_size;
+  char text[1024];
+  uint32_t font_size;
+  char font[256];
+  double size_pixels;
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t bold;
+  uint8_t italic;
+  uint8_t box_text;
+} patchy_engine_text_projection;
+
+typedef struct patchy_engine_smart_object_projection {
+  uint32_t struct_size;
+  uint32_t source_kind;
+  uint32_t filename_size;
+  char filename[256];
+  char filetype[4];
+  uint64_t source_size;
+  uint8_t editable;
+} patchy_engine_smart_object_projection;
 
 typedef int (*patchy_engine_render_progress_fn)(int32_t completed,
                                                 int32_t total,
@@ -659,6 +740,24 @@ int patchy_engine_session_apply_filter(
     patchy_engine_filter_progress_fn progress, void *progress_user_data,
     patchy_engine_cancellation *cancellation, patchy_engine_event *event,
     patchy_engine_error *error);
+int patchy_engine_session_add_text_layer(
+    patchy_engine_session *session,
+    const patchy_engine_text_layer_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_text(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_text_projection *text, patchy_engine_error *error);
+int patchy_engine_session_add_smart_object(
+    patchy_engine_session *session,
+    const patchy_engine_smart_object_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_smart_object(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_smart_object_projection *smart_object,
+    patchy_engine_error *error);
+int patchy_engine_session_smart_object_bytes(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_buffer *bytes, patchy_engine_error *error);
 int patchy_engine_session_add_alpha_channel(
     patchy_engine_session *session,
     const patchy_engine_alpha_channel_input *input,

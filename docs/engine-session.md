@@ -188,10 +188,20 @@ events retain their command/selection/preview/history/save kind, revision,
 state identity, dirty flag, affected layer and dirty region, while an explicit
 dropped counter makes a slow browser consumer observable without allocating
 inside the engine event callback.
+Browser-authored text accepts editable UTF-8 text/font/style metadata together
+with the host-rasterized RGBA preview that remains the committed reference
+pixels. Embedded and linked Smart Objects accept the same bounded preview plus
+either immutable source bytes or explicit external URI/absolute/relative link
+metadata. Both families commit through the stale-safe prepared-document
+boundary, project their editable/source identity back to the host and preserve
+stable layer IDs, embedded bytes, link kind and composite pixels through PSD
+save/reopen. Embedded bytes can be exported without exposing C++ ownership;
+linked sources deliberately expose metadata only and never read host paths.
 Core contract fixtures execute `open → inspect → render → mutate → undo → redo
 → save → reopen`, `create → author layers/tree/geometry → render → save-ack →
 reopen`, `upload pixels → select → author channel/path/vector → save → reopen`
 and `upload → mask → filter → progress/cancel → drain events → save → reopen`
+plus `text → embedded/linked Smart Objects → project/export → save → reopen`
 in every native or wasm-core build, and the header is valid strict C11.
 
 The build recursively rejects any Qt target in `patchy_engine`'s dependency
@@ -240,8 +250,8 @@ or a second dirty/revision counter is forbidden.
 
 - run the versioned host sequence under the supported wasm-core/Qt-WASM
   toolchain and compare its event/projection/output contract with native;
-- extend the private host protocol with text and Smart Object payloads without
-  stabilizing it as public ABI prematurely;
+- keep the private host protocol pre-1.0 while the remaining cohesive desktop
+  command families migrate and hosted parity evidence is collected;
 - migrate remaining unrelated direct shell mutations by cohesive command
   family while keeping desktop, scripting and browser hosts on one model;
 - complete Windows/WASM, corpus, Photoshop and independent review gates before
