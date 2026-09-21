@@ -47,6 +47,7 @@ export class PatchyWorkerClient {
   openBlob(blob, name = "Document.psd") {
     return this.#request("openBlob", { blob, name });
   }
+  inspectBlob(blob) { return this.#request("inspectBlob", { blob }); }
   create(width, height, name = "Untitled.psd") {
     return this.#request("create", { width, height, name });
   }

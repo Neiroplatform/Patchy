@@ -41,6 +41,10 @@ export interface FilterProgress {
 }
 export interface CancellableOperation<T> { promise: Promise<T>; cancel(): void }
 export interface TransferOptions { transferOwnership?: boolean }
+export interface PsdHeader {
+  version: 1 | 2; width: number; height: number; channels: number;
+  depth: number; colorMode: number; sourceBytes: number;
+}
 export type RenderFrame =
   | { kind: "bitmap"; bitmap: ImageBitmap; width: number; height: number }
   | { kind: "rgba"; bytes: Uint8Array; width: number; height: number };
@@ -53,6 +57,7 @@ export class PatchyWorkerClient {
   initialize(moduleUrl: string, moduleOptions?: object): Promise<void>;
   open(bytes: Uint8Array, name?: string, options?: TransferOptions): Promise<DocumentProjection>;
   openBlob(blob: Blob, name?: string): Promise<DocumentProjection>;
+  inspectBlob(blob: Blob): Promise<PsdHeader>;
   create(width: number, height: number, name?: string): Promise<DocumentProjection>;
   snapshot(): Promise<DocumentProjection>;
   listDocuments(): Promise<DocumentTabProjection[]>;

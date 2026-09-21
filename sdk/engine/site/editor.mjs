@@ -593,7 +593,7 @@ function renderMetadata() {
   $("detailRevision").textContent = snapshot ? String(snapshot.revision) : "-";
   const memory = snapshot?.memory;
   $("memoryLabel").textContent = memory
-    ? `${formatBytes(memory.totalRetainedBytes)} retained · ${formatBytes(memory.historyRetainedBytes)} history · ${formatBytes(memory.renderCacheBytes)} cache · ${frameTransport === "bitmap" ? "bitmap frames" : frameTransport === "rgba" ? "RGBA fallback" : "frame transport waiting"}`
+    ? `${formatBytes(memory.totalRetainedBytes)} retained · ${formatBytes(memory.historyRetainedBytes)} history · ${formatBytes(memory.renderCacheBytes)} cache · ${formatBytes(workingSetLimit)} limit · ${frameTransport === "bitmap" ? "bitmap frames" : frameTransport === "rgba" ? "RGBA fallback" : "frame transport waiting"}`
     : "Memory ready";
   updateControls();
 }
@@ -910,7 +910,8 @@ async function openFile(file) {
   clearError();
   setBusy(true, "Opening document", "Transferring bytes to the isolated Worker");
   try {
-    ensureMemorySafe({ sourceBytes: file.size }, file.name || "Document");
+    const header = await client.inspectBlob(file);
+    ensureMemorySafe(header, file.name || "Document");
     const next = await client.openBlob(file, file.name || "Document.psd");
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);

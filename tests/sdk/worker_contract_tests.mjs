@@ -6,7 +6,8 @@ import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "../../sdk/engine/memory-policy.mjs";
 import { createRenderFrame } from "../../sdk/engine/frame-transport.mjs";
-import { MAX_BROWSER_SOURCE_BYTES, readBlobInput } from "../../sdk/engine/blob-ingress.mjs";
+import { inspectPsdBlob, MAX_BROWSER_SOURCE_BYTES, parsePsdHeader,
+  readBlobInput } from "../../sdk/engine/blob-ingress.mjs";
 
 test("WASM export manifest covers every engine symbol used by the adapter", async () => {
   const root = new URL("../../", import.meta.url);
@@ -83,7 +84,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
     "client.undo", "client.redo", "client.renderFrame", "client.save", "client.saveDocument",
-    "client.setMemoryBudget", "client.openBlob"]) {
+    "client.setMemoryBudget", "client.openBlob", "client.inspectBlob"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
@@ -92,6 +93,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /recoverWorkerSession/);
   assert.match(worker, /method === "renderFrame"/);
   assert.match(worker, /method === "openBlob"/);
+  assert.match(worker, /method === "inspectBlob"/);
   assert.match(worker, /createRenderFrame\(bytes, payload\.region\)/);
   assert.match(script, /context\.drawImage\(frame\.bitmap/);
   assert.match(script, /frame\.bitmap\.close\(\)/);
@@ -137,6 +139,32 @@ test("Worker Blob ingress validates before allocation and returns exact owned by
     return new ArrayBuffer(1);
   }}), /changed/);
   assert.equal(MAX_BROWSER_SOURCE_BYTES, 1024 * 1024 * 1024);
+});
+
+function psdHeader({ version = 1, width = 10000, height = 10000,
+  channels = 4, depth = 8, colorMode = 3 } = {}) {
+  const bytes = new Uint8Array(26); bytes.set([56, 66, 80, 83]);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(4, version, false); view.setUint16(12, channels, false);
+  view.setUint32(14, height, false); view.setUint32(18, width, false);
+  view.setUint16(22, depth, false); view.setUint16(24, colorMode, false);
+  return bytes;
+}
+
+test("bounded PSD header inspection enables dimension-aware 500 MiB admission", async () => {
+  const headerBytes = psdHeader();
+  const parsed = parsePsdHeader(headerBytes, 500 * MIB);
+  assert.deepEqual(parsed, { version: 1, width: 10000, height: 10000,
+    channels: 4, depth: 8, colorMode: 3, sourceBytes: 500 * MIB });
+  assert.equal(documentPreflight({ ...parsed, limitBytes: 3 * 1024 * MIB }).allowed, true);
+  assert.equal(documentPreflight({ sourceBytes: 500 * MIB,
+    limitBytes: 3 * 1024 * MIB }).allowed, false);
+  assert.deepEqual(await inspectPsdBlob(new Blob([headerBytes])), {
+    ...parsed, sourceBytes: 26,
+  });
+  assert.throws(() => parsePsdHeader(psdHeader({ width: 30001 }), 26), /dimensions/);
+  const hostile = psdHeader(); hostile[0] = 0;
+  assert.throws(() => parsePsdHeader(hostile, 26), /not a PSD/);
 });
 
 test("Worker frame transport transfers ImageBitmap without exposing RGBA bytes", () => {
@@ -886,6 +914,11 @@ test("client sends Blob handles without main-thread byte materialization", async
   assert.equal(worker.sent[0].transfer.length, 0);
   worker.reply({ id: 1, ok: true, value: projection(1) });
   assert.equal((await opened).revision, 1n);
+  const inspected = client.inspectBlob(blob);
+  assert.equal(worker.sent[1].message.method, "inspectBlob");
+  worker.reply({ id: 2, ok: true, value: { version: 1, width: 1, height: 1,
+    channels: 4, depth: 8, colorMode: 3, sourceBytes: 4 } });
+  assert.equal((await inspected).width, 1);
 });
 
 test("client correlates RPC, transfers input and rejects all requests on crash", async () => {

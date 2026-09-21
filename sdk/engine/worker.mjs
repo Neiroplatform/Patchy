@@ -1,6 +1,9 @@
 import { createWorkerHost } from "./worker-host.mjs";
 import { createRenderFrame } from "./frame-transport.mjs";
-import { readBlobInput } from "./blob-ingress.mjs";
+import { inspectPsdBlob, readBlobInput } from "./blob-ingress.mjs";
+import { documentPreflight } from "./memory-policy.mjs";
+
+const WORKER_WORKING_SET_LIMIT = 3 * 1024 * 1024 * 1024;
 
 let hostPromise;
 
@@ -16,7 +19,17 @@ self.onmessage = async ({ data }) => {
     }
     if (!hostPromise) throw new Error("Patchy worker is not initialized");
     const host = await hostPromise;
+    if (method === "inspectBlob") {
+      const value = await inspectPsdBlob(payload.blob);
+      self.postMessage({ id, ok: true, value });
+      return;
+    }
     if (method === "openBlob") {
+      const header = await inspectPsdBlob(payload.blob);
+      const admission = documentPreflight({ ...header, limitBytes: WORKER_WORKING_SET_LIMIT });
+      if (!admission.allowed) {
+        throw new RangeError("PSD/PSB exceeds the Worker working-set safety limit");
+      }
       const bytes = await readBlobInput(payload.blob);
       const value = await host.dispatch({ method: "open", bytes: bytes.buffer, name: payload.name });
       self.postMessage({ id, ok: true, value });

@@ -124,6 +124,9 @@ try {
       "Worker-native Blob open lost layered PSD state");
     await client.closeDocument(blobOpened.documentId);
     await client.activateDocument(first.documentId);
+    const inspected = await client.inspectBlob(new Blob([saved]));
+    check(inspected.width === 4 && inspected.height === 3 && inspected.sourceBytes === saved.length,
+      "bounded PSD header inspection mismatch");
     await workspaceStore.checkpoint({ id: workspaceOne, name: "First.psd",
       revision: styled.revision, dirty: true, bytes: saved });
     const opacity = await client.setLayerOpacity(layerId, 0.75);
