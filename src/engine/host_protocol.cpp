@@ -143,7 +143,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_MEMORY_CONTROL |
     PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS |
     PATCHY_ENGINE_CAP_LAYER_TRANSFORM |
-    PATCHY_ENGINE_CAP_RASTER_STROKE;
+    PATCHY_ENGINE_CAP_RASTER_STROKE |
+    PATCHY_ENGINE_CAP_RASTER_FILL;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -551,6 +552,29 @@ std::optional<patchy::RasterStrokeRequest> raster_stroke_request(
   for (std::size_t index = 0; index < input->point_count; ++index) {
     request.points.push_back({input->points[index].x, input->points[index].y});
   }
+  const auto &selection = session->value->selection();
+  request.selection = selection.selection;
+  if (!selection.mask_alpha.empty()) {
+    request.selection_mask_bounds = selection.mask_bounds;
+    request.selection_mask = selection.mask_alpha;
+  }
+  return request;
+}
+
+std::optional<patchy::RasterFillRequest> raster_fill_request(
+    const patchy_engine_session *session,
+    const patchy_engine_raster_fill *input, patchy_engine_error *error) {
+  if (input == nullptr || input->struct_size != sizeof(*input) ||
+      input->layer_id == 0 || input->mode > 6U) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "a bounded versioned raster fill is required");
+    return std::nullopt;
+  }
+  patchy::RasterFillRequest request;
+  request.mode = static_cast<patchy::RasterFillMode>(input->mode);
+  request.color = {input->red, input->green, input->blue, input->alpha};
+  request.start = {input->start_x, input->start_y};
+  request.end = {input->end_x, input->end_y};
   const auto &selection = session->value->selection();
   request.selection = selection.selection;
   if (!selection.mask_alpha.empty()) {
@@ -3635,6 +3659,99 @@ int patchy_engine_session_apply_raster_stroke(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown raster-stroke failure");
+  }
+}
+
+int patchy_engine_session_preview_raster_fill(
+    const patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, const patchy_engine_raster_fill *fill,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || region == nullptr ||
+      rgba == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, preview region and buffer are required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) return 0;
+  auto request = raster_fill_request(session, fill, error);
+  if (!request.has_value()) return 0;
+  std::int32_t completed_rows = 0;
+  request->continue_operation = [progress, progress_user_data,
+                                 &completed_rows]() {
+    ++completed_rows;
+    return progress == nullptr ||
+           progress(completed_rows, 0, progress_user_data) != 0;
+  };
+  try {
+    auto preview_document = session->value->document();
+    patchy::RasterStrokeResult filled;
+    std::string fill_error;
+    if (!patchy::apply_raster_fill(preview_document, fill->layer_id, *request,
+                                   &filled, &fill_error)) {
+      return fail(error, fill_error == "raster fill was cancelled"
+                             ? PATCHY_ENGINE_ERROR_CANCELLED
+                             : PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  fill_error.c_str());
+    }
+    const auto preview_region = patchy::intersect_rect(
+        filled.affected_region,
+        patchy::Rect::from_size(preview_document.width(), preview_document.height()));
+    DocumentSession preview(std::move(preview_document));
+    const auto rendered = preview.render(preview_region);
+    if (!rendered) return fail(error, rendered.error);
+    if (!copy_buffer(rendered.pixels.data(), rgba, error)) return 0;
+    *region = {preview_region.x, preview_region.y, preview_region.width,
+               preview_region.height};
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate raster-fill preview");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown raster-fill preview failure");
+  }
+}
+
+int patchy_engine_session_apply_raster_fill(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, const patchy_engine_raster_fill *fill,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT, "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) return 0;
+  const auto request = raster_fill_request(session, fill, error);
+  if (!request.has_value()) return 0;
+  try {
+    auto prepared = session->value->document();
+    patchy::RasterStrokeResult filled;
+    std::string fill_error;
+    if (!patchy::apply_raster_fill(prepared, fill->layer_id, *request,
+                                   &filled, &fill_error)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  fill_error.c_str());
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::RasterFill,
+            expected_state_id, std::move(prepared), filled.affected_region});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = fill->layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate raster fill");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown raster-fill failure");
   }
 }
 

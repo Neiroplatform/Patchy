@@ -46,6 +46,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "filterLayerButton", "filterDialog", "filterKindInput", "filterParameterFields", "commitFilterButton",
     "adjustmentParameterFields",
     "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
+    "penToolButton", "shapeKindInput",
     "layerFillInput", "layerClipInput", "layerLockInput", "layerStyleSelect",
     "applyLayerStyleButton", "invertSelectionButton",
     "expandSelectionButton", "contractSelectionButton", "borderSelectionButton",
@@ -71,8 +72,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.cropDocument", "client.invertLayer",
     "client.setSelection", "client.setSelectionMask", "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
-    "client.layerPixels", "client.replacePixelLayer", "client.previewLayerTransform",
+    "client.previewLayerTransform",
     "client.transformLayer", "client.previewRasterStroke", "client.applyRasterStroke",
+    "client.previewRasterFill", "client.applyRasterFill",
     "client.addTextLayer",
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
     "client.updateVectorShape",
@@ -100,6 +102,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     /client\.(?:layerPixels|replacePixelLayer)/);
   assert.match(rasterPreviewFlow, /client\.previewRasterStroke/);
   assert.match(rasterCommitFlow, /client\.applyRasterStroke/);
+  assert.doesNotMatch(script, /client\.(?:layerPixels|replacePixelLayer)/);
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
   assert.match(script, /from "\.\/engine\/workspace-store\.mjs"/);
   assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
@@ -1003,6 +1006,37 @@ test("worker previews and commits one exact-state raster stroke", async () => {
   const committed = await host.dispatch({ method: "applyRasterStroke", ...message });
   assert.equal(committed.revision, 5n);
   await assert.rejects(host.dispatch({ method: "applyRasterStroke", ...message }),
+    (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
+  host.dispose();
+});
+
+test("worker previews and commits one exact-state raster fill", async () => {
+  let revision = 4n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 30n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision }; },
+    previewRasterFill(session, before, input) {
+      calls.push(["preview", session, before.revision, input]);
+      return { region: { x: 0, y: 0, width: 8, height: 4 }, rgba: new Uint8Array(128) };
+    },
+    applyRasterFill(session, before, input) {
+      calls.push(["commit", session, before.revision, input]); revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 8, height: 4, name: "Fill.psd" });
+  const message = { layerId: "7", mode: 5, color: [20, 40, 60, 255],
+    start: [0, 0], end: [8, 0], expectedStateId: "4", expectedRevision: "4" };
+  const preview = await host.dispatch({ method: "previewRasterFill", ...message,
+    cancellation: new SharedArrayBuffer(4) });
+  assert.equal(preview.rgba.byteLength, 128); assert.equal(revision, 4n);
+  const committed = await host.dispatch({ method: "applyRasterFill", ...message });
+  assert.equal(committed.revision, 5n);
+  await assert.rejects(host.dispatch({ method: "applyRasterFill", ...message }),
     (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
   host.dispose();

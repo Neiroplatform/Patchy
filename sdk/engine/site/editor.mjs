@@ -42,6 +42,7 @@ let cloneSource = null;
 let gradientDraft = null;
 let lassoDraft = null;
 let polygonDraft = null;
+let penDraft = null;
 let clipboardImageBlob = null;
 let layerClipboard = null;
 let draggedLayer = null;
@@ -153,7 +154,9 @@ function updateControls() {
   $("openSmartObjectButton").disabled = busy || layer?.kind !== 5 ||
     !layer?.smartObject?.contentsEditable;
   $("smartFilterButton").disabled = busy || layer?.kind !== 5 || !layer?.smartObject?.editable;
-  $("createVectorMaskButton").disabled = busy || !layer || layer.kind === 1 || layer.kind === 4 || !snapshot?.selection?.length;
+  const hasVectorMaskSource = Boolean(selectedPath()?.subpaths?.length || snapshot?.selection?.length);
+  $("createVectorMaskButton").disabled = busy || !layer || layer.kind === 1 ||
+    layer.kind === 4 || !hasVectorMaskSource;
   $("createMaskButton").disabled = busy || layer?.kind !== 0 || Boolean(layer?.mask);
   $("toggleMaskButton").disabled = busy || !layer?.mask;
   $("toggleMaskButton").textContent = layer?.mask?.disabled ? "Enable mask" : "Disable mask";
@@ -733,13 +736,14 @@ function renderSelection(rect = marqueeDraft) {
 }
 
 function setCanvasTool(tool) {
+  if (tool !== "pen" && penDraft) { penDraft = null; previewPolygon([]); }
   canvasTool = tool;
   $("canvasViewport").dataset.tool = tool;
   for (const [id, value] of [["moveToolButton", "move"], ["marqueeToolButton", "marquee"],
     ["lassoToolButton", "lasso"], ["polygonToolButton", "polygon"], ["magicToolButton", "magic"],
     ["panToolButton", "pan"], ["brushToolButton", "brush"],
     ["eraserToolButton", "eraser"], ["cloneToolButton", "clone"],
-    ["healToolButton", "heal"], ["gradientToolButton", "gradient"],
+    ["healToolButton", "heal"], ["gradientToolButton", "gradient"], ["penToolButton", "pen"],
     ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
   }
@@ -1263,6 +1267,26 @@ function rectanglePath(bounds) {
   ] };
 }
 
+function geometricShapePath(kind, bounds) {
+  if (kind === "rectangle") return rectanglePath(bounds);
+  const count = kind === "polygon" ? 6 : 24;
+  const cx = bounds.x + bounds.width / 2; const cy = bounds.y + bounds.height / 2;
+  return { anchors: Array.from({ length: count }, (_, index) => {
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / count;
+    return { x: cx + Math.cos(angle) * bounds.width / 2,
+      y: cy + Math.sin(angle) * bounds.height / 2 };
+  }) };
+}
+
+function commitPenPath() {
+  const draft = penDraft; penDraft = null; previewPolygon([]);
+  if (!draft || draft.points.length < 3) return;
+  mutate("Creating Pen path", () => client.addDocumentPath({
+    name: `Path ${snapshot.paths.length + 1}`, kind: 0,
+    path: { subpaths: [{ anchors: draft.points, shapeGroup: 0,
+      combine: 1, closed: draft.closed }] } }));
+}
+
 function selectionBounds() {
   const rects = snapshot?.selection || [];
   if (!rects.length) return null;
@@ -1472,7 +1496,8 @@ function commitShape() {
   $("shapeDialog").close();
   const bounds = { x, y, width, height };
   const layer = selectedLayer();
-  const input = { name: layer?.name || "Shape", path: rectanglePath(bounds),
+  const input = { name: layer?.name || "Shape",
+    path: geometricShapePath($("shapeKindInput").value, bounds),
     fill: colorBytes($("shapeFillInput").value), strokeEnabled: strokeWidth > 0,
     stroke: colorBytes($("shapeStrokeInput").value), strokeWidth };
   mutate(layer?.kind === 4 ? "Updating vector points" : "Creating vector shape", () => layer?.kind === 4
@@ -1774,8 +1799,9 @@ async function drainRasterPreview() {
     while (rasterPreviewPending) {
       const pending = rasterPreviewPending; rasterPreviewPending = null;
       try {
-        const preview = await client.previewRasterStroke({ ...pending.payload,
-          cancellation: pending.cancellation });
+        const preview = await (pending.kind === "fill"
+          ? client.previewRasterFill({ ...pending.payload, cancellation: pending.cancellation })
+          : client.previewRasterStroke({ ...pending.payload, cancellation: pending.cancellation }));
         if (pending.generation !== rasterPreviewGeneration || rasterPreviewPending) continue;
         if (rasterPreviewRestore) {
           context.putImageData(rasterPreviewRestore.pixels,
@@ -1800,7 +1826,23 @@ async function drainRasterPreview() {
 function scheduleRasterPreview(draft) {
   if (rasterPreviewCancellation) Atomics.store(rasterPreviewCancellation, 0, 1);
   rasterPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
-  rasterPreviewPending = { payload: rasterStrokePayload(draft),
+  rasterPreviewPending = { kind: "stroke", payload: rasterStrokePayload(draft),
+    cancellation: rasterPreviewCancellation, generation: ++rasterPreviewGeneration };
+  drainRasterPreview();
+}
+
+function rasterFillPayload(draft) {
+  const modes = { "foreground-transparent": 0, "black-white": 1, sunset: 2,
+    ocean: 3, solid: 4, checker: 5, dots: 6 };
+  return { layerId: draft.layer.id, mode: modes[draft.preset], color: draft.color,
+    start: [draft.start.x, draft.start.y], end: [draft.end.x, draft.end.y],
+    expectedStateId: draft.stateId, expectedRevision: draft.revision };
+}
+
+function scheduleRasterFillPreview(draft) {
+  if (rasterPreviewCancellation) Atomics.store(rasterPreviewCancellation, 0, 1);
+  rasterPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
+  rasterPreviewPending = { kind: "fill", payload: rasterFillPayload(draft),
     cancellation: rasterPreviewCancellation, generation: ++rasterPreviewGeneration };
   drainRasterPreview();
 }
@@ -1829,75 +1871,31 @@ function beginPaint(event) {
 async function fillSelectedPixels() {
   const layer = selectedLayer();
   if (busy || layer?.kind !== 0) return;
-  await mutate("Filling pixels", async () => {
-    const bytes = await client.layerPixels(layer.id);
-    const scratch = document.createElement("canvas"); scratch.width = layer.bounds.width; scratch.height = layer.bounds.height;
-    const target = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
-    target.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-      scratch.width, scratch.height), 0, 0);
-    target.fillStyle = paintStyle(target, $("paintPresetSelect").value,
-      { x: 0, y: 0 }, { x: scratch.width, y: 0 });
-    const rects = snapshot.selection?.length ? snapshot.selection : [layer.bounds];
-    for (const rect of rects) target.fillRect(rect.x - layer.bounds.x, rect.y - layer.bounds.y, rect.width, rect.height);
-    const rgba = new Uint8Array(target.getImageData(0, 0, scratch.width, scratch.height).data);
-    return client.replacePixelLayer(layer.id, { name: layer.name, width: scratch.width,
-      height: scratch.height, bounds: layer.bounds, rgba }, { transferOwnership: true });
-  });
-}
-
-function paintStyle(target, preset, start, end) {
-  if (preset === "solid") return $("brushColorInput").value;
-  if (preset === "checker" || preset === "dots") {
-    const tile = document.createElement("canvas"); tile.width = 16; tile.height = 16;
-    const tileContext = tile.getContext("2d");
-    if (preset === "checker") {
-      tileContext.fillStyle = "#f1f3f5"; tileContext.fillRect(0, 0, 16, 16);
-      tileContext.fillStyle = $("brushColorInput").value;
-      tileContext.fillRect(0, 0, 8, 8); tileContext.fillRect(8, 8, 8, 8);
-    } else {
-      tileContext.fillStyle = "transparent"; tileContext.clearRect(0, 0, 16, 16);
-      tileContext.fillStyle = $("brushColorInput").value;
-      tileContext.beginPath(); tileContext.arc(4, 4, 3, 0, Math.PI * 2); tileContext.fill();
-      tileContext.beginPath(); tileContext.arc(12, 12, 3, 0, Math.PI * 2); tileContext.fill();
-    }
-    return target.createPattern(tile, "repeat");
-  }
-  const gradient = target.createLinearGradient(start.x, start.y,
-    end.x === start.x && end.y === start.y ? end.x + 1 : end.x, end.y);
-  const stops = preset === "black-white" ? [[0, "#000000"], [1, "#ffffff"]]
-    : preset === "sunset" ? [[0, "#ff3d77"], [.48, "#ff9a3d"], [1, "#ffe66d"]]
-    : preset === "ocean" ? [[0, "#082f49"], [.5, "#0284c7"], [1, "#67e8f9"]]
-    : [[0, $("brushColorInput").value], [1, "transparent"]];
-  for (const [offset, color] of stops) gradient.addColorStop(offset, color);
-  return gradient;
+  const draft = { layer, preset: $("paintPresetSelect").value,
+    color: [...colorBytes($("brushColorInput").value), 255],
+    start: { x: layer.bounds.x, y: layer.bounds.y },
+    end: { x: layer.bounds.x + layer.bounds.width, y: layer.bounds.y },
+    stateId: snapshot.stateId, revision: snapshot.revision };
+  await mutate("Filling pixels", () => client.applyRasterFill(rasterFillPayload(draft)));
 }
 
 async function beginGradient(event) {
   const layer = selectedLayer();
   if (busy || layer?.kind !== 0 || event.button !== 0) return;
   const start = canvasPoint(event); canvas.setPointerCapture(event.pointerId);
-  gradientDraft = { pointerId: event.pointerId, layer, start, end: start };
+  gradientDraft = { pointerId: event.pointerId, layer, start, end: start,
+    preset: $("paintPresetSelect").value,
+    color: [...colorBytes($("brushColorInput").value), 255],
+    stateId: snapshot.stateId, revision: snapshot.revision };
+  scheduleRasterFillPreview(gradientDraft);
 }
 
 async function finishGradient(event) {
   const draft = gradientDraft;
   if (!draft || event.pointerId !== draft.pointerId) return;
   gradientDraft = null;
-  await mutate("Applying gradient", async () => {
-    const bytes = await client.layerPixels(draft.layer.id);
-    const scratch = document.createElement("canvas"); scratch.width = draft.layer.bounds.width; scratch.height = draft.layer.bounds.height;
-    const target = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
-    target.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-      scratch.width, scratch.height), 0, 0);
-    const local = (point) => ({ x: point.x - draft.layer.bounds.x, y: point.y - draft.layer.bounds.y });
-    const start = local(draft.start); const end = local(draft.end);
-    target.fillStyle = paintStyle(target, $("paintPresetSelect").value, start, end);
-    const rects = snapshot.selection?.length ? snapshot.selection : [draft.layer.bounds];
-    for (const rect of rects) target.fillRect(rect.x - draft.layer.bounds.x, rect.y - draft.layer.bounds.y, rect.width, rect.height);
-    const rgba = new Uint8Array(target.getImageData(0, 0, scratch.width, scratch.height).data);
-    return client.replacePixelLayer(draft.layer.id, { name: draft.layer.name, width: scratch.width,
-      height: scratch.height, bounds: draft.layer.bounds, rgba }, { transferOwnership: true });
-  });
+  clearRasterPreview();
+  await mutate("Applying gradient", () => client.applyRasterFill(rasterFillPayload(draft)));
 }
 
 function movePaint(event) {
@@ -1955,6 +1953,7 @@ registerCommand("tool.clone", "cloneToolButton", () => setCanvasTool("clone"));
 registerCommand("tool.heal", "healToolButton", () => setCanvasTool("heal"));
 registerCommand("tool.gradient", "gradientToolButton", () => setCanvasTool("gradient"));
 registerCommand("tool.fill", "fillToolButton", fillSelectedPixels, () => !busy && selectedLayer()?.kind === 0);
+registerCommand("tool.pen", "penToolButton", () => setCanvasTool("pen"));
 registerCommand("tool.text", "textToolButton", () => { setCanvasTool("text"); openTextDialog(); });
 registerCommand("selection.all", "selectAllButton", () => {
   mutate("Selecting all", () => client.setSelection([{ x: 0, y: 0, width: snapshot.width, height: snapshot.height }]));
@@ -2085,7 +2084,8 @@ $("removeMaskButton").addEventListener("click", () => {
   if (layer?.mask) mutate("Removing layer mask", () => client.removeLayerMask(layer.id));
 });
 $("createVectorMaskButton").addEventListener("click", () => {
-  const layer = selectedLayer(); const path = selectionPath();
+  const layer = selectedLayer(); const saved = selectedPath();
+  const path = saved?.subpaths?.length ? { subpaths: saved.subpaths } : selectionPath();
   if (layer && path) mutate("Creating vector mask", () => client.setVectorMask(layer.id,
     { path, feather: 0, density: 255 }));
 });
@@ -2242,6 +2242,16 @@ canvas.addEventListener("pointerdown", (event) => {
   if (["brush", "eraser", "clone", "heal"].includes(canvasTool)) { beginPaint(event); return; }
   if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "text") { openTextDialog(); return; }
+  if (canvasTool === "pen") {
+    const point = canvasPoint(event);
+    penDraft ??= { points: [], closed: false };
+    if (event.detail > 1 && penDraft.points.length >= 3) {
+      penDraft.closed = event.shiftKey; commitPenPath();
+    } else {
+      penDraft.points.push(point); previewPolygon(penDraft.points);
+    }
+    return;
+  }
   if (canvasTool === "magic") {
     commitSelectionMask("Selecting connected color", combinedSelectionMask(
       magicMask(canvasPoint(event)), selectionMode(event)));
@@ -2303,7 +2313,9 @@ canvas.addEventListener("pointermove", (event) => {
     if (Math.hypot(point.x - last.x, point.y - last.y) >= 1) lassoDraft.points.push(point);
     previewPolygon(lassoDraft.points);
   }
-  if (gradientDraft?.pointerId === event.pointerId) gradientDraft.end = canvasPoint(event);
+  if (gradientDraft?.pointerId === event.pointerId) {
+    gradientDraft.end = canvasPoint(event); scheduleRasterFillPreview(gradientDraft);
+  }
   if (!moveDraft) return;
   const point = canvasPoint(event);
   const dx = Math.round(point.x - moveDraft.start.x); const dy = Math.round(point.y - moveDraft.start.y);
@@ -2324,7 +2336,7 @@ canvas.addEventListener("pointerup", (event) => {
   commitLayerQuad(draft.layer, draft.quad, "Moving layer");
 });
 canvas.addEventListener("pointercancel", (event) => {
-  finishPaint(event, true); gradientDraft = null; moveDraft = null; lassoDraft = null;
+  finishPaint(event, true); gradientDraft = null; clearRasterPreview(); moveDraft = null; lassoDraft = null;
   previewPolygon([]); clearTransformPreview(true);
 });
 canvas.addEventListener("dblclick", (event) => {
@@ -2389,12 +2401,15 @@ window.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "b") executeCommand("tool.brush");
   if (event.key.toLowerCase() === "e") executeCommand("tool.eraser");
   if (event.key.toLowerCase() === "t") executeCommand("tool.text");
+  if (event.key.toLowerCase() === "p") executeCommand("tool.pen");
   if (event.key === "Enter" && polygonDraft) {
     const draft = polygonDraft; polygonDraft = null; previewPolygon([]);
     if (draft.points.length >= 3) commitSelectionMask("Selecting polygonal area",
       combinedSelectionMask(polygonMask(draft.points), draft.mode));
   }
   if (event.key === "Escape" && polygonDraft) { polygonDraft = null; previewPolygon([]); }
+  if (event.key === "Enter" && penDraft) commitPenPath();
+  if (event.key === "Escape" && penDraft) { penDraft = null; previewPolygon([]); }
 });
 
 for (const type of ["dragenter", "dragover"]) {

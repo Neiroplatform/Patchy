@@ -34,6 +34,7 @@ const DOCUMENT_PATH_PROJECTION_SIZE = 288;
 const PATH_SUBPATH_PROJECTION_SIZE = 16;
 const LAYER_TRANSFORM_SIZE = 80;
 const RASTER_STROKE_SIZE = 48;
+const RASTER_FILL_SIZE = 56;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -527,6 +528,45 @@ export class EmscriptenPatchyEngine {
         this.#module._patchy_engine_session_apply_raster_stroke(
           session, snapshot.stateId, snapshot.revision, value.stroke, event, error));
     } finally { this.#module._free(value.points); this.#module._free(value.stroke); }
+  }
+
+  previewRasterFill(session, snapshot, input,
+                    cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    if (!(cancellation instanceof Int32Array) ||
+        !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Raster-fill preview cancellation must use shared Int32 storage");
+    }
+    return this.#withError((error) => {
+      const fill = this.#rasterFill(input);
+      let region = 0; let buffer = 0; let callback = 0;
+      try {
+        region = this.#alloc(RECT_SIZE); buffer = this.#alloc(BUFFER_SIZE);
+        callback = this.#module.addFunction(
+          () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
+        this.#check(this.#module._patchy_engine_session_preview_raster_fill(
+          session, snapshot.stateId, snapshot.revision, fill, callback, 0,
+          region, buffer, error), error);
+        const r = this.#view(region, RECT_SIZE); const b = this.#view(buffer, BUFFER_SIZE);
+        const data = b.getUint32(0, true); const size = b.getUint32(4, true);
+        return { region: { x: r.getInt32(0, true), y: r.getInt32(4, true),
+          width: r.getInt32(8, true), height: r.getInt32(12, true) },
+        rgba: this.#module.HEAPU8.slice(data, data + size) };
+      } finally {
+        if (callback) this.#module.removeFunction(callback);
+        if (buffer) { this.#module._patchy_engine_buffer_release(buffer); this.#module._free(buffer); }
+        if (region) this.#module._free(region);
+        this.#module._free(fill);
+      }
+    });
+  }
+
+  applyRasterFill(session, snapshot, input) {
+    const fill = this.#rasterFill(input);
+    try {
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_apply_raster_fill(
+          session, snapshot.stateId, snapshot.revision, fill, event, error));
+    } finally { this.#module._free(fill); }
   }
 
   rasterizeLayer(session, snapshot, layerId) {
@@ -1532,6 +1572,26 @@ export class EmscriptenPatchyEngine {
       view.setUint32(40, points, true); view.setUint32(44, input.points.length, true);
       return { stroke, points };
     } catch (error) { this.#module._free(points); throw error; }
+  }
+
+  #rasterFill(input) {
+    const start = input.start ?? [0, 0]; const end = input.end ?? start;
+    const color = input.color ?? [0, 0, 0, 255];
+    if (typeof input.layerId !== "bigint" || input.layerId <= 0n ||
+        ![0, 1, 2, 3, 4, 5, 6].includes(input.mode) ||
+        !Array.isArray(start) || start.length !== 2 || !start.every(Number.isFinite) ||
+        !Array.isArray(end) || end.length !== 2 || !end.every(Number.isFinite) ||
+        !Array.isArray(color) || color.length !== 4 ||
+        color.some((component) => !Number.isInteger(component) || component < 0 || component > 255)) {
+      throw new TypeError("A bounded raster fill is required");
+    }
+    const fill = this.#alloc(RASTER_FILL_SIZE); const view = this.#view(fill, RASTER_FILL_SIZE);
+    view.setUint32(0, RASTER_FILL_SIZE, true); view.setUint32(4, input.mode, true);
+    view.setBigUint64(8, input.layerId, true);
+    color.forEach((component, index) => view.setUint8(16 + index, component));
+    view.setFloat64(24, start[0], true); view.setFloat64(32, start[1], true);
+    view.setFloat64(40, end[0], true); view.setFloat64(48, end[1], true);
+    return fill;
   }
 
   #bufferCall(call) {

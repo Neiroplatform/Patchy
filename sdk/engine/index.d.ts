@@ -80,6 +80,12 @@ export class PatchyWorkerClient {
   applyRasterStroke(input: { layerId: bigint; mode: 0 | 1 | 2 | 3; brushSize: number;
     color: number[]; points: number[][]; source?: number[];
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
+  previewRasterFill(input: { layerId: bigint; mode: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+    color: number[]; start: number[]; end: number[]; cancellation?: Int32Array;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<{ region: Rect; rgba: Uint8Array }>;
+  applyRasterFill(input: { layerId: bigint; mode: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+    color: number[]; start: number[]; end: number[];
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   closeDocument(documentId: number): Promise<DocumentProjection | null>;
   setMemoryBudget(documentBytes: number, globalBytes: number): Promise<DocumentProjection>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;

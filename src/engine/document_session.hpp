@@ -386,6 +386,7 @@ enum class PreparedDocumentMutationKind : std::uint8_t {
   CopyLayerTree,
   TransformLayer,
   RasterStroke,
+  RasterFill,
 };
 
 struct CommitPreparedDocumentState {

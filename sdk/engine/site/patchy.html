@@ -51,6 +51,7 @@
         <button class="tool-button" id="healToolButton" type="button" aria-label="Healing brush" aria-pressed="false" title="Healing brush (J)">✚</button>
         <button class="tool-button" id="gradientToolButton" type="button" aria-label="Gradient" aria-pressed="false" title="Gradient (G)">◩</button>
         <button class="tool-button" id="fillToolButton" type="button" aria-label="Fill selection" title="Fill selection">▰</button>
+        <button class="tool-button" id="penToolButton" type="button" aria-label="Pen path" aria-pressed="false" title="Pen path (P)">⌁</button>
         <button class="tool-button" id="textToolButton" type="button" aria-label="Text" aria-pressed="false" title="Text (T)">T</button>
         <button class="tool-button" id="selectAllButton" type="button" aria-label="Select all" title="Select all (Ctrl+A)" disabled>▣</button>
         <button class="tool-button" id="clearSelectionButton" type="button" aria-label="Clear selection" title="Clear selection (Ctrl+D)" disabled>×</button>
@@ -329,7 +330,7 @@
     </dialog>
     <dialog class="document-dialog" id="shapeDialog" aria-labelledby="shapeDialogTitle">
       <form method="dialog"><header><div><p class="eyebrow">SHAPE</p><h2 id="shapeDialogTitle">Create vector shape</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
-        <section><div class="field-row field-row-four">
+        <section><label class="dialog-field"><span>Kind</span><select id="shapeKindInput"><option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon">Hexagon</option></select></label><div class="field-row field-row-four">
           <label><span>X</span><input id="shapeXInput" type="number" step="1" required></label>
           <label><span>Y</span><input id="shapeYInput" type="number" step="1" required></label>
           <label><span>Width</span><input id="shapeWidthInput" type="number" min="1" step="1" required></label>

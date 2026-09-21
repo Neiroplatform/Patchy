@@ -2146,6 +2146,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_TRANSFORM) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_STROKE) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_FILL) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -4328,6 +4329,106 @@ void engine_host_protocol_previews_and_commits_one_raster_stroke() {
   patchy_engine_session_destroy(session); patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_previews_and_commits_one_raster_fill() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 8, 4, &error);
+  patchy_engine_document_projection before{}; before.struct_size = sizeof(before);
+  CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+  std::array<std::uint8_t, 8 * 4 * 4> rgba{};
+  patchy_engine_pixel_layer_input input{}; input.struct_size = sizeof(input);
+  input.expected_state_id = before.state_id; input.expected_revision = before.revision;
+  input.bounds = {0, 0, 8, 4}; input.width = 8; input.height = 4;
+  input.rgba = rgba.data(); input.rgba_size = rgba.size();
+  input.name = "Fill"; input.name_size = 4;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event, &error) == 1);
+  patchy_engine_document_projection ready{}; ready.struct_size = sizeof(ready);
+  CHECK(patchy_engine_session_document(session, &ready, &error) == 1);
+  patchy_engine_raster_fill fill{}; fill.struct_size = sizeof(fill);
+  fill.mode = PATCHY_ENGINE_RASTER_FILL_CHECKER;
+  fill.layer_id = event.affected_layer_id;
+  fill.red = 40; fill.green = 80; fill.blue = 120; fill.alpha = 255;
+  fill.start_x = 0; fill.start_y = 0; fill.end_x = 8; fill.end_y = 0;
+  patchy_engine_rect region{}; patchy_engine_buffer preview{};
+  const auto cancel = [](std::int32_t, std::int32_t, void*) { return 0; };
+  CHECK(patchy_engine_session_preview_raster_fill(
+            session, ready.state_id, ready.revision, &fill, cancel, nullptr,
+            &region, &preview, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(patchy_engine_session_preview_raster_fill(
+            session, ready.state_id, ready.revision, &fill, nullptr, nullptr,
+            &region, &preview, &error) == 1);
+  CHECK(region.width == 8 && region.height == 4 && preview.size == rgba.size());
+  patchy_engine_buffer_release(&preview);
+  CHECK(patchy_engine_session_apply_raster_fill(
+            session, ready.state_id, ready.revision, &fill, &event, &error) == 1);
+  CHECK(event.revision == ready.revision + 1U);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  patchy_engine_buffer saved{};
+  CHECK(patchy_engine_session_save_psd(session, &saved, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(runtime, saved.data, saved.size, &error);
+  CHECK(reopened != nullptr);
+  patchy_engine_session_destroy(reopened); patchy_engine_buffer_release(&saved);
+  patchy_engine_session_destroy(session); patchy_engine_runtime_destroy(runtime);
+}
+
+void core_raster_fill_respects_soft_selection_locks_and_presets() {
+  Document document(8, 2, PixelFormat::rgba8());
+  PixelBuffer pixels(8, 2, PixelFormat::rgba8()); pixels.clear(0);
+  const auto layer_id = document.add_pixel_layer("Fill", std::move(pixels)).id();
+  patchy::RasterFillRequest fill;
+  fill.mode = patchy::RasterFillMode::Solid; fill.color = {220, 40, 20, 255};
+  fill.start = {0, 0}; fill.end = {8, 0};
+  PixelBuffer mask(8, 2, PixelFormat::gray8()); mask.clear(0);
+  mask.pixel(0, 0)[0] = 128; fill.selection_mask_bounds = {0, 0, 8, 2};
+  fill.selection_mask = std::move(mask);
+  patchy::RasterStrokeResult result; std::string error;
+  CHECK(patchy::apply_raster_fill(document, layer_id, fill, &result, &error));
+  const auto *soft = document.find_layer(layer_id)->pixels().pixel(0, 0);
+  CHECK(soft[0] == 220 && soft[3] > 0 && soft[3] < 255);
+  CHECK(document.find_layer(layer_id)->pixels().pixel(1, 0)[3] == 0);
+
+  document.find_layer(layer_id)->set_lock_flags(patchy::kLayerLockTransparentPixels);
+  fill.selection_mask.reset(); fill.mode = patchy::RasterFillMode::Checker;
+  fill.color = {12, 34, 56, 255};
+  CHECK(patchy::apply_raster_fill(document, layer_id, fill, &result, &error));
+  CHECK(document.find_layer(layer_id)->pixels().pixel(1, 0)[3] == 0);
+  document.find_layer(layer_id)->set_lock_flags(patchy::kLayerLockImagePixels);
+  CHECK(!patchy::apply_raster_fill(document, layer_id, fill, nullptr, &error));
+
+  Document clipped(2, 1, PixelFormat::rgba8());
+  PixelBuffer clipped_pixels(4, 1, PixelFormat::rgba8()); clipped_pixels.clear(0);
+  const auto clipped_id = clipped.allocate_layer_id();
+  patchy::Layer clipped_input(clipped_id, "Clipped", std::move(clipped_pixels));
+  clipped_input.set_bounds({-2, 0, 4, 1});
+  auto& clipped_layer = clipped.add_layer(std::move(clipped_input));
+  patchy::RasterFillRequest clipped_fill;
+  clipped_fill.mode = patchy::RasterFillMode::Solid;
+  clipped_fill.color = {90, 80, 70, 255};
+  CHECK(patchy::apply_raster_fill(
+      clipped, clipped_layer.id(), clipped_fill, &result, &error));
+  CHECK(clipped_layer.pixels().pixel(0, 0)[3] == 0);
+  CHECK(clipped_layer.pixels().pixel(1, 0)[3] == 0);
+  CHECK(clipped_layer.pixels().pixel(2, 0)[0] == 90);
+  CHECK(clipped_layer.pixels().pixel(3, 0)[0] == 90);
+
+  Document point_gradient(3, 1, PixelFormat::rgba8());
+  PixelBuffer gradient_pixels(3, 1, PixelFormat::rgba8()); gradient_pixels.clear(0);
+  const auto gradient_id = point_gradient.add_pixel_layer(
+      "Gradient", std::move(gradient_pixels)).id();
+  patchy::RasterFillRequest gradient;
+  gradient.mode = patchy::RasterFillMode::ForegroundTransparent;
+  gradient.color = {30, 60, 90, 255};
+  gradient.start = {0, 0}; gradient.end = gradient.start;
+  CHECK(patchy::apply_raster_fill(
+      point_gradient, gradient_id, gradient, &result, &error));
+  CHECK(point_gradient.find_layer(gradient_id)->pixels().pixel(0, 0)[3] == 255);
+  CHECK(point_gradient.find_layer(gradient_id)->pixels().pixel(1, 0)[3] == 0);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -4420,5 +4521,9 @@ std::vector<TestCase> document_session_tests() {
        core_raster_stroke_respects_selection_and_immutable_clone_source},
       {"engine_host_protocol_previews_and_commits_one_raster_stroke",
        engine_host_protocol_previews_and_commits_one_raster_stroke},
+      {"engine_host_protocol_previews_and_commits_one_raster_fill",
+       engine_host_protocol_previews_and_commits_one_raster_fill},
+      {"core_raster_fill_respects_soft_selection_locks_and_presets",
+       core_raster_fill_respects_soft_selection_locks_and_presets},
   };
 }

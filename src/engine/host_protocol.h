@@ -44,6 +44,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS = UINT64_C(1) << 27,
   PATCHY_ENGINE_CAP_LAYER_TRANSFORM = UINT64_C(1) << 28,
   PATCHY_ENGINE_CAP_RASTER_STROKE = UINT64_C(1) << 29,
+  PATCHY_ENGINE_CAP_RASTER_FILL = UINT64_C(1) << 30,
 };
 
 enum patchy_engine_error_code {
@@ -124,6 +125,30 @@ typedef struct patchy_engine_raster_stroke {
   const patchy_engine_stroke_point *points;
   size_t point_count;
 } patchy_engine_raster_stroke;
+
+enum patchy_engine_raster_fill_mode {
+  PATCHY_ENGINE_RASTER_FILL_FOREGROUND_TRANSPARENT = 0,
+  PATCHY_ENGINE_RASTER_FILL_BLACK_WHITE = 1,
+  PATCHY_ENGINE_RASTER_FILL_SUNSET = 2,
+  PATCHY_ENGINE_RASTER_FILL_OCEAN = 3,
+  PATCHY_ENGINE_RASTER_FILL_SOLID = 4,
+  PATCHY_ENGINE_RASTER_FILL_CHECKER = 5,
+  PATCHY_ENGINE_RASTER_FILL_DOTS = 6,
+};
+
+typedef struct patchy_engine_raster_fill {
+  uint32_t struct_size;
+  uint32_t mode;
+  uint64_t layer_id;
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t alpha;
+  double start_x;
+  double start_y;
+  double end_x;
+  double end_y;
+} patchy_engine_raster_fill;
 
 typedef struct patchy_engine_memory_usage {
   uint32_t struct_size;
@@ -1097,6 +1122,16 @@ int patchy_engine_session_preview_raster_stroke(
 int patchy_engine_session_apply_raster_stroke(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const patchy_engine_raster_stroke *stroke,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_preview_raster_fill(
+    const patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_raster_fill *fill,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error);
+int patchy_engine_session_apply_raster_fill(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_raster_fill *fill,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,
