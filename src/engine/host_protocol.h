@@ -917,6 +917,11 @@ int patchy_engine_session_move_layer(
     uint64_t expected_revision, uint64_t layer_id, uint64_t target_layer_id,
     uint32_t position, uint8_t has_target_layer, patchy_engine_event *event,
     patchy_engine_error *error);
+int patchy_engine_session_group_layer(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, uint64_t layer_id, const char *name,
+    size_t name_size, patchy_engine_event *event,
+    patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,
                                patchy_engine_error *error);

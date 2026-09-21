@@ -2595,6 +2595,39 @@ int patchy_engine_session_move_layer(
   return patchy_engine_session_execute(session, &command, event, error);
 }
 
+int patchy_engine_session_group_layer(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, std::uint64_t layer_id,
+    const char *name, std::size_t name_size, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || layer_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and layer are required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  std::string group_name;
+  if (!copy_command_text(name, name_size, 256U, group_name, error)) {
+    return 0;
+  }
+  try {
+    auto result = session->value->execute(
+        patchy::engine::AddGroup{std::move(group_name), {layer_id}});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown group-layer failure");
+  }
+}
+
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,
                                patchy_engine_error *error) {

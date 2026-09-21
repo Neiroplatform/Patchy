@@ -74,9 +74,9 @@ skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
 no-entry Dedicated-Worker ES module (`patchy-engine.mjs` plus `.wasm`) and a
 deployable `build/wasm-sdk/site`. The module uses wasm BigInt for 64-bit IDs,
 a 256 MB–4 GB heap and no Qt. The local-first editor opens or drops PSD,
-creates a document, projects layers, toggles visibility, reorders, undo/redoes,
-renders and downloads PSD. It has no remote assets and exposes empty, busy,
-drop, engine-error and crash states.
+creates documents, imports RGBA8 layers, groups/removes/reorders/renames them,
+edits visibility/opacity/blend, undo/redoes, renders and downloads PSD. It has
+no remote assets and exposes empty, busy, drop, error/crash states.
 
 `client.mjs` owns correlation/crash state, `worker.mjs` the runtime/session,
 and `module-adapter.mjs` reads C structures. Input is copied once; render/PSD

@@ -20,6 +20,14 @@ export class PatchyWorkerClient {
   create(width: number, height: number): Promise<DocumentProjection>;
   snapshot(): Promise<DocumentProjection>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;
+  setLayerOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;
+  setLayerBlendMode(layerId: bigint, blendMode: number): Promise<DocumentProjection>;
+  renameLayer(layerId: bigint, name: string): Promise<DocumentProjection>;
+  removeLayer(layerId: bigint): Promise<DocumentProjection>;
+  groupLayer(layerId: bigint, name?: string): Promise<DocumentProjection>;
+  ungroup(layerId: bigint): Promise<DocumentProjection>;
+  addPixelLayer(input: { name: string; width: number; height: number;
+    bounds: Rect; rgba: Uint8Array }): Promise<DocumentProjection>;
   moveLayer(layerId: bigint, targetLayerId: bigint | null,
             position: number): Promise<DocumentProjection>;
   undo(): Promise<DocumentProjection>;

@@ -20,6 +20,40 @@ export class PatchyWorkerHost {
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
           message.visible);
         return this.#snapshot();
+      case "setLayerOpacity":
+        this.#engine.setLayerOpacity(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          message.opacity);
+        return this.#snapshot();
+      case "setLayerBlendMode":
+        this.#engine.setLayerBlendMode(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          message.blendMode);
+        return this.#snapshot();
+      case "renameLayer":
+        this.#engine.renameLayer(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          message.name);
+        return this.#snapshot();
+      case "removeLayer":
+        this.#engine.removeLayer(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId));
+        return this.#snapshot();
+      case "groupLayer":
+        this.#engine.groupLayer(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          message.name);
+        return this.#snapshot();
+      case "ungroup":
+        this.#engine.ungroup(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId));
+        return this.#snapshot();
+      case "addPixelLayer":
+        this.#engine.addPixelLayer(this.#requireSession(), this.#snapshot(), {
+          name: message.name, width: message.width, height: message.height,
+          bounds: message.bounds, rgba: new Uint8Array(message.rgba),
+        });
+        return this.#snapshot();
       case "moveLayer":
         this.#engine.moveLayer(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),

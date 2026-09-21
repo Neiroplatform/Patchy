@@ -72,8 +72,27 @@
             <div><p class="eyebrow">STRUCTURE</p><h2>Layers</h2></div>
             <span class="layer-count" id="layerCount">0</span>
           </header>
+          <div class="layer-actions" role="group" aria-label="Layer actions">
+            <button type="button" id="importLayerButton" disabled>Import pixels</button>
+            <button type="button" id="groupLayerButton" disabled>Group</button>
+            <button type="button" id="ungroupLayerButton" disabled>Ungroup</button>
+            <button type="button" id="removeLayerButton" disabled>Delete</button>
+          </div>
           <div class="layer-list" id="layerList" role="list" aria-label="Layers"></div>
           <div class="panel-empty" id="layersEmpty">Open a document to inspect its layers.</div>
+        </section>
+        <section class="panel properties-panel" id="propertiesPanel" aria-labelledby="propertiesTitle">
+          <header class="panel-header"><div><p class="eyebrow">APPEARANCE</p><h2 id="propertiesTitle">Selected layer</h2></div></header>
+          <div class="property-fields">
+            <label><span>Name</span><input id="layerNameInput" type="text" maxlength="256" disabled></label>
+            <label><span>Opacity <output id="layerOpacityOutput">100%</output></span><input id="layerOpacityInput" type="range" min="0" max="100" value="100" disabled></label>
+            <label><span>Blend mode</span><select id="layerBlendSelect" disabled>
+              <option value="0">Pass through</option><option value="1">Normal</option><option value="2">Multiply</option>
+              <option value="3">Screen</option><option value="4">Overlay</option>
+              <option value="5">Darken</option><option value="6">Lighten</option>
+              <option value="11">Difference</option><option value="27">Dissolve</option>
+            </select></label>
+          </div>
         </section>
         <section class="panel details-panel">
           <header class="panel-header"><div><p class="eyebrow">SESSION</p><h2>Document</h2></div></header>
@@ -92,6 +111,7 @@
       <button class="icon-button" id="dismissErrorButton" type="button" aria-label="Dismiss error">×</button>
     </div>
     <input id="fileInput" type="file" accept=".psd,.psb,application/octet-stream" hidden>
+    <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif" hidden>
   </div>
   <script type="module" src="./editor.mjs"></script>
 </body>

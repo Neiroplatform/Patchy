@@ -4,8 +4,11 @@ const EVENT_SIZE = 64;
 const DOCUMENT_SIZE = 56;
 const LAYER_SIZE = 320;
 const BUFFER_SIZE = 8;
+const COMMAND_SIZE = 304;
+const PIXEL_LAYER_INPUT_SIZE = 80;
 
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 function u64(view, offset) {
   return view.getBigUint64(offset, true);
@@ -100,6 +103,91 @@ export class EmscriptenPatchyEngine {
         visible ? 1 : 0, event, error));
   }
 
+  setLayerOpacity(session, snapshot, layerId, opacity) {
+    return this.#command(session, snapshot, 2, (view) => {
+      view.setBigUint64(32, layerId, true);
+      view.setFloat32(40, opacity, true);
+    });
+  }
+
+  setLayerBlendMode(session, snapshot, layerId, blendMode) {
+    return this.#command(session, snapshot, 4, (view) => {
+      view.setBigUint64(32, layerId, true);
+      view.setUint32(40, blendMode, true);
+    });
+  }
+
+  renameLayer(session, snapshot, layerId, name) {
+    const bytes = this.#text(name);
+    return this.#command(session, snapshot, 5, (view, command) => {
+      view.setBigUint64(32, layerId, true);
+      view.setUint32(40, bytes.byteLength, true);
+      this.#module.HEAPU8.set(bytes, command + 44);
+    });
+  }
+
+  removeLayer(session, snapshot, layerId) {
+    return this.#command(session, snapshot, 9, (view) =>
+      view.setBigUint64(32, layerId, true));
+  }
+
+  groupLayer(session, snapshot, layerId, name) {
+    const bytes = this.#text(name);
+    const namePointer = this.#alloc(bytes.byteLength || 1);
+    try {
+      this.#module.HEAPU8.set(bytes, namePointer);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_group_layer(
+          session, snapshot.stateId, snapshot.revision, layerId,
+          namePointer, bytes.byteLength, event, error));
+    } finally {
+      this.#module._free(namePointer);
+    }
+  }
+
+  ungroup(session, snapshot, layerId) {
+    return this.#command(session, snapshot, 16, (view) =>
+      view.setBigUint64(32, layerId, true));
+  }
+
+  addPixelLayer(session, snapshot, input) {
+    const name = this.#text(input.name);
+    const rgba = input.rgba;
+    const expected = input.width * input.height * 4;
+    if (!(rgba instanceof Uint8Array) || !Number.isSafeInteger(expected) ||
+        input.width <= 0 || input.height <= 0 || rgba.byteLength !== expected) {
+      throw new TypeError("Complete RGBA8 pixel layer input is required");
+    }
+    const pixels = this.#alloc(rgba.byteLength);
+    const namePointer = this.#alloc(name.byteLength || 1);
+    const value = this.#alloc(PIXEL_LAYER_INPUT_SIZE);
+    try {
+      this.#module.HEAPU8.set(rgba, pixels);
+      this.#module.HEAPU8.set(name, namePointer);
+      const view = this.#view(value, PIXEL_LAYER_INPUT_SIZE);
+      view.setUint32(0, PIXEL_LAYER_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true);
+      view.setInt32(32, input.bounds.x, true);
+      view.setInt32(36, input.bounds.y, true);
+      view.setInt32(40, input.bounds.width, true);
+      view.setInt32(44, input.bounds.height, true);
+      view.setInt32(48, input.width, true);
+      view.setInt32(52, input.height, true);
+      view.setUint32(56, pixels, true);
+      view.setUint32(60, rgba.byteLength, true);
+      view.setUint32(64, namePointer, true);
+      view.setUint32(68, name.byteLength, true);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_add_rgba8_layer(
+          session, value, event, error));
+    } finally {
+      this.#module._free(value);
+      this.#module._free(namePointer);
+      this.#module._free(pixels);
+    }
+  }
+
   moveLayer(session, snapshot, layerId, targetLayerId, position) {
     return this.#mutation((event, error) =>
       this.#module._patchy_engine_session_move_layer(
@@ -179,6 +267,32 @@ export class EmscriptenPatchyEngine {
     } finally {
       this.#module._free(layer);
     }
+  }
+
+  #command(session, snapshot, type, writePayload) {
+    const command = this.#alloc(COMMAND_SIZE);
+    try {
+      const view = this.#view(command, COMMAND_SIZE);
+      view.setUint32(0, COMMAND_SIZE, true);
+      view.setUint32(4, PROTOCOL_VERSION, true);
+      view.setUint32(8, type, true);
+      view.setBigUint64(16, snapshot.stateId, true);
+      view.setBigUint64(24, snapshot.revision, true);
+      writePayload(view, command);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_execute(
+          session, command, event, error));
+    } finally {
+      this.#module._free(command);
+    }
+  }
+
+  #text(value) {
+    const bytes = encoder.encode(String(value));
+    if (bytes.byteLength > 256 || bytes.includes(0)) {
+      throw new TypeError("Layer names must be valid UTF-8 without NUL and at most 256 bytes");
+    }
+    return bytes;
   }
 
   #mutation(call) {

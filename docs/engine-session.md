@@ -240,12 +240,14 @@ release, export closure and explicit crash state. The actual Emscripten build
 remains a required hosted gate when the pinned toolchain is available.
 
 The same preset stages `build/wasm-sdk/site`, a dependency-free self-hosted
-editor shell. It closes the first browser product loop: open or drop PSD,
-create a blank document, inspect layers, toggle visibility, reorder, undo/redo,
-render and download layered PSD. Empty, busy, drop, engine-error and Worker
-crash states remain explicit; the UI holds only projections and never becomes
-a second document owner. Download completion deliberately does not acknowledge
-durable save because the browser cannot prove that the user kept the file.
+editor shell. It closes the browser product loop from open/drop or blank
+creation through layered PSD download. The screen can import decoded RGBA8
+pixels as layers, select/remove/group/ungroup/reorder/rename them and edit
+visibility, opacity and common blend modes before undo/redo and render. Every
+mutation crosses the revision/state-guarded Worker RPC; UI selection remains
+view state, not a second document owner. Empty, busy, drop, engine-error and
+Worker-crash states remain explicit. Download completion deliberately does not
+acknowledge durable save because the browser cannot prove the file was kept.
 
 ## Desktop transition
 

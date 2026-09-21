@@ -2339,6 +2339,33 @@ void engine_host_protocol_authors_layers_and_document_geometry() {
   execute(ungroup);
   CHECK(project().layer_count == 2);
 
+  const auto before_atomic_group = project();
+  patchy_engine_event atomic_group{};
+  constexpr char atomic_group_name[] = "Atomic group";
+  CHECK(patchy_engine_session_group_layer(
+            session, before_atomic_group.state_id,
+            before_atomic_group.revision, base_id, atomic_group_name,
+            sizeof(atomic_group_name) - 1, &atomic_group, &error) == 1);
+  CHECK(atomic_group.changed == 1);
+  CHECK(atomic_group.affected_layer_id != 0);
+  CHECK(project().layer_count == 3);
+  patchy_engine_layer_projection atomic_grouped_base{};
+  bool found_atomic_grouped_base = false;
+  for (std::size_t index = 0; index < project().layer_count; ++index) {
+    patchy_engine_layer_projection projected{};
+    CHECK(patchy_engine_session_layer_at(session, index, &projected,
+                                         &error) == 1);
+    if (projected.id == base_id) {
+      atomic_grouped_base = projected;
+      found_atomic_grouped_base = true;
+      break;
+    }
+  }
+  CHECK(found_atomic_grouped_base);
+  CHECK(atomic_grouped_base.parent_id == atomic_group.affected_layer_id);
+  CHECK(patchy_engine_session_undo(session, &ignored, &error) == 1);
+  CHECK(project().layer_count == 2);
+
   patchy_engine_command add_temporary{};
   add_temporary.type = PATCHY_ENGINE_COMMAND_ADD_SOLID_LAYER;
   set_name(add_temporary.payload.add_solid_layer.name,

@@ -30,6 +30,26 @@ export class PatchyWorkerClient {
   setLayerVisibility(layerId, visible) {
     return this.#request("setLayerVisibility", { layerId: String(layerId), visible });
   }
+  setLayerOpacity(layerId, opacity) {
+    return this.#request("setLayerOpacity", { layerId: String(layerId), opacity });
+  }
+  setLayerBlendMode(layerId, blendMode) {
+    return this.#request("setLayerBlendMode", { layerId: String(layerId), blendMode });
+  }
+  renameLayer(layerId, name) {
+    return this.#request("renameLayer", { layerId: String(layerId), name });
+  }
+  removeLayer(layerId) { return this.#request("removeLayer", { layerId: String(layerId) }); }
+  groupLayer(layerId, name = "Group") {
+    return this.#request("groupLayer", { layerId: String(layerId), name });
+  }
+  ungroup(layerId) { return this.#request("ungroup", { layerId: String(layerId) }); }
+  addPixelLayer({ name, width, height, bounds, rgba }) {
+    const owned = rgba.slice();
+    return this.#request("addPixelLayer", {
+      name, width, height, bounds, rgba: owned.buffer,
+    }, [owned.buffer]);
+  }
   moveLayer(layerId, targetLayerId, position) {
     return this.#request("moveLayer", {
       layerId: String(layerId),

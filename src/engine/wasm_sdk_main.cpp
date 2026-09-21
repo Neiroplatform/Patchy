@@ -12,6 +12,12 @@ static_assert(sizeof(patchy_engine_layer_projection) == 320);
 static_assert(offsetof(patchy_engine_layer_projection, name) == 32);
 static_assert(offsetof(patchy_engine_layer_projection, bounds) == 304);
 static_assert(sizeof(patchy_engine_event) == 64);
+static_assert(sizeof(patchy_engine_command) == 304);
+static_assert(offsetof(patchy_engine_command, payload) == 32);
+static_assert(sizeof(patchy_engine_pixel_layer_input) == 80);
+static_assert(offsetof(patchy_engine_pixel_layer_input, bounds) == 32);
+static_assert(offsetof(patchy_engine_pixel_layer_input, rgba) == 56);
+static_assert(offsetof(patchy_engine_pixel_layer_input, name) == 64);
 
 // The browser SDK is a no-entry Emscripten module. Its public surface is the
 // versioned C ABI listed in sdk/engine/exports.json.

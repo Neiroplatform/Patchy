@@ -12,7 +12,12 @@ let documentName = "Untitled.psd";
 let busy = false;
 let dragDepth = 0;
 
-const layerKinds = ["Pixels", "Group", "Text", "Shape", "Adjustment"];
+const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
+const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
+
+function selectedLayer() {
+  return snapshot?.layers.find((layer) => layer.id === selectedLayerId) || null;
+}
 
 function setSessionState(state, label) {
   shell.dataset.state = state;
@@ -32,11 +37,19 @@ function setBusy(active, title = "Working", detail = "The engine is updating the
 }
 
 function updateControls() {
+  const layer = selectedLayer();
   $("saveButton").disabled = busy || !snapshot;
   $("undoButton").disabled = busy || !snapshot?.canUndo;
   $("redoButton").disabled = busy || !snapshot?.canRedo;
   $("openButton").disabled = busy;
   $("newButton").disabled = busy;
+  $("importLayerButton").disabled = busy || !snapshot;
+  $("groupLayerButton").disabled = busy || !layer;
+  $("ungroupLayerButton").disabled = busy || layer?.kind !== 1;
+  $("removeLayerButton").disabled = busy || !layer;
+  $("layerNameInput").disabled = busy || !layer;
+  $("layerOpacityInput").disabled = busy || !layer;
+  $("layerBlendSelect").disabled = busy || !layer;
 }
 
 function showError(title, error) {
@@ -66,11 +79,17 @@ function renderLayers() {
     row.innerHTML = `
       <button class="visibility-button" type="button" aria-label="${layer.visible ? "Hide" : "Show"} ${escapeHtml(layer.name)}">${layer.visible ? "◉" : "○"}</button>
       <span class="layer-thumb" aria-hidden="true"></span>
-      <span class="layer-copy"><span class="layer-name"></span><span class="layer-kind"></span></span>
+      <button class="layer-copy layer-select-button" type="button"><span class="layer-name"></span><span class="layer-kind"></span></button>
       <button class="reorder-button" type="button" aria-label="Move layer up" ${index === 0 ? "disabled" : ""}>↑</button>
       <button class="reorder-button" type="button" aria-label="Move layer down" ${index === layers.length - 1 ? "disabled" : ""}>↓</button>`;
     row.querySelector(".layer-name").textContent = layer.name || "Unnamed layer";
     row.querySelector(".layer-kind").textContent = formatKind(layer);
+    row.querySelector(".layer-select-button").setAttribute("aria-label", `Select ${layer.name || "unnamed layer"}`);
+    row.querySelector(".layer-select-button").addEventListener("click", () => {
+      selectedLayerId = layer.id;
+      renderLayers();
+      renderLayerProperties();
+    });
     row.querySelector(".visibility-button").addEventListener("click", () =>
       mutate("Updating layer", async () => client.setLayerVisibility(layer.id, !layer.visible)));
     const reorder = async (direction) => {
@@ -83,6 +102,22 @@ function renderLayers() {
     row.querySelectorAll(".reorder-button")[1].addEventListener("click", () => reorder(1));
     list.append(row);
   }
+}
+
+function renderLayerProperties() {
+  const layer = selectedLayer();
+  $("layerNameInput").value = layer?.name || "";
+  $("layerOpacityInput").value = layer ? String(Math.round(layer.opacity * 100)) : "100";
+  $("layerOpacityOutput").textContent = `${$("layerOpacityInput").value}%`;
+  const blendSelect = $("layerBlendSelect");
+  blendSelect.querySelectorAll("[data-current-mode]").forEach((option) => option.remove());
+  if (layer && !blendModes.has(layer.blendMode)) {
+    const option = new Option(`Engine mode ${layer.blendMode}`, String(layer.blendMode));
+    option.dataset.currentMode = "true";
+    blendSelect.prepend(option);
+  }
+  blendSelect.value = layer ? String(layer.blendMode) : "1";
+  updateControls();
 }
 
 function renderMetadata() {
@@ -115,6 +150,7 @@ async function acceptSnapshot(next, rerender = true) {
   $("emptyState").hidden = true;
   setSessionState("document", snapshot.dirty ? "Modified locally" : "Document ready");
   renderLayers();
+  renderLayerProperties();
   renderMetadata();
   if (rerender) await renderDocument();
 }
@@ -167,6 +203,32 @@ async function saveDocument() {
   finally { setBusy(false); }
 }
 
+async function importPixelLayer(file) {
+  if (!file || busy || !snapshot) return;
+  clearError();
+  setBusy(true, "Importing pixels", "Decoding the image outside canonical document state");
+  let image;
+  try {
+    image = await createImageBitmap(file);
+    if (image.width <= 0 || image.height <= 0 ||
+        !Number.isSafeInteger(image.width * image.height * 4)) {
+      throw new Error("Image dimensions cannot be represented safely");
+    }
+    const scratch = document.createElement("canvas");
+    scratch.width = image.width;
+    scratch.height = image.height;
+    const scratchContext = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
+    scratchContext.drawImage(image, 0, 0);
+    const rgba = new Uint8Array(scratchContext.getImageData(0, 0, image.width, image.height).data);
+    const name = file.name.replace(/\.[^.]+$/, "") || "Imported pixels";
+    await acceptSnapshot(await client.addPixelLayer({
+      name, width: image.width, height: image.height,
+      bounds: { x: 0, y: 0, width: image.width, height: image.height }, rgba,
+    }));
+  } catch (error) { showError("Could not import pixels", error); }
+  finally { image?.close?.(); setBusy(false); }
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
 }
@@ -180,6 +242,37 @@ $("undoButton").addEventListener("click", () => mutate("Undo", () => client.undo
 $("redoButton").addEventListener("click", () => mutate("Redo", () => client.redo()));
 $("fileInput").addEventListener("change", () => { openFile($("fileInput").files[0]); $("fileInput").value = ""; });
 $("dismissErrorButton").addEventListener("click", clearError);
+$("importLayerButton").addEventListener("click", () => { if (!busy && snapshot) $("imageInput").click(); });
+$("imageInput").addEventListener("change", () => { importPixelLayer($("imageInput").files[0]); $("imageInput").value = ""; });
+$("removeLayerButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Deleting layer", () => client.removeLayer(layer.id));
+});
+$("groupLayerButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Grouping layer", () => client.groupLayer(layer.id, "Group"));
+});
+$("ungroupLayerButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer?.kind === 1) mutate("Ungrouping layers", () => client.ungroup(layer.id));
+});
+$("layerNameInput").addEventListener("change", () => {
+  const layer = selectedLayer();
+  const name = $("layerNameInput").value.trim();
+  if (layer && name && name !== layer.name) mutate("Renaming layer", () => client.renameLayer(layer.id, name));
+  else renderLayerProperties();
+});
+$("layerOpacityInput").addEventListener("input", () => {
+  $("layerOpacityOutput").textContent = `${$("layerOpacityInput").value}%`;
+});
+$("layerOpacityInput").addEventListener("change", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Changing opacity", () => client.setLayerOpacity(layer.id, Number($("layerOpacityInput").value) / 100));
+});
+$("layerBlendSelect").addEventListener("change", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Changing blend mode", () => client.setLayerBlendMode(layer.id, Number($("layerBlendSelect").value)));
+});
 $("togglePanelsButton").addEventListener("click", () => {
   const hidden = shell.classList.toggle("panels-hidden");
   $("togglePanelsButton").setAttribute("aria-pressed", String(hidden));
