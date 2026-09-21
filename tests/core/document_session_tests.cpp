@@ -4251,6 +4251,52 @@ void core_layer_transform_preserves_smart_object_placement() {
         patchy::kSmartObjectRasterStatusPatchy);
 }
 
+void engine_host_protocol_returns_bounded_layer_thumbnail() {
+  patchy_engine_error error{};
+  auto* runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  auto* session = patchy_engine_session_create_rgba8(runtime, 4, 2, &error);
+  patchy_engine_document_projection before{};
+  before.struct_size = sizeof(before);
+  CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+  const std::array<std::uint8_t, 32> rgba{
+      255, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255,
+      0, 0, 255, 255, 0, 0, 255, 255, 255, 255, 0, 255, 255, 255, 0, 255};
+  patchy_engine_pixel_layer_input input{};
+  input.struct_size = sizeof(input);
+  input.expected_state_id = before.state_id;
+  input.expected_revision = before.revision;
+  input.bounds = {0, 0, 4, 2};
+  input.width = 4;
+  input.height = 2;
+  input.rgba = rgba.data();
+  input.rgba_size = rgba.size();
+  input.name = "Thumbnail";
+  input.name_size = 9;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event, &error) == 1);
+
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  patchy_engine_buffer thumbnail{};
+  CHECK(patchy_engine_session_layer_thumbnail_rgba8(
+            session, event.affected_layer_id, 2, &width, &height,
+            &thumbnail, &error) == 1);
+  CHECK(width == 2);
+  CHECK(height == 1);
+  CHECK(thumbnail.size == 8);
+  CHECK(thumbnail.data[3] == 255);
+  CHECK(thumbnail.data[7] == 255);
+  patchy_engine_buffer_release(&thumbnail);
+  CHECK(patchy_engine_session_layer_thumbnail_rgba8(
+            session, event.affected_layer_id, 129, &width, &height,
+            &thumbnail, &error) == 0);
+  CHECK(width == 0);
+  CHECK(height == 0);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 void core_raster_stroke_respects_selection_and_immutable_clone_source() {
   Document document(14, 4, PixelFormat::rgba8());
   PixelBuffer pixels(14, 4, PixelFormat::rgba8());
@@ -4744,6 +4790,8 @@ std::vector<TestCase> document_session_tests() {
        core_layer_transform_preserves_editable_text_and_fails_closed},
       {"core_layer_transform_preserves_smart_object_placement",
        core_layer_transform_preserves_smart_object_placement},
+      {"engine_host_protocol_returns_bounded_layer_thumbnail",
+       engine_host_protocol_returns_bounded_layer_thumbnail},
       {"core_raster_stroke_respects_selection_and_immutable_clone_source",
        core_raster_stroke_respects_selection_and_immutable_clone_source},
       {"engine_host_protocol_previews_and_commits_one_raster_stroke",

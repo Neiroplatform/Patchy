@@ -53,6 +53,11 @@ let recoveryPromise = null;
 let preferenceTimer = null;
 let renderedDocument = null;
 let frameTransport = "waiting";
+let layerWindowFrame = 0;
+const layerThumbnailCache = new Map();
+const LAYER_ROW_HEIGHT = 48;
+const LAYER_OVERSCAN = 5;
+const MAX_LAYER_THUMBNAILS = 256;
 const workingSetLimit = browserWorkingSetLimit({
   heapLimitBytes: performance.memory?.jsHeapSizeLimit,
   deviceMemoryGiB: navigator.deviceMemory,
@@ -522,22 +527,88 @@ async function cleanupRecoveryWorkspaces() {
 
 function formatKind(layer) { return layerKinds[layer.kind] || `Layer ${layer.kind}`; }
 
+function layerDepth(layer, byId) {
+  let depth = 0; let parentId = layer.parentId; const visited = new Set([layer.id]);
+  while (parentId && parentId !== 0n && depth < 32 && !visited.has(parentId)) {
+    visited.add(parentId); const parent = byId.get(parentId);
+    if (!parent) break;
+    depth++; parentId = parent.parentId;
+  }
+  return depth;
+}
+
+function rememberLayerThumbnail(key, value) {
+  layerThumbnailCache.delete(key); layerThumbnailCache.set(key, value);
+  while (layerThumbnailCache.size > MAX_LAYER_THUMBNAILS) {
+    layerThumbnailCache.delete(layerThumbnailCache.keys().next().value);
+  }
+}
+
+function paintLayerThumbnail(canvas, thumbnail) {
+  const target = canvas.getContext("2d", { alpha: true });
+  const image = new ImageData(new Uint8ClampedArray(thumbnail.rgba),
+    thumbnail.width, thumbnail.height);
+  const scratch = document.createElement("canvas");
+  scratch.width = thumbnail.width; scratch.height = thumbnail.height;
+  scratch.getContext("2d", { alpha: true }).putImageData(image, 0, 0);
+  target.clearRect(0, 0, 32, 32);
+  target.imageSmoothingEnabled = true;
+  const scale = Math.min(30 / thumbnail.width, 30 / thumbnail.height);
+  const width = Math.max(1, Math.round(thumbnail.width * scale));
+  const height = Math.max(1, Math.round(thumbnail.height * scale));
+  target.drawImage(scratch, Math.floor((32 - width) / 2),
+    Math.floor((32 - height) / 2), width, height);
+  canvas.dataset.ready = "true";
+}
+
+async function loadLayerThumbnail(canvas, layer, key, stateId, revision) {
+  const cached = layerThumbnailCache.get(key);
+  if (cached) { rememberLayerThumbnail(key, cached); paintLayerThumbnail(canvas, cached); return; }
+  if (layer.kind === 1 || layer.bounds.width <= 0 || layer.bounds.height <= 0) return;
+  try {
+    const thumbnail = await client.layerThumbnail(layer.id, 32, stateId, revision);
+    if (thumbnail.rgba.byteLength !== thumbnail.width * thumbnail.height * 4 ||
+        thumbnail.rgba.byteLength > 32 * 32 * 4) return;
+    rememberLayerThumbnail(key, thumbnail);
+    if (canvas.isConnected && canvas.dataset.thumbnailKey === key) {
+      paintLayerThumbnail(canvas, thumbnail);
+    }
+  } catch { /* A stale or non-raster row keeps its bounded kind placeholder. */ }
+}
+
+function scheduleLayerWindowRender() {
+  if (layerWindowFrame) return;
+  layerWindowFrame = requestAnimationFrame(() => { layerWindowFrame = 0; renderLayers(); });
+}
+
 function renderLayers() {
   const list = $("layerList");
+  const scrollTop = list.scrollTop;
   list.replaceChildren();
   const layers = snapshot ? [...snapshot.layers].reverse() : [];
   $("layerCount").textContent = String(layers.length);
   $("layersEmpty").hidden = layers.length > 0;
   $("layersEmpty").textContent = snapshot ? "This document has no layers." : "Open a document to inspect its layers.";
-  for (const [index, layer] of layers.entries()) {
+  const viewportRows = Math.max(1, Math.ceil((list.clientHeight || 480) / LAYER_ROW_HEIGHT));
+  const first = Math.max(0, Math.floor(scrollTop / LAYER_ROW_HEIGHT) - LAYER_OVERSCAN);
+  const last = Math.min(layers.length, first + viewportRows + LAYER_OVERSCAN * 2);
+  const topSpacer = document.createElement("div");
+  topSpacer.className = "layer-spacer"; topSpacer.style.height = `${first * LAYER_ROW_HEIGHT}px`;
+  list.append(topSpacer);
+  const byId = new Map(layers.map((layer) => [layer.id, layer]));
+  for (let index = first; index < last; ++index) {
+    const layer = layers[index];
     const row = document.createElement("div");
     row.className = "layer-row";
     row.draggable = true;
     row.setAttribute("role", "listitem");
+    row.setAttribute("aria-setsize", String(layers.length));
+    row.setAttribute("aria-posinset", String(index + 1));
     row.dataset.active = String(selectedLayerId === layer.id);
+    row.style.paddingLeft = `${5 + layerDepth(layer, byId) * 12}px`;
     row.innerHTML = `
       <button class="visibility-button" type="button" aria-label="${layer.visible ? "Hide" : "Show"} ${escapeHtml(layer.name)}">${layer.visible ? "◉" : "○"}</button>
-      <span class="layer-thumb" aria-hidden="true"></span>
+      <canvas class="layer-thumb" width="32" height="32" aria-hidden="true"></canvas>
       <button class="layer-copy layer-select-button" type="button"><span class="layer-name"></span><span class="layer-kind"></span></button>
       <button class="reorder-button" type="button" aria-label="Move layer up" ${index === 0 ? "disabled" : ""}>↑</button>
       <button class="reorder-button" type="button" aria-label="Move layer down" ${index === layers.length - 1 ? "disabled" : ""}>↓</button>`;
@@ -566,7 +637,15 @@ function renderLayers() {
     row.querySelectorAll(".reorder-button")[0].addEventListener("click", () => reorder(-1));
     row.querySelectorAll(".reorder-button")[1].addEventListener("click", () => reorder(1));
     list.append(row);
+    const thumbnail = row.querySelector(".layer-thumb");
+    const key = `${snapshot.documentId}:${snapshot.revision}:${layer.id}`;
+    thumbnail.dataset.thumbnailKey = key;
+    loadLayerThumbnail(thumbnail, layer, key, snapshot.stateId, snapshot.revision);
   }
+  const bottomSpacer = document.createElement("div");
+  bottomSpacer.className = "layer-spacer";
+  bottomSpacer.style.height = `${Math.max(0, layers.length - last) * LAYER_ROW_HEIGHT}px`;
+  list.append(bottomSpacer);
 }
 
 function renderLayerProperties() {
@@ -2425,6 +2504,7 @@ $("canvasViewport").addEventListener("wheel", (event) => {
   setZoom(zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15));
 }, { passive: false });
 window.addEventListener("resize", applyViewport);
+$("layerList").addEventListener("scroll", scheduleLayerWindowRender, { passive: true });
 window.addEventListener("beforeunload", (event) => {
   if ([...checkpointStates.values()].some((state) => state === "pending")) event.preventDefault();
 });

@@ -1282,6 +1282,59 @@ int patchy_engine_session_layer_rgba8_pixels(
   return copy_buffer(layer->pixels().data(), rgba, error);
 }
 
+int patchy_engine_session_layer_thumbnail_rgba8(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    std::uint32_t maximum_edge, std::uint32_t *width, std::uint32_t *height,
+    patchy_engine_buffer *rgba, patchy_engine_error *error) {
+  clear_error(error);
+  if (width != nullptr) *width = 0;
+  if (height != nullptr) *height = 0;
+  if (session == nullptr || session->value == nullptr || layer_id == 0 ||
+      maximum_edge == 0 || maximum_edge > 128 || width == nullptr ||
+      height == nullptr || rgba == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, layer, 1..128 edge and thumbnail outputs are required");
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  if (layer == nullptr || layer->pixels().empty() ||
+      layer->pixels().format() != patchy::PixelFormat::rgba8()) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer has no thumbnail-compatible RGBA8 pixels");
+  }
+  try {
+    const auto source_width = static_cast<std::uint32_t>(layer->pixels().width());
+    const auto source_height = static_cast<std::uint32_t>(layer->pixels().height());
+    const auto longest = std::max(source_width, source_height);
+    const auto target_edge = std::min(maximum_edge, longest);
+    *width = std::max(1U, static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(source_width) * target_edge + longest - 1U) /
+        longest));
+    *height = std::max(1U, static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(source_height) * target_edge + longest - 1U) /
+        longest));
+    std::vector<std::uint8_t> thumbnail(
+        static_cast<std::size_t>(*width) * *height * 4U);
+    for (std::uint32_t y = 0; y < *height; ++y) {
+      const auto source_y = std::min(source_height - 1U,
+          static_cast<std::uint32_t>((static_cast<std::uint64_t>(2U * y + 1U) *
+                                      source_height) / (2U * *height)));
+      for (std::uint32_t x = 0; x < *width; ++x) {
+        const auto source_x = std::min(source_width - 1U,
+            static_cast<std::uint32_t>((static_cast<std::uint64_t>(2U * x + 1U) *
+                                        source_width) / (2U * *width)));
+        const auto *source = layer->pixels().pixel(source_x, source_y);
+        auto *target = thumbnail.data() +
+            (static_cast<std::size_t>(y) * *width + x) * 4U;
+        std::copy_n(source, 4U, target);
+      }
+    }
+    return copy_buffer(thumbnail, rgba, error);
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate bounded layer thumbnail");
+  }
+}
+
 int patchy_engine_session_set_layer_mask(
     patchy_engine_session *session,
     const patchy_engine_layer_mask_input *input,

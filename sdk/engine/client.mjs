@@ -227,6 +227,10 @@ export class PatchyWorkerClient {
     }, [owned.buffer]);
   }
   layerPixels(layerId) { return this.#request("layerPixels", { layerId: String(layerId) }); }
+  layerThumbnail(layerId, maximumEdge, expectedStateId, expectedRevision) {
+    return this.#request("layerThumbnail", { layerId: String(layerId), maximumEdge,
+      expectedStateId: String(expectedStateId), expectedRevision: String(expectedRevision) });
+  }
   layerMaskPixels(layerId) { return this.#request("layerMaskPixels", { layerId: String(layerId) }); }
   replacePixelLayer(layerId, { name, width, height, bounds, rgba },
                     { transferOwnership = false } = {}) {

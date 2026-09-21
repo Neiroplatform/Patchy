@@ -73,7 +73,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.cropDocument", "client.invertLayer",
     "client.setSelection", "client.setSelectionMask", "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
-    "client.previewLayerTransform",
+    "client.layerThumbnail", "client.previewLayerTransform",
     "client.transformLayer", "client.previewRasterStroke", "client.applyRasterStroke",
     "client.previewRasterFill", "client.applyRasterFill",
     "client.previewLayerWarp", "client.warpLayer",
@@ -110,6 +110,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
   assert.match(script, /recoverWorkerSession/);
   assert.match(worker, /method === "renderFrame"/);
+  assert.match(worker, /method === "layerThumbnail"/);
   assert.match(worker, /method === "openBlob"/);
   assert.match(worker, /method === "inspectBlob"/);
   assert.match(worker, /method === "placePsdSmartObject"/);
@@ -136,7 +137,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     assert.match(html, new RegExp(`value="${preset}"`));
   }
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
-    "activateDocument(", "closeDocument(", "saveDocument(", "openSmartObjectContents(",
+    "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset("]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
@@ -456,6 +457,13 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       const data = alloc(24); heap.fill(0, data, data + 24); heap.set([1, 2, 3, 4], data);
       view.setUint32(output, data, true); view.setUint32(output + 4, 24, true); return 1;
     },
+    _patchy_engine_session_layer_thumbnail_rgba8(session, layerId, maximumEdge,
+                                                 width, height, output) {
+      assert.equal(layerId, 7n); assert.equal(maximumEdge, 2);
+      const data = alloc(8); heap.set([1, 2, 3, 255, 4, 5, 6, 255], data);
+      view.setUint32(width, 2, true); view.setUint32(height, 1, true);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 8, true); return 1;
+    },
     _patchy_engine_session_replace_rgba8_layer(session, input) {
       assert.equal(view.getBigUint64(input + 24, true), 7n); return 1;
     },
@@ -591,6 +599,9 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     gray: new Uint8Array([255, 0]), defaultColor: 0, linked: true });
   assert.deepEqual(Array.from(engine.layerMaskPixels(session, 7n)), [0, 255]);
   assert.deepEqual(Array.from(engine.layerPixels(session, 7n).subarray(0, 4)), [1, 2, 3, 4]);
+  assert.deepEqual(engine.layerThumbnail(session, 7n, 2), {
+    width: 2, height: 1, rgba: new Uint8Array([1, 2, 3, 255, 4, 5, 6, 255]),
+  });
   engine.replacePixelLayer(session, snapshot, 7n, { name: "Layer", width: 1, height: 1,
     bounds: { x: 1, y: 1, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) });
   engine.replacePixelLayerAndMask(session, snapshot, 7n,
@@ -656,7 +667,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
-  assert.equal(released, 7);
+  assert.equal(released, 8);
   engine.dispose();
   assert.equal(destroyed, 2);
 });
@@ -734,6 +745,8 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     },
     layerMaskPixels() { return maskPixels.slice(); },
     layerPixels() { return new Uint8Array(24).fill(9); },
+    layerThumbnail() { return { width: 2, height: 1,
+      rgba: new Uint8Array([1, 2, 3, 255, 4, 5, 6, 255]) }; },
     replacePixelLayer(session, before, layerId, input) {
       calls.push(["replacePixels", layerId, input.bounds]); revision++;
     },
@@ -771,6 +784,10 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   assert.equal(firstDocument.revision, 1n);
   assert.equal(firstDocument.documentName, "First.psd");
   assert.equal(firstDocument.documents.length, 1);
+  assert.equal((await host.dispatch({ method: "layerThumbnail", layerId: "7",
+    maximumEdge: 2, expectedStateId: "1", expectedRevision: "1" })).rgba.byteLength, 8);
+  await assert.rejects(host.dispatch({ method: "layerThumbnail", layerId: "7",
+    maximumEdge: 2, expectedStateId: "0", expectedRevision: "1" }), /stale/);
   assert.equal((await host.dispatch({ method: "setLayerVisibility", layerId: "7", visible: false })).layers[0].visible, false);
   await host.dispatch({ method: "moveLayer", layerId: "7", targetLayerId: null, position: 3 });
   await host.dispatch({ method: "setLayerOpacity", layerId: "7", opacity: 0.5 });

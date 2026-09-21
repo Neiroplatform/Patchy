@@ -431,6 +431,15 @@ export class PatchyWorkerHost {
       case "layerPixels":
         return this.#engine.layerPixels(
           this.#requireSession(), BigInt(message.layerId));
+      case "layerThumbnail": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          throw new Error("Layer thumbnail request is stale");
+        }
+        return this.#engine.layerThumbnail(
+          this.#requireSession(), BigInt(message.layerId), message.maximumEdge);
+      }
       case "layerMaskPixels":
         return this.#engine.layerMaskPixels(
           this.#requireSession(), BigInt(message.layerId));

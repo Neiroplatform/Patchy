@@ -22,6 +22,7 @@
   "_patchy_engine_session_replace_rgba8_layer",
   "_patchy_engine_session_replace_rgba8_layer_and_mask",
   "_patchy_engine_session_layer_rgba8_pixels",
+  "_patchy_engine_session_layer_thumbnail_rgba8",
   "_patchy_engine_session_apply_filter",
   "_patchy_engine_session_set_layer_mask",
   "_patchy_engine_session_layer_mask",

@@ -148,6 +148,10 @@ export class PatchyWorkerClient {
   addPixelLayer(input: { name: string; width: number; height: number;
     bounds: Rect; rgba: Uint8Array }, options?: TransferOptions): Promise<DocumentProjection>;
   layerPixels(layerId: bigint): Promise<Uint8Array>;
+  layerThumbnail(layerId: bigint, maximumEdge: number, expectedStateId: bigint,
+    expectedRevision: bigint): Promise<{
+    width: number; height: number; rgba: Uint8Array;
+  }>;
   layerMaskPixels(layerId: bigint): Promise<Uint8Array>;
   replacePixelLayer(layerId: bigint, input: { name: string; width: number;
     height: number; bounds: Rect; rgba: Uint8Array },

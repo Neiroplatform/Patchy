@@ -890,6 +890,33 @@ export class EmscriptenPatchyEngine {
         session, layerId, buffer, error));
   }
 
+  layerThumbnail(session, layerId, maximumEdge = 32) {
+    if (!Number.isInteger(maximumEdge) || maximumEdge < 1 || maximumEdge > 128) {
+      throw new RangeError("Layer thumbnail edge must be an integer from 1 to 128");
+    }
+    return this.#withError((error) => {
+      const dimensions = this.#alloc(8);
+      const buffer = this.#alloc(BUFFER_SIZE);
+      try {
+        this.#check(this.#module._patchy_engine_session_layer_thumbnail_rgba8(
+          session, layerId, maximumEdge, dimensions, dimensions + 4, buffer, error), error);
+        const width = this.#view(dimensions, 8).getUint32(0, true);
+        const height = this.#view(dimensions, 8).getUint32(4, true);
+        const value = this.#view(buffer, BUFFER_SIZE);
+        const data = value.getUint32(0, true);
+        const size = value.getUint32(4, true);
+        if (size !== width * height * 4 || size > 128 * 128 * 4) {
+          throw new PatchyEngineError(8, "Layer thumbnail returned inconsistent bounded pixels");
+        }
+        return { width, height, rgba: this.#module.HEAPU8.slice(data, data + size) };
+      } finally {
+        this.#module._patchy_engine_buffer_release(buffer);
+        this.#module._free(buffer);
+        this.#module._free(dimensions);
+      }
+    });
+  }
+
   addTextLayer(session, snapshot, input) {
     return this.#textLayerMutation(
       "_patchy_engine_session_add_text_layer", session, snapshot, null, input);

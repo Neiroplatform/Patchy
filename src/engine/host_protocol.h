@@ -1004,6 +1004,10 @@ int patchy_engine_session_replace_rgba8_layer_and_mask(
 int patchy_engine_session_layer_rgba8_pixels(
     const patchy_engine_session *session, uint64_t layer_id,
     patchy_engine_buffer *rgba, patchy_engine_error *error);
+int patchy_engine_session_layer_thumbnail_rgba8(
+    const patchy_engine_session *session, uint64_t layer_id,
+    uint32_t maximum_edge, uint32_t *width, uint32_t *height,
+    patchy_engine_buffer *rgba, patchy_engine_error *error);
 int patchy_engine_session_set_layer_mask(
     patchy_engine_session *session,
     const patchy_engine_layer_mask_input *input,

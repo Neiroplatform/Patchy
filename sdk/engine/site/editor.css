@@ -158,21 +158,21 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .layer-actions button:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); }
 .layer-actions button:disabled { opacity: .35; cursor: not-allowed; }
 .layer-actions button:last-child:nth-child(odd) { grid-column: 1 / -1; }
-.layer-list { min-height: 0; overflow: auto; padding: 0 7px 10px; }
+.layer-list { min-height: 0; overflow: auto; padding: 0 7px 10px; overflow-anchor: none; }
+.layer-spacer { width: 1px; pointer-events: none; }
 .structure-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 12px 12px; color: var(--text-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 .structure-lists button { display: block; width: 100%; margin-top: 4px; padding: 5px; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-1); color: var(--text-muted); font-size: 10px; text-transform: none; letter-spacing: 0; }
 .structure-lists button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
 .structure-editor { border-top: 1px solid var(--line); padding-top: 10px; }
 .path-anchor-editor { padding: 0 12px 12px; }
 .path-anchor-editor button { align-self: end; min-height: 30px; }
-.layer-row { display: grid; grid-template-columns: 30px 34px minmax(0, 1fr) 24px 24px; gap: 5px; align-items: center; min-height: 48px; padding: 5px; border: 1px solid transparent; border-radius: 6px; color: var(--text-muted); }
+.layer-row { display: grid; grid-template-columns: 30px 34px minmax(0, 1fr) 24px 24px; gap: 5px; align-items: center; height: 48px; padding: 5px; border: 1px solid transparent; border-radius: 6px; color: var(--text-muted); }
 .layer-row:hover { background: var(--surface-1); }
 .layer-row[data-active="true"] { background: #d7ff5509; border-color: #d7ff5538; color: var(--text); }
 .visibility-button, .reorder-button { border: 0; background: transparent; color: inherit; border-radius: 4px; height: 28px; cursor: pointer; }
 .visibility-button:hover, .reorder-button:hover { background: #ffffff0b; color: var(--text); }
 .visibility-button:disabled, .reorder-button:disabled { opacity: .3; cursor: not-allowed; }
-.layer-thumb { width: 32px; height: 32px; border-radius: 4px; border: 1px solid var(--line-strong); background: linear-gradient(135deg, #3c454d, #1d2227); position: relative; }
-.layer-thumb::after { content: ""; position: absolute; inset: 8px; border: 1px solid #89939b; opacity: .7; }
+.layer-thumb { display: block; width: 32px; height: 32px; border-radius: 4px; border: 1px solid var(--line-strong); background: linear-gradient(135deg, #3c454d, #1d2227); }
 .layer-copy { min-width: 0; }
 .layer-select-button { min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .layer-select-button:focus-visible { border-radius: 3px; }
