@@ -36,6 +36,15 @@ export class PatchyWorkerClient {
   setLayerOpacity(layerId, opacity) {
     return this.#request("setLayerOpacity", { layerId: String(layerId), opacity });
   }
+  setLayerFillOpacity(layerId, opacity) {
+    return this.#request("setLayerFillOpacity", { layerId: String(layerId), opacity });
+  }
+  setLayerLocks(layerId, lockFlags) {
+    return this.#request("setLayerLocks", { layerId: String(layerId), lockFlags });
+  }
+  setLayerClipping(layerId, clipped) {
+    return this.#request("setLayerClipping", { layerId: String(layerId), clipped });
+  }
   setLayerBlendMode(layerId, blendMode) {
     return this.#request("setLayerBlendMode", { layerId: String(layerId), blendMode });
   }
@@ -53,6 +62,16 @@ export class PatchyWorkerClient {
   cropDocument(crop) { return this.#request("cropDocument", { crop }); }
   setSelection(rects) { return this.#request("setSelection", { rects }); }
   clearSelection() { return this.#request("setSelection", { rects: [] }); }
+  invertSelection() { return this.#request("modifySelection", { type: 19, pixels: 0 }); }
+  expandSelection(pixels) { return this.#request("modifySelection", { type: 20, pixels }); }
+  contractSelection(pixels) { return this.#request("modifySelection", { type: 21, pixels }); }
+  borderSelection(pixels) { return this.#request("modifySelection", { type: 22, pixels }); }
+  addAlphaChannel(name = "Alpha 1") { return this.#request("addAlphaChannel", { name }); }
+  addDocumentPath(input) { return this.#request("addDocumentPath", { input }); }
+  selectChannel(channelId) { return this.#request("selectChannel", { channelId: String(channelId) }); }
+  selectPath(pathId, feather = 0, combine = 0, antialias = true) {
+    return this.#request("selectPath", { pathId: String(pathId), feather, combine, antialias });
+  }
   createLayerMask(layerId) {
     return this.#request("createLayerMask", { layerId: String(layerId) });
   }

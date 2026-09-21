@@ -246,6 +246,10 @@ The same one-owner path now covers selection-aware solid/gradient fills,
 one-gesture Clone/Heal commits, numeric rectangle-anchor shape edits and an
 atomic RGBA8 plus linked raster-mask transform. Unlinked or unsupported masked
 transforms still fail closed.
+Channels and saved/work paths project into the browser snapshot; selection can
+be saved as an alpha channel or rectangular path and restored from either.
+Invert/expand/contract/border selection plus layer fill opacity, lock flags and
+clipping reuse the guarded command envelope and canonical undo history.
 
 The `wasm-sdk` preset builds a no-entry ES module named `patchy-engine.mjs`.
 Its checked export manifest contains only allocator functions and the C ABI

@@ -103,7 +103,14 @@ function updateControls() {
   $("clearSelectionButton").disabled = busy || !snapshot?.selection?.length;
   $("layerNameInput").disabled = busy || !layer;
   $("layerOpacityInput").disabled = busy || !layer;
+  $("layerFillInput").disabled = busy || !layer;
   $("layerBlendSelect").disabled = busy || !layer;
+  $("layerClipInput").disabled = busy || !layer;
+  $("layerLockInput").disabled = busy || !layer;
+  for (const id of ["invertSelectionButton", "expandSelectionButton", "contractSelectionButton",
+    "borderSelectionButton", "saveChannelButton", "savePathButton"]) {
+    $(id).disabled = busy || !snapshot?.selection?.length;
+  }
   syncCommands();
 }
 
@@ -214,6 +221,10 @@ function renderLayerProperties() {
   $("layerNameInput").value = layer?.name || "";
   $("layerOpacityInput").value = layer ? String(Math.round(layer.opacity * 100)) : "100";
   $("layerOpacityOutput").textContent = `${$("layerOpacityInput").value}%`;
+  $("layerFillInput").value = layer ? String(Math.round(layer.fillOpacity * 100)) : "100";
+  $("layerFillOutput").textContent = `${$("layerFillInput").value}%`;
+  $("layerClipInput").checked = Boolean(layer?.clipped);
+  $("layerLockInput").checked = Boolean(layer?.lockFlags);
   const blendSelect = $("layerBlendSelect");
   blendSelect.querySelectorAll("[data-current-mode]").forEach((option) => option.remove());
   if (layer && !blendModes.has(layer.blendMode)) {
@@ -223,6 +234,23 @@ function renderLayerProperties() {
   }
   blendSelect.value = layer ? String(layer.blendMode) : "1";
   updateControls();
+}
+
+function renderStructure() {
+  const channelList = $("channelList"); const pathList = $("pathList");
+  channelList.replaceChildren(); pathList.replaceChildren();
+  for (const channel of snapshot?.channels || []) {
+    const button = document.createElement("button"); button.type = "button";
+    button.textContent = channel.name || "Alpha channel";
+    button.addEventListener("click", () => mutate("Loading channel selection", () => client.selectChannel(channel.id)));
+    channelList.append(button);
+  }
+  for (const path of snapshot?.paths || []) {
+    const button = document.createElement("button"); button.type = "button";
+    button.textContent = path.name || (path.kind === 1 ? "Work path" : "Saved path");
+    button.addEventListener("click", () => mutate("Loading path selection", () => client.selectPath(path.id)));
+    pathList.append(button);
+  }
 }
 
 function renderMetadata() {
@@ -326,6 +354,7 @@ async function acceptSnapshot(next, rerender = true) {
   setSessionState("document", snapshot.dirty ? "Modified locally" : "Document ready");
   renderLayers();
   renderLayerProperties();
+  renderStructure();
   renderMetadata();
   if (rerender) await renderDocument();
 }
@@ -905,6 +934,33 @@ $("layerOpacityInput").addEventListener("input", () => {
 $("layerOpacityInput").addEventListener("change", () => {
   const layer = selectedLayer();
   if (layer) mutate("Changing opacity", () => client.setLayerOpacity(layer.id, Number($("layerOpacityInput").value) / 100));
+});
+$("layerFillInput").addEventListener("input", () => {
+  $("layerFillOutput").textContent = `${$("layerFillInput").value}%`;
+});
+$("layerFillInput").addEventListener("change", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Changing fill opacity", () => client.setLayerFillOpacity(layer.id,
+    Number($("layerFillInput").value) / 100));
+});
+$("layerClipInput").addEventListener("change", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Changing clipping", () => client.setLayerClipping(layer.id, $("layerClipInput").checked));
+});
+$("layerLockInput").addEventListener("change", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Changing layer lock", () => client.setLayerLocks(layer.id,
+    $("layerLockInput").checked ? 7 : 0));
+});
+$("invertSelectionButton").addEventListener("click", () => mutate("Inverting selection", () => client.invertSelection()));
+$("expandSelectionButton").addEventListener("click", () => mutate("Expanding selection", () => client.expandSelection(4)));
+$("contractSelectionButton").addEventListener("click", () => mutate("Contracting selection", () => client.contractSelection(4)));
+$("borderSelectionButton").addEventListener("click", () => mutate("Bordering selection", () => client.borderSelection(4)));
+$("saveChannelButton").addEventListener("click", () => mutate("Saving alpha channel", () => client.addAlphaChannel(`Alpha ${snapshot.channels.length + 1}`)));
+$("savePathButton").addEventListener("click", () => {
+  const bounds = snapshot?.selection?.[0];
+  if (bounds) mutate("Saving document path", () => client.addDocumentPath({
+    name: `Path ${snapshot.paths.length + 1}`, kind: 0, path: rectanglePath(bounds) }));
 });
 $("layerBlendSelect").addEventListener("change", () => {
   const layer = selectedLayer();

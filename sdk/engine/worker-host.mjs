@@ -27,6 +27,18 @@ export class PatchyWorkerHost {
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
           message.opacity);
         return this.#snapshot();
+      case "setLayerFillOpacity":
+        this.#engine.setLayerFillOpacity(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.opacity);
+        return this.#snapshot();
+      case "setLayerLocks":
+        this.#engine.setLayerLocks(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.lockFlags);
+        return this.#snapshot();
+      case "setLayerClipping":
+        this.#engine.setLayerClipping(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.clipped);
+        return this.#snapshot();
       case "setLayerBlendMode":
         this.#engine.setLayerBlendMode(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
@@ -61,6 +73,24 @@ export class PatchyWorkerHost {
       case "setSelection":
         this.#engine.setSelection(
           this.#requireSession(), this.#snapshot(), message.rects);
+        return this.#snapshot();
+      case "modifySelection":
+        this.#engine.modifySelection(this.#requireSession(), this.#snapshot(), message.type, message.pixels);
+        return this.#snapshot();
+      case "selectChannel":
+        this.#engine.selectChannel(this.#requireSession(), this.#snapshot(), BigInt(message.channelId));
+        return this.#snapshot();
+      case "selectPath":
+        this.#engine.selectPath(this.#requireSession(), this.#snapshot(), BigInt(message.pathId),
+          message.feather, message.combine, message.antialias);
+        return this.#snapshot();
+      case "addAlphaChannel": {
+        const before = this.#snapshot(); const gray = selectionGray(before);
+        this.#engine.addAlphaChannel(this.#requireSession(), before, { name: message.name, gray });
+        return this.#snapshot();
+      }
+      case "addDocumentPath":
+        this.#engine.addDocumentPath(this.#requireSession(), this.#snapshot(), message.input);
         return this.#snapshot();
       case "createLayerMask": {
         const before = this.#snapshot();
@@ -253,6 +283,17 @@ function checkedMaskPixelCount(width, height) {
     throw new RangeError("Raster mask dimensions exceed the browser allocation limit");
   }
   return pixelCount;
+}
+
+function selectionGray(snapshot) {
+  const gray = new Uint8Array(checkedMaskPixelCount(snapshot.width, snapshot.height));
+  for (const rect of snapshot.selection) {
+    const x0 = Math.max(0, rect.x); const y0 = Math.max(0, rect.y);
+    const x1 = Math.min(snapshot.width, rect.x + rect.width);
+    const y1 = Math.min(snapshot.height, rect.y + rect.height);
+    for (let y = y0; y < y1; ++y) gray.fill(255, y * snapshot.width + x0, y * snapshot.width + x1);
+  }
+  return gray;
 }
 
 export async function createWorkerHost(moduleUrl, moduleOptions = {}) {

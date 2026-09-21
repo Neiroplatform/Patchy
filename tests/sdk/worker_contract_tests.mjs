@@ -36,6 +36,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "textDialog", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
     "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "smartFilterButton",
     "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
+    "layerFillInput", "layerClipInput", "layerLockInput", "invertSelectionButton",
+    "expandSelectionButton", "contractSelectionButton", "borderSelectionButton",
+    "saveChannelButton", "savePathButton", "channelList", "pathList",
     "createVectorMaskButton", "smartObjectInput", "shapeDialog", "commitShapeButton",
     "adjustmentDialog", "commitAdjustmentButton", "smartFilterDialog", "commitSmartFilterButton",
     "undoButton", "redoButton", "saveButton", "errorBanner"]) {
@@ -54,6 +57,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.updateVectorShape",
     "client.addAdjustment", "client.updateAdjustment", "client.addSmartObject",
     "client.replaceSmartObject", "client.setSmartFilter",
+    "client.setLayerFillOpacity", "client.setLayerLocks", "client.setLayerClipping",
+    "client.invertSelection", "client.expandSelection", "client.contractSelection",
+    "client.borderSelection", "client.addAlphaChannel", "client.addDocumentPath",
+    "client.selectChannel", "client.selectPath",
     "client.undo", "client.redo", "client.render", "client.save"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -119,6 +126,17 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     },
     _patchy_engine_session_layer_mask(session, layerId, output) {
       assert.equal(layerId, 7n); view.setUint32(output, 24, true); return 1;
+    },
+    _patchy_engine_session_channel_count(session, output) { view.setUint32(output, 1, true); return 1; },
+    _patchy_engine_session_channel_at(session, index, output) {
+      assert.equal(index, 0); view.setBigUint64(output, 31n, true); view.setUint32(output + 8, 0, true);
+      view.setUint32(output + 12, 5, true); heap.set(new TextEncoder().encode("Alpha"), output + 16); return 1;
+    },
+    _patchy_engine_session_path_count(session, output) { view.setUint32(output, 1, true); return 1; },
+    _patchy_engine_session_path_at(session, index, output) {
+      assert.equal(index, 0); view.setBigUint64(output, 41n, true); view.setUint32(output + 8, 0, true);
+      view.setUint32(output + 12, 4, true); heap.set(new TextEncoder().encode("Path"), output + 16);
+      view.setUint32(output + 272, 1, true); view.setUint32(output + 276, 4, true); return 1;
     },
     _patchy_engine_session_text(session, layerId, output) {
       assert.equal(layerId, 7n); assert.equal(view.getUint32(output, true), 1312);
@@ -241,6 +259,12 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_set_smart_filter(session, input) {
       assert.equal(view.getUint32(input + 32, true), 1); assert.equal(view.getFloat64(input + 40, true), 4); return 1;
     },
+    _patchy_engine_session_add_alpha_channel(session, input) {
+      assert.equal(view.getUint32(input, true), 40); assert.equal(view.getUint32(input + 28, true), 6); return 1;
+    },
+    _patchy_engine_session_add_document_path(session, input) {
+      assert.equal(view.getUint32(input, true), 56); assert.equal(view.getUint32(input + 44, true), 1); return 1;
+    },
     _patchy_engine_session_render_region(session, x, y, width, height, output) {
       assert.deepEqual([x, y, width, height], [0, 0, 3, 2]);
       const data = alloc(24); heap.fill(17, data, data + 24);
@@ -264,8 +288,14 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(snapshot.layers[0].text, { value: "Hello", font: "Arial", sizePixels: 18,
     color: [10, 20, 30], bold: true, italic: false, boxText: true });
   assert.deepEqual(snapshot.selection, []);
+  assert.deepEqual(snapshot.channels, [{ id: 31n, kind: 0, name: "Alpha" }]);
+  assert.deepEqual(snapshot.paths, [{ id: 41n, kind: 0, name: "Path", subpathCount: 1,
+    anchorCount: 4, clipping: false }]);
   engine.setLayerVisibility(session, snapshot, 7n, false);
   engine.setLayerOpacity(session, snapshot, 7n, 0.5);
+  engine.setLayerFillOpacity(session, snapshot, 7n, 0.75);
+  engine.setLayerLocks(session, snapshot, 7n, 7);
+  engine.setLayerClipping(session, snapshot, 7n, true);
   engine.setLayerBlendMode(session, snapshot, 7n, 2);
   engine.renameLayer(session, snapshot, 7n, "Renamed");
   engine.removeLayer(session, snapshot, 7n);
@@ -274,6 +304,10 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.rotateCanvas(session, snapshot, 90);
   engine.cropDocument(session, snapshot, { x: 1, y: 1, width: 4, height: 3 });
   engine.setSelection(session, snapshot, [{ x: 0, y: 0, width: 2, height: 1 }]);
+  engine.modifySelection(session, snapshot, 20, 4);
+  engine.selectChannel(session, snapshot, 31n);
+  engine.selectPath(session, snapshot, 41n, 0, 0, true);
+  engine.addAlphaChannel(session, snapshot, { name: "Alpha", gray: new Uint8Array(6).fill(255) });
   engine.setLayerMask(session, snapshot, 7n, { bounds: { x: 0, y: 0, width: 2, height: 1 },
     gray: new Uint8Array([255, 0]), defaultColor: 0, linked: true });
   assert.deepEqual(Array.from(engine.layerMaskPixels(session, 7n)), [0, 255]);
@@ -293,6 +327,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.addAdjustment(session, snapshot, { name: "Brightness", kind: 7, values: [10, 5] });
   engine.updateAdjustment(session, snapshot, 7n, { kind: 7, values: [20, 10] });
   const path = { anchors: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+  engine.addDocumentPath(session, snapshot, { name: "Path", kind: 0, path });
   engine.addVectorShape(session, snapshot, { name: "Shape", path, fill: [1, 2, 3],
     strokeEnabled: true, stroke: [4, 5, 6], strokeWidth: 2 });
   engine.updateVectorShape(session, snapshot, 7n, { name: "Shape", path, fill: [1, 2, 3],
@@ -317,7 +352,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   Atomics.store(cancellation, 0, 1);
   engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", cancellation);
   assert.deepEqual(callbackReturns, [1, 1, 0, 0]);
-  assert.deepEqual(commandTypes, [2, 4, 5, 9, 10, 11, 12, 13, 16]);
+  assert.deepEqual(commandTypes, [2, 3, 6, 7, 4, 5, 9, 10, 11, 12, 13, 20, 23, 28, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
   assert.equal(released, 4);
@@ -334,7 +369,7 @@ function projection(revision, visible = true, mask = null, selection = []) {
     layers: [{ id: 7n, parentId: 0n, kind: 0, visible, opacity: 1,
       name: "Layer", clipped: false, fillOpacity: 1, blendMode: 0,
       lockFlags: 0, bounds: { x: 0, y: 0, width: 3, height: 2 }, mask, text: null }],
-    selection,
+    selection, channels: [], paths: [],
   };
 }
 
@@ -357,6 +392,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
       calls.push(["move", before.revision, layerId, target, position]); revision++;
     },
     setLayerOpacity(session, before, layerId, opacity) { calls.push(["opacity", layerId, opacity]); revision++; },
+    setLayerFillOpacity(session, before, layerId, opacity) { calls.push(["fillOpacity", layerId, opacity]); revision++; },
+    setLayerLocks(session, before, layerId, flags) { calls.push(["locks", layerId, flags]); revision++; },
+    setLayerClipping(session, before, layerId, clipped) { calls.push(["clipping", layerId, clipped]); revision++; },
     setLayerBlendMode(session, before, layerId, mode) { calls.push(["blend", layerId, mode]); revision++; },
     renameLayer(session, before, layerId, name) { calls.push(["rename", layerId, name]); revision++; },
     removeLayer(session, before, layerId) { calls.push(["remove", layerId]); revision++; },
@@ -365,6 +403,11 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     rotateCanvas(session, before, degrees) { calls.push(["rotate", degrees]); revision++; },
     cropDocument(session, before, crop) { calls.push(["crop", crop]); revision++; },
     setSelection(session, before, rects) { calls.push(["selection", rects]); selection = rects; revision++; },
+    modifySelection(session, before, type, pixels) { calls.push(["modifySelection", type, pixels]); revision++; },
+    selectChannel(session, before, id) { calls.push(["selectChannel", id]); revision++; },
+    selectPath(session, before, id) { calls.push(["selectPath", id]); revision++; },
+    addAlphaChannel(session, before, input) { calls.push(["alpha", input.gray.byteLength]); revision++; },
+    addDocumentPath(session, before, input) { calls.push(["path", input.path.anchors.length]); revision++; },
     setLayerMask(session, before, layerId, next) {
       calls.push(["mask", layerId, next]);
       mask = next ? { bounds: next.bounds, defaultColor: next.defaultColor,
@@ -409,6 +452,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   assert.equal((await host.dispatch({ method: "setLayerVisibility", layerId: "7", visible: false })).layers[0].visible, false);
   await host.dispatch({ method: "moveLayer", layerId: "7", targetLayerId: null, position: 3 });
   await host.dispatch({ method: "setLayerOpacity", layerId: "7", opacity: 0.5 });
+  await host.dispatch({ method: "setLayerFillOpacity", layerId: "7", opacity: 0.75 });
+  await host.dispatch({ method: "setLayerLocks", layerId: "7", lockFlags: 7 });
+  await host.dispatch({ method: "setLayerClipping", layerId: "7", clipped: true });
   await host.dispatch({ method: "setLayerBlendMode", layerId: "7", blendMode: 2 });
   await host.dispatch({ method: "renameLayer", layerId: "7", name: "Renamed" });
   await host.dispatch({ method: "removeLayer", layerId: "7" });
@@ -417,6 +463,11 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "rotateCanvas", clockwiseDegrees: 90 });
   await host.dispatch({ method: "cropDocument", crop: { x: 1, y: 1, width: 4, height: 3 } });
   await host.dispatch({ method: "setSelection", rects: [{ x: 0, y: 0, width: 1, height: 1 }] });
+  await host.dispatch({ method: "modifySelection", type: 20, pixels: 4 });
+  await host.dispatch({ method: "addAlphaChannel", name: "Alpha 1" });
+  await host.dispatch({ method: "addDocumentPath", input: { path: { anchors: [{}, {}, {}] } } });
+  await host.dispatch({ method: "selectChannel", channelId: "3" });
+  await host.dispatch({ method: "selectPath", pathId: "4", feather: 0, combine: 0, antialias: true });
   assert.equal((await host.dispatch({ method: "createLayerMask", layerId: "7" })).layers[0].mask.defaultColor, 0);
   assert.equal((await host.dispatch({ method: "toggleLayerMask", layerId: "7" })).layers[0].mask.disabled, true);
   await host.dispatch({ method: "invertLayerMask", layerId: "7" });

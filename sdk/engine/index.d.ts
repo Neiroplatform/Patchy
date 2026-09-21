@@ -15,7 +15,9 @@ export interface DocumentProjection {
   channels: number; activeLayerId: bigint; revision: bigint; stateId: bigint;
   layerCount: number; hasActiveLayer: boolean; dirty: boolean;
   canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
-  selection: Rect[];
+  selection: Rect[]; channels: Array<{ id: bigint; kind: number; name: string }>;
+  paths: Array<{ id: bigint; kind: number; name: string; subpathCount: number;
+    anchorCount: number; clipping: boolean }>;
 }
 export type WorkerState = "starting" | "ready" | "crashed" | "closed";
 export interface FilterProgress {
@@ -33,6 +35,9 @@ export class PatchyWorkerClient {
   snapshot(): Promise<DocumentProjection>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;
   setLayerOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;
+  setLayerFillOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;
+  setLayerLocks(layerId: bigint, lockFlags: number): Promise<DocumentProjection>;
+  setLayerClipping(layerId: bigint, clipped: boolean): Promise<DocumentProjection>;
   setLayerBlendMode(layerId: bigint, blendMode: number): Promise<DocumentProjection>;
   renameLayer(layerId: bigint, name: string): Promise<DocumentProjection>;
   removeLayer(layerId: bigint): Promise<DocumentProjection>;
@@ -42,6 +47,16 @@ export class PatchyWorkerClient {
   cropDocument(crop: Rect): Promise<DocumentProjection>;
   setSelection(rects: Rect[]): Promise<DocumentProjection>;
   clearSelection(): Promise<DocumentProjection>;
+  invertSelection(): Promise<DocumentProjection>;
+  expandSelection(pixels: number): Promise<DocumentProjection>;
+  contractSelection(pixels: number): Promise<DocumentProjection>;
+  borderSelection(pixels: number): Promise<DocumentProjection>;
+  addAlphaChannel(name?: string): Promise<DocumentProjection>;
+  addDocumentPath(input: { name: string; kind?: number; clipping?: boolean;
+    path: VectorPathInput }): Promise<DocumentProjection>;
+  selectChannel(channelId: bigint): Promise<DocumentProjection>;
+  selectPath(pathId: bigint, feather?: number, combine?: number,
+    antialias?: boolean): Promise<DocumentProjection>;
   createLayerMask(layerId: bigint): Promise<DocumentProjection>;
   toggleLayerMask(layerId: bigint): Promise<DocumentProjection>;
   invertLayerMask(layerId: bigint): Promise<DocumentProjection>;

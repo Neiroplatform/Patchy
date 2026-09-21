@@ -24,6 +24,10 @@ const VECTOR_MASK_INPUT_SIZE = 64;
 const VECTOR_SHAPE_INPUT_SIZE = 64;
 const PATH_SUBPATH_SIZE = 20;
 const PATH_ANCHOR_SIZE = 56;
+const CHANNEL_PROJECTION_SIZE = 288;
+const ALPHA_CHANNEL_INPUT_SIZE = 40;
+const DOCUMENT_PATH_INPUT_SIZE = 56;
+const DOCUMENT_PATH_PROJECTION_SIZE = 288;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -121,9 +125,13 @@ export class EmscriptenPatchyEngine {
           canRedo: view.getUint8(55) !== 0,
           layers: [],
           selection: [],
+          channels: [],
+          paths: [],
         };
         result.layers = this.#layers(session, result.layerCount, error);
         result.selection = this.#selection(session, error);
+        result.channels = this.#channels(session, error);
+        result.paths = this.#paths(session, error);
         return result;
       } finally {
         this.#module._free(document);
@@ -142,6 +150,24 @@ export class EmscriptenPatchyEngine {
     return this.#command(session, snapshot, 2, (view) => {
       view.setBigUint64(32, layerId, true);
       view.setFloat32(40, opacity, true);
+    });
+  }
+
+  setLayerFillOpacity(session, snapshot, layerId, opacity) {
+    return this.#command(session, snapshot, 3, (view) => {
+      view.setBigUint64(32, layerId, true); view.setFloat32(40, opacity, true);
+    });
+  }
+
+  setLayerLocks(session, snapshot, layerId, lockFlags) {
+    return this.#command(session, snapshot, 6, (view) => {
+      view.setBigUint64(32, layerId, true); view.setUint32(40, lockFlags, true);
+    });
+  }
+
+  setLayerClipping(session, snapshot, layerId, clipped) {
+    return this.#command(session, snapshot, 7, (view) => {
+      view.setBigUint64(32, layerId, true); view.setUint8(40, clipped ? 1 : 0);
     });
   }
 
@@ -242,6 +268,62 @@ export class EmscriptenPatchyEngine {
       this.#module._free(input);
       this.#module._free(values);
     }
+  }
+
+  modifySelection(session, snapshot, type, pixels = 0) {
+    if (![19, 20, 21, 22].includes(type) || !Number.isInteger(pixels)) {
+      throw new TypeError("Supported selection morphology command is required");
+    }
+    return this.#command(session, snapshot, type, (view) => view.setInt32(32, pixels, true));
+  }
+
+  selectChannel(session, snapshot, channelId) {
+    return this.#command(session, snapshot, 23, (view) => view.setBigUint64(32, channelId, true));
+  }
+
+  selectPath(session, snapshot, pathId, feather = 0, combine = 0, antialias = true) {
+    if (!Number.isFinite(feather) || feather < 0 || !Number.isInteger(combine) || combine < 0 || combine > 3) {
+      throw new TypeError("Supported path selection settings are required");
+    }
+    return this.#command(session, snapshot, 28, (view) => {
+      view.setBigUint64(32, pathId, true); view.setFloat64(40, feather, true);
+      view.setUint32(48, combine, true); view.setUint8(52, antialias ? 1 : 0);
+    });
+  }
+
+  addAlphaChannel(session, snapshot, input) {
+    const name = this.#text(input.name);
+    if (!(input.gray instanceof Uint8Array) || input.gray.byteLength !== snapshot.width * snapshot.height) {
+      throw new TypeError("Alpha channel requires one gray byte per canvas pixel");
+    }
+    const gray = this.#alloc(input.gray.byteLength); const namePointer = this.#alloc(name.byteLength || 1);
+    const value = this.#alloc(ALPHA_CHANNEL_INPUT_SIZE);
+    try {
+      this.#module.HEAPU8.set(input.gray, gray); this.#module.HEAPU8.set(name, namePointer);
+      const view = this.#view(value, ALPHA_CHANNEL_INPUT_SIZE);
+      view.setUint32(0, ALPHA_CHANNEL_INPUT_SIZE, true); view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true); view.setUint32(24, gray, true);
+      view.setUint32(28, input.gray.byteLength, true); view.setUint32(32, namePointer, true);
+      view.setUint32(36, name.byteLength, true);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_add_alpha_channel(session, value, event, error));
+    } finally { this.#module._free(value); this.#module._free(namePointer); this.#module._free(gray); }
+  }
+
+  addDocumentPath(session, snapshot, input) {
+    const name = this.#text(input.name);
+    const path = this.#path(input.path); const namePointer = this.#alloc(name.byteLength || 1);
+    const value = this.#alloc(DOCUMENT_PATH_INPUT_SIZE);
+    try {
+      this.#module.HEAPU8.set(name, namePointer);
+      const view = this.#view(value, DOCUMENT_PATH_INPUT_SIZE);
+      view.setUint32(0, DOCUMENT_PATH_INPUT_SIZE, true); view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true); view.setUint32(24, namePointer, true);
+      view.setUint32(28, name.byteLength, true); view.setUint32(32, input.kind ?? 0, true);
+      view.setUint8(36, input.clipping ? 1 : 0); this.#writePath(view, 40, path);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_add_document_path(session, value, event, error));
+    } finally { this.#module._free(value); this.#module._free(namePointer); this.#releasePath(path); }
   }
 
   setLayerMask(session, snapshot, layerId, mask) {
@@ -752,6 +834,38 @@ export class EmscriptenPatchyEngine {
       this.#module._free(rect);
       this.#module._free(selection);
     }
+  }
+
+  #channels(session, error) {
+    const countPointer = this.#alloc(4); const value = this.#alloc(CHANNEL_PROJECTION_SIZE);
+    try {
+      this.#check(this.#module._patchy_engine_session_channel_count(session, countPointer, error), error);
+      const count = this.#view(countPointer, 4).getUint32(0, true); const result = [];
+      for (let index = 0; index < count; ++index) {
+        this.#check(this.#module._patchy_engine_session_channel_at(session, index, value, error), error);
+        const view = this.#view(value, CHANNEL_PROJECTION_SIZE); const nameSize = view.getUint32(12, true);
+        result.push({ id: u64(view, 0), kind: view.getUint32(8, true),
+          name: decoder.decode(this.#module.HEAPU8.subarray(value + 16, value + 16 + nameSize)) });
+      }
+      return result;
+    } finally { this.#module._free(value); this.#module._free(countPointer); }
+  }
+
+  #paths(session, error) {
+    const countPointer = this.#alloc(4); const value = this.#alloc(DOCUMENT_PATH_PROJECTION_SIZE);
+    try {
+      this.#check(this.#module._patchy_engine_session_path_count(session, countPointer, error), error);
+      const count = this.#view(countPointer, 4).getUint32(0, true); const result = [];
+      for (let index = 0; index < count; ++index) {
+        this.#check(this.#module._patchy_engine_session_path_at(session, index, value, error), error);
+        const view = this.#view(value, DOCUMENT_PATH_PROJECTION_SIZE); const nameSize = view.getUint32(12, true);
+        result.push({ id: u64(view, 0), kind: view.getUint32(8, true),
+          name: decoder.decode(this.#module.HEAPU8.subarray(value + 16, value + 16 + nameSize)),
+          subpathCount: view.getUint32(272, true), anchorCount: view.getUint32(276, true),
+          clipping: view.getUint8(280) !== 0 });
+      }
+      return result;
+    } finally { this.#module._free(value); this.#module._free(countPointer); }
   }
 
   #command(session, snapshot, type, writePayload) {

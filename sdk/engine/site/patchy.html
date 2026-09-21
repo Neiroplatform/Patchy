@@ -124,13 +124,28 @@
           <div class="property-fields">
             <label><span>Name</span><input id="layerNameInput" type="text" maxlength="256" disabled></label>
             <label><span>Opacity <output id="layerOpacityOutput">100%</output></span><input id="layerOpacityInput" type="range" min="0" max="100" value="100" disabled></label>
+            <label><span>Fill <output id="layerFillOutput">100%</output></span><input id="layerFillInput" type="range" min="0" max="100" value="100" disabled></label>
             <label><span>Blend mode</span><select id="layerBlendSelect" disabled>
               <option value="0">Pass through</option><option value="1">Normal</option><option value="2">Multiply</option>
               <option value="3">Screen</option><option value="4">Overlay</option>
               <option value="5">Darken</option><option value="6">Lighten</option>
               <option value="11">Difference</option><option value="27">Dissolve</option>
             </select></label>
+            <label class="check-field"><input id="layerClipInput" type="checkbox" disabled><span>Clip to layer below</span></label>
+            <label class="check-field"><input id="layerLockInput" type="checkbox" disabled><span>Lock layer</span></label>
           </div>
+        </section>
+        <section class="panel structure-panel">
+          <header class="panel-header"><div><p class="eyebrow">CHANNELS &amp; PATHS</p><h2>Structure</h2></div></header>
+          <div class="layer-actions">
+            <button id="invertSelectionButton" type="button" disabled>Invert selection</button>
+            <button id="expandSelectionButton" type="button" disabled>Expand 4 px</button>
+            <button id="contractSelectionButton" type="button" disabled>Contract 4 px</button>
+            <button id="borderSelectionButton" type="button" disabled>Border 4 px</button>
+            <button id="saveChannelButton" type="button" disabled>Save channel</button>
+            <button id="savePathButton" type="button" disabled>Save path</button>
+          </div>
+          <div class="structure-lists"><div><span>Channels</span><div id="channelList"></div></div><div><span>Paths</span><div id="pathList"></div></div></div>
         </section>
         <section class="panel details-panel">
           <header class="panel-header"><div><p class="eyebrow">SESSION</p><h2>Document</h2></div></header>
