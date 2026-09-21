@@ -10,7 +10,7 @@ const PIXEL_LAYER_INPUT_SIZE = 80;
 const FILTER_INPUT_SIZE = 56;
 const SELECTION_SIZE = 32;
 const SELECTION_INPUT_SIZE = 32;
-const SELECTION_MASK_INPUT_SIZE = 64;
+const SELECTION_MASK_INPUT_SIZE = 56;
 const RECT_SIZE = 16;
 const LAYER_MASK_INPUT_SIZE = 72;
 const LAYER_MASK_SIZE = 24;
@@ -33,6 +33,13 @@ const PATH_SUBPATH_PROJECTION_SIZE = 16;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
+
+// Pthread Emscripten modules expose HEAPU8 over SharedArrayBuffer. Browsers
+// reject shared views in TextDecoder even for immutable projected strings, so
+// copy only the bounded text slice into an ordinary ArrayBuffer first.
+function decodeHeap(bytes) {
+  return decoder.decode(Uint8Array.from(bytes));
+}
 
 function u64(view, offset) {
   return view.getBigUint64(offset, true);
@@ -868,8 +875,8 @@ export class EmscriptenPatchyEngine {
           const valueSize = textView.getUint32(4, true);
           const fontSize = textView.getUint32(1032, true);
           textValue = {
-            value: decoder.decode(this.#module.HEAPU8.subarray(text + 8, text + 8 + valueSize)),
-            font: decoder.decode(this.#module.HEAPU8.subarray(text + 1036, text + 1036 + fontSize)),
+            value: decodeHeap(this.#module.HEAPU8.subarray(text + 8, text + 8 + valueSize)),
+            font: decodeHeap(this.#module.HEAPU8.subarray(text + 1036, text + 1036 + fontSize)),
             sizePixels: textView.getFloat64(1296, true),
             color: [textView.getUint8(1304), textView.getUint8(1305), textView.getUint8(1306)],
             bold: textView.getUint8(1307) !== 0, italic: textView.getUint8(1308) !== 0,
@@ -891,8 +898,8 @@ export class EmscriptenPatchyEngine {
           const projected = this.#view(smartObject, SMART_OBJECT_PROJECTION_SIZE);
           const filenameSize = projected.getUint32(8, true);
           smartObjectValue = { sourceKind: projected.getUint32(4, true),
-            filename: decoder.decode(this.#module.HEAPU8.subarray(smartObject + 12, smartObject + 12 + filenameSize)),
-            filetype: decoder.decode(this.#module.HEAPU8.subarray(smartObject + 268, smartObject + 272)),
+            filename: decodeHeap(this.#module.HEAPU8.subarray(smartObject + 12, smartObject + 12 + filenameSize)),
+            filetype: decodeHeap(this.#module.HEAPU8.subarray(smartObject + 268, smartObject + 272)),
             sourceSize: u64(projected, 272), editable: projected.getUint8(280) !== 0 };
         }
         layers.push({
@@ -901,7 +908,7 @@ export class EmscriptenPatchyEngine {
           kind,
           visible: view.getUint8(20) !== 0,
           opacity: view.getFloat32(24, true),
-          name: decoder.decode(this.#module.HEAPU8.subarray(
+          name: decodeHeap(this.#module.HEAPU8.subarray(
             layer + 32, layer + 32 + nameSize)),
           clipped: view.getUint8(288) !== 0,
           fillOpacity: view.getFloat32(292, true),
@@ -978,7 +985,7 @@ export class EmscriptenPatchyEngine {
         this.#check(this.#module._patchy_engine_session_channel_at(session, index, value, error), error);
         const view = this.#view(value, CHANNEL_PROJECTION_SIZE); const nameSize = view.getUint32(12, true);
         result.push({ id: u64(view, 0), kind: view.getUint32(8, true),
-          name: decoder.decode(this.#module.HEAPU8.subarray(value + 16, value + 16 + nameSize)) });
+          name: decodeHeap(this.#module.HEAPU8.subarray(value + 16, value + 16 + nameSize)) });
       }
       return result;
     } finally { this.#module._free(value); this.#module._free(countPointer); }
@@ -1014,7 +1021,7 @@ export class EmscriptenPatchyEngine {
             combine: subpathView.getUint32(8, true), closed: subpathView.getUint8(12) !== 0 });
         }
         result.push({ id: pathId, kind: view.getUint32(8, true),
-          name: decoder.decode(this.#module.HEAPU8.subarray(value + 16, value + 16 + nameSize)),
+          name: decodeHeap(this.#module.HEAPU8.subarray(value + 16, value + 16 + nameSize)),
           subpathCount, anchorCount: view.getUint32(276, true),
           clipping: view.getUint8(280) !== 0, subpaths,
           anchors: subpaths.flatMap((subpath) => subpath.anchors) });
@@ -1289,7 +1296,7 @@ export class EmscriptenPatchyEngine {
     const code = view.getUint32(0, true);
     const bytes = this.#module.HEAPU8.subarray(error + 4, error + ERROR_SIZE);
     const end = bytes.indexOf(0);
-    throw new PatchyEngineError(code, decoder.decode(end < 0 ? bytes : bytes.subarray(0, end)));
+    throw new PatchyEngineError(code, decodeHeap(end < 0 ? bytes : bytes.subarray(0, end)));
   }
 
   #alloc(size) {

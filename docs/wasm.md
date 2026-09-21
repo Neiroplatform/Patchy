@@ -91,7 +91,14 @@ and `module-adapter.mjs` reads C structures. Filter cancellation uses shared
 atomic storage so UI can stop a synchronous call at engine checkpoints. Inputs
 are owned; render/PSD outputs are copied before release.
 Exports/layouts fail closed on drift. Node covers Worker editing, assets and
-MIME; the real artifact still needs pinned emsdk.
+MIME. After building `wasm-sdk`, serve the repository root with the required
+isolation headers and open `tests/sdk/wasm_runtime_smoke.html`. The browser
+fixture runs the real pthread artifact through create, RGBA authoring, exact
+soft-mask transport, style preset, bounded render, layered PSD save/reopen and
+three isolated switchable sessions; the body reports `PASS` only after the
+whole sequence. Its shared-heap adapter regression uses `SharedArrayBuffer`,
+pins the 56-byte wasm32 selection-mask input and copies bounded projected text
+before `TextDecoder`, matching the actual threaded runtime.
 
 ## wasm-core preset decisions (all in CMakePresets.json)
 

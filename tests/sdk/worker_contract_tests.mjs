@@ -102,13 +102,14 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 560px\)/);
   assert.match(css, /\.document-actions \{ gap: 5px; overflow-x: auto;/);
+  assert.match(css, /\.inspector \{ min-width: 0; min-height: 0;[^}]+display: block; overflow-y: auto;/);
   assert.match(html, /role="alert"/);
   assert.match(nodeServer, /'\.css': 'text\/css; charset=utf-8'/);
   assert.match(pythonServer, /"\.css": "text\/css; charset=utf-8"/);
 });
 
 test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
-  const memory = new ArrayBuffer(1 << 20);
+  const memory = new SharedArrayBuffer(1 << 20);
   const heap = new Uint8Array(memory);
   const view = new DataView(memory);
   let next = 1024;
@@ -218,7 +219,16 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       if (type === 13) assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true), view.getInt32(command + 40, true), view.getInt32(command + 44, true)], [1, 1, 4, 3]);
       return 1;
     },
-    _patchy_engine_session_set_selection_mask() { return 1; },
+    _patchy_engine_session_set_selection_mask(session, input) {
+      assert.equal(session, 22); assert.equal(view.getUint32(input, true), 56);
+      assert.equal(view.getBigUint64(input + 8, true), 9n);
+      assert.equal(view.getBigUint64(input + 16, true), 4n);
+      assert.deepEqual([view.getInt32(input + 24, true), view.getInt32(input + 28, true),
+        view.getInt32(input + 32, true), view.getInt32(input + 36, true)], [0, 0, 3, 2]);
+      assert.deepEqual([view.getInt32(input + 40, true), view.getInt32(input + 44, true)], [3, 2]);
+      assert.equal(view.getUint32(input + 52, true), 6);
+      return 1;
+    },
     _patchy_engine_session_group_layer(session, state, revision, layer, name, nameSize) {
       assert.deepEqual([session, state, revision, layer], [22, 9n, 4n, 7n]);
       assert.equal(new TextDecoder().decode(heap.subarray(name, name + nameSize)), "Group");
