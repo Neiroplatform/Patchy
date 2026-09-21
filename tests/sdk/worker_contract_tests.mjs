@@ -43,6 +43,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton",
     "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
     "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "openSmartObjectButton", "smartFilterButton",
+    "filterLayerButton", "filterDialog", "filterKindInput", "filterParameterFields", "commitFilterButton",
+    "adjustmentParameterFields",
     "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
     "layerFillInput", "layerClipInput", "layerLockInput", "layerStyleSelect",
     "applyLayerStyleButton", "invertSelectionButton",
@@ -73,7 +75,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
     "client.updateVectorShape",
     "client.addAdjustment", "client.updateAdjustment", "client.addSmartObject",
-    "client.replaceSmartObject", "client.openSmartObjectContents",
+    "client.replaceSmartObject", "client.openSmartObjectContents", "client.applyFilter",
     "client.saveSmartObjectContents", "client.setSmartFilter",
     "client.setLayerFillOpacity", "client.setLayerLocks", "client.setLayerClipping",
     "client.setLayerStylePreset",
@@ -231,6 +233,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   let released = 0;
   let destroyed = 0;
   let callback = null;
+  let projectedLayerKind = 3;
   const callbackReturns = [];
   const commandTypes = [];
   const alloc = (size) => { const at = next; next += (size + 7) & ~7; return at; };
@@ -262,7 +265,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     },
     _patchy_engine_session_layer_at(session, index, output) {
       assert.equal(index, 0);
-      view.setBigUint64(output, 7n, true); view.setUint32(output + 16, 3, true);
+      view.setBigUint64(output, 7n, true); view.setUint32(output + 16, projectedLayerKind, true);
       heap[output + 20] = 1; view.setFloat32(output + 24, 1, true);
       view.setUint32(output + 28, 5, true); heap.set(new TextEncoder().encode("Layer"), output + 32);
       view.setFloat32(output + 292, 1, true); view.setInt32(output + 312, 3, true);
@@ -301,6 +304,14 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       view.setUint32(output + 1032, font.length, true); heap.set(font, output + 1036);
       view.setFloat64(output + 1296, 18, true); heap.set([10, 20, 30, 1, 0, 1], output + 1304);
       return 1;
+    },
+    _patchy_engine_session_adjustment(session, layerId, output) {
+      assert.equal(layerId, 7n); assert.equal(view.getUint32(output, true), 44);
+      view.setUint32(output + 4, 1, true); view.setUint32(output + 40, 2, true); return 1;
+    },
+    _patchy_engine_session_adjustment_curve_point_at(session, layerId, index, output) {
+      assert.equal(layerId, 7n); view.setInt32(output, index * 255, true);
+      view.setInt32(output + 4, index * 255, true); return 1;
     },
     _patchy_engine_session_selection(session, output) {
       assert.equal(session, 22); assert.equal(view.getUint32(output, true), 32);
@@ -364,6 +375,18 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       const filterPointer = view.getUint32(input + 32, true);
       const filterSize = view.getUint32(input + 36, true);
       assert.equal(new TextDecoder().decode(heap.subarray(filterPointer, filterPointer + filterSize)), "patchy.filters.invert");
+      const parameters = view.getUint32(input + 40, true);
+      const parameterCount = view.getUint32(input + 44, true);
+      if (parameterCount) {
+        assert.equal(parameterCount, 4);
+        assert.equal(new TextDecoder().decode(heap.subarray(parameters + 8, parameters + 14)), "amount");
+        assert.equal(view.getBigInt64(parameters + 72, true), 75n);
+        assert.equal(view.getFloat64(parameters + 208 + 72, true), 2.5);
+        assert.equal(heap[parameters + 416 + 72], 1);
+        assert.equal(view.getUint32(parameters + 624 + 72, true), 7);
+        assert.equal(new TextDecoder().decode(heap.subarray(parameters + 624 + 76,
+          parameters + 624 + 83)), "uniform");
+      }
       assert.equal(progress, 71);
       callbackReturns.push(callback(1, 2, 0, 0), callback(2, 2, 0, 0));
       return 1;
@@ -476,6 +499,10 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.equal(snapshot.layers[0].bounds.width, 3);
   assert.deepEqual(snapshot.layers[0].text, { value: "Hello", font: "Arial", sizePixels: 18,
     color: [10, 20, 30], bold: true, italic: false, boxText: true });
+  projectedLayerKind = 2;
+  assert.deepEqual(engine.snapshot(session).layers[0].adjustment.curvePoints,
+    [{ input: 0, output: 0 }, { input: 255, output: 255 }]);
+  projectedLayerKind = 3;
   assert.deepEqual(snapshot.selection, []);
   assert.deepEqual(snapshot.channels, [{ id: 31n, kind: 0, name: "Alpha" }]);
   assert.equal(snapshot.paths[0].id, 41n);
@@ -558,11 +585,22 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) });
   const progress = [];
   const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  assert.throws(() => engine.applyFilter(session, snapshot, 7n, null, [], cancellation),
+    /identifier must be a string/);
+  assert.throws(() => engine.applyFilter(session, snapshot, 7n, "patchy.filters.add_noise",
+    [{ key: "distribution", kind: "option", value: 1 }], cancellation),
+  /Option filter parameters require strings/);
+  assert.throws(() => engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert",
+    [{ kind: "integer", value: 75 }], cancellation), /require string keys/);
   engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert",
+    [{ key: "amount", kind: "integer", value: 75 },
+      { key: "radius", kind: "double", value: 2.5 },
+      { key: "monochromatic", kind: "boolean", value: true },
+      { key: "distribution", kind: "option", value: "uniform" }],
     cancellation, (value) => progress.push(value.ratio));
   assert.deepEqual(progress, [0.5, 1]);
   Atomics.store(cancellation, 0, 1);
-  engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", cancellation);
+  engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", [], cancellation);
   assert.deepEqual(callbackReturns, [1, 1, 0, 0]);
   assert.deepEqual(commandTypes, [2, 3, 6, 7, 35, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
@@ -664,8 +702,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     addSmartObject(session, before, input) { calls.push(["smartObject", input.sourceBytes.byteLength]); revision++; },
     replaceSmartObject(session, before, layerId, input) { calls.push(["replaceSmartObject", layerId, input.sourceBytes.byteLength]); revision++; },
     setSmartFilter(session, before, layerId, input) { calls.push(["smartFilter", layerId, input.kind]); revision++; },
-    applyFilter(session, before, layerId, filterId, cancellation, progress) {
-      calls.push(["filter", layerId, filterId]); progress({ completed: 1, total: 1, stage: 0, ratio: 1 }); revision++;
+    applyFilter(session, before, layerId, filterId, parameters, cancellation, progress) {
+      calls.push(["filter", layerId, filterId, parameters]);
+      progress({ completed: 1, total: 1, stage: 0, ratio: 1 }); revision++;
     },
     groupLayer(session, before, layerId, name) { calls.push(["group", layerId, name]); revision++; },
     ungroup(session, before, layerId) { calls.push(["ungroup", layerId]); revision++; },
@@ -755,9 +794,12 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "addPixelLayer", name: "Pixels", width: 1, height: 1,
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]).buffer });
   const filterProgress = [];
-  await host.dispatch({ method: "invertLayer", layerId: "7",
+  await host.dispatch({ method: "applyFilter", layerId: "7", filterId: "patchy.filters.threshold",
+    parameters: [{ key: "threshold", kind: "integer", value: 128 }],
     cancellation: new SharedArrayBuffer(4), progress: (value) => filterProgress.push(value.ratio) });
   assert.deepEqual(filterProgress, [1]);
+  assert.deepEqual(calls.find((call) => call[0] === "filter").slice(1, 4),
+    [7n, "patchy.filters.threshold", [{ key: "threshold", kind: "integer", value: 128 }]]);
   await host.dispatch({ method: "undo" });
   await host.dispatch({ method: "redo" });
   assert.equal((await host.dispatch({ method: "render", region: { x: 0, y: 0, width: 3, height: 2 } })).byteLength, 24);
@@ -1067,8 +1109,13 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
     bytes: new Uint8Array([1, 2, 3, 4]), width: 1, height: 1 } });
   assert.equal((await renderedFrame).kind, "rgba");
   const filterProgress = [];
-  const filter = client.invertLayer(7n, (value) => filterProgress.push(value.ratio));
+  const filter = client.applyFilter(7n, "patchy.filters.gaussian_blur",
+    [{ key: "radius", kind: "integer", value: 3 }],
+    (value) => filterProgress.push(value.ratio));
   const filterMessage = worker.sent[4].message;
+  assert.equal(filterMessage.method, "applyFilter");
+  assert.equal(filterMessage.filterId, "patchy.filters.gaussian_blur");
+  assert.deepEqual(filterMessage.parameters, [{ key: "radius", kind: "integer", value: 3 }]);
   assert.ok(filterMessage.cancellation instanceof SharedArrayBuffer);
   worker.reply({ id: 5, progress: { completed: 1, total: 2, stage: 0, ratio: 0.5 } });
   assert.deepEqual(filterProgress, [0.5]);

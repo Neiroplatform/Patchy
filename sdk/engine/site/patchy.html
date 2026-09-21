@@ -132,6 +132,7 @@
             <button type="button" id="ungroupLayerButton" disabled>Ungroup</button>
             <button type="button" id="removeLayerButton" disabled>Delete</button>
             <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
+            <button type="button" id="filterLayerButton" disabled>Filters</button>
             <button type="button" id="textLayerButton" disabled>Add text</button>
             <button type="button" id="shapeLayerButton" disabled>Add shape</button>
             <button type="button" id="adjustmentLayerButton" disabled>Add adjustment</button>
@@ -327,11 +328,23 @@
           <option value="7">Brightness / Contrast</option><option value="2">Hue / Saturation</option>
           <option value="0">Levels</option><option value="1">Curves</option><option value="3">Color Balance</option>
           <option value="4">Invert</option><option value="5">Posterize</option><option value="6">Threshold</option>
-        </select></label><div class="field-row">
-          <label><span>Primary value</span><input id="adjustmentValueOne" type="number" step="1" value="0"></label>
-          <label><span>Secondary value</span><input id="adjustmentValueTwo" type="number" step="1" value="0"></label>
-        </div><p class="dialog-note">Values are interpreted by the selected adjustment. Curves starts with a neutral RGB curve.</p>
+        </select></label><div class="property-fields" id="adjustmentParameterFields"></div>
+        <p class="dialog-note">Adjustment layers remain editable and are preserved through PSD save/reopen.</p>
         <div class="dialog-actions"><button class="button button-primary" id="commitAdjustmentButton" type="button">Apply adjustment</button></div></section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="filterDialog" aria-labelledby="filterDialogTitle">
+      <form method="dialog"><header><div><p class="eyebrow">PIXEL FILTER</p><h2 id="filterDialogTitle">Apply filter</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section><label class="dialog-field"><span>Filter</span><select id="filterKindInput">
+          <option value="patchy.filters.brightness_contrast">Brightness / Contrast</option>
+          <option value="patchy.filters.invert">Invert</option><option value="patchy.filters.grayscale">Grayscale</option>
+          <option value="patchy.filters.sepia">Sepia</option><option value="patchy.filters.threshold">Threshold</option>
+          <option value="patchy.filters.posterize">Posterize</option><option value="patchy.filters.gaussian_blur">Gaussian Blur</option>
+          <option value="patchy.filters.sharpen">Sharpen</option><option value="patchy.filters.unsharp_mask">Unsharp Mask</option>
+          <option value="patchy.filters.pixelate">Pixel Mosaic</option><option value="patchy.filters.add_noise">Add Noise</option>
+        </select></label><div class="property-fields" id="filterParameterFields"></div>
+        <p class="dialog-note">The current selection limits the filter. Apply is one cancellable undo step.</p>
+        <div class="dialog-actions"><button class="button button-primary" id="commitFilterButton" type="button">Apply filter</button></div></section>
       </form>
     </dialog>
     <dialog class="document-dialog" id="smartFilterDialog" aria-labelledby="smartFilterDialogTitle">

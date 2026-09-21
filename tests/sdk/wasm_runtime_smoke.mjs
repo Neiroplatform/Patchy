@@ -42,11 +42,11 @@ try {
     const first = recovered.restored[0].snapshot;
     const second = recovered.restored[1].snapshot;
     check(recovered.restored[0].manifest.generation === 2 &&
-      recovered.restored[0].manifest.revision === "7",
+      recovered.restored[0].manifest.revision === "9",
       "latest complete first generation was not selected");
     check(recovered.restored[1].manifest.generation === 1,
       "second workspace generation was not isolated");
-    check(first.width === 4 && first.height === 3 && first.layers.length === 2,
+    check(first.width === 4 && first.height === 3 && first.layers.length === 3,
       "first recovered PSD lost authored state");
     check(second.width === 2 && second.height === 2 && second.documents.length === 2,
       "second recovered PSD or multi-document isolation failed");
@@ -98,6 +98,17 @@ try {
     check(styled.revision > authored.revision, "style preset did not publish a revision");
     check(styled.dirtyRegion?.width === 4 && styled.dirtyRegion?.height === 3,
       "dirty render region did not cross the wasm32 ABI");
+    const filterOperation = client.applyFilter(layerId, "patchy.filters.brightness_contrast",
+      [{ key: "brightness", kind: "integer", value: 12 },
+        { key: "contrast", kind: "integer", value: 8 }]);
+    const filtered = await filterOperation.promise;
+    check(filtered.revision === styled.revision + 1n,
+      "parameterized filter was not one engine revision");
+    const adjusted = await client.addAdjustment({ name: "Browser Levels", kind: 0,
+      values: [8, 240, 110, 0, 255], curvePoints: [] });
+    const adjustmentLayer = adjusted.layers.find((layer) => layer.id === adjusted.activeLayerId);
+    check(adjustmentLayer?.adjustment?.values[2] === 110,
+      "editable adjustment parameters did not cross wasm32");
 
     check((await client.render({ x: 0, y: 0, width: 1, height: 1 })).length === 4,
       "partial bounded render byte count mismatch");
@@ -120,7 +131,7 @@ try {
       "layered PSD encoding mismatch");
     const blobOpened = await client.openBlob(
       new Blob([saved], { type: "image/vnd.adobe.photoshop" }), "Worker Blob.psd");
-    check(blobOpened.layers.length === 1 && blobOpened.width === 4 && blobOpened.height === 3,
+    check(blobOpened.layers.length === 2 && blobOpened.width === 4 && blobOpened.height === 3,
       "Worker-native Blob open lost layered PSD state");
     await client.closeDocument(blobOpened.documentId);
     await client.activateDocument(first.documentId);

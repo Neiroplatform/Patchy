@@ -409,10 +409,16 @@ export class PatchyWorkerHost {
         return this.#snapshot();
       case "undo": this.#engine.undo(this.#requireSession()); return this.#snapshot();
       case "redo": this.#engine.redo(this.#requireSession()); return this.#snapshot();
+      case "applyFilter":
+        this.#engine.applyFilter(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          message.filterId, message.parameters || [], new Int32Array(message.cancellation),
+          message.progress);
+        return this.#snapshot();
       case "invertLayer":
         this.#engine.applyFilter(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
-          "patchy.filters.invert", new Int32Array(message.cancellation), message.progress);
+          "patchy.filters.invert", [], new Int32Array(message.cancellation), message.progress);
         return this.#snapshot();
       case "render":
         return this.#engine.render(this.#requireSession(), message.region);

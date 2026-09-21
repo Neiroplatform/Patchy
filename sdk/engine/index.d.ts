@@ -6,7 +6,8 @@ export interface LayerProjection {
   mask: null | { bounds: Rect; defaultColor: number; disabled: boolean; linked: boolean };
   text: null | { value: string; font: string; sizePixels: number;
     color: [number, number, number]; bold: boolean; italic: boolean; boxText: boolean };
-  adjustment: null | { kind: number; values: number[] };
+  adjustment: null | { kind: number; values: number[];
+    curvePoints: Array<{ input: number; output: number }> };
   smartObject: null | { sourceKind: number; filename: string; filetype: string;
     sourceSize: bigint; editable: boolean; contentsEditable: boolean };
 }
@@ -145,6 +146,9 @@ export class PatchyWorkerClient {
             position: number): Promise<DocumentProjection>;
   undo(): Promise<DocumentProjection>;
   redo(): Promise<DocumentProjection>;
+  applyFilter(layerId: bigint, filterId: string, parameters?: FilterParameterInput[],
+              onProgress?: (progress: FilterProgress) => void):
+    CancellableOperation<DocumentProjection>;
   invertLayer(layerId: bigint,
               onProgress?: (progress: FilterProgress) => void):
     CancellableOperation<DocumentProjection>;
@@ -178,3 +182,6 @@ export interface AdjustmentInput { name?: string; kind: number; values?: number[
 export interface SmartObjectInput { name: string; filename: string; filetype: string;
   width: number; height: number; bounds: Rect; rgba: Uint8Array; sourceBytes: Uint8Array }
 export interface SmartFilterInput { kind: number; amount: number; enabled?: boolean }
+export interface FilterParameterInput { key: string;
+  kind: "integer" | "double" | "boolean" | "option";
+  value: number | boolean | string }

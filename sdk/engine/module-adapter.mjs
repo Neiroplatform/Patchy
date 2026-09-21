@@ -9,6 +9,7 @@ const BUFFER_SIZE = 8;
 const COMMAND_SIZE = 304;
 const PIXEL_LAYER_INPUT_SIZE = 80;
 const FILTER_INPUT_SIZE = 56;
+const FILTER_PARAMETER_SIZE = 208;
 const SELECTION_SIZE = 32;
 const SELECTION_INPUT_SIZE = 32;
 const SELECTION_MASK_INPUT_SIZE = 56;
@@ -545,18 +546,66 @@ export class EmscriptenPatchyEngine {
     }
   }
 
-  applyFilter(session, snapshot, layerId, filterId, cancellation, onProgress) {
+  applyFilter(session, snapshot, layerId, filterId, parameters, cancellation, onProgress) {
+    if (typeof filterId !== "string") throw new TypeError("Filter identifier must be a string");
     const filter = this.#text(filterId, "Filter identifiers", 128);
     if (filter.byteLength === 0) throw new TypeError("Filter identifier is required");
+    if (!Array.isArray(parameters) || parameters.length > 256) {
+      throw new TypeError("Filter parameters must be a bounded array");
+    }
     if (!(cancellation instanceof Int32Array) ||
         !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
       throw new TypeError("Filter cancellation must use shared Int32 storage");
     }
+    const encodedParameters = parameters.map((parameter) => {
+      if (!parameter || typeof parameter !== "object" || typeof parameter.key !== "string") {
+        throw new TypeError("Filter parameters require string keys");
+      }
+      const key = this.#text(parameter.key, "Filter parameter keys", 64);
+      if (key.byteLength === 0) throw new TypeError("Filter parameter key is required");
+      const kind = { integer: 0, double: 1, boolean: 2, option: 3 }[parameter.kind];
+      if (kind == null) throw new TypeError("Filter parameter kind is invalid");
+      if (kind === 0 && !Number.isSafeInteger(parameter.value)) {
+        throw new TypeError("Integer filter parameters must be safe integers");
+      }
+      if (kind === 1 && !Number.isFinite(parameter.value)) {
+        throw new TypeError("Double filter parameters must be finite");
+      }
+      if (kind === 2 && typeof parameter.value !== "boolean") {
+        throw new TypeError("Boolean filter parameters require booleans");
+      }
+      if (kind === 3 && typeof parameter.value !== "string") {
+        throw new TypeError("Option filter parameters require strings");
+      }
+      const option = kind === 3
+        ? this.#text(parameter.value, "Filter parameter options", 128) : null;
+      if (kind === 3 && option.byteLength === 0) throw new TypeError("Filter option is required");
+      return { ...parameter, key, kind, option };
+    });
     const filterPointer = this.#alloc(filter.byteLength || 1);
     const input = this.#alloc(FILTER_INPUT_SIZE);
+    const parameterPointer = this.#alloc(Math.max(1, parameters.length * FILTER_PARAMETER_SIZE));
     const selection = snapshot.selection || [];
     const selectionPointer = this.#alloc(Math.max(1, selection.length * RECT_SIZE));
     this.#module.HEAPU8.set(filter, filterPointer);
+    const parameterView = this.#view(
+      parameterPointer, Math.max(1, parameters.length * FILTER_PARAMETER_SIZE));
+    encodedParameters.forEach((parameter, index) => {
+      const offset = index * FILTER_PARAMETER_SIZE;
+      parameterView.setUint32(offset, parameter.kind, true);
+      parameterView.setUint32(offset + 4, parameter.key.byteLength, true);
+      this.#module.HEAPU8.set(parameter.key, parameterPointer + offset + 8);
+      if (parameter.kind === 0) {
+        parameterView.setBigInt64(offset + 72, BigInt(parameter.value), true);
+      } else if (parameter.kind === 1) {
+        parameterView.setFloat64(offset + 72, parameter.value, true);
+      } else if (parameter.kind === 2) {
+        parameterView.setUint8(offset + 72, parameter.value ? 1 : 0);
+      } else {
+        parameterView.setUint32(offset + 72, parameter.option.byteLength, true);
+        this.#module.HEAPU8.set(parameter.option, parameterPointer + offset + 76);
+      }
+    });
     const selectionView = this.#view(selectionPointer, Math.max(1, selection.length * RECT_SIZE));
     selection.forEach((rect, index) => {
       const offset = index * RECT_SIZE;
@@ -572,6 +621,8 @@ export class EmscriptenPatchyEngine {
     view.setBigUint64(24, layerId, true);
     view.setUint32(32, filterPointer, true);
     view.setUint32(36, filter.byteLength, true);
+    view.setUint32(40, parameters.length ? parameterPointer : 0, true);
+    view.setUint32(44, parameters.length, true);
     view.setUint32(48, selection.length ? selectionPointer : 0, true);
     view.setUint32(52, selection.length, true);
     const callback = this.#module.addFunction((completed, total, stage) => {
@@ -587,6 +638,7 @@ export class EmscriptenPatchyEngine {
       this.#module.removeFunction(callback);
       this.#module._free(input);
       this.#module._free(filterPointer);
+      this.#module._free(parameterPointer);
       this.#module._free(selectionPointer);
     }
   }
@@ -907,6 +959,7 @@ export class EmscriptenPatchyEngine {
     const mask = this.#alloc(LAYER_MASK_SIZE);
     const text = this.#alloc(TEXT_PROJECTION_SIZE);
     const adjustment = this.#alloc(ADJUSTMENT_PROJECTION_SIZE);
+    const curvePoint = this.#alloc(8);
     const smartObject = this.#alloc(SMART_OBJECT_PROJECTION_SIZE);
     try {
       const layers = [];
@@ -944,8 +997,16 @@ export class EmscriptenPatchyEngine {
           this.#check(this.#module._patchy_engine_session_adjustment(
             session, u64(view, 0), adjustment, error), error);
           const projected = this.#view(adjustment, ADJUSTMENT_PROJECTION_SIZE);
+          const curvePoints = [];
+          for (let pointIndex = 0; pointIndex < projected.getUint32(40, true); ++pointIndex) {
+            this.#check(this.#module._patchy_engine_session_adjustment_curve_point_at(
+              session, u64(view, 0), pointIndex, curvePoint, error), error);
+            const point = this.#view(curvePoint, 8);
+            curvePoints.push({ input: point.getInt32(0, true), output: point.getInt32(4, true) });
+          }
           adjustmentValue = { kind: projected.getUint32(4, true), values: Array.from(
-            { length: 8 }, (_, valueIndex) => projected.getInt32(8 + valueIndex * 4, true)) };
+            { length: 8 }, (_, valueIndex) => projected.getInt32(8 + valueIndex * 4, true)),
+          curvePoints };
         }
         if (kind === 5) {
           this.#view(smartObject, SMART_OBJECT_PROJECTION_SIZE).setUint32(0, SMART_OBJECT_PROJECTION_SIZE, true);
@@ -989,6 +1050,7 @@ export class EmscriptenPatchyEngine {
     } finally {
       this.#module._free(smartObject);
       this.#module._free(adjustment);
+      this.#module._free(curvePoint);
       this.#module._free(text);
       this.#module._free(mask);
       this.#module._free(layer);

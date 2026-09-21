@@ -222,15 +222,18 @@ export class PatchyWorkerClient {
   }
   undo() { return this.#request("undo"); }
   redo() { return this.#request("redo"); }
-  invertLayer(layerId, onProgress) {
+  applyFilter(layerId, filterId, parameters = [], onProgress) {
     const cancellation = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-    const promise = this.#request("invertLayer", {
-      layerId: String(layerId), cancellation: cancellation.buffer,
+    const promise = this.#request("applyFilter", {
+      layerId: String(layerId), filterId, parameters, cancellation: cancellation.buffer,
     }, [], onProgress);
     return {
       promise,
       cancel() { Atomics.store(cancellation, 0, 1); },
     };
+  }
+  invertLayer(layerId, onProgress) {
+    return this.applyFilter(layerId, "patchy.filters.invert", [], onProgress);
   }
   render(region) { return this.#request("render", { region }); }
   renderFrame(region) { return this.#request("renderFrame", { region }); }

@@ -127,6 +127,7 @@ function updateControls() {
   $("ungroupLayerButton").disabled = busy || layer?.kind !== 1;
   $("removeLayerButton").disabled = busy || !layer;
   $("invertLayerButton").disabled = busy || layer?.kind !== 0;
+  $("filterLayerButton").disabled = busy || layer?.kind !== 0;
   $("textLayerButton").disabled = busy || !snapshot;
   $("textLayerButton").textContent = layer?.kind === 3 ? "Edit text" : "Add text";
   $("layerTransformButton").disabled = busy || ![0, 3].includes(layer?.kind) ||
@@ -201,12 +202,17 @@ function documentMutation(title, operation) {
 async function invertSelectedLayer() {
   const layer = selectedLayer();
   if (busy || !snapshot || layer?.kind !== 0) return;
+  await applyPixelFilter(layer, "patchy.filters.invert", []);
+}
+
+async function applyPixelFilter(layer, filterId, parameters) {
   clearError();
-  setBusy(true, "Inverting pixels", "Filtering selected layer locally");
+  const definition = PIXEL_FILTERS.find((item) => item.id === filterId);
+  setBusy(true, `Applying ${definition?.name || "filter"}`, "Filtering selected layer locally");
   $("busyProgress").hidden = false;
   $("cancelOperationButton").hidden = false;
   $("cancelOperationButton").disabled = false;
-  const operation = client.invertLayer(layer.id, (progress) => {
+  const operation = client.applyFilter(layer.id, filterId, parameters, (progress) => {
     $("busyProgress").value = progress.ratio;
     $("busyDetail").textContent = `Filtering selected layer · ${Math.round(progress.ratio * 100)}%`;
   });
@@ -216,7 +222,7 @@ async function invertSelectedLayer() {
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
   } catch (error) {
-    if (error?.code !== 7) showError("Could not invert layer", error);
+    if (error?.code !== 7) showError("Could not apply filter", error);
     else setSessionState("document", "Filter cancelled");
   } finally {
     setBusy(false);
@@ -1170,8 +1176,137 @@ function selectionPath() {
 }
 
 function adjustmentName(kind) {
-  return ["Levels", "Curves", "Hue/Saturation", "Color Balance", "Invert",
-    "Posterize", "Threshold", "Brightness/Contrast"][kind] || "Adjustment";
+  return ADJUSTMENTS.find((item) => item.kind === kind)?.name || "Adjustment";
+}
+
+const ADJUSTMENTS = [
+  { kind: 0, name: "Levels", parameters: [
+    { key: "black_input", label: "Black input", index: 0, min: 0, max: 254, value: 0 },
+    { key: "white_input", label: "White input", index: 1, min: 1, max: 255, value: 255 },
+    { key: "gamma", label: "Gamma %", index: 2, min: 10, max: 999, value: 100 },
+    { key: "black_output", label: "Black output", index: 3, min: 0, max: 255, value: 0 },
+    { key: "white_output", label: "White output", index: 4, min: 0, max: 255, value: 255 },
+  ] },
+  { kind: 1, name: "Curves", parameters: [
+    { key: "curve", label: "RGB points (input:output)", curve: true, value: "0:0, 255:255" },
+  ] },
+  { kind: 2, name: "Hue / Saturation", parameters: [
+    { key: "hue", label: "Hue", index: 0, min: -180, max: 180, value: 0 },
+    { key: "saturation", label: "Saturation", index: 1, min: -100, max: 100, value: 0 },
+    { key: "lightness", label: "Lightness", index: 2, min: -100, max: 100, value: 0 },
+    { key: "colorize", label: "Colorize", index: 3, boolean: true, value: false },
+    { key: "colorize_hue", label: "Colorize hue", index: 4, min: 0, max: 360, value: 0 },
+    { key: "colorize_saturation", label: "Colorize saturation", index: 5, min: 0, max: 100, value: 25 },
+    { key: "colorize_lightness", label: "Colorize lightness", index: 6, min: -100, max: 100, value: 0 },
+  ] },
+  { kind: 3, name: "Color Balance", parameters: [
+    { key: "cyan_red", label: "Cyan / Red", index: 0, min: -100, max: 100, value: 0 },
+    { key: "magenta_green", label: "Magenta / Green", index: 1, min: -100, max: 100, value: 0 },
+    { key: "yellow_blue", label: "Yellow / Blue", index: 2, min: -100, max: 100, value: 0 },
+  ] },
+  { kind: 4, name: "Invert", parameters: [] },
+  { kind: 5, name: "Posterize", parameters: [
+    { key: "levels", label: "Levels", index: 0, min: 2, max: 255, value: 4 },
+  ] },
+  { kind: 6, name: "Threshold", parameters: [
+    { key: "threshold", label: "Threshold", index: 0, min: 1, max: 255, value: 128 },
+  ] },
+  { kind: 7, name: "Brightness / Contrast", parameters: [
+    { key: "brightness", label: "Brightness", index: 0, min: -150, max: 150, value: 0 },
+    { key: "contrast", label: "Contrast", index: 1, min: -50, max: 100, value: 0 },
+    { key: "legacy", label: "Legacy mode", index: 2, boolean: true, value: false },
+  ] },
+];
+
+const PIXEL_FILTERS = [
+  { id: "patchy.filters.brightness_contrast", name: "Brightness / Contrast", parameters: [
+    { key: "brightness", label: "Brightness", kind: "integer", min: -100, max: 100, value: 0 },
+    { key: "contrast", label: "Contrast", kind: "integer", min: -100, max: 100, value: 0 },
+  ] },
+  { id: "patchy.filters.invert", name: "Invert", parameters: [
+    { key: "amount", label: "Amount", kind: "integer", min: 0, max: 100, value: 100 },
+  ] },
+  { id: "patchy.filters.grayscale", name: "Grayscale", parameters: [
+    { key: "amount", label: "Amount", kind: "integer", min: 0, max: 100, value: 100 },
+  ] },
+  { id: "patchy.filters.sepia", name: "Sepia", parameters: [
+    { key: "amount", label: "Amount", kind: "integer", min: 0, max: 100, value: 100 },
+  ] },
+  { id: "patchy.filters.threshold", name: "Threshold", parameters: [
+    { key: "threshold", label: "Threshold", kind: "integer", min: 0, max: 255, value: 128 },
+  ] },
+  { id: "patchy.filters.posterize", name: "Posterize", parameters: [
+    { key: "levels", label: "Levels", kind: "integer", min: 2, max: 16, value: 4 },
+  ] },
+  { id: "patchy.filters.gaussian_blur", name: "Gaussian Blur", parameters: [
+    { key: "radius", label: "Radius", kind: "integer", min: 1, max: 12, value: 2 },
+  ] },
+  { id: "patchy.filters.sharpen", name: "Sharpen", parameters: [
+    { key: "amount", label: "Amount", kind: "integer", min: 0, max: 300, value: 100 },
+  ] },
+  { id: "patchy.filters.unsharp_mask", name: "Unsharp Mask", parameters: [
+    { key: "amount", label: "Amount", kind: "integer", min: 1, max: 500, value: 150 },
+    { key: "radius", label: "Radius", kind: "double", min: 0.1, max: 1000, step: 0.1, value: 2 },
+    { key: "threshold", label: "Threshold", kind: "integer", min: 0, max: 255, value: 8 },
+  ] },
+  { id: "patchy.filters.pixelate", name: "Pixel Mosaic", parameters: [
+    { key: "block_size", label: "Block size", kind: "integer", min: 2, max: 32, value: 4 },
+  ] },
+  { id: "patchy.filters.add_noise", name: "Add Noise", parameters: [
+    { key: "amount", label: "Amount", kind: "double", min: 0.1, max: 400, step: 0.1, value: 12.5 },
+    { key: "distribution", label: "Distribution", kind: "option", value: "uniform",
+      options: [["uniform", "Uniform"], ["gaussian", "Gaussian"]] },
+    { key: "monochromatic", label: "Monochromatic", kind: "boolean", value: false },
+    { key: "seed", label: "Seed", kind: "integer", min: 0, max: 999999999, value: 1 },
+  ] },
+];
+
+function renderFilterParameters() {
+  const definition = PIXEL_FILTERS.find((item) => item.id === $("filterKindInput").value);
+  const container = $("filterParameterFields"); container.replaceChildren();
+  for (const parameter of definition?.parameters || []) {
+    const label = document.createElement("label"); const caption = document.createElement("span");
+    caption.textContent = parameter.label; label.append(caption);
+    let input;
+    if (parameter.kind === "option") {
+      input = document.createElement("select");
+      for (const [value, text] of parameter.options) {
+        const option = document.createElement("option"); option.value = value;
+        option.textContent = text; input.append(option);
+      }
+      input.value = parameter.value;
+    } else {
+      input = document.createElement("input"); input.type = parameter.kind === "boolean" ? "checkbox" : "number";
+      if (parameter.kind === "boolean") input.checked = parameter.value;
+      else {
+        input.value = String(parameter.value); input.min = String(parameter.min);
+        input.max = String(parameter.max); input.step = String(parameter.step || 1);
+      }
+    }
+    input.dataset.filterParameter = parameter.key; label.append(input); container.append(label);
+  }
+}
+
+function openFilterDialog() {
+  if (busy || selectedLayer()?.kind !== 0) return;
+  renderFilterParameters(); $("filterDialog").showModal();
+}
+
+function commitFilter() {
+  const layer = selectedLayer();
+  const definition = PIXEL_FILTERS.find((item) => item.id === $("filterKindInput").value);
+  if (!layer || !definition) return;
+  const parameters = definition.parameters.map((parameter) => {
+    const input = $("filterParameterFields").querySelector(`[data-filter-parameter="${parameter.key}"]`);
+    const value = parameter.kind === "boolean" ? input.checked : parameter.kind === "option" ? input.value : Number(input.value);
+    if ((parameter.kind === "integer" && !Number.isSafeInteger(value)) ||
+        (parameter.kind === "double" && !Number.isFinite(value)) ||
+        (typeof value === "number" && (value < parameter.min || value > parameter.max))) {
+      throw new RangeError(`${parameter.label} is outside the supported range`);
+    }
+    return { key: parameter.key, kind: parameter.kind, value };
+  });
+  $("filterDialog").close(); applyPixelFilter(layer, definition.id, parameters);
 }
 
 function openShapeDialog() {
@@ -1209,20 +1344,70 @@ function openAdjustmentDialog() {
   $("adjustmentDialogTitle").textContent = editing ? "Edit adjustment layer" : "Create adjustment layer";
   $("commitAdjustmentButton").textContent = editing ? "Update adjustment" : "Create adjustment";
   $("adjustmentKindInput").value = String(layer?.adjustment?.kind ?? 7);
-  $("adjustmentValueOne").value = String(layer?.adjustment?.values?.[0] ?? 0);
-  $("adjustmentValueTwo").value = String(layer?.adjustment?.values?.[1] ?? 0);
+  renderAdjustmentParameters(editing ? layer.adjustment : null);
   $("adjustmentDialog").showModal();
+}
+
+function renderAdjustmentParameters(existing = null) {
+  const definition = ADJUSTMENTS.find((item) => item.kind === Number($("adjustmentKindInput").value));
+  const container = $("adjustmentParameterFields"); container.replaceChildren();
+  for (const parameter of definition?.parameters || []) {
+    const label = document.createElement("label"); const caption = document.createElement("span");
+    caption.textContent = parameter.label; label.append(caption);
+    const input = document.createElement("input"); input.dataset.adjustmentParameter = parameter.key;
+    if (parameter.curve) {
+      input.type = "text";
+      input.value = existing?.kind === 1 && existing.curvePoints?.length
+        ? existing.curvePoints.map((point) => `${point.input}:${point.output}`).join(", ")
+        : parameter.value;
+    } else if (parameter.boolean) {
+      input.type = "checkbox";
+      input.checked = existing?.kind === definition.kind
+        ? Boolean(existing.values?.[parameter.index]) : parameter.value;
+    } else {
+      input.type = "number"; input.step = "1";
+      input.min = String(parameter.min); input.max = String(parameter.max);
+      input.value = String(existing?.kind === definition.kind
+        ? existing.values?.[parameter.index] ?? parameter.value : parameter.value);
+    }
+    label.append(input); container.append(label);
+  }
 }
 
 function commitAdjustment() {
   const kind = Number($("adjustmentKindInput").value);
-  const first = Number($("adjustmentValueOne").value);
-  const second = Number($("adjustmentValueTwo").value);
-  if (![kind, first, second].every(Number.isInteger)) return;
-  const defaults = kind === 0 ? [first, second || 255, 100, 0, 255] : kind === 5 ? [Math.max(2, first || 4)]
-    : kind === 6 ? [Math.max(0, first || 128)] : [first, second];
-  const input = { name: adjustmentName(kind), kind, values: defaults,
-    curvePoints: kind === 1 ? [{ input: 0, output: 0 }, { input: 255, output: 255 }] : [] };
+  const definition = ADJUSTMENTS.find((item) => item.kind === kind);
+  if (!definition) return;
+  const values = Array(8).fill(0); let curvePoints = [];
+  for (const parameter of definition.parameters) {
+    const control = $("adjustmentParameterFields").querySelector(
+      `[data-adjustment-parameter="${parameter.key}"]`);
+    if (parameter.curve) {
+      curvePoints = control.value.split(",").map((entry) => entry.trim().split(":").map(Number))
+        .map(([input, output]) => ({ input, output }));
+      if (curvePoints.length < 2 || curvePoints.length > 64 ||
+          curvePoints.some((point) => !Number.isInteger(point.input) || !Number.isInteger(point.output) ||
+            point.input < 0 || point.input > 255 || point.output < 0 || point.output > 255) ||
+          curvePoints.some((point, index) => index > 0 && point.input <= curvePoints[index - 1].input)) {
+        throw new RangeError("Curves require 2–64 ordered input:output points in the 0–255 range");
+      }
+    } else {
+      const value = parameter.boolean ? Number(control.checked) : Number(control.value);
+      if (!Number.isSafeInteger(value) || (!parameter.boolean &&
+          (value < parameter.min || value > parameter.max))) {
+        throw new RangeError(`${parameter.label} is outside the supported range`);
+      }
+      values[parameter.index] = value;
+    }
+  }
+  if (kind === 0 && (values[1] <= values[0] || values[4] < values[3])) {
+    throw new RangeError("Levels white points must not precede black points");
+  }
+  if (kind === 7 && values[2] &&
+      (values[0] < -100 || values[0] > 100 || values[1] < -100 || values[1] > 100)) {
+    throw new RangeError("Legacy brightness and contrast must stay in the -100–100 range");
+  }
+  const input = { name: adjustmentName(kind), kind, values, curvePoints };
   const layer = selectedLayer();
   $("adjustmentDialog").close();
   mutate(layer?.kind === 2 ? "Updating adjustment" : "Creating adjustment", () => layer?.kind === 2
@@ -1575,6 +1760,8 @@ registerCommand("document.recovery", "recoveryButton", openRecoveryDialog, () =>
 registerCommand("document.save", "saveButton", saveDocument, () => !busy && Boolean(snapshot));
 registerCommand("layer.openSmartObject", "openSmartObjectButton", openSmartObjectContents,
   () => !busy && Boolean(selectedLayer()?.smartObject?.contentsEditable));
+registerCommand("layer.filter", "filterLayerButton", openFilterDialog,
+  () => !busy && selectedLayer()?.kind === 0);
 registerCommand("document.export", "exportButton", exportDocument, () => !busy && Boolean(snapshot));
 registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
 registerCommand("document.pastePixels", "pastePixelsButton", pastePixels, () => !busy && Boolean(snapshot) &&
@@ -1625,6 +1812,14 @@ $("ungroupLayerButton").addEventListener("click", () => {
   if (layer?.kind === 1) mutate("Ungrouping layers", () => client.ungroup(layer.id));
 });
 $("invertLayerButton").addEventListener("click", invertSelectedLayer);
+$("filterKindInput").addEventListener("change", renderFilterParameters);
+$("adjustmentKindInput").addEventListener("change", () => renderAdjustmentParameters());
+$("commitFilterButton").addEventListener("click", () => {
+  try { commitFilter(); } catch (error) { showError("Could not apply filter", error); }
+});
+$("commitAdjustmentButton").addEventListener("click", () => {
+  try { commitAdjustment(); } catch (error) { showError("Could not apply adjustment", error); }
+});
 $("textLayerButton").addEventListener("click", openTextDialog);
 $("shapeLayerButton").addEventListener("click", openShapeDialog);
 $("adjustmentLayerButton").addEventListener("click", openAdjustmentDialog);
@@ -1632,7 +1827,6 @@ $("smartObjectButton").addEventListener("click", () => $("smartObjectInput").cli
 $("smartObjectInput").addEventListener("change", () => { placeSmartObject($("smartObjectInput").files[0]); $("smartObjectInput").value = ""; });
 $("smartFilterButton").addEventListener("click", openSmartFilterDialog);
 $("commitShapeButton").addEventListener("click", commitShape);
-$("commitAdjustmentButton").addEventListener("click", commitAdjustment);
 $("commitSmartFilterButton").addEventListener("click", commitSmartFilter);
 $("layerTransformButton").addEventListener("click", openLayerTransformDialog);
 $("commitTextButton").addEventListener("click", commitTextDialog);
