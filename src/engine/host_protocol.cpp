@@ -3,6 +3,7 @@
 #include "engine/document_session.hpp"
 #include "core/adjustment_layer.hpp"
 #include "core/layer_metadata.hpp"
+#include "core/pattern_resource.hpp"
 #include "core/smart_object.hpp"
 #include "filters/smart_filter_renderer.hpp"
 #include "formats/document_flatten.hpp"
@@ -19,6 +20,7 @@
 #include <new>
 #include <limits>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -135,7 +137,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_VECTOR_MASK_AUTHORING |
     PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING |
     PATCHY_ENGINE_CAP_SELECTION_AUTHORING |
-    PATCHY_ENGINE_CAP_MEMORY_CONTROL;
+    PATCHY_ENGINE_CAP_MEMORY_CONTROL |
+    PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -252,6 +255,49 @@ bool expected_state(const patchy_engine_session *session,
     return false;
   }
   return true;
+}
+
+bool transferable_layer_tree(const patchy::Layer &layer,
+                             patchy_engine_error *error) {
+  if (patchy::layer_is_smart_object(layer) ||
+      patchy::layer_is_vector_shape(layer) ||
+      layer.smart_filter_stack() != nullptr) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "Smart Objects, Smart Filters and vector shapes require document resources and cannot be transferred yet");
+    return false;
+  }
+  std::vector<std::string> pattern_ids;
+  patchy::collect_referenced_pattern_ids(layer, pattern_ids);
+  if (!pattern_ids.empty()) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "layers with pattern resources cannot be transferred yet");
+    return false;
+  }
+  return std::all_of(layer.children().begin(), layer.children().end(),
+                     [error](const patchy::Layer &child) {
+                       return transferable_layer_tree(child, error);
+                     });
+}
+
+patchy::Layer clone_transferable_layer(const patchy::Layer &source,
+                                       patchy::Document &target,
+                                       std::set<std::uint32_t> &photoshop_ids,
+                                       std::uint32_t &next_photoshop_id) {
+  auto clone = source.clone_with_id(target.allocate_layer_id());
+  clone.children().clear();
+  if (patchy::photoshop_layer_id(source).has_value()) {
+    while (next_photoshop_id == 0 || photoshop_ids.contains(next_photoshop_id)) {
+      ++next_photoshop_id;
+    }
+    patchy::set_photoshop_layer_id(clone, next_photoshop_id);
+    photoshop_ids.insert(next_photoshop_id++);
+  }
+  for (const auto &child : source.children()) {
+    clone.children().push_back(
+        clone_transferable_layer(child, target, photoshop_ids,
+                                 next_photoshop_id));
+  }
+  return clone;
 }
 
 bool valid_rgba_payload(const std::uint8_t *rgba, std::size_t rgba_size,
@@ -3245,6 +3291,81 @@ int patchy_engine_session_group_layer(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown group-layer failure");
+  }
+}
+
+int patchy_engine_session_copy_layer(
+    patchy_engine_session *target, std::uint64_t expected_target_state_id,
+    std::uint64_t expected_target_revision,
+    const patchy_engine_session *source,
+    std::uint64_t expected_source_state_id,
+    std::uint64_t expected_source_revision, std::uint64_t source_layer_id,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (target == nullptr || target->value == nullptr || source == nullptr ||
+      source->value == nullptr || source_layer_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "source, target and source layer are required");
+  }
+  if (!expected_state(target, expected_target_state_id,
+                      expected_target_revision, error) ||
+      !expected_state(source, expected_source_state_id,
+                      expected_source_revision, error)) {
+    return 0;
+  }
+  try {
+    const auto &source_document = source->value->document();
+    const auto *source_layer = source_document.find_layer(source_layer_id);
+    if (source_layer == nullptr) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "source layer does not exist");
+    }
+    if (source_document.format() != target->value->document().format()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "source and target pixel formats must match");
+    }
+    if (!transferable_layer_tree(*source_layer, error)) {
+      return 0;
+    }
+
+    auto prepared = target->value->document();
+    std::set<std::uint32_t> photoshop_ids;
+    const auto collect_ids = [&photoshop_ids](
+                                 const auto &self,
+                                 const std::vector<patchy::Layer> &layers) -> void {
+      for (const auto &layer : layers) {
+        if (const auto id = patchy::photoshop_layer_id(layer); id.has_value()) {
+          photoshop_ids.insert(*id);
+        }
+        self(self, layer.children());
+      }
+    };
+    collect_ids(collect_ids, prepared.layers());
+    auto next_photoshop_id =
+        patchy::next_photoshop_layer_id(prepared.layers());
+    auto clone = clone_transferable_layer(*source_layer, prepared,
+                                          photoshop_ids, next_photoshop_id);
+    const auto new_layer_id = clone.id();
+    const auto affected = clone.bounds();
+    prepared.add_layer(std::move(clone));
+    auto result = target->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::CopyLayerTree,
+            expected_target_state_id, std::move(prepared), affected});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    result.affected_layer_id = new_layer_id;
+    publish_event(*target->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate transferred layer tree");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown cross-document layer transfer failure");
   }
 }
 

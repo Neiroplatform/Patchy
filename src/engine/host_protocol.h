@@ -41,6 +41,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING = UINT64_C(1) << 24,
   PATCHY_ENGINE_CAP_SELECTION_AUTHORING = UINT64_C(1) << 25,
   PATCHY_ENGINE_CAP_MEMORY_CONTROL = UINT64_C(1) << 26,
+  PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS = UINT64_C(1) << 27,
 };
 
 enum patchy_engine_error_code {
@@ -1024,6 +1025,12 @@ int patchy_engine_session_group_layer(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, uint64_t layer_id, const char *name,
     size_t name_size, patchy_engine_event *event,
+    patchy_engine_error *error);
+int patchy_engine_session_copy_layer(
+    patchy_engine_session *target, uint64_t expected_target_state_id,
+    uint64_t expected_target_revision, const patchy_engine_session *source,
+    uint64_t expected_source_state_id, uint64_t expected_source_revision,
+    uint64_t source_layer_id, patchy_engine_event *event,
     patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,

@@ -66,6 +66,9 @@ export class PatchyWorkerClient {
   snapshot(): Promise<DocumentProjection>;
   listDocuments(): Promise<DocumentTabProjection[]>;
   activateDocument(documentId: number): Promise<DocumentProjection>;
+  copyLayerToDocument(input: { sourceDocumentId: number; targetDocumentId: number;
+    layerId: bigint; expectedSourceStateId: bigint; expectedSourceRevision: bigint;
+    expectedTargetStateId: bigint; expectedTargetRevision: bigint }): Promise<DocumentProjection>;
   closeDocument(documentId: number): Promise<DocumentProjection | null>;
   setMemoryBudget(documentBytes: number, globalBytes: number): Promise<DocumentProjection>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;

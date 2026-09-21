@@ -11,6 +11,7 @@
 #include "test_harness.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -2140,6 +2141,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_PATH_PROJECTION) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_VECTOR_AUTHORING) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_MEMORY_CONTROL) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -3812,6 +3814,128 @@ void engine_host_protocol_authors_nondestructive_workflow() {
   patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_copies_layers_between_sessions_atomically() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *source = patchy_engine_session_create_rgba8(runtime, 2, 2, &error);
+  auto *target = patchy_engine_session_create_rgba8(runtime, 2, 2, &error);
+  CHECK(source != nullptr);
+  CHECK(target != nullptr);
+
+  patchy_engine_document_projection source_before{};
+  source_before.struct_size = sizeof(source_before);
+  CHECK(patchy_engine_session_document(source, &source_before, &error) == 1);
+  const std::array<std::uint8_t, 16> rgba{
+      255, 0, 0, 255, 0, 255, 0, 255,
+      0, 0, 255, 255, 255, 255, 255, 255};
+  constexpr char name[] = "Transfer me";
+  patchy_engine_pixel_layer_input input{};
+  input.struct_size = sizeof(input);
+  input.expected_state_id = source_before.state_id;
+  input.expected_revision = source_before.revision;
+  input.bounds = {0, 0, 2, 2};
+  input.width = 2;
+  input.height = 2;
+  input.rgba = rgba.data();
+  input.rgba_size = rgba.size();
+  input.name = name;
+  input.name_size = sizeof(name) - 1U;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(source, &input, &event, &error) ==
+        1);
+  const auto child_layer_id = event.affected_layer_id;
+  patchy_engine_document_projection source_with_pixels{};
+  source_with_pixels.struct_size = sizeof(source_with_pixels);
+  CHECK(patchy_engine_session_document(source, &source_with_pixels, &error) == 1);
+  const std::array<std::uint8_t, 4> gray{255, 128, 64, 0};
+  patchy_engine_layer_mask_input mask{};
+  mask.struct_size = sizeof(mask);
+  mask.expected_state_id = source_with_pixels.state_id;
+  mask.expected_revision = source_with_pixels.revision;
+  mask.layer_id = child_layer_id;
+  mask.bounds = {0, 0, 2, 2};
+  mask.width = 2;
+  mask.height = 2;
+  mask.gray = gray.data();
+  mask.gray_size = gray.size();
+  mask.default_color = 0;
+  mask.linked = 1;
+  mask.has_mask = 1;
+  CHECK(patchy_engine_session_set_layer_mask(source, &mask, &event, &error) == 1);
+  patchy_engine_document_projection source_with_mask{};
+  source_with_mask.struct_size = sizeof(source_with_mask);
+  CHECK(patchy_engine_session_document(source, &source_with_mask, &error) == 1);
+  constexpr char group_name[] = "Transfer group";
+  CHECK(patchy_engine_session_group_layer(
+            source, source_with_mask.state_id, source_with_mask.revision,
+            child_layer_id, group_name, sizeof(group_name) - 1U, &event,
+            &error) == 1);
+  const auto source_layer_id = event.affected_layer_id;
+
+  patchy_engine_document_projection source_ready{};
+  source_ready.struct_size = sizeof(source_ready);
+  patchy_engine_document_projection target_before{};
+  target_before.struct_size = sizeof(target_before);
+  CHECK(patchy_engine_session_document(source, &source_ready, &error) == 1);
+  CHECK(patchy_engine_session_document(target, &target_before, &error) == 1);
+  CHECK(patchy_engine_session_copy_layer(
+            target, target_before.state_id, target_before.revision, source,
+            source_ready.state_id, source_ready.revision, source_layer_id,
+            &event, &error) == 1);
+  CHECK(event.changed == 1);
+  CHECK(event.revision == target_before.revision + 1U);
+  CHECK(event.affected_layer_id != 0);
+
+  patchy_engine_document_projection target_after{};
+  target_after.struct_size = sizeof(target_after);
+  patchy_engine_document_projection source_after{};
+  source_after.struct_size = sizeof(source_after);
+  CHECK(patchy_engine_session_document(target, &target_after, &error) == 1);
+  CHECK(patchy_engine_session_document(source, &source_after, &error) == 1);
+  CHECK(target_after.layer_count == 2U);
+  CHECK(source_after.revision == source_ready.revision);
+  CHECK(source_after.state_id == source_ready.state_id);
+  CHECK(patchy_engine_session_undo(target, &event, &error) == 1);
+  CHECK(patchy_engine_session_document(target, &target_after, &error) == 1);
+  CHECK(target_after.layer_count == 0U);
+  CHECK(patchy_engine_session_redo(target, &event, &error) == 1);
+  CHECK(patchy_engine_session_document(target, &target_after, &error) == 1);
+  CHECK(target_after.layer_count == 2U);
+  patchy_engine_layer_projection projected{};
+  std::uint64_t copied_child_id = 0;
+  for (std::size_t index = 0; index < target_after.layer_count; ++index) {
+    CHECK(patchy_engine_session_layer_at(target, index, &projected, &error) == 1);
+    if (projected.kind == PATCHY_ENGINE_LAYER_PIXEL) copied_child_id = projected.id;
+  }
+  CHECK(copied_child_id != 0);
+  patchy_engine_layer_mask_projection copied_mask{};
+  copied_mask.struct_size = sizeof(copied_mask);
+  CHECK(patchy_engine_session_layer_mask(target, copied_child_id, &copied_mask,
+                                         &error) == 1);
+  CHECK(copied_mask.has_mask == 1);
+  patchy_engine_buffer psd{};
+  CHECK(patchy_engine_session_save_psd(target, &psd, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size, &error);
+  CHECK(reopened != nullptr);
+  patchy_engine_document_projection reopened_document{};
+  reopened_document.struct_size = sizeof(reopened_document);
+  CHECK(patchy_engine_session_document(reopened, &reopened_document, &error) == 1);
+  CHECK(reopened_document.layer_count == 2U);
+  patchy_engine_buffer_release(&psd);
+  patchy_engine_session_destroy(reopened);
+
+  CHECK(patchy_engine_session_copy_layer(
+            target, target_before.state_id, target_before.revision, source,
+            source_ready.state_id, source_ready.revision, source_layer_id,
+            &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  patchy_engine_session_destroy(target);
+  patchy_engine_session_destroy(source);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -3894,5 +4018,7 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_authors_text_and_smart_objects},
       {"engine_host_protocol_authors_nondestructive_workflow",
        engine_host_protocol_authors_nondestructive_workflow},
+      {"engine_host_protocol_copies_layers_between_sessions_atomically",
+       engine_host_protocol_copies_layers_between_sessions_atomically},
   };
 }

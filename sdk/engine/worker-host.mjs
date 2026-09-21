@@ -32,6 +32,27 @@ export class PatchyWorkerHost {
       case "activateDocument":
         this.#activateDocument(message.documentId);
         return this.#snapshot();
+      case "copyLayerToDocument": {
+        const sourceId = Number(message.sourceDocumentId);
+        const targetId = Number(message.targetDocumentId);
+        const source = this.#sessions.get(sourceId);
+        const target = this.#sessions.get(targetId);
+        if (!source || !target) throw new Error("Patchy source or target document does not exist");
+        const sourceSnapshot = this.#engine.snapshot(source.session);
+        const targetSnapshot = this.#engine.snapshot(target.session);
+        if (sourceSnapshot.stateId !== BigInt(message.expectedSourceStateId) ||
+            sourceSnapshot.revision !== BigInt(message.expectedSourceRevision) ||
+            targetSnapshot.stateId !== BigInt(message.expectedTargetStateId) ||
+            targetSnapshot.revision !== BigInt(message.expectedTargetRevision)) {
+          const error = new Error("Layer transfer was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6;
+          throw error;
+        }
+        this.#engine.copyLayerToSession(target.session, targetSnapshot,
+          source.session, sourceSnapshot, BigInt(message.layerId));
+        this.#activateDocument(targetId);
+        return this.#snapshot();
+      }
       case "closeDocument": return this.#closeDocument(message.documentId);
       case "addPsdSmartObject": {
         const parent = this.#sessions.get(this.#activeDocumentId);

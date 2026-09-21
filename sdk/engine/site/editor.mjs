@@ -31,6 +31,8 @@ let gradientDraft = null;
 let lassoDraft = null;
 let polygonDraft = null;
 let clipboardImageBlob = null;
+let layerClipboard = null;
+let draggedLayer = null;
 let workspaceAvailable = false;
 let automaticRecoveryEnabled = false;
 let recoveryPromise = null;
@@ -115,7 +117,7 @@ function updateControls() {
   $("exportButton").disabled = busy || !snapshot;
   $("copyPixelsButton").disabled = busy || !snapshot;
   $("pastePixelsButton").disabled = busy || !snapshot ||
-    (!clipboardImageBlob && !navigator.clipboard?.read);
+    (!layerClipboard && !clipboardImageBlob && !navigator.clipboard?.read);
   $("undoButton").disabled = busy || !snapshot?.canUndo;
   $("redoButton").disabled = busy || !snapshot?.canRedo;
   $("openButton").disabled = busy;
@@ -323,6 +325,7 @@ async function recoverEngineAfterCrash() {
         checkpointStates.set(item.documentId, "confirmed");
       }
       selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+      layerClipboard = null; draggedLayer = null;
       await acceptSnapshot(result.activeSnapshot);
       automaticRecoveryEnabled = true;
       const reverted = result.restored.filter((item) => !item.confirmedAtCrash);
@@ -511,6 +514,7 @@ function renderLayers() {
   for (const [index, layer] of layers.entries()) {
     const row = document.createElement("div");
     row.className = "layer-row";
+    row.draggable = true;
     row.setAttribute("role", "listitem");
     row.dataset.active = String(selectedLayerId === layer.id);
     row.innerHTML = `
@@ -527,6 +531,12 @@ function renderLayers() {
       renderLayers();
       renderLayerProperties();
     });
+    row.addEventListener("dragstart", (event) => {
+      draggedLayer = captureLayerReference(layer);
+      event.dataTransfer?.setData("application/x-patchy-layer", String(layer.id));
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+    });
+    row.addEventListener("dragend", () => { draggedLayer = null; });
     row.querySelector(".visibility-button").addEventListener("click", () =>
       mutate("Updating layer", async () => client.setLayerVisibility(layer.id, !layer.visible)));
     const reorder = async (direction) => {
@@ -613,6 +623,19 @@ function renderDocumentTabs() {
   for (const documentTab of documents) {
     const item = document.createElement("span"); item.className = "document-tab";
     item.dataset.active = String(documentTab.active);
+    item.addEventListener("dragover", (event) => {
+      if (!draggedLayer) return;
+      event.preventDefault(); event.stopPropagation();
+      item.dataset.dropTarget = "true";
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    });
+    item.addEventListener("dragleave", () => { delete item.dataset.dropTarget; });
+    item.addEventListener("drop", (event) => {
+      if (!draggedLayer) return;
+      event.preventDefault(); event.stopPropagation(); delete item.dataset.dropTarget;
+      transferLayerReference(draggedLayer, documentTab.id);
+      draggedLayer = null;
+    });
     const activate = document.createElement("button"); activate.type = "button";
     activate.setAttribute("role", "tab"); activate.setAttribute("aria-selected", String(documentTab.active));
     activate.title = documentTab.name;
@@ -1036,6 +1059,12 @@ function renderedSelectionCanvas() {
 async function copyRenderedPixels() {
   if (busy || !snapshot) return;
   try {
+    const layer = selectedLayer();
+    if (layer) {
+      layerClipboard = captureLayerReference(layer);
+      updateControls(); setSessionState("document", "Editable layer copied locally");
+      return;
+    }
     clipboardImageBlob = await canvasBlob(renderedSelectionCanvas(), "image/png");
     if (navigator.clipboard?.write && globalThis.ClipboardItem) {
       try { await navigator.clipboard.write([new ClipboardItem({ "image/png": clipboardImageBlob })]); }
@@ -1048,6 +1077,10 @@ async function copyRenderedPixels() {
 async function pastePixels() {
   if (busy || !snapshot) return;
   try {
+    if (layerClipboard) {
+      await transferLayerReference(layerClipboard, snapshot.documentId);
+      return;
+    }
     let blob = null;
     if (navigator.clipboard?.read) {
       try {
@@ -1062,6 +1095,30 @@ async function pastePixels() {
     const file = new File([blob], "Clipboard pixels.png", { type: blob.type || "image/png" });
     await importPixelLayer(file);
   } catch (error) { showError("Could not paste pixels", error); }
+}
+
+function captureLayerReference(layer) {
+  return { sourceDocumentId: snapshot.documentId, layerId: layer.id,
+    expectedSourceStateId: snapshot.stateId,
+    expectedSourceRevision: snapshot.revision, name: layer.name };
+}
+
+async function transferLayerReference(reference, targetDocumentId) {
+  if (busy || !snapshot || !reference) return;
+  clearError(); setBusy(true, "Copying editable layer", "Committing one canonical target revision");
+  try {
+    let target = snapshot;
+    if (target.documentId !== targetDocumentId) {
+      target = await client.activateDocument(targetDocumentId);
+      selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    }
+    const next = await client.copyLayerToDocument({ ...reference,
+      targetDocumentId, expectedTargetStateId: target.stateId,
+      expectedTargetRevision: target.revision });
+    selectedLayerId = next.activeLayerId;
+    await acceptSnapshot(next); scheduleCheckpoint(next);
+  } catch (error) { showError("Could not copy editable layer", error); }
+  finally { setBusy(false); }
 }
 
 async function decodeLocalImage(file) {
@@ -1765,7 +1822,7 @@ registerCommand("layer.filter", "filterLayerButton", openFilterDialog,
 registerCommand("document.export", "exportButton", exportDocument, () => !busy && Boolean(snapshot));
 registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
 registerCommand("document.pastePixels", "pastePixelsButton", pastePixels, () => !busy && Boolean(snapshot) &&
-  Boolean(clipboardImageBlob || navigator.clipboard?.read));
+  Boolean(layerClipboard || clipboardImageBlob || navigator.clipboard?.read));
 registerCommand("history.undo", "undoButton", () => mutate("Undo", () => client.undo()), () => !busy && Boolean(snapshot?.canUndo));
 registerCommand("history.redo", "redoButton", () => mutate("Redo", () => client.redo()), () => !busy && Boolean(snapshot?.canRedo));
 registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
@@ -2182,6 +2239,7 @@ window.addEventListener("keydown", (event) => {
 
 for (const type of ["dragenter", "dragover"]) {
   window.addEventListener(type, (event) => {
+    if (event.dataTransfer?.types?.includes("application/x-patchy-layer")) return;
     event.preventDefault();
     if (type === "dragenter") dragDepth++;
     $("dropState").hidden = false;
@@ -2189,6 +2247,7 @@ for (const type of ["dragenter", "dragover"]) {
 }
 window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropState").hidden = true; } });
 window.addEventListener("drop", (event) => {
+  if (event.dataTransfer?.types?.includes("application/x-patchy-layer")) return;
   event.preventDefault(); dragDepth = 0; $("dropState").hidden = true;
   const file = event.dataTransfer?.files?.[0];
   if (!file) return;

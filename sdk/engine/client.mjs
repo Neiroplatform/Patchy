@@ -59,6 +59,17 @@ export class PatchyWorkerClient {
   snapshot() { return this.#request("snapshot"); }
   listDocuments() { return this.#request("listDocuments"); }
   activateDocument(documentId) { return this.#request("activateDocument", { documentId }); }
+  copyLayerToDocument(input) {
+    return this.#request("copyLayerToDocument", {
+      sourceDocumentId: input.sourceDocumentId,
+      targetDocumentId: input.targetDocumentId,
+      layerId: String(input.layerId),
+      expectedSourceStateId: String(input.expectedSourceStateId),
+      expectedSourceRevision: String(input.expectedSourceRevision),
+      expectedTargetStateId: String(input.expectedTargetStateId),
+      expectedTargetRevision: String(input.expectedTargetRevision),
+    });
+  }
   closeDocument(documentId) { return this.#request("closeDocument", { documentId }); }
   setMemoryBudget(documentBytes, globalBytes) {
     return this.#request("setMemoryBudget", { documentBytes, globalBytes });

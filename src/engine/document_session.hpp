@@ -383,6 +383,7 @@ enum class PreparedDocumentMutationKind : std::uint8_t {
   SmartObject,
   Path,
   MergeRasterize,
+  CopyLayerTree,
 };
 
 struct CommitPreparedDocumentState {

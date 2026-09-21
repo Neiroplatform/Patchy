@@ -63,6 +63,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     assert.match(html, new RegExp(`id="${id}"`));
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
+    "client.copyLayerToDocument",
     "client.setLayerVisibility",
     "client.moveLayer", "client.addPixelLayer", "client.groupLayer", "client.removeLayer",
     "client.renameLayer", "client.setLayerOpacity", "client.setLayerBlendMode",
@@ -112,6 +113,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /registerCommand\("tool\.gradient"/);
   assert.match(script, /registerCommand\("document\.export"/);
   assert.match(script, /navigator\.clipboard/);
+  assert.match(script, /application\/x-patchy-layer/);
+  assert.match(script, /draggable = true/);
   assert.match(script, /fullSelectionMask\(\)/);
   assert.match(html, /image\/svg\+xml/);
   assert.match(html, /SVG \(flattened\)/);
@@ -244,7 +247,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 27n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 28n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -358,6 +361,12 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_group_layer(session, state, revision, layer, name, nameSize) {
       assert.deepEqual([session, state, revision, layer], [22, 9n, 4n, 7n]);
       assert.equal(new TextDecoder().decode(heap.subarray(name, name + nameSize)), "Group");
+      return 1;
+    },
+    _patchy_engine_session_copy_layer(target, targetState, targetRevision,
+        source, sourceState, sourceRevision, layerId) {
+      assert.deepEqual([target, targetState, targetRevision, source, sourceState,
+        sourceRevision, layerId], [22, 9n, 4n, 22, 9n, 4n, 7n]);
       return 1;
     },
     _patchy_engine_session_add_rgba8_layer(session, input) {
@@ -492,7 +501,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 27n) - 1n);
+  assert.equal(engine.capabilities, (1n << 28n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -580,6 +589,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     rgba: new Uint8Array([1, 2, 3, 4]), sourceBytes: new Uint8Array([5, 6, 7, 8]) });
   engine.setSmartFilter(session, snapshot, 7n, { kind: 1, amount: 4 });
   engine.groupLayer(session, snapshot, 7n, "Group");
+  engine.copyLayerToSession(session, snapshot, session, snapshot, 7n);
   engine.ungroup(session, snapshot, 7n);
   engine.addPixelLayer(session, snapshot, { name: "Pixel", width: 1, height: 1,
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) });
@@ -857,6 +867,43 @@ test("one Worker owns isolated switchable document sessions", async () => {
   assert.deepEqual(closed, [101]);
   host.dispose();
   assert.deepEqual(closed, [101, 100]);
+});
+
+test("worker copies one exact editable layer state into one atomic target revision", async () => {
+  let nextSession = 100;
+  const revisions = new Map();
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 27n,
+    create() { const session = nextSession++; revisions.set(session, 1n); return session; },
+    snapshot(session) {
+      const revision = revisions.get(session);
+      return { ...projection(Number(revision)), revision, stateId: revision };
+    },
+    copyLayerToSession(target, targetSnapshot, source, sourceSnapshot, layerId) {
+      calls.push({ target, targetSnapshot, source, sourceSnapshot, layerId });
+      revisions.set(target, revisions.get(target) + 1n);
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  const source = await host.dispatch({ method: "create", width: 3, height: 2, name: "Source.psd" });
+  const target = await host.dispatch({ method: "create", width: 3, height: 2, name: "Target.psd" });
+  const copied = await host.dispatch({ method: "copyLayerToDocument",
+    sourceDocumentId: source.documentId, targetDocumentId: target.documentId,
+    layerId: "7", expectedSourceStateId: "1", expectedSourceRevision: "1",
+    expectedTargetStateId: "1", expectedTargetRevision: "1" });
+  assert.equal(copied.documentId, target.documentId);
+  assert.equal(copied.revision, 2n);
+  assert.equal(revisions.get(calls[0].source), 1n);
+  assert.equal(calls[0].layerId, 7n);
+  await assert.rejects(host.dispatch({ method: "copyLayerToDocument",
+    sourceDocumentId: source.documentId, targetDocumentId: target.documentId,
+    layerId: "7", expectedSourceStateId: "1", expectedSourceRevision: "1",
+    expectedTargetStateId: "1", expectedTargetRevision: "1" }),
+  (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.equal(calls.length, 1);
+  host.dispose();
 });
 
 test("Smart Object contents open once and save back as one stale-guarded parent revision", async () => {

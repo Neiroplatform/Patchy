@@ -431,6 +431,18 @@ export class EmscriptenPatchyEngine {
     } finally { this.#module._free(pointer); }
   }
 
+  copyLayerToSession(targetSession, targetSnapshot, sourceSession,
+                     sourceSnapshot, sourceLayerId) {
+    if (typeof sourceLayerId !== "bigint" || sourceLayerId <= 0n) {
+      throw new TypeError("A positive source layer id is required");
+    }
+    return this.#mutation((event, error) =>
+      this.#module._patchy_engine_session_copy_layer(
+        targetSession, targetSnapshot.stateId, targetSnapshot.revision,
+        sourceSession, sourceSnapshot.stateId, sourceSnapshot.revision,
+        sourceLayerId, event, error));
+  }
+
   rasterizeLayer(session, snapshot, layerId) {
     const layer = snapshot.layers.find((candidate) => candidate.id === layerId);
     if (!layer || ![3, 4, 5].includes(layer.kind) ||

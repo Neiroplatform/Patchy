@@ -168,8 +168,28 @@ try {
 
     const second = await client.create(2, 2, "Second.psd");
     check(second.documents.length === 2, "second isolated session was not retained");
+    const copied = await client.copyLayerToDocument({
+      sourceDocumentId: first.documentId, targetDocumentId: second.documentId,
+      layerId, expectedSourceStateId: opacity.stateId,
+      expectedSourceRevision: opacity.revision,
+      expectedTargetStateId: second.stateId,
+      expectedTargetRevision: second.revision,
+    });
+    check(copied.documentId === second.documentId && copied.layers.length === 1 &&
+      copied.revision === second.revision + 1n,
+    "cross-document layer copy was not one target revision");
+    const undoneCopy = await client.undo();
+    check(undoneCopy.layers.length === 0, "cross-document copy was not undoable");
+    const redoneCopy = await client.redo();
+    check(redoneCopy.layers.length === 1, "cross-document copy was not redoable");
+    const copiedPsd = await client.saveDocument(second.documentId);
+    const reopenedCopy = await client.open(copiedPsd, "Copied layer.psd");
+    check(reopenedCopy.layers.length === 1,
+      "cross-document copied layer did not survive save/reopen");
+    await client.closeDocument(reopenedCopy.documentId);
     await workspaceStore.checkpoint({ id: workspaceTwo, name: "Second.psd",
-      revision: second.revision, dirty: false, bytes: await client.saveDocument(second.documentId) });
+      revision: redoneCopy.revision, dirty: true,
+      bytes: await client.saveDocument(second.documentId) });
     const restored = await client.activateDocument(first.documentId);
     check(restored.documentId === first.documentId && restored.layers.length === 1,
       "document switch lost canonical state");
