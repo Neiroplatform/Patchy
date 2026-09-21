@@ -24,12 +24,17 @@ export class PatchyWorkerClient {
     this.#state = "ready";
   }
 
-  open(bytes) {
+  open(bytes, name = "Document.psd") {
     const owned = bytes.slice();
-    return this.#request("open", { bytes: owned.buffer }, [owned.buffer]);
+    return this.#request("open", { bytes: owned.buffer, name }, [owned.buffer]);
   }
-  create(width, height) { return this.#request("create", { width, height }); }
+  create(width, height, name = "Untitled.psd") {
+    return this.#request("create", { width, height, name });
+  }
   snapshot() { return this.#request("snapshot"); }
+  listDocuments() { return this.#request("listDocuments"); }
+  activateDocument(documentId) { return this.#request("activateDocument", { documentId }); }
+  closeDocument(documentId) { return this.#request("closeDocument", { documentId }); }
   setLayerVisibility(layerId, visible) {
     return this.#request("setLayerVisibility", { layerId: String(layerId), visible });
   }
@@ -44,6 +49,9 @@ export class PatchyWorkerClient {
   }
   setLayerClipping(layerId, clipped) {
     return this.#request("setLayerClipping", { layerId: String(layerId), clipped });
+  }
+  setLayerStylePreset(layerId, presetId) {
+    return this.#request("setLayerStylePreset", { layerId: String(layerId), presetId });
   }
   setLayerBlendMode(layerId, blendMode) {
     return this.#request("setLayerBlendMode", { layerId: String(layerId), blendMode });

@@ -1,8 +1,13 @@
 import { EmscriptenPatchyEngine } from "./module-adapter.mjs";
 
+const MAX_OPEN_DOCUMENTS = 16;
+
 export class PatchyWorkerHost {
   #engine;
   #session = 0;
+  #activeDocumentId = 0;
+  #nextDocumentId = 1;
+  #sessions = new Map();
 
   constructor(engine) { this.#engine = engine; }
 
@@ -11,12 +16,19 @@ export class PatchyWorkerHost {
   async dispatch(message) {
     switch (message.method) {
       case "open":
-        this.#replaceSession(this.#engine.open(new Uint8Array(message.bytes)));
-        return this.#engine.snapshot(this.#session);
+        this.#addSession(this.#engine.open(new Uint8Array(message.bytes)),
+          message.name || "Document.psd");
+        return this.#snapshot();
       case "create":
-        this.#replaceSession(this.#engine.create(message.width, message.height));
-        return this.#engine.snapshot(this.#session);
+        this.#addSession(this.#engine.create(message.width, message.height),
+          message.name || "Untitled.psd");
+        return this.#snapshot();
       case "snapshot": return this.#snapshot();
+      case "listDocuments": return this.#documentList();
+      case "activateDocument":
+        this.#activateDocument(message.documentId);
+        return this.#snapshot();
+      case "closeDocument": return this.#closeDocument(message.documentId);
       case "setLayerVisibility":
         this.#engine.setLayerVisibility(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
@@ -38,6 +50,10 @@ export class PatchyWorkerHost {
       case "setLayerClipping":
         this.#engine.setLayerClipping(this.#requireSession(), this.#snapshot(),
           BigInt(message.layerId), message.clipped);
+        return this.#snapshot();
+      case "setLayerStylePreset":
+        this.#engine.setLayerStylePreset(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId), message.presetId);
         return this.#snapshot();
       case "setLayerBlendMode":
         this.#engine.setLayerBlendMode(
@@ -255,26 +271,63 @@ export class PatchyWorkerHost {
       case "render":
         return this.#engine.render(this.#requireSession(), message.region);
       case "save": return this.#engine.save(this.#requireSession());
-      case "close": this.#replaceSession(0); return null;
+      case "close": return this.#closeDocument(this.#activeDocumentId);
       default: throw new TypeError(`Unknown Patchy worker method: ${message.method}`);
     }
   }
 
   dispose() {
-    this.#replaceSession(0);
+    for (const { session } of this.#sessions.values()) this.#engine.close(session);
+    this.#sessions.clear(); this.#session = 0; this.#activeDocumentId = 0;
     this.#engine.dispose();
   }
 
-  #snapshot() { return this.#engine.snapshot(this.#requireSession()); }
+  #snapshot() {
+    const projection = this.#engine.snapshot(this.#requireSession());
+    const active = this.#sessions.get(this.#activeDocumentId);
+    active.dirty = projection.dirty; active.revision = projection.revision;
+    return { ...projection, documentId: this.#activeDocumentId,
+      documentName: active.name, documents: this.#documentList() };
+  }
 
   #requireSession() {
     if (!this.#session) throw new Error("No Patchy document is open");
     return this.#session;
   }
 
-  #replaceSession(next) {
-    if (this.#session) this.#engine.close(this.#session);
-    this.#session = next;
+  #addSession(session, name) {
+    if (this.#sessions.size >= MAX_OPEN_DOCUMENTS) {
+      this.#engine.close(session);
+      throw new RangeError(`Patchy supports at most ${MAX_OPEN_DOCUMENTS} open browser documents`);
+    }
+    const documentId = this.#nextDocumentId++;
+    this.#sessions.set(documentId, { session, name, dirty: false, revision: 1n });
+    this.#activeDocumentId = documentId; this.#session = session;
+  }
+
+  #activateDocument(documentId) {
+    const id = Number(documentId); const record = this.#sessions.get(id);
+    if (!record) throw new Error("Patchy document does not exist");
+    this.#activeDocumentId = id; this.#session = record.session;
+  }
+
+  #closeDocument(documentId) {
+    const id = Number(documentId || this.#activeDocumentId);
+    const record = this.#sessions.get(id);
+    if (!record) throw new Error("Patchy document does not exist");
+    this.#engine.close(record.session); this.#sessions.delete(id);
+    if (id === this.#activeDocumentId) {
+      const remaining = [...this.#sessions.keys()];
+      this.#activeDocumentId = remaining.at(-1) || 0;
+      this.#session = this.#sessions.get(this.#activeDocumentId)?.session || 0;
+    }
+    return this.#session ? this.#snapshot() : null;
+  }
+
+  #documentList() {
+    return [...this.#sessions.entries()].map(([id, record]) => ({ id,
+      name: record.name, dirty: record.dirty, revision: record.revision,
+      active: id === this.#activeDocumentId }));
   }
 
   #mutateExistingMask(layerId, change) {

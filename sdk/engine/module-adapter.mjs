@@ -176,6 +176,14 @@ export class EmscriptenPatchyEngine {
     });
   }
 
+  setLayerStylePreset(session, snapshot, layerId, presetId) {
+    const bytes = this.#text(presetId, "Layer style preset ids", 64);
+    return this.#command(session, snapshot, 35, (view, command) => {
+      view.setBigUint64(32, layerId, true); view.setUint32(40, bytes.byteLength, true);
+      this.#module.HEAPU8.set(bytes, command + 44);
+    });
+  }
+
   setLayerBlendMode(session, snapshot, layerId, blendMode) {
     return this.#command(session, snapshot, 4, (view) => {
       view.setBigUint64(32, layerId, true);

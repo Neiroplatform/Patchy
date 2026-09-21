@@ -116,6 +116,13 @@ struct SetLayerClipping {
   bool clipped{false};
 };
 
+struct SetLayerStylePreset {
+  LayerId layer_id{0};
+  // Empty clears all modeled effects. Non-empty ids must resolve through the
+  // deterministic built-in style registry.
+  std::string preset_id{};
+};
+
 struct SetLayerMaskState {
   LayerId layer_id{0};
   std::optional<LayerMask> mask{};
@@ -426,6 +433,7 @@ using DocumentCommand =
                  RotateCanvas, CropDocument, WrapOffsetDocument,
                  SetLayersOpacity, SetLayersFillOpacity, SetLayersBlendMode,
                  SetLayersVisibility, SetLayerLockStates, SetLayerClipping,
+                 SetLayerStylePreset,
                  SetLayerMaskState, UngroupLayers, FlipLayers, PlaceLayers,
                  ReplaceLayerPixels, ApplyFilter, SetSelection,
                  CommitPreparedSelection,

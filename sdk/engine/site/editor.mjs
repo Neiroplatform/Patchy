@@ -26,6 +26,7 @@ let cloneSource = null;
 let gradientDraft = null;
 let lassoDraft = null;
 let polygonDraft = null;
+let clipboardImageBlob = null;
 
 const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
 const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
@@ -81,6 +82,11 @@ function setBusy(active, title = "Working", detail = "The engine is updating the
 function updateControls() {
   const layer = selectedLayer();
   $("saveButton").disabled = busy || !snapshot;
+  $("exportFormatSelect").disabled = busy || !snapshot;
+  $("exportButton").disabled = busy || !snapshot;
+  $("copyPixelsButton").disabled = busy || !snapshot;
+  $("pastePixelsButton").disabled = busy || !snapshot ||
+    (!clipboardImageBlob && !navigator.clipboard?.read);
   $("undoButton").disabled = busy || !snapshot?.canUndo;
   $("redoButton").disabled = busy || !snapshot?.canRedo;
   $("openButton").disabled = busy;
@@ -114,6 +120,8 @@ function updateControls() {
   $("layerBlendSelect").disabled = busy || !layer;
   $("layerClipInput").disabled = busy || !layer;
   $("layerLockInput").disabled = busy || !layer;
+  $("layerStyleSelect").disabled = busy || !layer;
+  $("applyLayerStyleButton").disabled = busy || !layer;
   for (const id of ["invertSelectionButton", "expandSelectionButton", "contractSelectionButton",
     "borderSelectionButton", "growSelectionButton", "similarSelectionButton",
     "smoothSelectionButton", "featherSelectionButton", "saveChannelButton", "savePathButton"]) {
@@ -291,6 +299,25 @@ function renderMetadata() {
   $("detailCanvas").textContent = snapshot ? `${snapshot.width} × ${snapshot.height}` : "-";
   $("detailRevision").textContent = snapshot ? String(snapshot.revision) : "-";
   updateControls();
+}
+
+function renderDocumentTabs() {
+  const tabs = $("documentTabs"); tabs.replaceChildren();
+  const documents = snapshot?.documents || [];
+  tabs.hidden = documents.length === 0;
+  for (const documentTab of documents) {
+    const item = document.createElement("span"); item.className = "document-tab";
+    item.dataset.active = String(documentTab.active);
+    const activate = document.createElement("button"); activate.type = "button";
+    activate.setAttribute("role", "tab"); activate.setAttribute("aria-selected", String(documentTab.active));
+    activate.title = documentTab.name;
+    activate.textContent = `${documentTab.dirty ? "• " : ""}${documentTab.name}`;
+    activate.addEventListener("click", () => activateDocumentTab(documentTab.id));
+    const close = document.createElement("button"); close.type = "button";
+    close.setAttribute("aria-label", `Close ${documentTab.name}`); close.textContent = "×";
+    close.addEventListener("click", () => closeDocumentTab(documentTab));
+    item.append(activate, close); tabs.append(item);
+  }
 }
 
 async function renderDocument() {
@@ -482,7 +509,14 @@ function canvasPoint(event) {
 }
 
 async function acceptSnapshot(next, rerender = true) {
+  if (!next) {
+    snapshot = null; selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    $("emptyState").hidden = false; setSessionState("ready", "Engine ready");
+    renderLayers(); renderLayerProperties(); renderStructure(); renderMetadata(); renderDocumentTabs();
+    return;
+  }
   snapshot = next;
+  documentName = snapshot.documentName || documentName;
   if (selectedLayerId == null || !snapshot.layers.some((layer) => layer.id === selectedLayerId)) {
     selectedLayerId = snapshot.activeLayerId || snapshot.layers.at(-1)?.id || null;
   }
@@ -494,7 +528,32 @@ async function acceptSnapshot(next, rerender = true) {
   renderLayerProperties();
   renderStructure();
   renderMetadata();
+  renderDocumentTabs();
   if (rerender) await renderDocument();
+}
+
+async function activateDocumentTab(documentId) {
+  if (busy || snapshot?.documentId === documentId) return;
+  clearError(); setBusy(true, "Switching document", "Activating its canonical Worker session");
+  try {
+    const next = await client.activateDocument(documentId);
+    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    await acceptSnapshot(next);
+  } catch (error) { showError("Could not switch document", error); }
+  finally { setBusy(false); }
+}
+
+async function closeDocumentTab(documentTab) {
+  if (busy) return;
+  if (documentTab.dirty && !confirm(`Close ${documentTab.name} without saving?`)) return;
+  clearError(); setBusy(true, "Closing document", "Releasing its canonical Worker session");
+  try {
+    if (snapshot?.documentId === documentTab.id) {
+      selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    }
+    await acceptSnapshot(await client.closeDocument(documentTab.id));
+  } catch (error) { showError("Could not close document", error); }
+  finally { setBusy(false); }
 }
 
 async function mutate(title, operation) {
@@ -512,8 +571,9 @@ async function openFile(file) {
   setBusy(true, "Opening document", "Transferring bytes to the isolated Worker");
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    documentName = file.name || "Document.psd";
-    await acceptSnapshot(await client.open(bytes));
+    const next = await client.open(bytes, file.name || "Document.psd");
+    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    await acceptSnapshot(next);
   } catch (error) { showError("Could not open document", error); }
   finally { setBusy(false); }
 }
@@ -523,8 +583,9 @@ async function newDocument() {
   clearError();
   setBusy(true, "Creating document", "Preparing a 1600 × 1000 RGBA workspace");
   try {
-    documentName = "Untitled.psd";
-    await acceptSnapshot(await client.create(1600, 1000));
+    const next = await client.create(1600, 1000, "Untitled.psd");
+    selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
+    await acceptSnapshot(next);
   } catch (error) { showError("Could not create document", error); }
   finally { setBusy(false); }
 }
@@ -545,13 +606,116 @@ async function saveDocument() {
   finally { setBusy(false); }
 }
 
-async function importPixelLayer(file) {
-  if (!file || busy || !snapshot) return;
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url; anchor.download = filename; anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function canvasBlob(source, type, quality) {
+  return new Promise((resolve, reject) => source.toBlob(
+    (blob) => blob ? resolve(blob) : reject(new Error(`Browser could not encode ${type}`)), type, quality));
+}
+
+function exportBaseName() {
+  return (documentName.replace(/\.[^.]+$/, "") || "Patchy export").replace(/[\\/:*?"<>|]/g, "-");
+}
+
+async function exportDocument() {
+  if (busy || !snapshot) return;
+  clearError(); setBusy(true, "Exporting document", "Encoding the rendered composite locally");
+  try {
+    const format = $("exportFormatSelect").value;
+    if (format === "svg") {
+      const dataUrl = canvas.toDataURL("image/png");
+      const svgNamespace = "http" + "://www.w3.org/2000/svg";
+      const svg = `<svg xmlns="${svgNamespace}" width="${canvas.width}" height="${canvas.height}" viewBox="0 0 ${canvas.width} ${canvas.height}"><title>${escapeHtml(exportBaseName())}</title><image width="100%" height="100%" href="${dataUrl}"/></svg>`;
+      downloadBlob(new Blob([svg], { type: "image/svg+xml" }), `${exportBaseName()}.svg`);
+    } else {
+      const type = `image/${format}`;
+      const blob = await canvasBlob(canvas, type, format === "jpeg" ? .92 : undefined);
+      downloadBlob(blob, `${exportBaseName()}.${format === "jpeg" ? "jpg" : format}`);
+    }
+  } catch (error) { showError("Could not export document", error); }
+  finally { setBusy(false); }
+}
+
+function renderedSelectionCanvas() {
+  const bounds = selectionBounds() || { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  const output = document.createElement("canvas"); output.width = bounds.width; output.height = bounds.height;
+  const outputContext = output.getContext("2d", { alpha: true, willReadFrequently: true });
+  outputContext.drawImage(canvas, bounds.x, bounds.y, bounds.width, bounds.height,
+    0, 0, bounds.width, bounds.height);
+  if (snapshot.selection?.length) {
+    const mask = fullSelectionMask();
+    const pixels = outputContext.getImageData(0, 0, bounds.width, bounds.height);
+    for (let y = 0; y < bounds.height; ++y) {
+      for (let x = 0; x < bounds.width; ++x) {
+        const coverage = mask[(bounds.y + y) * snapshot.width + bounds.x + x] / 255;
+        pixels.data[(y * bounds.width + x) * 4 + 3] = Math.round(
+          pixels.data[(y * bounds.width + x) * 4 + 3] * coverage);
+      }
+    }
+    outputContext.putImageData(pixels, 0, 0);
+  }
+  return output;
+}
+
+async function copyRenderedPixels() {
+  if (busy || !snapshot) return;
+  try {
+    clipboardImageBlob = await canvasBlob(renderedSelectionCanvas(), "image/png");
+    if (navigator.clipboard?.write && globalThis.ClipboardItem) {
+      try { await navigator.clipboard.write([new ClipboardItem({ "image/png": clipboardImageBlob })]); }
+      catch { /* The in-memory clipboard remains available across opened documents. */ }
+    }
+    updateControls(); setSessionState("document", "Pixels copied locally");
+  } catch (error) { showError("Could not copy pixels", error); }
+}
+
+async function pastePixels() {
+  if (busy || !snapshot) return;
+  try {
+    let blob = null;
+    if (navigator.clipboard?.read) {
+      try {
+        const items = await navigator.clipboard.read();
+        const item = items.find((candidate) => candidate.types.some((type) => type.startsWith("image/")));
+        const type = item?.types.find((candidate) => candidate.startsWith("image/"));
+        if (item && type) blob = await item.getType(type);
+      } catch { blob = null; }
+    }
+    blob ||= clipboardImageBlob;
+    if (!blob) throw new Error("Clipboard does not contain an image");
+    const file = new File([blob], "Clipboard pixels.png", { type: blob.type || "image/png" });
+    await importPixelLayer(file);
+  } catch (error) { showError("Could not paste pixels", error); }
+}
+
+async function decodeLocalImage(file) {
+  try { return await createImageBitmap(file); }
+  catch (bitmapError) {
+    const url = URL.createObjectURL(file);
+    try {
+      const image = new Image(); image.decoding = "async";
+      await new Promise((resolve, reject) => {
+        image.addEventListener("load", resolve, { once: true });
+        image.addEventListener("error", () => reject(bitmapError), { once: true });
+        image.src = url;
+      });
+      return image;
+    } finally { URL.revokeObjectURL(url); }
+  }
+}
+
+async function importPixelLayer(file, createDocument = false) {
+  if (!file || busy || (!snapshot && !createDocument)) return;
   clearError();
   setBusy(true, "Importing pixels", "Decoding the image outside canonical document state");
   let image;
   try {
-    image = await createImageBitmap(file);
+    image = await decodeLocalImage(file);
     if (image.width <= 0 || image.height <= 0 ||
         !Number.isSafeInteger(image.width * image.height * 4)) {
       throw new Error("Image dimensions cannot be represented safely");
@@ -563,6 +727,9 @@ async function importPixelLayer(file) {
     scratchContext.drawImage(image, 0, 0);
     const rgba = new Uint8Array(scratchContext.getImageData(0, 0, image.width, image.height).data);
     const name = file.name.replace(/\.[^.]+$/, "") || "Imported pixels";
+    if (!snapshot) {
+      await acceptSnapshot(await client.create(image.width, image.height, `${name}.psd`));
+    }
     await acceptSnapshot(await client.addPixelLayer({
       name, width: image.width, height: image.height,
       bounds: { x: 0, y: 0, width: image.width, height: image.height }, rgba,
@@ -936,13 +1103,41 @@ async function fillSelectedPixels() {
     const target = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
     target.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength),
       scratch.width, scratch.height), 0, 0);
-    target.fillStyle = $("brushColorInput").value;
+    target.fillStyle = paintStyle(target, $("paintPresetSelect").value,
+      { x: 0, y: 0 }, { x: scratch.width, y: 0 });
     const rects = snapshot.selection?.length ? snapshot.selection : [layer.bounds];
     for (const rect of rects) target.fillRect(rect.x - layer.bounds.x, rect.y - layer.bounds.y, rect.width, rect.height);
     const rgba = new Uint8Array(target.getImageData(0, 0, scratch.width, scratch.height).data);
     return client.replacePixelLayer(layer.id, { name: layer.name, width: scratch.width,
       height: scratch.height, bounds: layer.bounds, rgba });
   });
+}
+
+function paintStyle(target, preset, start, end) {
+  if (preset === "solid") return $("brushColorInput").value;
+  if (preset === "checker" || preset === "dots") {
+    const tile = document.createElement("canvas"); tile.width = 16; tile.height = 16;
+    const tileContext = tile.getContext("2d");
+    if (preset === "checker") {
+      tileContext.fillStyle = "#f1f3f5"; tileContext.fillRect(0, 0, 16, 16);
+      tileContext.fillStyle = $("brushColorInput").value;
+      tileContext.fillRect(0, 0, 8, 8); tileContext.fillRect(8, 8, 8, 8);
+    } else {
+      tileContext.fillStyle = "transparent"; tileContext.clearRect(0, 0, 16, 16);
+      tileContext.fillStyle = $("brushColorInput").value;
+      tileContext.beginPath(); tileContext.arc(4, 4, 3, 0, Math.PI * 2); tileContext.fill();
+      tileContext.beginPath(); tileContext.arc(12, 12, 3, 0, Math.PI * 2); tileContext.fill();
+    }
+    return target.createPattern(tile, "repeat");
+  }
+  const gradient = target.createLinearGradient(start.x, start.y,
+    end.x === start.x && end.y === start.y ? end.x + 1 : end.x, end.y);
+  const stops = preset === "black-white" ? [[0, "#000000"], [1, "#ffffff"]]
+    : preset === "sunset" ? [[0, "#ff3d77"], [.48, "#ff9a3d"], [1, "#ffe66d"]]
+    : preset === "ocean" ? [[0, "#082f49"], [.5, "#0284c7"], [1, "#67e8f9"]]
+    : [[0, $("brushColorInput").value], [1, "transparent"]];
+  for (const [offset, color] of stops) gradient.addColorStop(offset, color);
+  return gradient;
 }
 
 async function beginGradient(event) {
@@ -964,9 +1159,7 @@ async function finishGradient(event) {
       scratch.width, scratch.height), 0, 0);
     const local = (point) => ({ x: point.x - draft.layer.bounds.x, y: point.y - draft.layer.bounds.y });
     const start = local(draft.start); const end = local(draft.end);
-    const gradient = target.createLinearGradient(start.x, start.y, end.x || start.x + 1, end.y);
-    gradient.addColorStop(0, $("brushColorInput").value); gradient.addColorStop(1, "transparent");
-    target.fillStyle = gradient;
+    target.fillStyle = paintStyle(target, $("paintPresetSelect").value, start, end);
     const rects = snapshot.selection?.length ? snapshot.selection : [draft.layer.bounds];
     for (const rect of rects) target.fillRect(rect.x - draft.layer.bounds.x, rect.y - draft.layer.bounds.y, rect.width, rect.height);
     const rgba = new Uint8Array(target.getImageData(0, 0, scratch.width, scratch.height).data);
@@ -1002,6 +1195,10 @@ function openPicker() { if (!busy) $("fileInput").click(); }
 registerCommand("document.open", "openButton", openPicker, () => !busy);
 registerCommand("document.new", "newButton", newDocument, () => !busy);
 registerCommand("document.save", "saveButton", saveDocument, () => !busy && Boolean(snapshot));
+registerCommand("document.export", "exportButton", exportDocument, () => !busy && Boolean(snapshot));
+registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
+registerCommand("document.pastePixels", "pastePixelsButton", pastePixels, () => !busy && Boolean(snapshot) &&
+  Boolean(clipboardImageBlob || navigator.clipboard?.read));
 registerCommand("history.undo", "undoButton", () => mutate("Undo", () => client.undo()), () => !busy && Boolean(snapshot?.canUndo));
 registerCommand("history.redo", "redoButton", () => mutate("Redo", () => client.redo()), () => !busy && Boolean(snapshot?.canRedo));
 registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
@@ -1146,6 +1343,11 @@ $("layerLockInput").addEventListener("change", () => {
   const layer = selectedLayer();
   if (layer) mutate("Changing layer lock", () => client.setLayerLocks(layer.id,
     $("layerLockInput").checked ? 7 : 0));
+});
+$("applyLayerStyleButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Applying layer style", () =>
+    client.setLayerStylePreset(layer.id, $("layerStyleSelect").value));
 });
 $("invertSelectionButton").addEventListener("click", () => mutate("Inverting selection", () => client.invertSelection()));
 $("expandSelectionButton").addEventListener("click", () => mutate("Expanding selection", () => client.expandSelection(4)));
@@ -1355,8 +1557,11 @@ window.addEventListener("resize", applyViewport);
 window.addEventListener("keydown", (event) => {
   if (!(event.ctrlKey || event.metaKey)) return;
   const key = event.key.toLowerCase();
+  const editingField = event.target?.matches?.("input, select, textarea, [contenteditable]");
   if (key === "o") { event.preventDefault(); executeCommand("document.open"); }
   if (key === "s") { event.preventDefault(); executeCommand("document.save"); }
+  if (key === "c" && !editingField && snapshot) { event.preventDefault(); executeCommand("document.copyPixels"); }
+  if (key === "v" && !editingField && snapshot) { event.preventDefault(); executeCommand("document.pastePixels"); }
   if (key === "z") {
     event.preventDefault();
     const redo = event.shiftKey;
@@ -1394,7 +1599,11 @@ for (const type of ["dragenter", "dragover"]) {
 window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropState").hidden = true; } });
 window.addEventListener("drop", (event) => {
   event.preventDefault(); dragDepth = 0; $("dropState").hidden = true;
-  openFile(event.dataTransfer?.files?.[0]);
+  const file = event.dataTransfer?.files?.[0];
+  if (!file) return;
+  if (/\.(psd|psb)$/i.test(file.name)) openFile(file);
+  else if (file.type.startsWith("image/") || /\.svg$/i.test(file.name)) importPixelLayer(file, !snapshot);
+  else showError("Unsupported drop", new Error("Drop a PSD, PSB, PNG, JPEG, WebP, AVIF, or SVG file."));
 });
 
 try {

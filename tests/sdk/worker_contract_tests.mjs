@@ -24,7 +24,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const types = await readFile(new URL("sdk/engine/index.d.ts", root), "utf8");
   const nodeServer = await readFile(new URL("scripts/wasm/serve.mjs", root), "utf8");
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
-  for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "layerList",
+  for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
+    "exportFormatSelect", "exportButton", "copyPixelsButton", "pastePixelsButton", "paintPresetSelect",
     "importLayerButton", "groupLayerButton", "removeLayerButton", "layerNameInput",
     "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
     "documentDialog", "resizeImageButton", "resizeCanvasButton", "rotateLeftButton",
@@ -35,10 +36,11 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "gestureCanvas", "transformOverlay", "moveToolButton", "brushToolButton",
     "lassoToolButton", "polygonToolButton", "magicToolButton", "selectionToleranceInput",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton",
-    "textDialog", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
+    "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
     "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "smartFilterButton",
     "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
-    "layerFillInput", "layerClipInput", "layerLockInput", "invertSelectionButton",
+    "layerFillInput", "layerClipInput", "layerLockInput", "layerStyleSelect",
+    "applyLayerStyleButton", "invertSelectionButton",
     "expandSelectionButton", "contractSelectionButton", "borderSelectionButton",
     "growSelectionButton", "similarSelectionButton", "smoothSelectionButton", "featherSelectionButton",
     "saveChannelButton", "savePathButton", "channelList", "pathList",
@@ -51,7 +53,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "undoButton", "redoButton", "saveButton", "errorBanner"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
-  for (const method of ["client.open", "client.setLayerVisibility",
+  for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
+    "client.setLayerVisibility",
     "client.moveLayer", "client.addPixelLayer", "client.groupLayer", "client.removeLayer",
     "client.renameLayer", "client.setLayerOpacity", "client.setLayerBlendMode",
     "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
@@ -65,6 +68,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.addAdjustment", "client.updateAdjustment", "client.addSmartObject",
     "client.replaceSmartObject", "client.setSmartFilter",
     "client.setLayerFillOpacity", "client.setLayerLocks", "client.setLayerClipping",
+    "client.setLayerStylePreset",
     "client.invertSelection", "client.expandSelection", "client.contractSelection",
     "client.borderSelection", "client.growSelection", "client.selectSimilar",
     "client.addAlphaChannel", "client.addDocumentPath",
@@ -82,12 +86,22 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /registerCommand\("selection\.all"/);
   assert.match(script, /registerCommand\("tool\.clone"/);
   assert.match(script, /registerCommand\("tool\.gradient"/);
-  for (const contract of ["selectionMask:", "setSelectionMask(", "growSelection(", "selectSimilar("]) {
+  assert.match(script, /registerCommand\("document\.export"/);
+  assert.match(script, /navigator\.clipboard/);
+  assert.match(script, /fullSelectionMask\(\)/);
+  assert.match(html, /image\/svg\+xml/);
+  assert.match(html, /SVG \(flattened\)/);
+  for (const preset of ["foreground-transparent", "black-white", "sunset", "ocean", "checker", "dots"]) {
+    assert.match(html, new RegExp(`value="${preset}"`));
+  }
+  for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
+    "activateDocument(", "closeDocument(", "growSelection(", "selectSimilar(", "setLayerStylePreset("]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
   assert.doesNotMatch(`${html}\n${css}\n${script}`, /https?:\/\//);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 560px\)/);
+  assert.match(css, /\.document-actions \{ gap: 5px; overflow-x: auto;/);
   assert.match(html, /role="alert"/);
   assert.match(nodeServer, /'\.css': 'text\/css; charset=utf-8'/);
   assert.match(pythonServer, /"\.css": "text\/css; charset=utf-8"/);
@@ -332,6 +346,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.setLayerFillOpacity(session, snapshot, 7n, 0.75);
   engine.setLayerLocks(session, snapshot, 7n, 7);
   engine.setLayerClipping(session, snapshot, 7n, true);
+  engine.setLayerStylePreset(session, snapshot, 7n, "57a1e500-0015-4c6d-8f2a-9b3d4e55c015");
   engine.setLayerBlendMode(session, snapshot, 7n, 2);
   engine.renameLayer(session, snapshot, 7n, "Renamed");
   engine.removeLayer(session, snapshot, 7n);
@@ -403,7 +418,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   Atomics.store(cancellation, 0, 1);
   engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", cancellation);
   assert.deepEqual(callbackReturns, [1, 1, 0, 0]);
-  assert.deepEqual(commandTypes, [2, 3, 6, 7, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
+  assert.deepEqual(commandTypes, [2, 3, 6, 7, 35, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
@@ -447,6 +462,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     setLayerFillOpacity(session, before, layerId, opacity) { calls.push(["fillOpacity", layerId, opacity]); revision++; },
     setLayerLocks(session, before, layerId, flags) { calls.push(["locks", layerId, flags]); revision++; },
     setLayerClipping(session, before, layerId, clipped) { calls.push(["clipping", layerId, clipped]); revision++; },
+    setLayerStylePreset(session, before, layerId, presetId) {
+      calls.push(["stylePreset", layerId, presetId]); revision++;
+    },
     setLayerBlendMode(session, before, layerId, mode) { calls.push(["blend", layerId, mode]); revision++; },
     renameLayer(session, before, layerId, name) { calls.push(["rename", layerId, name]); revision++; },
     removeLayer(session, before, layerId) { calls.push(["remove", layerId]); revision++; },
@@ -514,13 +532,17 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     dispose() { calls.push(["dispose"]); },
   };
   const host = new PatchyWorkerHost(engine);
-  assert.equal((await host.dispatch({ method: "create", width: 3, height: 2 })).revision, 1n);
+  const firstDocument = await host.dispatch({ method: "create", width: 3, height: 2, name: "First.psd" });
+  assert.equal(firstDocument.revision, 1n);
+  assert.equal(firstDocument.documentName, "First.psd");
+  assert.equal(firstDocument.documents.length, 1);
   assert.equal((await host.dispatch({ method: "setLayerVisibility", layerId: "7", visible: false })).layers[0].visible, false);
   await host.dispatch({ method: "moveLayer", layerId: "7", targetLayerId: null, position: 3 });
   await host.dispatch({ method: "setLayerOpacity", layerId: "7", opacity: 0.5 });
   await host.dispatch({ method: "setLayerFillOpacity", layerId: "7", opacity: 0.75 });
   await host.dispatch({ method: "setLayerLocks", layerId: "7", lockFlags: 7 });
   await host.dispatch({ method: "setLayerClipping", layerId: "7", clipped: true });
+  await host.dispatch({ method: "setLayerStylePreset", layerId: "7", presetId: "" });
   await host.dispatch({ method: "setLayerBlendMode", layerId: "7", blendMode: 2 });
   await host.dispatch({ method: "renameLayer", layerId: "7", name: "Renamed" });
   await host.dispatch({ method: "removeLayer", layerId: "7" });
@@ -594,11 +616,57 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "redo" });
   assert.equal((await host.dispatch({ method: "render", region: { x: 0, y: 0, width: 3, height: 2 } })).byteLength, 24);
   assert.deepEqual(Array.from(await host.dispatch({ method: "save" })), [56, 66, 80, 83]);
-  await host.dispatch({ method: "close" });
+  const secondDocument = await host.dispatch({ method: "create", width: 1, height: 1, name: "Second.psd" });
+  assert.equal(secondDocument.documents.length, 2);
+  assert.equal(secondDocument.documentName, "Second.psd");
+  const firstAgain = await host.dispatch({ method: "activateDocument", documentId: firstDocument.documentId });
+  assert.equal(firstAgain.documentName, "First.psd");
+  assert.equal((await host.dispatch({ method: "listDocuments" })).length, 2);
+  const afterSecondClose = await host.dispatch({ method: "closeDocument", documentId: secondDocument.documentId });
+  assert.equal(afterSecondClose.documents.length, 1);
+  assert.equal(afterSecondClose.documentId, firstDocument.documentId);
+  assert.equal(await host.dispatch({ method: "close" }), null);
   host.dispose();
   assert.deepEqual(calls[1], ["visibility", 1n, 7n, false]);
   assert.deepEqual(calls[2], ["move", 2n, 7n, null, 3]);
   assert.ok(calls.some(([name]) => name === "save"));
+});
+
+test("one Worker owns isolated switchable document sessions", async () => {
+  let nextSession = 100;
+  const revisions = new Map(); const visibility = new Map(); const closed = [];
+  const engine = {
+    capabilities: 0n,
+    create() { const session = nextSession++; revisions.set(session, 1); visibility.set(session, true); return session; },
+    snapshot(session) {
+      const value = projection(revisions.get(session), visibility.get(session));
+      value.dirty = revisions.get(session) > 1; return value;
+    },
+    setLayerVisibility(session, before, layerId, visible) {
+      assert.equal(before.revision, BigInt(revisions.get(session)));
+      visibility.set(session, visible); revisions.set(session, revisions.get(session) + 1);
+    },
+    close(session) { closed.push(session); revisions.delete(session); visibility.delete(session); },
+    dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  const first = await host.dispatch({ method: "create", width: 2, height: 2, name: "First.psd" });
+  const editedFirst = await host.dispatch({ method: "setLayerVisibility", layerId: "7", visible: false });
+  assert.equal(editedFirst.revision, 2n);
+  const second = await host.dispatch({ method: "create", width: 3, height: 3, name: "Second.psd" });
+  assert.equal(second.revision, 1n);
+  assert.equal(second.documents.length, 2);
+  const restoredFirst = await host.dispatch({ method: "activateDocument", documentId: first.documentId });
+  assert.equal(restoredFirst.revision, 2n);
+  assert.equal(restoredFirst.layers[0].visible, false);
+  const restoredSecond = await host.dispatch({ method: "activateDocument", documentId: second.documentId });
+  assert.equal(restoredSecond.revision, 1n);
+  assert.equal(restoredSecond.layers[0].visible, true);
+  const fallback = await host.dispatch({ method: "closeDocument", documentId: second.documentId });
+  assert.equal(fallback.documentId, first.documentId);
+  assert.deepEqual(closed, [101]);
+  host.dispose();
+  assert.deepEqual(closed, [101, 100]);
 });
 
 class FakeWorker extends EventTarget {
@@ -624,6 +692,7 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   const source = new Uint8Array([1, 2, 3]);
   const opened = client.open(source);
   assert.equal(worker.sent[1].transfer.length, 1);
+  assert.equal(worker.sent[1].message.name, "Document.psd");
   worker.reply({ id: 2, ok: true, value: projection(1) });
   assert.equal((await opened).layers[0].id, 7n);
   const pixelInput = new Uint8Array([1, 2, 3, 4]);

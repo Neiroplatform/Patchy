@@ -22,6 +22,13 @@
         <button class="icon-button" id="redoButton" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
         <button class="button" id="transformButton" type="button" disabled>Canvas</button>
         <button class="button" id="saveButton" type="button" disabled><span class="download-label">Download PSD</span><span class="save-label">Save</span></button>
+        <select id="exportFormatSelect" aria-label="Export format" disabled>
+          <option value="png">PNG</option><option value="jpeg">JPEG</option>
+          <option value="webp">WebP</option><option value="svg">SVG (flattened)</option>
+        </select>
+        <button class="button" id="exportButton" type="button" disabled>Export</button>
+        <button class="icon-button" id="copyPixelsButton" type="button" aria-label="Copy rendered pixels" title="Copy pixels (Ctrl+C)" disabled>⎘</button>
+        <button class="icon-button" id="pastePixelsButton" type="button" aria-label="Paste image as layer" title="Paste image (Ctrl+V)" disabled>⎙</button>
       </nav>
       <div class="session-indicator" id="sessionIndicator" aria-live="polite">
         <span class="status-dot"></span><span>Starting engine</span>
@@ -50,11 +57,19 @@
       </aside>
 
       <section class="stage" aria-label="Document canvas">
+        <div class="document-tabs" id="documentTabs" role="tablist" aria-label="Open documents" hidden></div>
         <div class="stage-meta" id="stageMeta" hidden>
           <span id="documentName">Untitled</span>
           <span class="tool-options" id="toolOptions">
             <label>Size <input id="brushSizeInput" type="range" min="1" max="128" value="24"><output id="brushSizeOutput">24 px</output></label>
             <label>Color <input id="brushColorInput" type="color" value="#111111"></label>
+            <label>Paint <select id="paintPresetSelect">
+              <option value="foreground-transparent">Foreground → transparent</option>
+              <option value="black-white">Black → white</option>
+              <option value="sunset">Sunset</option><option value="ocean">Ocean</option>
+              <option value="solid">Solid foreground</option>
+              <option value="checker">Checker pattern</option><option value="dots">Dot pattern</option>
+            </select></label>
             <label>Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
           </span>
           <span id="documentMetrics"></span>
@@ -137,6 +152,16 @@
             </select></label>
             <label class="check-field"><input id="layerClipInput" type="checkbox" disabled><span>Clip to layer below</span></label>
             <label class="check-field"><input id="layerLockInput" type="checkbox" disabled><span>Lock layer</span></label>
+            <label><span>Style preset</span><select id="layerStyleSelect" disabled>
+              <option value="">None</option>
+              <option value="57a1e500-0015-4c6d-8f2a-9b3d4e55c015">Soft Shadow</option>
+              <option value="57a1e500-0016-4c6d-8f2a-9b3d4e55c016">Sticker Outline</option>
+              <option value="57a1e500-0017-4c6d-8f2a-9b3d4e55c017">Simple Emboss</option>
+              <option value="57a1e500-0018-4c6d-8f2a-9b3d4e55c018">Warm Glow</option>
+              <option value="57a1e500-0019-4c6d-8f2a-9b3d4e55c019">Neon Edge</option>
+              <option value="57a1e500-001a-4c6d-8f2a-9b3d4e55c01a">Letterpress</option>
+            </select></label>
+            <button id="applyLayerStyleButton" type="button" disabled>Apply style</button>
           </div>
         </section>
         <section class="panel structure-panel">
@@ -193,8 +218,8 @@
       <button class="icon-button" id="dismissErrorButton" type="button" aria-label="Dismiss error">×</button>
     </div>
     <input id="fileInput" type="file" accept=".psd,.psb,application/octet-stream" hidden>
-    <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif" hidden>
-    <input id="smartObjectInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif" hidden>
+    <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
+    <input id="smartObjectInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
     <dialog class="document-dialog" id="documentDialog" aria-labelledby="documentDialogTitle">
       <form method="dialog">
         <header><div><p class="eyebrow">DOCUMENT</p><h2 id="documentDialogTitle">Canvas operations</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
@@ -228,9 +253,10 @@
         <section>
           <label class="dialog-field"><span>Content</span><textarea id="textValueInput" maxlength="1024" rows="4" required></textarea></label>
           <div class="field-row">
-            <label><span>Font</span><input id="textFontInput" type="text" value="Arial" maxlength="256" required></label>
+            <label><span>Font</span><input id="textFontInput" type="text" value="Arial" list="fontPresetList" maxlength="256" required></label>
             <label><span>Size</span><input id="textSizeInput" type="number" min="1" max="512" value="48" required></label>
           </div>
+          <datalist id="fontPresetList"><option value="Arial"><option value="Georgia"><option value="Courier New"><option value="Times New Roman"><option value="Verdana"><option value="Trebuchet MS"></datalist>
           <div class="field-row text-style-row">
             <label><span>Color</span><input id="textColorInput" type="color" value="#111111"></label>
             <label class="check-field"><input id="textBoldInput" type="checkbox"><span>Bold</span></label>

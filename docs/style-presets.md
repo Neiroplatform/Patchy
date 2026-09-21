@@ -43,6 +43,14 @@ Deep reference for the layer-style preset system: the Styles page in the Layer S
 - Names are original phrases evoking famous looks, no trademarks; recipes stay inside what Patchy renders today (smooth inner bevel, gloss contours, stacked instances, built-in patterns only — Stamped Steel references Brushed Metal + Bumps).
 - Canonical English names/folders live in the sidecars; display translates while unrenamed (`style_library_entry_display_name`, `style_preset_folder_display_name` — QObject context, like pattern names).
 
+The private browser host command `SetLayerStylePreset` resolves these same
+stable ids inside `DocumentSession`; JavaScript never sends effect recipes.
+It validates referenced built-in pattern ids before mutation, adopts their
+resources into the document and clears preserved `lfx2`/`lrFX`/`plFX`/`lmfx`
+sources so the next PSD save cannot be shadowed by stale imported effects. An
+empty id clears modeled effects. The self-hosted shell initially exposes the
+six Basics recipes as a compact authored-style surface.
+
 ## .asl codec (src/psd/asl_io.*)
 
 Container (verified against PS 2026 files, see ps-compat.md): u16 2, '8BSL', u16 3, u32 patterns length (0 with NO count field when empty; otherwise standard 'Patt' block records via psd_patterns), u32 style count, then per style a 4-aligned length-prefixed record of two version-16 descriptors - 'null' {Nm, Idnt} and 'Styl' {documentMode, Lefx, blendOptions}. 'Lefx' matches the lfx2 root descriptor, so conversion is shared through psd/psd_layer_effects.hpp (`layer_style_from_lefx_descriptor`, `photoshop_lfx2_layer_style_payload`; the writer re-reads its own payload with `read_descriptor` and re-classes it "Lefx"). ZString names ("$$$/key=Display Name") resolve to the display text; Patchy writes plain names. Trailing 8BIMphry hierarchy data is ignored. Robustness mirrors pat_reader: 32 MiB cap, per-style skip-with-warning, decoded-prefix retention, id repair. `fillOpacity` is modeled with opacity, blend mode, and Blend If; it is emitted only when nondefault so existing default bytes stay stable. Knockout and channel restrictions still warn and drop; custom Satin contours normalize to Linear at import with a warning. `asl_writer_bytes_are_stable` is the byte canary.

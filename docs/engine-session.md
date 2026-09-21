@@ -80,6 +80,11 @@ typed editing commands.
   invalidates both participants; mask add/delete/link/enable/invert validate
   geometry, preserve off-canvas imported bounds, report old/new effect bounds
   and round-trip through PSD with one revision and undo state;
+- `SetLayerStylePreset` applies or clears a deterministic built-in style by
+  stable preset id. It validates every referenced built-in pattern before the
+  mutation, adopts those resources into the document, invalidates imported
+  native style blocks and reports the union of old/new effect bounds in one
+  undoable revision;
 - `CommitPreviewedDocumentChannel` is the matching atomic completion boundary
   for saved alpha-channel gestures. Canvas keeps responsive brush/fill frames,
   accumulates their bounded dirty union and records one transitional UI undo
@@ -170,7 +175,8 @@ stale browser command fails before it reaches the model. The envelope now also
 requires the exact revision, preventing a late command from overwriting newer
 selection/history state that deliberately shares a document state ID. Browser hosts can add
 solid layers and groups, remove/move/ungroup them, edit visibility/name/opacity/
-fill/blend/locks/clipping, resize image/canvas, rotate or crop, then render,
+fill/blend/locks/clipping or apply/clear a built-in layer-style preset, resize
+image/canvas, rotate or crop, then render,
 undo/redo, encode layered PSD and acknowledge durable persistence separately.
 The save acknowledgement is also state-guarded, so bytes from an older state
 cannot clear the dirty flag of a newer edit. The protocol also projects and
@@ -249,7 +255,9 @@ transforms still fail closed.
 Channels and saved/work paths project into the browser snapshot; selection can
 be saved as an alpha channel or rectangular path and restored from either.
 Invert/expand/contract/border selection plus layer fill opacity, lock flags and
-clipping reuse the guarded command envelope and canonical undo history.
+clipping reuse the guarded command envelope and canonical undo history. The
+same path applies the six browser-exposed built-in style recipes without
+moving layer-style ownership into JavaScript.
 
 The `wasm-sdk` preset builds a no-entry ES module named `patchy-engine.mjs`.
 Its checked export manifest contains only allocator functions and the C ABI
@@ -263,8 +271,16 @@ remains a required hosted gate when the pinned toolchain is available.
 
 The same preset stages `build/wasm-sdk/site`, a dependency-free self-hosted
 editor shell. It closes the browser product loop from open/drop or blank
-creation through layered PSD download. The screen can import decoded RGBA8
-pixels as layers, select/remove/group/ungroup/reorder/rename them and edit
+creation through layered PSD download plus flattened PNG/JPEG/WebP/SVG export.
+The screen can import decoded RGBA8 PNG/JPEG/WebP/AVIF/SVG pixels as layers,
+open a dropped raster image as a new document, and keep up to 16 isolated
+switchable document sessions inside the same Worker. Document tabs activate or
+close those engine sessions without moving canonical state into the UI. Rendered
+pixels travel through the browser clipboard between open documents; copy
+preserves the exact committed soft selection as alpha and keeps an in-memory
+fallback when system clipboard permission is unavailable. The screen can also
+apply built-in layer-style, gradient, pattern and font presets, then
+select/remove/group/ungroup/reorder/rename layers and edit
 visibility, opacity and common blend modes before undo/redo and render. Every
 document can also be scaled, canvas-resized around the center, rotated or
 cropped. A shared command registry drives toolbar and keyboard actions; the

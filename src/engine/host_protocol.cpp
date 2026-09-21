@@ -2992,6 +2992,21 @@ int patchy_engine_session_execute(patchy_engine_session *session,
           patchy::engine::SelectionSimilarityMode::Similar,
           command->payload.selection_tolerance.tolerance});
       break;
+    case PATCHY_ENGINE_COMMAND_SET_LAYER_STYLE_PRESET: {
+      std::string preset_id;
+      if (command->payload.set_layer_style_preset.preset_id_size != 0 &&
+          !copy_command_text(
+              command->payload.set_layer_style_preset.preset_id,
+              command->payload.set_layer_style_preset.preset_id_size,
+              sizeof(command->payload.set_layer_style_preset.preset_id),
+              preset_id, error)) {
+        return 0;
+      }
+      result = session->value->execute(patchy::engine::SetLayerStylePreset{
+          command->payload.set_layer_style_preset.layer_id,
+          std::move(preset_id)});
+      break;
+    }
     case PATCHY_ENGINE_COMMAND_SELECT_CHANNEL: {
       const auto *channel = session->value->document().find_channel(
           command->payload.select_channel.channel_id);

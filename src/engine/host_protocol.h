@@ -632,6 +632,7 @@ enum patchy_engine_command_type {
   PATCHY_ENGINE_COMMAND_SET_CLIPPING_PATH = 32,
   PATCHY_ENGINE_COMMAND_GROW_SELECTION = 33,
   PATCHY_ENGINE_COMMAND_SELECT_SIMILAR = 34,
+  PATCHY_ENGINE_COMMAND_SET_LAYER_STYLE_PRESET = 35,
 };
 
 typedef struct patchy_engine_command {
@@ -730,6 +731,11 @@ typedef struct patchy_engine_command {
     struct {
       int32_t tolerance;
     } selection_tolerance;
+    struct {
+      uint64_t layer_id;
+      uint32_t preset_id_size;
+      char preset_id[64];
+    } set_layer_style_preset;
     struct {
       uint64_t channel_id;
     } select_channel;

@@ -4,7 +4,9 @@
 #include "core/document_memory.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/layer_render_utils.hpp"
+#include "core/pattern_presets.hpp"
 #include "core/smart_object.hpp"
+#include "core/style_presets.hpp"
 #include "core/vector_raster.hpp"
 #include "psd/psd_document_io.hpp"
 #include "psd/psd_filter_effects.hpp"
@@ -2927,6 +2929,42 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                 layer->set_name(concrete.name);
                 changed = true;
               }
+            } else if constexpr (std::is_same_v<Command,
+                                                SetLayerStylePreset>) {
+              if (!concrete.preset_id.empty() &&
+                  find_builtin_style_preset(concrete.preset_id) == nullptr) {
+                error = make_error(SessionErrorCode::InvalidArgument,
+                                   "layer style preset does not exist");
+                return;
+              }
+              auto style = concrete.preset_id.empty()
+                               ? LayerStyle{}
+                               : builtin_style_preset_style(concrete.preset_id);
+              std::vector<std::string> pattern_ids;
+              collect_referenced_pattern_ids(style, pattern_ids);
+              for (const auto &id : pattern_ids) {
+                if (find_builtin_pattern_preset(id) == nullptr) {
+                  error = make_error(
+                      SessionErrorCode::InvalidArgument,
+                      "layer style preset requires an unavailable pattern");
+                  return;
+                }
+              }
+              const auto before = layer_effect_bounds(*layer);
+              prepare_mutation(record_history);
+              layer = document_.find_layer(concrete.layer_id);
+              layer->layer_style() = std::move(style);
+              auto &blocks = layer->unknown_psd_blocks();
+              std::erase_if(blocks, [](const UnknownPsdBlock &block) {
+                return block.key == "lfx2" || block.key == "lrFX" ||
+                       block.key == "plFX" || block.key == "lmfx";
+              });
+              for (const auto &id : pattern_ids) {
+                document_.metadata().patterns.adopt(
+                    builtin_pattern_resource(id));
+              }
+              affected_region = unite_rect(before, layer_effect_bounds(*layer));
+              changed = true;
             } else if constexpr (std::is_same_v<Command, SetLayerClipping>) {
               const auto location =
                   find_layer_location(document_.layers(), concrete.layer_id);

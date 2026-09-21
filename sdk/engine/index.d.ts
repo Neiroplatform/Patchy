@@ -15,6 +15,7 @@ export interface DocumentProjection {
   channels: number; activeLayerId: bigint; revision: bigint; stateId: bigint;
   layerCount: number; hasActiveLayer: boolean; dirty: boolean;
   canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
+  documentId: number; documentName: string; documents: DocumentTabProjection[];
   selection: Rect[];
   selectionMask: null | { bounds: Rect; gray: Uint8Array };
   channels: Array<{ id: bigint; kind: number; name: string }>;
@@ -22,6 +23,8 @@ export interface DocumentProjection {
     anchorCount: number; clipping: boolean; anchors: VectorAnchor[];
     subpaths: VectorSubpathInput[] }>;
 }
+export interface DocumentTabProjection { id: number; name: string; dirty: boolean;
+  revision: bigint; active: boolean }
 export type WorkerState = "starting" | "ready" | "crashed" | "closed";
 export interface FilterProgress {
   completed: number; total: number; stage: number; ratio: number;
@@ -33,14 +36,18 @@ export class PatchyWorkerClient {
   readonly state: WorkerState;
   readonly capabilities: bigint;
   initialize(moduleUrl: string, moduleOptions?: object): Promise<void>;
-  open(bytes: Uint8Array): Promise<DocumentProjection>;
-  create(width: number, height: number): Promise<DocumentProjection>;
+  open(bytes: Uint8Array, name?: string): Promise<DocumentProjection>;
+  create(width: number, height: number, name?: string): Promise<DocumentProjection>;
   snapshot(): Promise<DocumentProjection>;
+  listDocuments(): Promise<DocumentTabProjection[]>;
+  activateDocument(documentId: number): Promise<DocumentProjection>;
+  closeDocument(documentId: number): Promise<DocumentProjection | null>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;
   setLayerOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;
   setLayerFillOpacity(layerId: bigint, opacity: number): Promise<DocumentProjection>;
   setLayerLocks(layerId: bigint, lockFlags: number): Promise<DocumentProjection>;
   setLayerClipping(layerId: bigint, clipped: boolean): Promise<DocumentProjection>;
+  setLayerStylePreset(layerId: bigint, presetId: string): Promise<DocumentProjection>;
   setLayerBlendMode(layerId: bigint, blendMode: number): Promise<DocumentProjection>;
   renameLayer(layerId: bigint, name: string): Promise<DocumentProjection>;
   removeLayer(layerId: bigint): Promise<DocumentProjection>;

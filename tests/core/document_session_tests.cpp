@@ -2525,6 +2525,36 @@ void engine_host_protocol_authors_pixels_channels_and_selection() {
   CHECK(layer.bounds.width == 2);
   CHECK(project().revision == before_add.revision + 1U);
 
+  patchy_engine_command set_style{};
+  set_style.type = PATCHY_ENGINE_COMMAND_SET_LAYER_STYLE_PRESET;
+  set_style.payload.set_layer_style_preset.layer_id = layer_id;
+  const std::string style_id = "57a1e500-0015-4c6d-8f2a-9b3d4e55c015";
+  set_style.payload.set_layer_style_preset.preset_id_size =
+      static_cast<std::uint32_t>(style_id.size());
+  std::memcpy(set_style.payload.set_layer_style_preset.preset_id,
+              style_id.data(), style_id.size());
+  CHECK(execute(set_style).changed == 1);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  const auto before_invalid_style = project();
+  patchy_engine_command invalid_style = set_style;
+  invalid_style.struct_size = sizeof(invalid_style);
+  invalid_style.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  invalid_style.expected_state_id = before_invalid_style.state_id;
+  invalid_style.expected_revision = before_invalid_style.revision;
+  const std::string invalid_style_id = "missing-style";
+  invalid_style.payload.set_layer_style_preset.preset_id_size =
+      static_cast<std::uint32_t>(invalid_style_id.size());
+  std::memcpy(invalid_style.payload.set_layer_style_preset.preset_id,
+              invalid_style_id.data(), invalid_style_id.size());
+  CHECK(patchy_engine_session_execute(session, &invalid_style, &event,
+                                      &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_ENGINE);
+  CHECK(project().state_id == before_invalid_style.state_id);
+  set_style.payload.set_layer_style_preset.preset_id_size = 0;
+  CHECK(execute(set_style).changed == 1);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+
   pixels[0] = 10;
   pixels[1] = 200;
   const auto before_replace = project();
