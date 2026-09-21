@@ -124,9 +124,9 @@ struct SetLayerStylePreset {
   std::string preset_id{};
 };
 
-// Browser-facing essential Layer Style editor. Each optional value owns the
-// first effect instance of its family; any additional imported instances and
-// every other modeled effect family are preserved verbatim.
+// Browser-facing common Layer Style editor. Each optional value owns the first
+// effect instance of its family; additional imported instances and the three
+// preset-only families are preserved verbatim.
 struct SetEssentialLayerStyle {
   LayerId layer_id{0};
   bool effects_visible{true};
@@ -134,6 +134,10 @@ struct SetEssentialLayerStyle {
   std::optional<LayerDropShadow> drop_shadow{};
   std::optional<LayerColorOverlay> color_overlay{};
   std::optional<LayerStroke> stroke{};
+  std::optional<LayerInnerShadow> inner_shadow{};
+  std::optional<LayerOuterGlow> outer_glow{};
+  std::optional<LayerInnerGlow> inner_glow{};
+  std::optional<LayerSatin> satin{};
 };
 
 struct SetLayerMaskState {

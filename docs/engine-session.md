@@ -394,11 +394,14 @@ typed commands when their operation is covered; adding new direct state owners
 or a second dirty/revision counter is forbidden.
 
 The browser Layer Style surface uses `SetEssentialLayerStyle` for Drop Shadow,
-Stroke and Color Overlay. It replaces or removes only the first instance in
-each requested family, preserves stacked tail instances and all unrelated
-effects, unions old/new effect bounds, invalidates native effect blocks and
-publishes one revision. The Qt-free C projection reports editable values and
-total family counts so the shell can disclose preserved stacked effects.
+Inner Shadow, Outer Glow, Inner Glow, Satin, Stroke and Color Overlay. Its
+complete input names every editable family explicitly, preventing a partial
+client payload from silently clearing imported effects. It replaces or removes
+only the first instance in each family, preserves stacked tail instances plus
+Bevel, Gradient and Pattern effects, unions old/new effect bounds, invalidates
+native effect blocks and publishes one revision. The Qt-free C projection
+reports exact editable values and total family counts so the shell can disclose
+preserved stacked effects.
 
 ## Remaining M2 boundary
 

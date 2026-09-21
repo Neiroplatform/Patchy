@@ -2985,6 +2985,9 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
               const auto valid_opacity = [](float value) {
                 return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
               };
+              const auto valid_nonnegative = [](float value) {
+                return std::isfinite(value) && value >= 0.0F;
+              };
               const auto valid_blend = [](BlendMode value) {
                 return static_cast<std::uint32_t>(value) <=
                        static_cast<std::uint32_t>(BlendMode::Dissolve);
@@ -3010,7 +3013,42 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                     concrete.stroke->size < 0.0F ||
                     static_cast<std::uint32_t>(concrete.stroke->position) >
                         static_cast<std::uint32_t>(
-                            LayerStrokePosition::Center)))) {
+                            LayerStrokePosition::Center))) ||
+                  (concrete.inner_shadow.has_value() &&
+                   (!valid_blend(concrete.inner_shadow->blend_mode) ||
+                    !valid_opacity(concrete.inner_shadow->opacity) ||
+                    !std::isfinite(concrete.inner_shadow->angle_degrees) ||
+                    !valid_nonnegative(concrete.inner_shadow->distance) ||
+                    !valid_opacity(concrete.inner_shadow->choke) ||
+                    !valid_nonnegative(concrete.inner_shadow->size))) ||
+                  (concrete.outer_glow.has_value() &&
+                   (!valid_blend(concrete.outer_glow->blend_mode) ||
+                    !valid_opacity(concrete.outer_glow->opacity) ||
+                    !valid_opacity(concrete.outer_glow->spread) ||
+                    !valid_nonnegative(concrete.outer_glow->size) ||
+                    static_cast<std::uint32_t>(concrete.outer_glow->technique) >
+                        static_cast<std::uint32_t>(LayerGlowTechnique::Precise) ||
+                    !std::isfinite(concrete.outer_glow->range) ||
+                    concrete.outer_glow->range < 1.0F ||
+                    concrete.outer_glow->range > 100.0F)) ||
+                  (concrete.inner_glow.has_value() &&
+                   (!valid_blend(concrete.inner_glow->blend_mode) ||
+                    !valid_opacity(concrete.inner_glow->opacity) ||
+                    !valid_opacity(concrete.inner_glow->choke) ||
+                    !valid_nonnegative(concrete.inner_glow->size) ||
+                    static_cast<std::uint32_t>(concrete.inner_glow->source) >
+                        static_cast<std::uint32_t>(LayerInnerGlowSource::Edge) ||
+                    static_cast<std::uint32_t>(concrete.inner_glow->technique) >
+                        static_cast<std::uint32_t>(LayerGlowTechnique::Precise) ||
+                    !std::isfinite(concrete.inner_glow->range) ||
+                    concrete.inner_glow->range < 1.0F ||
+                    concrete.inner_glow->range > 100.0F)) ||
+                  (concrete.satin.has_value() &&
+                   (!valid_blend(concrete.satin->blend_mode) ||
+                    !valid_opacity(concrete.satin->opacity) ||
+                    !std::isfinite(concrete.satin->angle_degrees) ||
+                    !valid_nonnegative(concrete.satin->distance) ||
+                    !valid_nonnegative(concrete.satin->size)))) {
                 error = make_error(SessionErrorCode::InvalidArgument,
                                    "essential layer style values are invalid");
                 return;
@@ -3031,6 +3069,10 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
               replace_first(style.drop_shadows, concrete.drop_shadow);
               replace_first(style.color_overlays, concrete.color_overlay);
               replace_first(style.strokes, concrete.stroke);
+              replace_first(style.inner_shadows, concrete.inner_shadow);
+              replace_first(style.outer_glows, concrete.outer_glow);
+              replace_first(style.inner_glows, concrete.inner_glow);
+              replace_first(style.satins, concrete.satin);
               style.effects_visible = concrete.effects_visible;
               style.layer_mask_hides_effects =
                   concrete.layer_mask_hides_effects;
@@ -3042,7 +3084,11 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                       style.layer_mask_hides_effects &&
                   current.drop_shadows == style.drop_shadows &&
                   current.color_overlays == style.color_overlays &&
-                  current.strokes == style.strokes) {
+                  current.strokes == style.strokes &&
+                  current.inner_shadows == style.inner_shadows &&
+                  current.outer_glows == style.outer_glows &&
+                  current.inner_glows == style.inner_glows &&
+                  current.satins == style.satins) {
                 return;
               }
 

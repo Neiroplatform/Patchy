@@ -105,9 +105,10 @@ Mask, then undo/redo and layered PSD save/reopen. It must report `PASS`; the
 Node contract alone cannot substitute for this browser run.
 
 `tests/sdk/wasm_layer_style_smoke.html` is the focused editable-effect gate.
-Real pthread WASM authors Drop Shadow, Stroke and Color Overlay through one
-exact-state Worker command, checks the wasm32 projection, undo/redo and layered
-PSD save/reopen. The native engine regression separately pins preservation of
+Real pthread WASM authors Drop Shadow, Inner Shadow, Outer Glow, Inner Glow,
+Satin, Stroke and Color Overlay through one exact-state Worker command, checks
+the wasm32 projection, undo/redo and layered PSD save/reopen. The native engine
+regression separately pins preservation of
 stacked instances and unrelated imported effect families.
 
 ## wasm-core preset decisions (all in CMakePresets.json)

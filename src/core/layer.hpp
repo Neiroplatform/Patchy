@@ -294,6 +294,8 @@ struct LayerInnerShadow {
   float choke{0.0F};
   float size{5.0F};
   bool use_global_light{false};
+
+  friend bool operator==(const LayerInnerShadow&, const LayerInnerShadow&) = default;
 };
 
 // Photoshop's outer-glow Technique ('GlwT' BETE enum): Softer blurs the
@@ -316,6 +318,8 @@ struct LayerOuterGlow {
   // blurred matte scaled by 100/range and clamped; PS's UI default is 50, so
   // real files render twice as hot as the raw blur.
   float range{50.0F};
+
+  friend bool operator==(const LayerOuterGlow&, const LayerOuterGlow&) = default;
 };
 
 enum class LayerInnerGlowSource {
@@ -337,6 +341,8 @@ struct LayerInnerGlow {
   // default of 50 doubles the glow near the contour. The Center source is the
   // complement of the gained Edge field.
   float range{50.0F};
+
+  friend bool operator==(const LayerInnerGlow&, const LayerInnerGlow&) = default;
 };
 
 struct LayerColorOverlay {
@@ -474,6 +480,8 @@ struct LayerSatin {
   // Untouched Photoshop lfx2 data preserves custom contour points and AntA.
   // Patchy's modeled renderer/editor uses a non-anti-aliased Linear contour.
   bool unsupported_contour_options{false};
+
+  friend bool operator==(const LayerSatin&, const LayerSatin&) = default;
 };
 
 struct LayerPatternOverlay {

@@ -5,7 +5,7 @@ const EVENT_SIZE = 64;
 const DOCUMENT_SIZE = 56;
 const MEMORY_USAGE_SIZE = 128;
 const LAYER_SIZE = 320;
-const ESSENTIAL_LAYER_STYLE_SIZE = 128;
+const ESSENTIAL_LAYER_STYLE_SIZE = 296;
 const BUFFER_SIZE = 8;
 const COMMAND_SIZE = 304;
 const PIXEL_LAYER_INPUT_SIZE = 80;
@@ -214,6 +214,12 @@ export class EmscriptenPatchyEngine {
     if (!input || typeof input !== "object") {
       throw new TypeError("Essential layer style input is required");
     }
+    for (const family of ["dropShadow", "colorOverlay", "stroke", "innerShadow",
+      "outerGlow", "innerGlow", "satin"]) {
+      if (!Object.hasOwn(input, family)) {
+        throw new TypeError(`Common layer style input must include ${family}`);
+      }
+    }
     const packRgb = (color, subject) => {
       const [red, green, blue] = this.#rgb(color, subject);
       return (red << 16) | (green << 8) | blue;
@@ -236,8 +242,22 @@ export class EmscriptenPatchyEngine {
     const shadow = input.dropShadow ?? null;
     const overlay = input.colorOverlay ?? null;
     const stroke = input.stroke ?? null;
+    const innerShadow = input.innerShadow ?? null;
+    const outerGlow = input.outerGlow ?? null;
+    const innerGlow = input.innerGlow ?? null;
+    const satin = input.satin ?? null;
     if (stroke && (!Number.isInteger(stroke.position) || stroke.position < 0 || stroke.position > 2)) {
       throw new TypeError("Stroke position is invalid");
+    }
+    if (outerGlow && (!Number.isInteger(outerGlow.technique ?? 0) ||
+        (outerGlow.technique ?? 0) < 0 || (outerGlow.technique ?? 0) > 1)) {
+      throw new TypeError("Outer Glow technique is invalid");
+    }
+    if (innerGlow && (!Number.isInteger(innerGlow.source ?? 1) ||
+        (innerGlow.source ?? 1) < 0 || (innerGlow.source ?? 1) > 1 ||
+        !Number.isInteger(innerGlow.technique ?? 0) ||
+        (innerGlow.technique ?? 0) < 0 || (innerGlow.technique ?? 0) > 1)) {
+      throw new TypeError("Inner Glow source or technique is invalid");
     }
     return this.#command(session, snapshot, 36, (view) => {
       view.setBigUint64(32, layerId, true);
@@ -271,6 +291,51 @@ export class EmscriptenPatchyEngine {
         view.setFloat32(128, Math.max(0, finite(stroke.size ?? 3, "Stroke size")), true);
         view.setUint32(132, stroke.position ?? 0, true);
         view.setUint32(136, stroke.overprint ? 1 : 0, true);
+      }
+      view.setUint32(140, innerShadow ? 1 : 0, true);
+      if (innerShadow) {
+        view.setUint32(144, innerShadow.enabled === false ? 0 : 1, true);
+        view.setUint32(148, blend(innerShadow.blendMode ?? 2, "Inner Shadow"), true);
+        view.setUint32(152, packRgb(innerShadow.color ?? [0, 0, 0], "Inner Shadow color"), true);
+        view.setFloat32(156, opacity(innerShadow.opacity ?? .75, "Inner Shadow opacity"), true);
+        view.setFloat32(160, finite(innerShadow.angle ?? 120, "Inner Shadow angle"), true);
+        view.setFloat32(164, Math.max(0, finite(innerShadow.distance ?? 5, "Inner Shadow distance")), true);
+        view.setFloat32(168, opacity(innerShadow.choke ?? 0, "Inner Shadow choke"), true);
+        view.setFloat32(172, Math.max(0, finite(innerShadow.size ?? 5, "Inner Shadow size")), true);
+      }
+      view.setUint32(176, outerGlow ? 1 : 0, true);
+      if (outerGlow) {
+        view.setUint32(180, outerGlow.enabled === false ? 0 : 1, true);
+        view.setUint32(184, blend(outerGlow.blendMode ?? 1, "Outer Glow"), true);
+        view.setUint32(188, packRgb(outerGlow.color ?? [255, 255, 190], "Outer Glow color"), true);
+        view.setFloat32(192, opacity(outerGlow.opacity ?? .75, "Outer Glow opacity"), true);
+        view.setFloat32(196, opacity(outerGlow.spread ?? 0, "Outer Glow spread"), true);
+        view.setFloat32(200, Math.max(0, finite(outerGlow.size ?? 5, "Outer Glow size")), true);
+        view.setUint32(204, outerGlow.technique ?? 0, true);
+        view.setFloat32(208, finite(outerGlow.range ?? 50, "Outer Glow range"), true);
+      }
+      view.setUint32(212, innerGlow ? 1 : 0, true);
+      if (innerGlow) {
+        view.setUint32(216, innerGlow.enabled === false ? 0 : 1, true);
+        view.setUint32(220, blend(innerGlow.blendMode ?? 3, "Inner Glow"), true);
+        view.setUint32(224, packRgb(innerGlow.color ?? [255, 255, 190], "Inner Glow color"), true);
+        view.setFloat32(228, opacity(innerGlow.opacity ?? .75, "Inner Glow opacity"), true);
+        view.setFloat32(232, opacity(innerGlow.choke ?? 0, "Inner Glow choke"), true);
+        view.setFloat32(236, Math.max(0, finite(innerGlow.size ?? 5, "Inner Glow size")), true);
+        view.setUint32(240, innerGlow.source ?? 1, true);
+        view.setUint32(244, innerGlow.technique ?? 0, true);
+        view.setFloat32(248, finite(innerGlow.range ?? 50, "Inner Glow range"), true);
+      }
+      view.setUint32(252, satin ? 1 : 0, true);
+      if (satin) {
+        view.setUint32(256, satin.enabled === false ? 0 : 1, true);
+        view.setUint32(260, blend(satin.blendMode ?? 2, "Satin"), true);
+        view.setUint32(264, packRgb(satin.color ?? [0, 0, 0], "Satin color"), true);
+        view.setFloat32(268, opacity(satin.opacity ?? .5, "Satin opacity"), true);
+        view.setFloat32(272, finite(satin.angle ?? 19, "Satin angle"), true);
+        view.setFloat32(276, Math.max(0, finite(satin.distance ?? 11, "Satin distance")), true);
+        view.setFloat32(280, Math.max(0, finite(satin.size ?? 14, "Satin size")), true);
+        view.setUint32(284, satin.invert === false ? 0 : 1, true);
       }
     });
   }
@@ -1374,7 +1439,11 @@ export class EmscriptenPatchyEngine {
             layerMaskHidesEffects: styleView.getUint32(20, true) !== 0,
             counts: { dropShadow: styleView.getUint32(24, true),
               colorOverlay: styleView.getUint32(28, true),
-              stroke: styleView.getUint32(32, true) },
+              stroke: styleView.getUint32(32, true),
+              innerShadow: styleView.getUint32(128, true),
+              outerGlow: styleView.getUint32(132, true),
+              innerGlow: styleView.getUint32(136, true),
+              satin: styleView.getUint32(140, true) },
             dropShadow: projectedEffect(36, 40, 44, 48, {
               opacity: styleView.getFloat32(52, true), angle: styleView.getFloat32(56, true),
               distance: styleView.getFloat32(60, true), spread: styleView.getFloat32(64, true),
@@ -1386,6 +1455,22 @@ export class EmscriptenPatchyEngine {
               opacity: styleView.getFloat32(112, true), size: styleView.getFloat32(116, true),
               position: styleView.getUint32(120, true),
               overprint: styleView.getUint32(124, true) !== 0 }),
+            innerShadow: projectedEffect(144, 148, 152, 156, {
+              opacity: styleView.getFloat32(160, true), angle: styleView.getFloat32(164, true),
+              distance: styleView.getFloat32(168, true), choke: styleView.getFloat32(172, true),
+              size: styleView.getFloat32(176, true) }),
+            outerGlow: projectedEffect(180, 184, 188, 192, {
+              opacity: styleView.getFloat32(196, true), spread: styleView.getFloat32(200, true),
+              size: styleView.getFloat32(204, true), technique: styleView.getUint32(208, true),
+              range: styleView.getFloat32(212, true) }),
+            innerGlow: projectedEffect(216, 220, 224, 228, {
+              opacity: styleView.getFloat32(232, true), choke: styleView.getFloat32(236, true),
+              size: styleView.getFloat32(240, true), source: styleView.getUint32(244, true),
+              technique: styleView.getUint32(248, true), range: styleView.getFloat32(252, true) }),
+            satin: projectedEffect(256, 260, 264, 268, {
+              opacity: styleView.getFloat32(272, true), angle: styleView.getFloat32(276, true),
+              distance: styleView.getFloat32(280, true), size: styleView.getFloat32(284, true),
+              invert: styleView.getUint32(288, true) !== 0 }),
           },
         });
       }

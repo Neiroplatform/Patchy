@@ -4532,8 +4532,8 @@ void engine_session_essential_layer_style_is_atomic_preserving_and_round_trips()
   patchy::LayerDropShadow stacked{}; stacked.enabled = true;
   stacked.color = {20, 30, 40}; stacked.distance = 12.0F;
   source.layer_style().drop_shadows = {original, stacked};
-  patchy::LayerInnerGlow glow{}; glow.enabled = true;
-  source.layer_style().inner_glows = {glow};
+  patchy::LayerBevelEmboss bevel{}; bevel.enabled = true;
+  source.layer_style().bevels = {bevel};
   source.unknown_psd_blocks().push_back({"lfx2", {1, 2, 3}});
   const auto layer_id = source.id();
   DocumentSession session(std::move(document));
@@ -4547,9 +4547,28 @@ void engine_session_essential_layer_style_is_atomic_preserving_and_round_trips()
   patchy::LayerStroke stroke{}; stroke.enabled = true;
   stroke.color = {200, 100, 50}; stroke.opacity = 0.8F;
   stroke.size = 6.0F; stroke.position = patchy::LayerStrokePosition::Inside;
+  patchy::LayerInnerShadow inner_shadow{}; inner_shadow.enabled = true;
+  inner_shadow.color = {30, 40, 50}; inner_shadow.opacity = 0.55F;
+  inner_shadow.angle_degrees = 75.0F; inner_shadow.distance = 3.0F;
+  inner_shadow.choke = 0.1F; inner_shadow.size = 8.0F;
+  patchy::LayerOuterGlow outer_glow{}; outer_glow.enabled = true;
+  outer_glow.color = {210, 180, 90}; outer_glow.opacity = 0.6F;
+  outer_glow.spread = 0.2F; outer_glow.size = 11.0F;
+  outer_glow.technique = patchy::LayerGlowTechnique::Precise;
+  outer_glow.range = 72.0F;
+  patchy::LayerInnerGlow inner_glow{}; inner_glow.enabled = true;
+  inner_glow.color = {100, 220, 190}; inner_glow.opacity = 0.7F;
+  inner_glow.choke = 0.15F; inner_glow.size = 9.0F;
+  inner_glow.source = patchy::LayerInnerGlowSource::Center;
+  inner_glow.range = 65.0F;
+  patchy::LayerSatin satin{}; satin.enabled = true;
+  satin.color = {70, 20, 100}; satin.opacity = 0.45F;
+  satin.angle_degrees = 24.0F; satin.distance = 10.0F;
+  satin.size = 13.0F; satin.invert = false;
   const auto before_revision = session.revision();
   auto result = session.execute(patchy::engine::SetEssentialLayerStyle{
-      layer_id, true, true, shadow, overlay, stroke});
+      layer_id, true, true, shadow, overlay, stroke, inner_shadow, outer_glow,
+      inner_glow, satin});
   CHECK(result && result.changed);
   CHECK(session.revision() == before_revision + 1U);
   const auto *edited = session.document().find_layer(layer_id);
@@ -4557,7 +4576,11 @@ void engine_session_essential_layer_style_is_atomic_preserving_and_round_trips()
   CHECK(edited->layer_style().drop_shadows.size() == 2U);
   CHECK(edited->layer_style().drop_shadows.front() == shadow);
   CHECK(edited->layer_style().drop_shadows[1] == stacked);
-  CHECK(edited->layer_style().inner_glows.size() == 1U);
+  CHECK(edited->layer_style().inner_shadows.front() == inner_shadow);
+  CHECK(edited->layer_style().outer_glows.front() == outer_glow);
+  CHECK(edited->layer_style().inner_glows.front() == inner_glow);
+  CHECK(edited->layer_style().satins.front() == satin);
+  CHECK(edited->layer_style().bevels.size() == 1U);
   CHECK(edited->layer_style().color_overlays ==
         std::vector<patchy::LayerColorOverlay>{overlay});
   CHECK(edited->layer_style().strokes == std::vector<patchy::LayerStroke>{stroke});
@@ -4582,7 +4605,11 @@ void engine_session_essential_layer_style_is_atomic_preserving_and_round_trips()
   CHECK(round_trip->layer_style().drop_shadows.front().color == shadow.color);
   CHECK(round_trip->layer_style().color_overlays.front().color == overlay.color);
   CHECK(round_trip->layer_style().strokes.front().position == stroke.position);
-  CHECK(round_trip->layer_style().inner_glows.size() == 1U);
+  CHECK(round_trip->layer_style().inner_shadows.front().color == inner_shadow.color);
+  CHECK(round_trip->layer_style().outer_glows.front().technique == outer_glow.technique);
+  CHECK(round_trip->layer_style().inner_glows.front().source == inner_glow.source);
+  CHECK(round_trip->layer_style().satins.front().invert == satin.invert);
+  CHECK(round_trip->layer_style().bevels.size() == 1U);
 }
 
 void engine_host_protocol_previews_and_commits_one_layer_warp() {

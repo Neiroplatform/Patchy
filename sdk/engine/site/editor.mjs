@@ -769,6 +769,43 @@ function openLayerStyleDialog() {
   $("styleShadowSpreadInput").value = String(Math.round((shadow?.spread ?? 0) * 100));
   $("styleShadowSizeInput").value = String(shadow?.size ?? 5);
   $("styleShadowConcealsInput").checked = shadow?.layerConceals !== false;
+  const innerShadow = style.innerShadow;
+  $("styleInnerShadowEnabledInput").checked = Boolean(innerShadow?.enabled);
+  setEffectBlend("styleInnerShadowBlendInput", innerShadow?.blendMode ?? 2);
+  $("styleInnerShadowColorInput").value = colorHex(innerShadow?.color, "#000000");
+  $("styleInnerShadowOpacityInput").value = String(Math.round((innerShadow?.opacity ?? .75) * 100));
+  $("styleInnerShadowAngleInput").value = String(innerShadow?.angle ?? 120);
+  $("styleInnerShadowDistanceInput").value = String(innerShadow?.distance ?? 5);
+  $("styleInnerShadowChokeInput").value = String(Math.round((innerShadow?.choke ?? 0) * 100));
+  $("styleInnerShadowSizeInput").value = String(innerShadow?.size ?? 5);
+  const outerGlow = style.outerGlow;
+  $("styleOuterGlowEnabledInput").checked = Boolean(outerGlow?.enabled);
+  setEffectBlend("styleOuterGlowBlendInput", outerGlow?.blendMode ?? 1);
+  $("styleOuterGlowColorInput").value = colorHex(outerGlow?.color, "#ffffbe");
+  $("styleOuterGlowOpacityInput").value = String(Math.round((outerGlow?.opacity ?? .75) * 100));
+  $("styleOuterGlowSpreadInput").value = String(Math.round((outerGlow?.spread ?? 0) * 100));
+  $("styleOuterGlowSizeInput").value = String(outerGlow?.size ?? 5);
+  $("styleOuterGlowTechniqueInput").value = String(outerGlow?.technique ?? 0);
+  $("styleOuterGlowRangeInput").value = String(outerGlow?.range ?? 50);
+  const innerGlow = style.innerGlow;
+  $("styleInnerGlowEnabledInput").checked = Boolean(innerGlow?.enabled);
+  setEffectBlend("styleInnerGlowBlendInput", innerGlow?.blendMode ?? 3);
+  $("styleInnerGlowColorInput").value = colorHex(innerGlow?.color, "#ffffbe");
+  $("styleInnerGlowOpacityInput").value = String(Math.round((innerGlow?.opacity ?? .75) * 100));
+  $("styleInnerGlowChokeInput").value = String(Math.round((innerGlow?.choke ?? 0) * 100));
+  $("styleInnerGlowSizeInput").value = String(innerGlow?.size ?? 5);
+  $("styleInnerGlowSourceInput").value = String(innerGlow?.source ?? 1);
+  $("styleInnerGlowTechniqueInput").value = String(innerGlow?.technique ?? 0);
+  $("styleInnerGlowRangeInput").value = String(innerGlow?.range ?? 50);
+  const satin = style.satin;
+  $("styleSatinEnabledInput").checked = Boolean(satin?.enabled);
+  setEffectBlend("styleSatinBlendInput", satin?.blendMode ?? 2);
+  $("styleSatinColorInput").value = colorHex(satin?.color, "#000000");
+  $("styleSatinOpacityInput").value = String(Math.round((satin?.opacity ?? .5) * 100));
+  $("styleSatinAngleInput").value = String(satin?.angle ?? 19);
+  $("styleSatinDistanceInput").value = String(satin?.distance ?? 11);
+  $("styleSatinSizeInput").value = String(satin?.size ?? 14);
+  $("styleSatinInvertInput").checked = satin?.invert !== false;
   const stroke = style.stroke;
   $("styleStrokeEnabledInput").checked = Boolean(stroke?.enabled);
   setEffectBlend("styleStrokeBlendInput", stroke?.blendMode ?? 1);
@@ -786,7 +823,7 @@ function openLayerStyleDialog() {
     .map(([family, count]) => `${family}: ${count - 1} additional`);
   $("styleStackedEffectsNote").textContent = extras.length
     ? `Imported stacked effects preserved — ${extras.join(", ")}.`
-    : "The first instance of each essential family is editable.";
+    : "The first instance of each common family is editable.";
   $("layerStyleDialog").showModal();
 }
 
@@ -804,6 +841,43 @@ function essentialLayerStyleInput() {
       distance: Number($("styleShadowDistanceInput").value),
       spread: percent("styleShadowSpreadInput"), size: Number($("styleShadowSizeInput").value),
       layerConceals: $("styleShadowConcealsInput").checked,
+    } : null,
+    innerShadow: $("styleInnerShadowEnabledInput").checked ? {
+      enabled: true, blendMode: Number($("styleInnerShadowBlendInput").value),
+      color: colorBytes($("styleInnerShadowColorInput").value),
+      opacity: percent("styleInnerShadowOpacityInput"),
+      angle: Number($("styleInnerShadowAngleInput").value),
+      distance: Number($("styleInnerShadowDistanceInput").value),
+      choke: percent("styleInnerShadowChokeInput"),
+      size: Number($("styleInnerShadowSizeInput").value),
+    } : null,
+    outerGlow: $("styleOuterGlowEnabledInput").checked ? {
+      enabled: true, blendMode: Number($("styleOuterGlowBlendInput").value),
+      color: colorBytes($("styleOuterGlowColorInput").value),
+      opacity: percent("styleOuterGlowOpacityInput"),
+      spread: percent("styleOuterGlowSpreadInput"),
+      size: Number($("styleOuterGlowSizeInput").value),
+      technique: Number($("styleOuterGlowTechniqueInput").value),
+      range: Number($("styleOuterGlowRangeInput").value),
+    } : null,
+    innerGlow: $("styleInnerGlowEnabledInput").checked ? {
+      enabled: true, blendMode: Number($("styleInnerGlowBlendInput").value),
+      color: colorBytes($("styleInnerGlowColorInput").value),
+      opacity: percent("styleInnerGlowOpacityInput"),
+      choke: percent("styleInnerGlowChokeInput"),
+      size: Number($("styleInnerGlowSizeInput").value),
+      source: Number($("styleInnerGlowSourceInput").value),
+      technique: Number($("styleInnerGlowTechniqueInput").value),
+      range: Number($("styleInnerGlowRangeInput").value),
+    } : null,
+    satin: $("styleSatinEnabledInput").checked ? {
+      enabled: true, blendMode: Number($("styleSatinBlendInput").value),
+      color: colorBytes($("styleSatinColorInput").value),
+      opacity: percent("styleSatinOpacityInput"),
+      angle: Number($("styleSatinAngleInput").value),
+      distance: Number($("styleSatinDistanceInput").value),
+      size: Number($("styleSatinSizeInput").value),
+      invert: $("styleSatinInvertInput").checked,
     } : null,
     stroke: $("styleStrokeEnabledInput").checked ? {
       enabled: true, blendMode: Number($("styleStrokeBlendInput").value),

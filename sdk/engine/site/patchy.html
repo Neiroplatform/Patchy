@@ -367,7 +367,7 @@
       </form>
     </dialog>
     <dialog class="document-dialog layer-style-dialog" id="layerStyleDialog" aria-labelledby="layerStyleDialogTitle">
-      <form method="dialog"><header><div><p class="eyebrow">LAYER STYLE</p><h2 id="layerStyleDialogTitle">Essential effects</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+      <form method="dialog"><header><div><p class="eyebrow">LAYER STYLE</p><h2 id="layerStyleDialogTitle">Common effects</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
         <section><div class="field-row">
           <label class="check-field"><input id="styleEffectsVisibleInput" type="checkbox" checked><span>Effects visible</span></label>
           <label class="check-field"><input id="styleMaskHidesInput" type="checkbox"><span>Layer mask hides effects</span></label>
@@ -382,6 +382,51 @@
             <label><span>Spread %</span><input id="styleShadowSpreadInput" type="number" min="0" max="100" step="1" value="0"></label>
             <label><span>Size</span><input id="styleShadowSizeInput" type="number" min="0" max="1000" step="1" value="5"></label>
             <label class="check-field"><input id="styleShadowConcealsInput" type="checkbox" checked><span>Layer knocks out</span></label>
+          </div>
+        </section>
+        <section><h3>Inner Shadow</h3><label class="check-field"><input id="styleInnerShadowEnabledInput" type="checkbox"><span>Enable Inner Shadow</span></label>
+          <div class="field-row field-row-four">
+            <label><span>Blend</span><select id="styleInnerShadowBlendInput"><option value="1">Normal</option><option value="2">Multiply</option><option value="3">Screen</option><option value="4">Overlay</option></select></label>
+            <label><span>Color</span><input id="styleInnerShadowColorInput" type="color" value="#000000"></label>
+            <label><span>Opacity %</span><input id="styleInnerShadowOpacityInput" type="number" min="0" max="100" step="1" value="75"></label>
+            <label><span>Angle°</span><input id="styleInnerShadowAngleInput" type="number" min="-360" max="360" step="1" value="120"></label>
+            <label><span>Distance</span><input id="styleInnerShadowDistanceInput" type="number" min="0" max="1000" step="1" value="5"></label>
+            <label><span>Choke %</span><input id="styleInnerShadowChokeInput" type="number" min="0" max="100" step="1" value="0"></label>
+            <label><span>Size</span><input id="styleInnerShadowSizeInput" type="number" min="0" max="1000" step="1" value="5"></label>
+          </div>
+        </section>
+        <section><h3>Outer Glow</h3><label class="check-field"><input id="styleOuterGlowEnabledInput" type="checkbox"><span>Enable Outer Glow</span></label>
+          <div class="field-row field-row-four">
+            <label><span>Blend</span><select id="styleOuterGlowBlendInput"><option value="1">Normal</option><option value="2">Multiply</option><option value="3">Screen</option><option value="4">Overlay</option></select></label>
+            <label><span>Color</span><input id="styleOuterGlowColorInput" type="color" value="#ffffbe"></label>
+            <label><span>Opacity %</span><input id="styleOuterGlowOpacityInput" type="number" min="0" max="100" step="1" value="75"></label>
+            <label><span>Spread %</span><input id="styleOuterGlowSpreadInput" type="number" min="0" max="100" step="1" value="0"></label>
+            <label><span>Size</span><input id="styleOuterGlowSizeInput" type="number" min="0" max="1000" step="1" value="5"></label>
+            <label><span>Technique</span><select id="styleOuterGlowTechniqueInput"><option value="0">Softer</option><option value="1">Precise</option></select></label>
+            <label><span>Range %</span><input id="styleOuterGlowRangeInput" type="number" min="1" max="100" step="1" value="50"></label>
+          </div>
+        </section>
+        <section><h3>Inner Glow</h3><label class="check-field"><input id="styleInnerGlowEnabledInput" type="checkbox"><span>Enable Inner Glow</span></label>
+          <div class="field-row field-row-four">
+            <label><span>Blend</span><select id="styleInnerGlowBlendInput"><option value="1">Normal</option><option value="2">Multiply</option><option value="3">Screen</option><option value="4">Overlay</option></select></label>
+            <label><span>Color</span><input id="styleInnerGlowColorInput" type="color" value="#ffffbe"></label>
+            <label><span>Opacity %</span><input id="styleInnerGlowOpacityInput" type="number" min="0" max="100" step="1" value="75"></label>
+            <label><span>Choke %</span><input id="styleInnerGlowChokeInput" type="number" min="0" max="100" step="1" value="0"></label>
+            <label><span>Size</span><input id="styleInnerGlowSizeInput" type="number" min="0" max="1000" step="1" value="5"></label>
+            <label><span>Source</span><select id="styleInnerGlowSourceInput"><option value="1">Edge</option><option value="0">Center</option></select></label>
+            <label><span>Technique</span><select id="styleInnerGlowTechniqueInput"><option value="0">Softer</option><option value="1">Precise</option></select></label>
+            <label><span>Range %</span><input id="styleInnerGlowRangeInput" type="number" min="1" max="100" step="1" value="50"></label>
+          </div>
+        </section>
+        <section><h3>Satin</h3><label class="check-field"><input id="styleSatinEnabledInput" type="checkbox"><span>Enable Satin</span></label>
+          <div class="field-row field-row-four">
+            <label><span>Blend</span><select id="styleSatinBlendInput"><option value="1">Normal</option><option value="2">Multiply</option><option value="3">Screen</option><option value="4">Overlay</option></select></label>
+            <label><span>Color</span><input id="styleSatinColorInput" type="color" value="#000000"></label>
+            <label><span>Opacity %</span><input id="styleSatinOpacityInput" type="number" min="0" max="100" step="1" value="50"></label>
+            <label><span>Angle°</span><input id="styleSatinAngleInput" type="number" min="-360" max="360" step="1" value="19"></label>
+            <label><span>Distance</span><input id="styleSatinDistanceInput" type="number" min="0" max="1000" step="1" value="11"></label>
+            <label><span>Size</span><input id="styleSatinSizeInput" type="number" min="0" max="1000" step="1" value="14"></label>
+            <label class="check-field"><input id="styleSatinInvertInput" type="checkbox" checked><span>Invert</span></label>
           </div>
         </section>
         <section><h3>Stroke</h3><label class="check-field"><input id="styleStrokeEnabledInput" type="checkbox"><span>Enable Stroke</span></label>
@@ -400,7 +445,7 @@
             <label><span>Color</span><input id="styleOverlayColorInput" type="color" value="#ff0000"></label>
             <label><span>Opacity %</span><input id="styleOverlayOpacityInput" type="number" min="0" max="100" step="1" value="100"></label>
           </div>
-          <p class="dialog-note">Apply commits all three families as one undo step. Additional imported instances and every other effect family remain intact.</p>
+          <p class="dialog-note">Apply commits all seven editable families as one undo step. Additional imported instances and Bevel, Gradient and Pattern effects remain intact.</p>
           <div class="dialog-actions"><button class="button button-primary" id="commitLayerStyleButton" type="button">Apply effects</button></div>
         </section>
       </form>

@@ -1,4 +1,42 @@
 export interface Rect { x: number; y: number; width: number; height: number }
+export type RgbColor = [number, number, number];
+export interface LayerEffectBase {
+  enabled: boolean; blendMode: number; color: RgbColor; opacity: number;
+}
+export interface LayerStyleProjection {
+  effectsVisible: boolean; layerMaskHidesEffects: boolean;
+  counts: { dropShadow: number; colorOverlay: number; stroke: number;
+    innerShadow: number; outerGlow: number; innerGlow: number; satin: number };
+  dropShadow: null | (LayerEffectBase & { angle: number; distance: number;
+    spread: number; size: number; layerConceals: boolean });
+  colorOverlay: null | LayerEffectBase;
+  stroke: null | (LayerEffectBase & { size: number; position: 0 | 1 | 2;
+    overprint: boolean });
+  innerShadow: null | (LayerEffectBase & { angle: number; distance: number;
+    choke: number; size: number });
+  outerGlow: null | (LayerEffectBase & { spread: number; size: number;
+    technique: 0 | 1; range: number });
+  innerGlow: null | (LayerEffectBase & { choke: number; size: number;
+    source: 0 | 1; technique: 0 | 1; range: number });
+  satin: null | (LayerEffectBase & { angle: number; distance: number;
+    size: number; invert: boolean });
+}
+export interface CommonLayerStyleInput {
+  effectsVisible?: boolean; layerMaskHidesEffects?: boolean;
+  dropShadow: null | Partial<LayerEffectBase & { angle: number; distance: number;
+    spread: number; size: number; layerConceals: boolean }>;
+  colorOverlay: null | Partial<LayerEffectBase>;
+  stroke: null | Partial<LayerEffectBase & { size: number; position: 0 | 1 | 2;
+    overprint: boolean }>;
+  innerShadow: null | Partial<LayerEffectBase & { angle: number; distance: number;
+    choke: number; size: number }>;
+  outerGlow: null | Partial<LayerEffectBase & { spread: number; size: number;
+    technique: 0 | 1; range: number }>;
+  innerGlow: null | Partial<LayerEffectBase & { choke: number; size: number;
+    source: 0 | 1; technique: 0 | 1; range: number }>;
+  satin: null | Partial<LayerEffectBase & { angle: number; distance: number;
+    size: number; invert: boolean }>;
+}
 export interface LayerProjection {
   id: bigint; parentId: bigint; kind: number; visible: boolean;
   opacity: number; name: string; clipped: boolean; fillOpacity: number;
@@ -10,6 +48,7 @@ export interface LayerProjection {
     curvePoints: Array<{ input: number; output: number }> };
   smartObject: null | { sourceKind: number; filename: string; filetype: string;
     sourceSize: bigint; editable: boolean; contentsEditable: boolean };
+  layerStyle: LayerStyleProjection;
 }
 export interface DocumentProjection {
   width: number; height: number; colorMode: number; bitDepth: number;
@@ -104,6 +143,8 @@ export class PatchyWorkerClient {
   setLayerLocks(layerId: bigint, lockFlags: number): Promise<DocumentProjection>;
   setLayerClipping(layerId: bigint, clipped: boolean): Promise<DocumentProjection>;
   setLayerStylePreset(layerId: bigint, presetId: string): Promise<DocumentProjection>;
+  setEssentialLayerStyle(layerId: bigint,
+    input: CommonLayerStyleInput): Promise<DocumentProjection>;
   setLayerBlendMode(layerId: bigint, blendMode: number): Promise<DocumentProjection>;
   renameLayer(layerId: bigint, name: string): Promise<DocumentProjection>;
   removeLayer(layerId: bigint): Promise<DocumentProjection>;

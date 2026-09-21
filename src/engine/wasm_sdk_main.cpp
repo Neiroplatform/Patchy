@@ -67,6 +67,16 @@ static_assert(sizeof(patchy_engine_selection_input) == 32);
 static_assert(offsetof(patchy_engine_selection_input, rects) == 24);
 static_assert(sizeof(patchy_engine_selection_mask_input) == 56);
 static_assert(offsetof(patchy_engine_selection_mask_input, gray) == 48);
+static_assert(sizeof(patchy_engine_essential_layer_style_projection) == 296);
+static_assert(offsetof(patchy_engine_essential_layer_style_projection,
+                       inner_shadow_count) == 128);
+static_assert(offsetof(patchy_engine_essential_layer_style_projection,
+                       satin_invert) == 288);
+static_assert(offsetof(patchy_engine_command,
+                       payload.set_essential_layer_style.inner_shadow_present) ==
+              140);
+static_assert(offsetof(patchy_engine_command,
+                       payload.set_essential_layer_style.satin_invert) == 284);
 static_assert(sizeof(patchy_engine_layer_mask_input) == 72);
 static_assert(offsetof(patchy_engine_layer_mask_input, bounds) == 32);
 static_assert(offsetof(patchy_engine_layer_mask_input, gray) == 56);

@@ -281,7 +281,7 @@ typedef struct patchy_engine_layer_projection {
   patchy_engine_rect bounds;
 } patchy_engine_layer_projection;
 
-/* Editable first-instance projection for the browser's essential Layer Style
+/* Editable first-instance projection for the browser's common Layer Style
  * workflow. Counts disclose preserved stacked instances to the shell. */
 typedef struct patchy_engine_essential_layer_style_projection {
   uint32_t struct_size;
@@ -315,6 +315,47 @@ typedef struct patchy_engine_essential_layer_style_projection {
   float stroke_size;
   uint32_t stroke_position;
   uint32_t stroke_overprint;
+  uint32_t inner_shadow_count;
+  uint32_t outer_glow_count;
+  uint32_t inner_glow_count;
+  uint32_t satin_count;
+  uint32_t inner_shadow_present;
+  uint32_t inner_shadow_enabled;
+  uint32_t inner_shadow_blend_mode;
+  uint32_t inner_shadow_rgb;
+  float inner_shadow_opacity;
+  float inner_shadow_angle;
+  float inner_shadow_distance;
+  float inner_shadow_choke;
+  float inner_shadow_size;
+  uint32_t outer_glow_present;
+  uint32_t outer_glow_enabled;
+  uint32_t outer_glow_blend_mode;
+  uint32_t outer_glow_rgb;
+  float outer_glow_opacity;
+  float outer_glow_spread;
+  float outer_glow_size;
+  uint32_t outer_glow_technique;
+  float outer_glow_range;
+  uint32_t inner_glow_present;
+  uint32_t inner_glow_enabled;
+  uint32_t inner_glow_blend_mode;
+  uint32_t inner_glow_rgb;
+  float inner_glow_opacity;
+  float inner_glow_choke;
+  float inner_glow_size;
+  uint32_t inner_glow_source;
+  uint32_t inner_glow_technique;
+  float inner_glow_range;
+  uint32_t satin_present;
+  uint32_t satin_enabled;
+  uint32_t satin_blend_mode;
+  uint32_t satin_rgb;
+  float satin_opacity;
+  float satin_angle;
+  float satin_distance;
+  float satin_size;
+  uint32_t satin_invert;
 } patchy_engine_essential_layer_style_projection;
 
 typedef struct patchy_engine_document_projection {
@@ -954,6 +995,43 @@ typedef struct patchy_engine_command {
       float stroke_size;
       uint32_t stroke_position;
       uint32_t stroke_overprint;
+      uint32_t inner_shadow_present;
+      uint32_t inner_shadow_enabled;
+      uint32_t inner_shadow_blend_mode;
+      uint32_t inner_shadow_rgb;
+      float inner_shadow_opacity;
+      float inner_shadow_angle;
+      float inner_shadow_distance;
+      float inner_shadow_choke;
+      float inner_shadow_size;
+      uint32_t outer_glow_present;
+      uint32_t outer_glow_enabled;
+      uint32_t outer_glow_blend_mode;
+      uint32_t outer_glow_rgb;
+      float outer_glow_opacity;
+      float outer_glow_spread;
+      float outer_glow_size;
+      uint32_t outer_glow_technique;
+      float outer_glow_range;
+      uint32_t inner_glow_present;
+      uint32_t inner_glow_enabled;
+      uint32_t inner_glow_blend_mode;
+      uint32_t inner_glow_rgb;
+      float inner_glow_opacity;
+      float inner_glow_choke;
+      float inner_glow_size;
+      uint32_t inner_glow_source;
+      uint32_t inner_glow_technique;
+      float inner_glow_range;
+      uint32_t satin_present;
+      uint32_t satin_enabled;
+      uint32_t satin_blend_mode;
+      uint32_t satin_rgb;
+      float satin_opacity;
+      float satin_angle;
+      float satin_distance;
+      float satin_size;
+      uint32_t satin_invert;
     } set_essential_layer_style;
     struct {
       uint64_t channel_id;

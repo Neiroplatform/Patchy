@@ -51,13 +51,15 @@ sources so the next PSD save cannot be shadowed by stale imported effects. An
 empty id clears modeled effects. The self-hosted shell initially exposes the
 six Basics recipes as a compact authored-style surface.
 
-The browser's essential-effect editor projects and edits the first modeled
-Drop Shadow, Stroke and Color Overlay instance. One Apply crosses the
-Worker/wasm32 boundary as `SetEssentialLayerStyle` and creates one undo entry.
-Per-family counts disclose stacked imported instances: entries after the first
-and every other Layer Style family are preserved rather than silently dropped.
-As with preset edits, modeled changes clear native effect source blocks so PSD
-save regenerates truthful descriptors from canonical state.
+The browser's common-effect editor projects and edits the first modeled Drop
+Shadow, Inner Shadow, Outer Glow, Inner Glow, Satin, Stroke and Color Overlay
+instance. One Apply crosses the Worker/wasm32 boundary as
+`SetEssentialLayerStyle` and creates one undo entry. The payload is a complete
+seven-family state, so omitted fields fail before mutation. Per-family counts
+disclose stacked imported instances: entries after the first plus Bevel,
+Gradient and Pattern effects are preserved rather than silently dropped. As
+with preset edits, modeled changes clear native effect source blocks so PSD save
+regenerates truthful descriptors from canonical state.
 
 ## .asl codec (src/psd/asl_io.*)
 

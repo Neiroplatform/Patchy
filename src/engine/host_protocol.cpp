@@ -117,16 +117,25 @@ static_assert(static_cast<std::uint32_t>(patchy::PathCombineOp::Intersect) ==
 static_assert(static_cast<std::uint32_t>(
                   patchy::engine::SelectionCombineMode::Intersect) ==
               PATCHY_ENGINE_SELECTION_INTERSECT);
-static_assert(sizeof(patchy_engine_essential_layer_style_projection) == 128U);
+static_assert(sizeof(patchy_engine_essential_layer_style_projection) == 296U);
 static_assert(offsetof(patchy_engine_essential_layer_style_projection,
                        drop_shadow_present) == 36U);
 static_assert(offsetof(patchy_engine_essential_layer_style_projection,
                        stroke_overprint) == 124U);
+static_assert(offsetof(patchy_engine_essential_layer_style_projection,
+                       inner_shadow_count) == 128U);
+static_assert(offsetof(patchy_engine_essential_layer_style_projection,
+                       satin_invert) == 288U);
 static_assert(offsetof(patchy_engine_command,
                        payload.set_essential_layer_style.layer_id) == 32U);
 static_assert(offsetof(patchy_engine_command,
                        payload.set_essential_layer_style.stroke_overprint) ==
               136U);
+static_assert(offsetof(patchy_engine_command,
+                       payload.set_essential_layer_style.inner_shadow_present) ==
+              140U);
+static_assert(offsetof(patchy_engine_command,
+                       payload.set_essential_layer_style.satin_invert) == 284U);
 
 constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_LAYER_PROJECTION |
@@ -1289,6 +1298,13 @@ int patchy_engine_session_essential_layer_style(
     style->color_overlay_count =
         static_cast<std::uint32_t>(source.color_overlays.size());
     style->stroke_count = static_cast<std::uint32_t>(source.strokes.size());
+    style->inner_shadow_count =
+        static_cast<std::uint32_t>(source.inner_shadows.size());
+    style->outer_glow_count =
+        static_cast<std::uint32_t>(source.outer_glows.size());
+    style->inner_glow_count =
+        static_cast<std::uint32_t>(source.inner_glows.size());
+    style->satin_count = static_cast<std::uint32_t>(source.satins.size());
     if (!source.drop_shadows.empty()) {
       const auto &value = source.drop_shadows.front();
       style->drop_shadow_present = 1U;
@@ -1322,6 +1338,60 @@ int patchy_engine_session_essential_layer_style(
       style->stroke_size = value.size;
       style->stroke_position = static_cast<std::uint32_t>(value.position);
       style->stroke_overprint = value.overprint ? 1U : 0U;
+    }
+    if (!source.inner_shadows.empty()) {
+      const auto &value = source.inner_shadows.front();
+      style->inner_shadow_present = 1U;
+      style->inner_shadow_enabled = value.enabled ? 1U : 0U;
+      style->inner_shadow_blend_mode =
+          static_cast<std::uint32_t>(value.blend_mode);
+      style->inner_shadow_rgb = pack_rgb(value.color);
+      style->inner_shadow_opacity = value.opacity;
+      style->inner_shadow_angle = value.angle_degrees;
+      style->inner_shadow_distance = value.distance;
+      style->inner_shadow_choke = value.choke;
+      style->inner_shadow_size = value.size;
+    }
+    if (!source.outer_glows.empty()) {
+      const auto &value = source.outer_glows.front();
+      style->outer_glow_present = 1U;
+      style->outer_glow_enabled = value.enabled ? 1U : 0U;
+      style->outer_glow_blend_mode =
+          static_cast<std::uint32_t>(value.blend_mode);
+      style->outer_glow_rgb = pack_rgb(value.color);
+      style->outer_glow_opacity = value.opacity;
+      style->outer_glow_spread = value.spread;
+      style->outer_glow_size = value.size;
+      style->outer_glow_technique =
+          static_cast<std::uint32_t>(value.technique);
+      style->outer_glow_range = value.range;
+    }
+    if (!source.inner_glows.empty()) {
+      const auto &value = source.inner_glows.front();
+      style->inner_glow_present = 1U;
+      style->inner_glow_enabled = value.enabled ? 1U : 0U;
+      style->inner_glow_blend_mode =
+          static_cast<std::uint32_t>(value.blend_mode);
+      style->inner_glow_rgb = pack_rgb(value.color);
+      style->inner_glow_opacity = value.opacity;
+      style->inner_glow_choke = value.choke;
+      style->inner_glow_size = value.size;
+      style->inner_glow_source = static_cast<std::uint32_t>(value.source);
+      style->inner_glow_technique =
+          static_cast<std::uint32_t>(value.technique);
+      style->inner_glow_range = value.range;
+    }
+    if (!source.satins.empty()) {
+      const auto &value = source.satins.front();
+      style->satin_present = 1U;
+      style->satin_enabled = value.enabled ? 1U : 0U;
+      style->satin_blend_mode = static_cast<std::uint32_t>(value.blend_mode);
+      style->satin_rgb = pack_rgb(value.color);
+      style->satin_opacity = value.opacity;
+      style->satin_angle = value.angle_degrees;
+      style->satin_distance = value.distance;
+      style->satin_size = value.size;
+      style->satin_invert = value.invert ? 1U : 0U;
     }
     return 1;
   } catch (const std::exception &exception) {
@@ -3568,6 +3638,62 @@ int patchy_engine_session_execute(patchy_engine_session *session,
             static_cast<patchy::LayerStrokePosition>(input.stroke_position);
         stroke.overprint = input.stroke_overprint != 0U;
         value.stroke = stroke;
+      }
+      if (input.inner_shadow_present != 0U) {
+        patchy::LayerInnerShadow shadow{};
+        shadow.enabled = input.inner_shadow_enabled != 0U;
+        shadow.blend_mode =
+            static_cast<patchy::BlendMode>(input.inner_shadow_blend_mode);
+        shadow.color = rgb(input.inner_shadow_rgb);
+        shadow.opacity = input.inner_shadow_opacity;
+        shadow.angle_degrees = input.inner_shadow_angle;
+        shadow.distance = input.inner_shadow_distance;
+        shadow.choke = input.inner_shadow_choke;
+        shadow.size = input.inner_shadow_size;
+        value.inner_shadow = shadow;
+      }
+      if (input.outer_glow_present != 0U) {
+        patchy::LayerOuterGlow glow{};
+        glow.enabled = input.outer_glow_enabled != 0U;
+        glow.blend_mode =
+            static_cast<patchy::BlendMode>(input.outer_glow_blend_mode);
+        glow.color = rgb(input.outer_glow_rgb);
+        glow.opacity = input.outer_glow_opacity;
+        glow.spread = input.outer_glow_spread;
+        glow.size = input.outer_glow_size;
+        glow.technique =
+            static_cast<patchy::LayerGlowTechnique>(input.outer_glow_technique);
+        glow.range = input.outer_glow_range;
+        value.outer_glow = glow;
+      }
+      if (input.inner_glow_present != 0U) {
+        patchy::LayerInnerGlow glow{};
+        glow.enabled = input.inner_glow_enabled != 0U;
+        glow.blend_mode =
+            static_cast<patchy::BlendMode>(input.inner_glow_blend_mode);
+        glow.color = rgb(input.inner_glow_rgb);
+        glow.opacity = input.inner_glow_opacity;
+        glow.choke = input.inner_glow_choke;
+        glow.size = input.inner_glow_size;
+        glow.source =
+            static_cast<patchy::LayerInnerGlowSource>(input.inner_glow_source);
+        glow.technique =
+            static_cast<patchy::LayerGlowTechnique>(input.inner_glow_technique);
+        glow.range = input.inner_glow_range;
+        value.inner_glow = glow;
+      }
+      if (input.satin_present != 0U) {
+        patchy::LayerSatin satin{};
+        satin.enabled = input.satin_enabled != 0U;
+        satin.blend_mode =
+            static_cast<patchy::BlendMode>(input.satin_blend_mode);
+        satin.color = rgb(input.satin_rgb);
+        satin.opacity = input.satin_opacity;
+        satin.angle_degrees = input.satin_angle;
+        satin.distance = input.satin_distance;
+        satin.size = input.satin_size;
+        satin.invert = input.satin_invert != 0U;
+        value.satin = satin;
       }
       result = session->value->execute(value);
       break;
