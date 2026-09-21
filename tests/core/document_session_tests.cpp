@@ -3121,6 +3121,210 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_authors_nondestructive_workflow() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 6, 4, &error);
+  CHECK(session != nullptr);
+  const auto project = [&]() {
+    patchy_engine_document_projection document{};
+    document.struct_size = sizeof(document);
+    CHECK(patchy_engine_session_document(session, &document, &error) == 1);
+    return document;
+  };
+  patchy_engine_event event{};
+  std::vector<std::uint8_t> pixels(4U * 4U * 4U, 255U);
+  for (std::size_t index = 0; index < pixels.size(); index += 4U) {
+    pixels[index] = static_cast<std::uint8_t>(20U + index);
+    pixels[index + 1U] = 80U;
+    pixels[index + 2U] = 140U;
+  }
+  const auto initial = project();
+  patchy_engine_pixel_layer_input add{};
+  add.struct_size = sizeof(add);
+  add.expected_state_id = initial.state_id;
+  add.expected_revision = initial.revision;
+  add.bounds = {0, 0, 4, 4};
+  add.width = 4;
+  add.height = 4;
+  add.rgba = pixels.data();
+  add.rgba_size = pixels.size();
+  add.name = "Masked pixels";
+  add.name_size = std::strlen(add.name);
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &add, &event, &error) ==
+        1);
+  const auto pixel_id = event.affected_layer_id;
+
+  const patchy_engine_path_anchor anchors[] = {
+      {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0},
+      {3.0, 0.0, 3.0, 0.0, 3.0, 0.0, 0},
+      {3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 0},
+      {0.0, 3.0, 0.0, 3.0, 0.0, 3.0, 0},
+  };
+  const patchy_engine_path_subpath_input subpath{
+      0, 4, 0, PATCHY_ENGINE_PATH_ADD, 1};
+  const auto before_mask = project();
+  patchy_engine_vector_mask_input vector_mask{};
+  vector_mask.struct_size = sizeof(vector_mask);
+  vector_mask.expected_state_id = before_mask.state_id;
+  vector_mask.expected_revision = before_mask.revision;
+  vector_mask.layer_id = pixel_id;
+  vector_mask.path = {&subpath, 1, anchors, 4};
+  vector_mask.feather = 0.5;
+  vector_mask.density = 210;
+  vector_mask.unlinked = 1;
+  vector_mask.has_mask = 1;
+  CHECK(patchy_engine_session_set_vector_mask(
+            session, &vector_mask, &event, &error) == 1);
+  patchy_engine_vector_mask_projection projected_mask{};
+  projected_mask.struct_size = sizeof(projected_mask);
+  CHECK(patchy_engine_session_vector_mask(
+            session, pixel_id, &projected_mask, &error) == 1);
+  CHECK(projected_mask.subpath_count == 1);
+  CHECK(projected_mask.anchor_count == 4);
+  CHECK(projected_mask.density == 210);
+  CHECK(projected_mask.unlinked == 1);
+
+  const patchy_engine_curve_point curve[] = {{0, 10}, {128, 170}, {255, 245}};
+  const auto before_adjustment = project();
+  patchy_engine_adjustment_input adjustment{};
+  adjustment.struct_size = sizeof(adjustment);
+  adjustment.expected_state_id = before_adjustment.state_id;
+  adjustment.expected_revision = before_adjustment.revision;
+  adjustment.name = "Browser curves";
+  adjustment.name_size = std::strlen(adjustment.name);
+  adjustment.kind = PATCHY_ENGINE_ADJUSTMENT_CURVES;
+  adjustment.curve_points = curve;
+  adjustment.curve_point_count = std::size(curve);
+  CHECK(patchy_engine_session_set_adjustment(
+            session, &adjustment, &event, &error) == 1);
+  const auto adjustment_id = event.affected_layer_id;
+  patchy_engine_adjustment_projection projected_adjustment{};
+  projected_adjustment.struct_size = sizeof(projected_adjustment);
+  CHECK(patchy_engine_session_adjustment(
+            session, adjustment_id, &projected_adjustment, &error) == 1);
+  CHECK(projected_adjustment.kind == PATCHY_ENGINE_ADJUSTMENT_CURVES);
+  CHECK(projected_adjustment.curve_point_count == 3);
+  patchy_engine_curve_point projected_point{};
+  CHECK(patchy_engine_session_adjustment_curve_point_at(
+            session, adjustment_id, 1, &projected_point, &error) == 1);
+  CHECK(projected_point.input == 128);
+  CHECK(projected_point.output == 170);
+
+  const auto before_update = project();
+  adjustment.expected_state_id = before_update.state_id;
+  adjustment.expected_revision = before_update.revision;
+  adjustment.layer_id = adjustment_id;
+  adjustment.update_existing = 1;
+  adjustment.kind = PATCHY_ENGINE_ADJUSTMENT_BRIGHTNESS_CONTRAST;
+  adjustment.values[0] = 18;
+  adjustment.values[1] = -9;
+  adjustment.values[2] = 1;
+  adjustment.curve_points = nullptr;
+  adjustment.curve_point_count = 0;
+  CHECK(patchy_engine_session_set_adjustment(
+            session, &adjustment, &event, &error) == 1);
+  projected_adjustment = {};
+  projected_adjustment.struct_size = sizeof(projected_adjustment);
+  CHECK(patchy_engine_session_adjustment(
+            session, adjustment_id, &projected_adjustment, &error) == 1);
+  CHECK(projected_adjustment.kind ==
+        PATCHY_ENGINE_ADJUSTMENT_BRIGHTNESS_CONTRAST);
+  CHECK(projected_adjustment.values[0] == 18);
+  CHECK(projected_adjustment.values[1] == -9);
+  const auto before_curve_restore = project();
+  const patchy_engine_curve_point updated_curve[] = {{0, 20}, {255, 230}};
+  adjustment.expected_state_id = before_curve_restore.state_id;
+  adjustment.expected_revision = before_curve_restore.revision;
+  adjustment.kind = PATCHY_ENGINE_ADJUSTMENT_CURVES;
+  adjustment.curve_points = updated_curve;
+  adjustment.curve_point_count = std::size(updated_curve);
+  CHECK(patchy_engine_session_set_adjustment(
+            session, &adjustment, &event, &error) == 1);
+
+  const std::array<std::uint8_t, 8> source_bytes{'8', 'B', 'P', 'S', 4, 3, 2,
+                                                  1};
+  const auto before_smart = project();
+  patchy_engine_smart_object_input smart{};
+  smart.struct_size = sizeof(smart);
+  smart.expected_state_id = before_smart.state_id;
+  smart.expected_revision = before_smart.revision;
+  smart.bounds = {2, 0, 4, 4};
+  smart.width = 4;
+  smart.height = 4;
+  smart.rgba = pixels.data();
+  smart.rgba_size = pixels.size();
+  smart.name = "Filtered object";
+  smart.name_size = std::strlen(smart.name);
+  smart.source_kind = PATCHY_ENGINE_SMART_OBJECT_EMBEDDED;
+  smart.filename = "filter-source.psb";
+  smart.filename_size = std::strlen(smart.filename);
+  std::memcpy(smart.filetype, "8BPB", 4);
+  smart.source_bytes = source_bytes.data();
+  smart.source_size = source_bytes.size();
+  CHECK(patchy_engine_session_add_smart_object(
+            session, &smart, &event, &error) == 1);
+  const auto smart_id = event.affected_layer_id;
+  const auto before_filter = project();
+  patchy_engine_smart_filter_input filter{};
+  filter.struct_size = sizeof(filter);
+  filter.expected_state_id = before_filter.state_id;
+  filter.expected_revision = before_filter.revision;
+  filter.layer_id = smart_id;
+  filter.kind = PATCHY_ENGINE_SMART_FILTER_GAUSSIAN_BLUR;
+  filter.amount = 1.25;
+  filter.enabled = 1;
+  CHECK(patchy_engine_session_set_smart_filter(
+            session, &filter, &event, &error) == 1);
+  patchy_engine_smart_filter_projection projected_filter{};
+  projected_filter.struct_size = sizeof(projected_filter);
+  CHECK(patchy_engine_session_smart_filter(
+            session, smart_id, &projected_filter, &error) == 1);
+  CHECK(projected_filter.entry_count == 1);
+  CHECK(projected_filter.first_kind ==
+        PATCHY_ENGINE_SMART_FILTER_GAUSSIAN_BLUR);
+  CHECK(projected_filter.first_amount == 1.25);
+
+  patchy_engine_buffer rendered{};
+  CHECK(patchy_engine_session_render(session, {0, 0, 6, 4}, &rendered,
+                                     &event, &error) == 1);
+  patchy_engine_buffer psd{};
+  CHECK(patchy_engine_session_save_psd(session, &psd, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
+                                                  &error);
+  CHECK(reopened != nullptr);
+  projected_mask = {};
+  projected_mask.struct_size = sizeof(projected_mask);
+  CHECK(patchy_engine_session_vector_mask(
+            reopened, pixel_id, &projected_mask, &error) == 1);
+  projected_adjustment = {};
+  projected_adjustment.struct_size = sizeof(projected_adjustment);
+  CHECK(patchy_engine_session_adjustment(
+            reopened, adjustment_id, &projected_adjustment, &error) == 1);
+  CHECK(projected_adjustment.curve_point_count == 2);
+  projected_filter = {};
+  projected_filter.struct_size = sizeof(projected_filter);
+  CHECK(patchy_engine_session_smart_filter(
+            reopened, smart_id, &projected_filter, &error) == 1);
+  CHECK(projected_filter.first_amount == 1.25);
+  patchy_engine_buffer reopened_render{};
+  CHECK(patchy_engine_session_render(reopened, {0, 0, 6, 4},
+                                     &reopened_render, &event, &error) == 1);
+  CHECK(reopened_render.size == rendered.size);
+  CHECK(std::equal(reopened_render.data,
+                   reopened_render.data + reopened_render.size,
+                   rendered.data));
+
+  patchy_engine_buffer_release(&reopened_render);
+  patchy_engine_buffer_release(&rendered);
+  patchy_engine_session_destroy(reopened);
+  patchy_engine_buffer_release(&psd);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -3199,5 +3403,7 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_runs_mask_filter_async_lifecycle},
       {"engine_host_protocol_authors_text_and_smart_objects",
        engine_host_protocol_authors_text_and_smart_objects},
+      {"engine_host_protocol_authors_nondestructive_workflow",
+       engine_host_protocol_authors_nondestructive_workflow},
   };
 }

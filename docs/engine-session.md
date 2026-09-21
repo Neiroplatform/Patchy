@@ -197,11 +197,22 @@ boundary, project their editable/source identity back to the host and preserve
 stable layer IDs, embedded bytes, link kind and composite pixels through PSD
 save/reopen. Embedded bytes can be exported without exposing C++ ownership;
 linked sources deliberately expose metadata only and never read host paths.
+The browser host can now create or update all eight modeled adjustment-layer
+kinds, author/remove vector masks with path, density, feather and mask flags,
+and apply a supported single-entry Smart Filter stack to an editable embedded
+Smart Object. The initial Smart Filter authoring subset is Gaussian Blur, High
+Pass, Median, Mosaic and Box Blur; the engine renders the committed pixels and
+regenerates both placed-layer and filter-cache PSD metadata in the same atomic
+command. Projection APIs return adjustment parameters/curve points,
+vector-mask shape counts and Smart Filter kind/value without exposing C++
+ownership.
 Core contract fixtures execute `open → inspect → render → mutate → undo → redo
 → save → reopen`, `create → author layers/tree/geometry → render → save-ack →
 reopen`, `upload pixels → select → author channel/path/vector → save → reopen`
 and `upload → mask → filter → progress/cancel → drain events → save → reopen`
 plus `text → embedded/linked Smart Objects → project/export → save → reopen`
+and `pixels → vector mask → adjustment → embedded Smart Object → Smart Filter
+→ render → save → reopen`
 in every native or wasm-core build, and the header is valid strict C11.
 
 The build recursively rejects any Qt target in `patchy_engine`'s dependency

@@ -1904,9 +1904,16 @@ void ui_script_manager_cli_example_dialog() {
   CHECK(command.contains(QStringLiteral("batch-export.js")));
   CHECK(command.contains(QStringLiteral("--script-output result.txt")));
   CHECK(command.contains(QStringLiteral("--script-arg folder=C:\\photos")));
-  // The test binary's path has no spaces, so one universal line serves every
-  // shell: unquoted exe token, no separate PowerShell box.
-  CHECK(!command.startsWith(QLatin1Char('"')));
+  // POSIX uses one universal line even when a non-ASCII or spaced checkout
+  // requires quoting the executable token. Validate the actual application
+  // path instead of assuming the test binary lives in an ASCII-only path.
+  const auto native_exe =
+      QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+  if (command.startsWith(QLatin1Char('"'))) {
+    CHECK(command.startsWith(QLatin1Char('"') + native_exe + QLatin1Char('"')));
+  } else {
+    CHECK(command.startsWith(native_exe + QLatin1Char(' ')));
+  }
   CHECK(example->findChild<QPlainTextEdit*>(
             QStringLiteral("scriptEditorCliCommandPowerShell")) == nullptr);
   save_widget_artifact("script_cli_example_dialog", *example);

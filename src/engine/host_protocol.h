@@ -36,6 +36,9 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_EVENT_DRAIN = UINT64_C(1) << 19,
   PATCHY_ENGINE_CAP_TEXT_AUTHORING = UINT64_C(1) << 20,
   PATCHY_ENGINE_CAP_SMART_OBJECT_AUTHORING = UINT64_C(1) << 21,
+  PATCHY_ENGINE_CAP_ADJUSTMENT_AUTHORING = UINT64_C(1) << 22,
+  PATCHY_ENGINE_CAP_VECTOR_MASK_AUTHORING = UINT64_C(1) << 23,
+  PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING = UINT64_C(1) << 24,
 };
 
 enum patchy_engine_error_code {
@@ -346,6 +349,69 @@ typedef struct patchy_engine_smart_object_projection {
   uint8_t editable;
 } patchy_engine_smart_object_projection;
 
+enum patchy_engine_adjustment_kind {
+  PATCHY_ENGINE_ADJUSTMENT_LEVELS = 0,
+  PATCHY_ENGINE_ADJUSTMENT_CURVES = 1,
+  PATCHY_ENGINE_ADJUSTMENT_HUE_SATURATION = 2,
+  PATCHY_ENGINE_ADJUSTMENT_COLOR_BALANCE = 3,
+  PATCHY_ENGINE_ADJUSTMENT_INVERT = 4,
+  PATCHY_ENGINE_ADJUSTMENT_POSTERIZE = 5,
+  PATCHY_ENGINE_ADJUSTMENT_THRESHOLD = 6,
+  PATCHY_ENGINE_ADJUSTMENT_BRIGHTNESS_CONTRAST = 7,
+};
+
+typedef struct patchy_engine_curve_point {
+  int32_t input;
+  int32_t output;
+} patchy_engine_curve_point;
+
+typedef struct patchy_engine_adjustment_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  uint64_t layer_id;
+  const char *name;
+  size_t name_size;
+  uint32_t kind;
+  int32_t values[8];
+  const patchy_engine_curve_point *curve_points;
+  size_t curve_point_count;
+  uint8_t update_existing;
+} patchy_engine_adjustment_input;
+
+typedef struct patchy_engine_adjustment_projection {
+  uint32_t struct_size;
+  uint32_t kind;
+  int32_t values[8];
+  size_t curve_point_count;
+} patchy_engine_adjustment_projection;
+
+enum patchy_engine_smart_filter_kind {
+  PATCHY_ENGINE_SMART_FILTER_GAUSSIAN_BLUR = 1,
+  PATCHY_ENGINE_SMART_FILTER_HIGH_PASS = 2,
+  PATCHY_ENGINE_SMART_FILTER_MEDIAN = 3,
+  PATCHY_ENGINE_SMART_FILTER_MOSAIC = 4,
+  PATCHY_ENGINE_SMART_FILTER_BOX_BLUR = 5,
+};
+
+typedef struct patchy_engine_smart_filter_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  uint64_t layer_id;
+  uint32_t kind;
+  double amount;
+  uint8_t enabled;
+} patchy_engine_smart_filter_input;
+
+typedef struct patchy_engine_smart_filter_projection {
+  uint32_t struct_size;
+  size_t entry_count;
+  uint32_t first_kind;
+  double first_amount;
+  uint8_t enabled;
+} patchy_engine_smart_filter_projection;
+
 typedef int (*patchy_engine_render_progress_fn)(int32_t completed,
                                                 int32_t total,
                                                 void *user_data);
@@ -410,6 +476,33 @@ typedef struct patchy_engine_path_input {
   const patchy_engine_path_anchor *anchors;
   size_t anchor_count;
 } patchy_engine_path_input;
+
+typedef struct patchy_engine_vector_mask_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  uint64_t layer_id;
+  patchy_engine_path_input path;
+  double feather;
+  uint8_t density;
+  uint8_t disabled;
+  uint8_t inverted;
+  uint8_t unlinked;
+  uint8_t hides_effects;
+  uint8_t has_mask;
+} patchy_engine_vector_mask_input;
+
+typedef struct patchy_engine_vector_mask_projection {
+  uint32_t struct_size;
+  size_t subpath_count;
+  size_t anchor_count;
+  double feather;
+  uint8_t density;
+  uint8_t disabled;
+  uint8_t inverted;
+  uint8_t unlinked;
+  uint8_t hides_effects;
+} patchy_engine_vector_mask_projection;
 
 typedef struct patchy_engine_document_path_input {
   uint32_t struct_size;
@@ -758,6 +851,32 @@ int patchy_engine_session_smart_object(
 int patchy_engine_session_smart_object_bytes(
     const patchy_engine_session *session, uint64_t layer_id,
     patchy_engine_buffer *bytes, patchy_engine_error *error);
+int patchy_engine_session_set_adjustment(
+    patchy_engine_session *session,
+    const patchy_engine_adjustment_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_adjustment(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_adjustment_projection *adjustment,
+    patchy_engine_error *error);
+int patchy_engine_session_adjustment_curve_point_at(
+    const patchy_engine_session *session, uint64_t layer_id, size_t index,
+    patchy_engine_curve_point *point, patchy_engine_error *error);
+int patchy_engine_session_set_vector_mask(
+    patchy_engine_session *session,
+    const patchy_engine_vector_mask_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_vector_mask(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_vector_mask_projection *mask, patchy_engine_error *error);
+int patchy_engine_session_set_smart_filter(
+    patchy_engine_session *session,
+    const patchy_engine_smart_filter_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_smart_filter(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_smart_filter_projection *filter,
+    patchy_engine_error *error);
 int patchy_engine_session_add_alpha_channel(
     patchy_engine_session *session,
     const patchy_engine_alpha_channel_input *input,

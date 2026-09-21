@@ -1,8 +1,11 @@
 #include "engine/host_protocol.h"
 
 #include "engine/document_session.hpp"
+#include "core/adjustment_layer.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/smart_object.hpp"
+#include "filters/smart_filter_renderer.hpp"
+#include "psd/psd_filter_effects.hpp"
 #include "psd/psd_smart_objects.hpp"
 
 #include <algorithm>
@@ -126,7 +129,10 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_PROGRESS_CANCELLATION |
     PATCHY_ENGINE_CAP_EVENT_DRAIN |
     PATCHY_ENGINE_CAP_TEXT_AUTHORING |
-    PATCHY_ENGINE_CAP_SMART_OBJECT_AUTHORING;
+    PATCHY_ENGINE_CAP_SMART_OBJECT_AUTHORING |
+    PATCHY_ENGINE_CAP_ADJUSTMENT_AUTHORING |
+    PATCHY_ENGINE_CAP_VECTOR_MASK_AUTHORING |
+    PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -1431,6 +1437,487 @@ int patchy_engine_session_smart_object_bytes(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown smart object byte projection failure");
+  }
+}
+
+int patchy_engine_session_set_adjustment(
+    patchy_engine_session *session,
+    const patchy_engine_adjustment_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) ||
+      input->kind > PATCHY_ENGINE_ADJUSTMENT_BRIGHTNESS_CONTRAST ||
+      input->curve_point_count > 64U ||
+      (input->curve_point_count != 0 && input->curve_points == nullptr) ||
+      (input->update_existing != 0 && input->layer_id == 0)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete adjustment input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  try {
+    patchy::AdjustmentSettings settings;
+    settings.kind = static_cast<patchy::AdjustmentKind>(input->kind);
+    switch (input->kind) {
+    case PATCHY_ENGINE_ADJUSTMENT_LEVELS:
+      settings.levels = {input->values[0], input->values[1], input->values[2],
+                         input->values[3], input->values[4]};
+      break;
+    case PATCHY_ENGINE_ADJUSTMENT_CURVES:
+      settings.curves.rgb.clear();
+      settings.curves.rgb.reserve(input->curve_point_count);
+      for (std::size_t index = 0; index < input->curve_point_count; ++index) {
+        settings.curves.rgb.push_back({input->curve_points[index].input,
+                                       input->curve_points[index].output});
+      }
+      break;
+    case PATCHY_ENGINE_ADJUSTMENT_HUE_SATURATION:
+      settings.hue_saturation = {
+          input->values[0], input->values[1], input->values[2],
+          input->values[3] != 0, input->values[4], input->values[5],
+          input->values[6]};
+      break;
+    case PATCHY_ENGINE_ADJUSTMENT_COLOR_BALANCE:
+      settings.color_balance = {input->values[0], input->values[1],
+                                input->values[2]};
+      break;
+    case PATCHY_ENGINE_ADJUSTMENT_INVERT:
+      break;
+    case PATCHY_ENGINE_ADJUSTMENT_POSTERIZE:
+      settings.posterize.levels = input->values[0];
+      break;
+    case PATCHY_ENGINE_ADJUSTMENT_THRESHOLD:
+      settings.threshold.level = input->values[0];
+      break;
+    case PATCHY_ENGINE_ADJUSTMENT_BRIGHTNESS_CONTRAST:
+      settings.brightness_contrast = {input->values[0], input->values[1],
+                                      input->values[2] != 0};
+      break;
+    default:
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "adjustment kind is invalid");
+    }
+    CommandResult result;
+    if (input->update_existing != 0) {
+      result = session->value->execute(
+          patchy::engine::UpdateAdjustmentLayer{input->layer_id, settings});
+    } else {
+      std::string name;
+      if (!copy_command_text(input->name, input->name_size, 256U, name,
+                             error)) {
+        return 0;
+      }
+      result = session->value->execute(
+          patchy::engine::AddAdjustmentLayer{std::move(name), settings, {}});
+    }
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate adjustment payload");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown adjustment authoring failure");
+  }
+}
+
+int patchy_engine_session_adjustment(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_adjustment_projection *adjustment,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || adjustment == nullptr ||
+      adjustment->struct_size != sizeof(*adjustment)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and initialized adjustment projection are required");
+  }
+  try {
+    const auto *layer = session->value->document().find_layer(layer_id);
+    const auto settings = layer == nullptr
+                              ? std::optional<patchy::AdjustmentSettings>{}
+                              : patchy::adjustment_settings_from_layer(*layer);
+    if (!settings.has_value()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "layer is not an adjustment");
+    }
+    const auto struct_size = adjustment->struct_size;
+    *adjustment = {};
+    adjustment->struct_size = struct_size;
+    adjustment->kind = static_cast<std::uint32_t>(settings->kind);
+    switch (settings->kind) {
+    case patchy::AdjustmentKind::Levels:
+      adjustment->values[0] = settings->levels.black_input;
+      adjustment->values[1] = settings->levels.white_input;
+      adjustment->values[2] = settings->levels.gamma_percent;
+      adjustment->values[3] = settings->levels.black_output;
+      adjustment->values[4] = settings->levels.white_output;
+      break;
+    case patchy::AdjustmentKind::Curves:
+      adjustment->curve_point_count = settings->curves.rgb.size();
+      break;
+    case patchy::AdjustmentKind::HueSaturation:
+      adjustment->values[0] = settings->hue_saturation.hue_shift;
+      adjustment->values[1] = settings->hue_saturation.saturation_delta;
+      adjustment->values[2] = settings->hue_saturation.lightness_delta;
+      adjustment->values[3] = settings->hue_saturation.colorize;
+      adjustment->values[4] = settings->hue_saturation.colorize_hue;
+      adjustment->values[5] = settings->hue_saturation.colorize_saturation;
+      adjustment->values[6] = settings->hue_saturation.colorize_lightness;
+      break;
+    case patchy::AdjustmentKind::ColorBalance:
+      adjustment->values[0] = settings->color_balance.cyan_red;
+      adjustment->values[1] = settings->color_balance.magenta_green;
+      adjustment->values[2] = settings->color_balance.yellow_blue;
+      break;
+    case patchy::AdjustmentKind::Invert:
+      break;
+    case patchy::AdjustmentKind::Posterize:
+      adjustment->values[0] = settings->posterize.levels;
+      break;
+    case patchy::AdjustmentKind::Threshold:
+      adjustment->values[0] = settings->threshold.level;
+      break;
+    case patchy::AdjustmentKind::BrightnessContrast:
+      adjustment->values[0] = settings->brightness_contrast.brightness;
+      adjustment->values[1] = settings->brightness_contrast.contrast;
+      adjustment->values[2] = settings->brightness_contrast.use_legacy;
+      break;
+    }
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not project adjustment payload");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown adjustment projection failure");
+  }
+}
+
+int patchy_engine_session_adjustment_curve_point_at(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    std::size_t index, patchy_engine_curve_point *point,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || point == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and curve point output are required");
+  }
+  try {
+    const auto *layer = session->value->document().find_layer(layer_id);
+    const auto settings = layer == nullptr
+                              ? std::optional<patchy::AdjustmentSettings>{}
+                              : patchy::adjustment_settings_from_layer(*layer);
+    if (!settings.has_value() ||
+        settings->kind != patchy::AdjustmentKind::Curves ||
+        index >= settings->curves.rgb.size()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "RGB curve point index is invalid");
+    }
+    *point = {settings->curves.rgb[index].input,
+              settings->curves.rgb[index].output};
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not project curve point");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown curve point projection failure");
+  }
+}
+
+int patchy_engine_session_set_vector_mask(
+    patchy_engine_session *session,
+    const patchy_engine_vector_mask_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->layer_id == 0 ||
+      !std::isfinite(input->feather) || input->feather < 0.0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete vector mask input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  try {
+    std::optional<patchy::LayerVectorMask> mask;
+    if (input->has_mask != 0) {
+      const auto path = vector_path_from_input(input->path, error);
+      if (!path.has_value()) {
+        return 0;
+      }
+      mask.emplace();
+      mask->path = *path;
+      mask->feather = input->feather;
+      mask->density = input->density;
+      mask->disabled = input->disabled != 0;
+      mask->inverted = input->inverted != 0;
+      mask->unlinked = input->unlinked != 0;
+      mask->hides_effects = input->hides_effects != 0;
+    }
+    const auto result = session->value->execute(
+        patchy::engine::SetVectorMaskState{input->layer_id, std::move(mask)});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate vector mask payload");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown vector mask authoring failure");
+  }
+}
+
+int patchy_engine_session_vector_mask(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_vector_mask_projection *mask, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || mask == nullptr ||
+      mask->struct_size != sizeof(*mask)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and initialized vector mask projection are required");
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  const auto *source = layer == nullptr ? nullptr : layer->vector_mask();
+  if (source == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer has no vector mask");
+  }
+  const auto struct_size = mask->struct_size;
+  *mask = {};
+  mask->struct_size = struct_size;
+  mask->subpath_count = source->path.subpaths.size();
+  for (const auto &subpath : source->path.subpaths) {
+    mask->anchor_count += subpath.anchors.size();
+  }
+  mask->feather = source->feather;
+  mask->density = source->density;
+  mask->disabled = source->disabled;
+  mask->inverted = source->inverted;
+  mask->unlinked = source->unlinked;
+  mask->hides_effects = source->hides_effects;
+  return 1;
+}
+
+int patchy_engine_session_set_smart_filter(
+    patchy_engine_session *session,
+    const patchy_engine_smart_filter_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->layer_id == 0 ||
+      input->kind < PATCHY_ENGINE_SMART_FILTER_GAUSSIAN_BLUR ||
+      input->kind > PATCHY_ENGINE_SMART_FILTER_BOX_BLUR ||
+      !std::isfinite(input->amount)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete Smart Filter input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  try {
+    const auto *layer = session->value->document().find_layer(input->layer_id);
+    if (layer == nullptr || !patchy::layer_is_smart_object(*layer) ||
+        patchy::smart_object_lock_reason(*layer) != "") {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "editable embedded Smart Object is required");
+    }
+    const auto placement = patchy::smart_object_placement_from_layer(*layer);
+    const auto placed_uuid = patchy::smart_object_placed_uuid(*layer);
+    if (!placement.has_value() || placed_uuid.empty()) {
+      return fail(error, PATCHY_ENGINE_ERROR_ENGINE,
+                  "Smart Object placement is incomplete");
+    }
+    patchy::SmartFilterEntry entry;
+    entry.enabled = input->enabled != 0;
+    entry.native_name = "Gaussian Blur...";
+    entry.native_class_id = "GsnB";
+    entry.native_filter_id = 0x47736e42U;
+    switch (input->kind) {
+    case PATCHY_ENGINE_SMART_FILTER_GAUSSIAN_BLUR:
+      entry.kind = patchy::SmartFilterKind::GaussianBlur;
+      entry.parameters = patchy::GaussianBlurSmartFilter{
+          std::clamp(input->amount, 0.1, 1000.0)};
+      break;
+    case PATCHY_ENGINE_SMART_FILTER_HIGH_PASS:
+      entry.kind = patchy::SmartFilterKind::HighPass;
+      entry.native_name = "High Pass...";
+      entry.native_class_id = "HghP";
+      entry.native_filter_id = 0x48676850U;
+      entry.parameters = patchy::HighPassSmartFilter{
+          std::clamp(input->amount, 0.1, 1000.0)};
+      break;
+    case PATCHY_ENGINE_SMART_FILTER_MEDIAN:
+      entry.kind = patchy::SmartFilterKind::Median;
+      entry.native_name = "Median...";
+      entry.native_class_id = "Mdn ";
+      entry.native_filter_id = 0x4d646e20U;
+      entry.parameters = patchy::MedianSmartFilter{
+          std::clamp(input->amount, 1.0, 500.0)};
+      break;
+    case PATCHY_ENGINE_SMART_FILTER_MOSAIC:
+      entry.kind = patchy::SmartFilterKind::Mosaic;
+      entry.native_name = "Mosaic...";
+      entry.native_class_id = "Msc ";
+      entry.native_filter_id = 0x4d736320U;
+      entry.parameters = patchy::MosaicSmartFilter{static_cast<std::int32_t>(
+          std::clamp(std::lround(input->amount), 2L, 200L))};
+      break;
+    case PATCHY_ENGINE_SMART_FILTER_BOX_BLUR:
+      entry.kind = patchy::SmartFilterKind::BoxBlur;
+      entry.native_name = "Box Blur...";
+      entry.native_class_id = "boxblur";
+      entry.native_filter_id = 843U;
+      entry.parameters = patchy::BoxBlurSmartFilter{
+          std::clamp(input->amount, 1.0, 2000.0)};
+      break;
+    default:
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "Smart Filter kind is invalid");
+    }
+    patchy::SmartFilterStack stack;
+    stack.support = patchy::SmartFilterStackSupport::Supported;
+    stack.entries.push_back(std::move(entry));
+    stack.mask.bounds = patchy::Rect::from_size(
+        session->value->document().width(), session->value->document().height());
+    stack.mask.pixels = patchy::PixelBuffer(
+        session->value->document().width(), session->value->document().height(),
+        patchy::PixelFormat::gray8());
+    stack.mask.pixels.clear(255U);
+    stack.mask.linked = false;
+    const auto document_bounds = patchy::Rect::from_size(
+        session->value->document().width(), session->value->document().height());
+    const auto rendered = patchy::render_smart_filter_stack(
+        layer->pixels(), layer->bounds(), document_bounds, stack);
+    std::vector<std::pair<std::size_t, std::vector<std::uint8_t>>> blocks;
+    const auto &unknown = layer->unknown_psd_blocks();
+    for (std::size_t index = 0; index < unknown.size(); ++index) {
+      if (unknown[index].key == "SoLd") {
+        blocks.emplace_back(
+            index, patchy::psd::author_placed_layer_sold_payload(
+                       *placement, placed_uuid, &stack));
+      }
+    }
+    if (blocks.empty()) {
+      return fail(error, PATCHY_ENGINE_ERROR_ENGINE,
+                  "Smart Object has no editable SoLd block");
+    }
+    auto effects =
+        session->value->document().metadata().smart_filter_effects;
+    auto record = patchy::psd::author_filter_effects_record(
+        placed_uuid, document_bounds, layer->pixels(), layer->bounds(),
+        stack.mask);
+    if (!record.has_value() || !effects.upsert_authored(std::move(*record))) {
+      return fail(error, PATCHY_ENGINE_ERROR_ENGINE,
+                  "could not author Smart Filter cache");
+    }
+    const auto result = session->value->execute(
+        patchy::engine::CommitSmartFilterState{
+            input->layer_id, stack, rendered.pixels, rendered.bounds,
+            std::move(blocks), std::move(effects)});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const patchy::FilterCancelled &) {
+    return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
+                "Smart Filter rendering was cancelled");
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate Smart Filter payload");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_ENGINE, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown Smart Filter authoring failure");
+  }
+}
+
+int patchy_engine_session_smart_filter(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_smart_filter_projection *filter,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || filter == nullptr ||
+      filter->struct_size != sizeof(*filter)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and initialized Smart Filter projection are required");
+  }
+  try {
+    const auto *layer = session->value->document().find_layer(layer_id);
+    const auto *stack =
+        layer == nullptr ? nullptr : layer->smart_filter_stack();
+    if (stack == nullptr || stack->entries.empty()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "layer has no Smart Filters");
+    }
+    const auto struct_size = filter->struct_size;
+    *filter = {};
+    filter->struct_size = struct_size;
+    filter->entry_count = stack->entries.size();
+    const auto &entry = stack->entries.front();
+    filter->enabled = entry.enabled;
+    switch (entry.kind) {
+    case patchy::SmartFilterKind::GaussianBlur:
+      filter->first_kind = PATCHY_ENGINE_SMART_FILTER_GAUSSIAN_BLUR;
+      filter->first_amount =
+          std::get<patchy::GaussianBlurSmartFilter>(entry.parameters)
+              .radius_pixels;
+      break;
+    case patchy::SmartFilterKind::HighPass:
+      filter->first_kind = PATCHY_ENGINE_SMART_FILTER_HIGH_PASS;
+      filter->first_amount =
+          std::get<patchy::HighPassSmartFilter>(entry.parameters).radius_pixels;
+      break;
+    case patchy::SmartFilterKind::Median:
+      filter->first_kind = PATCHY_ENGINE_SMART_FILTER_MEDIAN;
+      filter->first_amount =
+          std::get<patchy::MedianSmartFilter>(entry.parameters).radius_pixels;
+      break;
+    case patchy::SmartFilterKind::Mosaic:
+      filter->first_kind = PATCHY_ENGINE_SMART_FILTER_MOSAIC;
+      filter->first_amount =
+          std::get<patchy::MosaicSmartFilter>(entry.parameters)
+              .cell_size_pixels;
+      break;
+    case patchy::SmartFilterKind::BoxBlur:
+      filter->first_kind = PATCHY_ENGINE_SMART_FILTER_BOX_BLUR;
+      filter->first_amount =
+          std::get<patchy::BoxBlurSmartFilter>(entry.parameters).radius_pixels;
+      break;
+    default:
+      return fail(error, PATCHY_ENGINE_ERROR_ENGINE,
+                  "first Smart Filter kind is not projectable");
+    }
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not project Smart Filter payload");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown Smart Filter projection failure");
   }
 }
 
