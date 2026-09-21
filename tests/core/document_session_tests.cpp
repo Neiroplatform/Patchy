@@ -9,6 +9,7 @@
 #include "core/raster_stroke.hpp"
 #include "core/vector_raster.hpp"
 #include "core/vector_live_shapes.hpp"
+#include "core/text_warp.hpp"
 #include "psd/psd_document_io.hpp"
 #include "test_groups.hpp"
 #include "test_harness.hpp"
@@ -4205,6 +4206,51 @@ void core_layer_transform_preserves_editable_text_and_fails_closed() {
                    before_rejection.pixels().data().begin()));
 }
 
+void core_layer_transform_preserves_smart_object_placement() {
+  Document document(16, 12, PixelFormat::rgba8());
+  PixelBuffer pixels(4, 3, PixelFormat::rgba8());
+  pixels.clear(255);
+  const auto layer_id = document.allocate_layer_id();
+  patchy::Layer smart(layer_id, "Editable Smart Object", std::move(pixels));
+  smart.set_bounds({2, 3, 4, 3});
+  patchy::SmartObjectPlacement placement;
+  placement.uuid = "11111111-2222-3333-4444-555555555555";
+  placement.transform = {2.0, 3.0, 6.0, 3.0, 6.0, 6.0, 2.0, 6.0};
+  placement.non_affine_transform =
+      std::array<double, 8>{2.0, 3.0, 6.0, 2.5, 6.5, 6.0, 1.5, 6.5};
+  placement.width = 4.0;
+  placement.height = 3.0;
+  patchy::set_layer_smart_object_metadata(
+      smart, placement, placement.uuid, "SoLd", "",
+      patchy::kSmartObjectRasterStatusPhotoshop);
+  document.add_layer(std::move(smart));
+
+  const std::array<double, 8> target{1.0, 1.0, 8.0, 2.0,
+                                     7.0, 9.0, 0.0, 7.0};
+  patchy::LayerTransformResult transformed;
+  std::string error;
+  CHECK(patchy::transform_layer(
+      document, layer_id,
+      patchy::LayerTransformRequest{
+          target, patchy::LayerTransformInterpolation::Bilinear},
+      &transformed, &error));
+  const auto* layer = document.find_layer(layer_id);
+  CHECK(layer != nullptr);
+  CHECK(patchy::layer_is_smart_object(*layer));
+  const auto updated = patchy::smart_object_placement_from_layer(*layer);
+  CHECK(updated.has_value());
+  for (std::size_t index = 0; index < target.size(); ++index) {
+    CHECK(std::abs(updated->transform[index] - target[index]) < 1.0e-8);
+  }
+  CHECK(updated->non_affine_transform.has_value());
+  CHECK(*updated->non_affine_transform != *placement.non_affine_transform);
+  CHECK(updated->width == placement.width);
+  CHECK(updated->height == placement.height);
+  CHECK(patchy::layer_smart_object_block_dirty(*layer));
+  CHECK(layer->metadata().at(patchy::kLayerMetadataSmartObjectRasterStatus) ==
+        patchy::kSmartObjectRasterStatusPatchy);
+}
+
 void core_raster_stroke_respects_selection_and_immutable_clone_source() {
   Document document(14, 4, PixelFormat::rgba8());
   PixelBuffer pixels(14, 4, PixelFormat::rgba8());
@@ -4517,6 +4563,97 @@ void core_layer_warp_supports_linked_mask_and_fails_closed() {
   CHECK(error == "a locked layer cannot be warped");
 }
 
+void core_layer_warp_authors_editable_text_metadata() {
+  Document document(12, 10, PixelFormat::rgba8());
+  PixelBuffer pixels(6, 3, PixelFormat::rgba8());
+  pixels.clear(255);
+  const auto id = document.allocate_layer_id();
+  patchy::Layer text(id, "Warped text", std::move(pixels));
+  text.set_bounds({2, 3, 6, 3});
+  text.metadata()[patchy::kLayerMetadataText] = "Editable text";
+  text.metadata()[patchy::kLayerMetadataTextRasterStatus] = "patchy_raster";
+  document.add_layer(std::move(text));
+
+  patchy::LayerWarpRequest request;
+  request.style = "warpArc";
+  request.bend = 45.0;
+  request.horizontal_distortion = 12.0;
+  request.vertical_distortion = -7.0;
+  request.rotate_vertical = true;
+  patchy::LayerWarpResult result;
+  std::string error;
+  CHECK(patchy::warp_layer(document, id, request, &result, &error));
+  const auto* layer = document.find_layer(id);
+  CHECK(layer != nullptr);
+  CHECK(patchy::layer_is_text(*layer));
+  CHECK(layer->metadata().at(patchy::kLayerMetadataText) == "Editable text");
+  const auto warp = patchy::text_warp_from_layer(*layer);
+  CHECK(warp.has_value());
+  CHECK(warp->style == "warpArc");
+  CHECK(warp->rotate == "Vrtc");
+  CHECK(warp->value == 45.0);
+  CHECK(warp->perspective == 12.0);
+  CHECK(warp->perspective_other == -7.0);
+  CHECK(warp->bounds_right == 6.0);
+  CHECK(warp->bounds_bottom == 3.0);
+  CHECK(!patchy::warp_layer(document, id, request, nullptr, &error));
+  CHECK(error.find("existing editable text warp") != std::string::npos);
+}
+
+void core_layer_warp_authors_and_preserves_smart_object_metadata() {
+  Document document(14, 10, PixelFormat::rgba8());
+  PixelBuffer pixels(6, 4, PixelFormat::rgba8());
+  pixels.clear(255);
+  const auto id = document.allocate_layer_id();
+  patchy::Layer smart(id, "Warped Smart Object", std::move(pixels));
+  smart.set_bounds({2, 2, 6, 4});
+  patchy::SmartObjectPlacement placement;
+  placement.uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  placement.transform = {2.0, 2.0, 8.0, 2.0, 8.0, 6.0, 2.0, 6.0};
+  placement.width = 6.0;
+  placement.height = 4.0;
+  patchy::set_layer_smart_object_metadata(
+      smart, placement, placement.uuid, "SoLd", "",
+      patchy::kSmartObjectRasterStatusPhotoshop);
+  document.add_layer(std::move(smart));
+
+  patchy::LayerWarpRequest request;
+  request.style = "warpArch";
+  request.bend = 30.0;
+  patchy::LayerWarpResult result;
+  std::string error;
+  CHECK(patchy::warp_layer(document, id, request, &result, &error));
+  auto* layer = document.find_layer(id);
+  CHECK(layer != nullptr);
+  const auto warp = patchy::smart_object_warp_from_layer(*layer);
+  CHECK(warp.has_value());
+  CHECK(warp->style == "warpArch");
+  CHECK(warp->value == 30.0);
+  CHECK(patchy::layer_smart_object_block_dirty(*layer));
+  CHECK(layer->metadata().at(patchy::kLayerMetadataSmartObjectRasterStatus) ==
+        patchy::kSmartObjectRasterStatusPatchy);
+
+  const auto warped_metadata =
+      layer->metadata().at(patchy::kLayerMetadataSmartObjectWarp);
+  const auto bounds = layer->bounds();
+  const std::array<double, 8> target{
+      static_cast<double>(bounds.x), static_cast<double>(bounds.y),
+      static_cast<double>(bounds.x + bounds.width + 1),
+      static_cast<double>(bounds.y + 1),
+      static_cast<double>(bounds.x + bounds.width),
+      static_cast<double>(bounds.y + bounds.height + 1),
+      static_cast<double>(bounds.x - 1),
+      static_cast<double>(bounds.y + bounds.height)};
+  CHECK(patchy::transform_layer(
+      document, id,
+      patchy::LayerTransformRequest{
+          target, patchy::LayerTransformInterpolation::Bilinear},
+      nullptr, &error));
+  layer = document.find_layer(id);
+  CHECK(layer->metadata().at(patchy::kLayerMetadataSmartObjectWarp) ==
+        warped_metadata);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -4605,6 +4742,8 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_transforms_layers_with_engine_preview_and_atomic_commit},
       {"core_layer_transform_preserves_editable_text_and_fails_closed",
        core_layer_transform_preserves_editable_text_and_fails_closed},
+      {"core_layer_transform_preserves_smart_object_placement",
+       core_layer_transform_preserves_smart_object_placement},
       {"core_raster_stroke_respects_selection_and_immutable_clone_source",
        core_raster_stroke_respects_selection_and_immutable_clone_source},
       {"engine_host_protocol_previews_and_commits_one_raster_stroke",
@@ -4617,5 +4756,9 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_previews_and_commits_one_layer_warp},
       {"core_layer_warp_supports_linked_mask_and_fails_closed",
        core_layer_warp_supports_linked_mask_and_fails_closed},
+      {"core_layer_warp_authors_editable_text_metadata",
+       core_layer_warp_authors_editable_text_metadata},
+      {"core_layer_warp_authors_and_preserves_smart_object_metadata",
+       core_layer_warp_authors_and_preserves_smart_object_metadata},
   };
 }

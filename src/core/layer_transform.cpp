@@ -1,6 +1,7 @@
 #include "core/layer_transform.hpp"
 
 #include "core/layer_metadata.hpp"
+#include "core/smart_object.hpp"
 #include "core/warp_mesh.hpp"
 
 #include <algorithm>
@@ -196,8 +197,10 @@ bool transform_layer(Document& document, LayerId layer_id,
     return fail(error, "transform target layer does not exist");
   }
   const bool editable_text = layer_is_text(*current);
-  if (current->kind() != LayerKind::Pixel && !editable_text) {
-    return fail(error, "only pixel and editable text layers can be transformed");
+  const bool editable_smart_object = layer_is_smart_object(*current);
+  if (current->kind() != LayerKind::Pixel && !editable_text &&
+      !editable_smart_object) {
+    return fail(error, "only pixel, editable text and Smart Object layers can be transformed");
   }
   if (current->bounds().empty() || current->pixels().empty()) {
     return fail(error, "transform target has no raster bounds");
@@ -213,6 +216,11 @@ bool transform_layer(Document& document, LayerId layer_id,
   }
   if (editable_text && !affine_quad(request.quad)) {
     return fail(error, "editable text supports affine transforms only");
+  }
+  if (editable_smart_object &&
+      (!smart_object_placement_from_layer(*current).has_value() ||
+       !smart_object_lock_reason(*current).empty())) {
+    return fail(error, "Smart Object transform metadata is unavailable or locked");
   }
 
   const auto bounds = current->bounds();
@@ -289,6 +297,23 @@ bool transform_layer(Document& document, LayerId layer_id,
     transformed.metadata()[kLayerMetadataTextTransform] =
         serialize_layer_affine_transform(
             compose_layer_affine_transform(outer, stored));
+  } else if (editable_smart_object) {
+    auto placement = *smart_object_placement_from_layer(*current);
+    const auto map_quad = [&matrix](std::array<double, 8>& quad) {
+      for (std::size_t index = 0; index < quad.size(); index += 2U) {
+        const auto mapped = apply_homography(*matrix, quad[index], quad[index + 1U]);
+        quad[index] = mapped[0];
+        quad[index + 1U] = mapped[1];
+      }
+    };
+    map_quad(placement.transform);
+    if (placement.non_affine_transform.has_value()) {
+      map_quad(*placement.non_affine_transform);
+    }
+    store_smart_object_placement(transformed, placement);
+    mark_layer_smart_object_block_dirty(transformed);
+    transformed.metadata()[kLayerMetadataSmartObjectRasterStatus] =
+        kSmartObjectRasterStatusPatchy;
   }
 
   const auto affected = unite(bounds, *target_bounds);

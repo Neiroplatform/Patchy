@@ -2,6 +2,7 @@
 
 #include "core/layer_metadata.hpp"
 #include "core/smart_object.hpp"
+#include "core/text_warp.hpp"
 #include "core/warp_mesh.hpp"
 
 #include <algorithm>
@@ -216,11 +217,13 @@ bool warp_layer(Document& document, LayerId layer_id,
                 std::string* error) {
   auto* current = document.find_layer(layer_id);
   if (current == nullptr) return fail(error, "warp target layer does not exist");
+  const bool editable_text = layer_is_text(*current);
+  const bool editable_smart_object = layer_is_smart_object(*current);
   if ((current->kind() != LayerKind::Pixel &&
-       current->kind() != LayerKind::SmartObject) ||
+       current->kind() != LayerKind::SmartObject && !editable_text) ||
       current->pixels().format() != PixelFormat::rgba8() ||
       current->pixels().empty() || current->bounds().empty()) {
-    return fail(error, "only RGBA8 pixel and Smart Object layers can be warped");
+    return fail(error, "only RGBA8 pixel, editable text and Smart Object layers can be warped");
   }
   if (!can_generate_style_warp_mesh(request.style) ||
       !std::isfinite(request.bend) ||
@@ -246,12 +249,15 @@ bool warp_layer(Document& document, LayerId layer_id,
        current->mask()->pixels.format() != PixelFormat::gray8())) {
     return fail(error, "warp requires a linked raster mask with matching geometry");
   }
-  if (current->kind() == LayerKind::SmartObject &&
+  if (editable_smart_object &&
       (!smart_object_placement_from_layer(*current).has_value() ||
        !smart_object_lock_reason(*current).empty() ||
        smart_object_warp_from_layer(*current).has_value() ||
        current->smart_filter_stack() != nullptr)) {
     return fail(error, "Smart Object warp metadata is unavailable or locked");
+  }
+  if (editable_text && text_warp_from_layer(*current).has_value()) {
+    return fail(error, "an existing editable text warp must be rerendered before replacement");
   }
 
   const auto old_bounds = current->bounds();
@@ -300,7 +306,7 @@ bool warp_layer(Document& document, LayerId layer_id,
     transformed.set_mask(std::move(mask));
   }
 
-  if (current->kind() == LayerKind::SmartObject) {
+  if (editable_smart_object) {
     SmartObjectWarp warp;
     warp.style = request.style;
     warp.value = request.bend;
@@ -322,6 +328,17 @@ bool warp_layer(Document& document, LayerId layer_id,
     mark_layer_smart_object_block_dirty(transformed);
     transformed.metadata()[kLayerMetadataSmartObjectRasterStatus] =
         kSmartObjectRasterStatusPatchy;
+  } else if (editable_text) {
+    TextWarp warp;
+    warp.style = request.style;
+    warp.value = request.bend;
+    warp.perspective = request.horizontal_distortion;
+    warp.perspective_other = request.vertical_distortion;
+    warp.rotate = request.rotate_vertical ? "Vrtc" : "Hrzn";
+    warp.bounds_right = old_bounds.width;
+    warp.bounds_bottom = old_bounds.height;
+    transformed.metadata()[kLayerMetadataTextWarp] = serialize_text_warp(warp);
+    transformed.metadata()[kLayerMetadataTextRasterStatus] = "patchy_raster";
   }
 
   *current = std::move(transformed);

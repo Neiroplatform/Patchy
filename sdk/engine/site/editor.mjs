@@ -146,9 +146,9 @@ function updateControls() {
   $("filterLayerButton").disabled = busy || layer?.kind !== 0;
   $("textLayerButton").disabled = busy || !snapshot;
   $("textLayerButton").textContent = layer?.kind === 3 ? "Edit text" : "Add text";
-  $("layerTransformButton").disabled = busy || ![0, 3].includes(layer?.kind) ||
-    Boolean(layer?.mask && !(layer.kind === 0 && layer.mask.linked));
-  $("layerWarpButton").disabled = busy || ![0, 5].includes(layer?.kind) ||
+  $("layerTransformButton").disabled = busy || ![0, 3, 5].includes(layer?.kind) ||
+    Boolean(layer?.mask && !layer.mask.linked) || Boolean(layer?.vectorMask);
+  $("layerWarpButton").disabled = busy || ![0, 3, 5].includes(layer?.kind) ||
     Boolean(layer?.vectorMask) || Boolean(layer?.mask && !layer.mask.linked);
   $("shapeLayerButton").disabled = busy || !snapshot;
   $("adjustmentLayerButton").disabled = busy || !snapshot;
@@ -1734,8 +1734,8 @@ async function commitTextDialog() {
 
 function openLayerTransformDialog() {
   const layer = selectedLayer();
-  if (busy || ![0, 3].includes(layer?.kind) ||
-      (layer?.mask && !(layer.kind === 0 && layer.mask.linked))) return;
+  if (busy || ![0, 3, 5].includes(layer?.kind) || layer?.vectorMask ||
+      (layer?.mask && !layer.mask.linked)) return;
   for (const [id, value] of [["layerXInput", layer.bounds.x], ["layerYInput", layer.bounds.y],
     ["layerWidthInput", layer.bounds.width], ["layerHeightInput", layer.bounds.height]]) $(id).value = String(value);
   $("layerAngleInput").value = "0";
@@ -1749,7 +1749,7 @@ function openLayerTransformDialog() {
 
 function openLayerWarpDialog() {
   const layer = selectedLayer();
-  if (busy || ![0, 5].includes(layer?.kind) || layer?.vectorMask ||
+  if (busy || ![0, 3, 5].includes(layer?.kind) || layer?.vectorMask ||
       (layer?.mask && !layer.mask.linked)) return;
   warpDialogDraft = { layer, stateId: snapshot.stateId, revision: snapshot.revision };
   $("layerWarpStyleInput").value = "0"; $("layerWarpBendInput").value = "50";

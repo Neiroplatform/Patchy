@@ -55,6 +55,50 @@ try {
     smartWarped.layers.find((layer) => layer.id === smartId)?.kind === 5,
   "editable Smart Object warp was not one canonical revision");
 
+  const smartBounds = smartWarped.layers.find((layer) => layer.id === smartId).bounds;
+  const smartQuad = [smartBounds.x, smartBounds.y,
+    smartBounds.x + smartBounds.width + 1, smartBounds.y + 1,
+    smartBounds.x + smartBounds.width, smartBounds.y + smartBounds.height + 1,
+    smartBounds.x - 1, smartBounds.y + smartBounds.height];
+  const smartTransform = { layerId: smartId, quad: smartQuad,
+    expectedStateId: smartWarped.stateId, expectedRevision: smartWarped.revision };
+  const smartTransformPreview = await client.previewLayerTransform(smartTransform);
+  const afterSmartPreview = await client.snapshot();
+  check(smartTransformPreview.rgba.length ===
+    smartTransformPreview.region.width * smartTransformPreview.region.height * 4 &&
+    afterSmartPreview.revision === smartWarped.revision,
+  "Smart Object transform preview mutated state or returned inconsistent pixels");
+  const smartTransformed = await client.transformLayer(smartTransform);
+  check(smartTransformed.revision === smartWarped.revision + 1n &&
+    smartTransformed.layers.find((layer) => layer.id === smartId)?.kind === 5,
+  "editable Smart Object perspective transform was not one canonical revision");
+
+  const textRgba = new Uint8Array(4 * 2 * 4);
+  for (let offset = 0; offset < textRgba.length; offset += 4) {
+    textRgba.set([30, 40, 210, 255], offset);
+  }
+  const textAuthored = await client.addTextLayer({ name: "Warp text", text: "Warp",
+    font: "Arial", sizePixels: 12, color: [30, 40, 210], bold: false,
+    italic: false, boxText: true, width: 4, height: 2,
+    bounds: { x: 1, y: 1, width: 4, height: 2 }, rgba: textRgba },
+  { transferOwnership: true });
+  const textId = textAuthored.activeLayerId;
+  check(textRgba.byteLength === 0 &&
+    textAuthored.layers.find((layer) => layer.id === textId)?.kind === 3,
+  "editable text authoring did not cross the Worker boundary");
+  const textWarp = { ...warp, layerId: textId, style: 0, bend: 42,
+    horizontalDistortion: 9, verticalDistortion: -6, rotateVertical: true,
+    expectedStateId: textAuthored.stateId, expectedRevision: textAuthored.revision };
+  const textWarpPreview = await client.previewLayerWarp(textWarp);
+  check((await client.snapshot()).revision === textAuthored.revision &&
+    textWarpPreview.rgba.length ===
+      textWarpPreview.region.width * textWarpPreview.region.height * 4,
+  "editable text warp preview mutated state or returned inconsistent pixels");
+  const textWarped = await client.warpLayer(textWarp);
+  check(textWarped.revision === textAuthored.revision + 1n &&
+    textWarped.layers.find((layer) => layer.id === textId)?.kind === 3,
+  "editable text warp was not one canonical revision");
+
   const path = { subpaths: [{ anchors: [
     { x: 1, y: 1 }, { x: 6, y: 1 }, { x: 6, y: 3 }, { x: 1, y: 3 },
   ], shapeGroup: 0, combine: 1, closed: true }] };
@@ -80,10 +124,11 @@ try {
   const reopened = await client.open(saved, "Reopened drawing.psd");
   check(reopened.paths.length === 1 && reopened.layers.some((layer) => layer.kind === 4) &&
     reopened.layers.some((layer) => layer.kind === 0) &&
-    reopened.layers.some((layer) => layer.kind === 5),
-  "drawing/path/shape state did not survive PSD reopen");
+    reopened.layers.some((layer) => layer.kind === 5) &&
+    reopened.layers.some((layer) => layer.kind === 3),
+  "drawing/path/shape/editable transform state did not survive PSD reopen");
   body.dataset.result = "PASS";
-  body.textContent = `PASS fillCancel=${cancelCode} warpCancel=${warpCancelCode} warp=${warpPreview.region.width}x${warpPreview.region.height} smart=1 paths=${reopened.paths.length} layers=${reopened.layers.length}`;
+  body.textContent = `PASS fillCancel=${cancelCode} warpCancel=${warpCancelCode} warp=${warpPreview.region.width}x${warpPreview.region.height} smartTransform=1 textWarp=1 paths=${reopened.paths.length} layers=${reopened.layers.length}`;
 } catch (error) {
   body.dataset.result = "FAIL"; body.textContent = `FAIL ${error?.stack || error}`;
 } finally { client.terminate(); }

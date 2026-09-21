@@ -27,9 +27,10 @@ struct LayerWarpResult {
   Rect affected_region{};
 };
 
-// Applies a Photoshop-compatible preset warp to one RGBA8 pixel or Smart Object
-// cache. A linked raster mask is warped atomically when it shares the layer's
-// geometry. Unsupported masks/metadata and excessive allocations fail closed.
+// Applies a Photoshop-compatible preset warp to one RGBA8 pixel, editable text
+// or Smart Object cache. Text/Smart Object parametric metadata is authored with
+// the same controls. A linked raster mask is warped atomically when it shares
+// the layer's geometry. Unsupported metadata and excessive allocations fail closed.
 [[nodiscard]] bool warp_layer(Document& document, LayerId layer_id,
                               const LayerWarpRequest& request,
                               LayerWarpResult* result, std::string* error);
