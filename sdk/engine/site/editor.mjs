@@ -871,7 +871,7 @@ function renderLayers() {
     });
     row.addEventListener("dragstart", (event) => {
       if (!selectedLayerIds.has(layer.id)) setSingleLayerSelection(layer.id);
-      draggedLayer = captureLayerReference(layer);
+      draggedLayer = captureLayerReference();
       event.dataTransfer?.setData("application/x-patchy-layer", String(layer.id));
       if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
     });
@@ -1762,8 +1762,9 @@ async function copyRenderedPixels() {
   try {
     const layer = selectedLayer();
     if (layer) {
-      layerClipboard = captureLayerReference(layer);
-      updateControls(); setSessionState("document", "Editable layer copied locally");
+      layerClipboard = captureLayerReference();
+      updateControls(); setSessionState("document",
+        `${layerClipboard.layerIds.length} editable layer${layerClipboard.layerIds.length === 1 ? "" : "s"} copied locally`);
       return;
     }
     clipboardImageBlob = await canvasBlob(renderedSelectionCanvas(), "image/png");
@@ -1798,28 +1799,39 @@ async function pastePixels() {
   } catch (error) { showError("Could not paste pixels", error); }
 }
 
-function captureLayerReference(layer) {
-  return { sourceDocumentId: snapshot.documentId, layerId: layer.id,
+function captureLayerReference() {
+  const layerIds = selectedLayerIdsTopToBottom({ rootsOnly: true });
+  return { sourceDocumentId: snapshot.documentId, layerIds,
     expectedSourceStateId: snapshot.stateId,
-    expectedSourceRevision: snapshot.revision, name: layer.name };
+    expectedSourceRevision: snapshot.revision };
 }
 
 async function transferLayerReference(reference, targetDocumentId) {
   if (busy || !snapshot || !reference) return;
-  clearError(); setBusy(true, "Copying editable layer", "Committing one canonical target revision");
+  const count = reference.layerIds?.length || 0;
+  clearError(); setBusy(true, count === 1 ? "Copying editable layer" : "Copying editable layers",
+    "Committing one canonical target revision");
   try {
     let target = snapshot;
     if (target.documentId !== targetDocumentId) {
       target = await client.activateDocument(targetDocumentId);
       clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     }
-    const next = await client.copyLayerToDocument({ ...reference,
+    const priorTargetIds = new Set(target.layers.map((layer) => layer.id));
+    const next = await client.copyLayersToDocument({ ...reference,
       targetDocumentId, expectedTargetStateId: target.stateId,
       expectedTargetRevision: target.revision });
-    recordHistoryMutation(target, next, "Copying editable layer");
-    setSingleLayerSelection(next.activeLayerId);
+    recordHistoryMutation(target, next, count === 1 ? "Copying editable layer" : "Copying editable layers");
+    const copiedIds = next.layers.filter((layer) => !priorTargetIds.has(layer.id)).map((layer) => layer.id);
+    selectedLayerIds = new Set(copiedIds);
+    selectedLayerId = copiedIds.includes(next.activeLayerId) ? next.activeLayerId : copiedIds.at(-1) ?? null;
+    layerSelectionAnchorId = selectedLayerId;
+    if (reference.sourceDocumentId === targetDocumentId) {
+      reference.expectedSourceStateId = next.stateId;
+      reference.expectedSourceRevision = next.revision;
+    }
     await acceptSnapshot(next); scheduleCheckpoint(next);
-  } catch (error) { showError("Could not copy editable layer", error); }
+  } catch (error) { showError("Could not copy editable layers", error); }
   finally { setBusy(false); }
 }
 

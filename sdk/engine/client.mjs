@@ -77,6 +77,18 @@ export class PatchyWorkerClient {
       expectedTargetRevision: String(input.expectedTargetRevision),
     });
   }
+  copyLayersToDocument(input) {
+    if (!Array.isArray(input.layerIds)) throw new TypeError("Layer transfer requires a layer id array");
+    return this.#request("copyLayersToDocument", {
+      sourceDocumentId: input.sourceDocumentId,
+      targetDocumentId: input.targetDocumentId,
+      layerIds: input.layerIds.map(String),
+      expectedSourceStateId: String(input.expectedSourceStateId),
+      expectedSourceRevision: String(input.expectedSourceRevision),
+      expectedTargetStateId: String(input.expectedTargetStateId),
+      expectedTargetRevision: String(input.expectedTargetRevision),
+    });
+  }
   previewLayerTransform(input) {
     const cancellation = input.cancellation instanceof Int32Array
       ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));

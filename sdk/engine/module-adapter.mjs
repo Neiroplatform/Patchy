@@ -47,6 +47,7 @@ const CAP_PSB_SAVE_AS = 1n << 33n;
 const CAP_LAYER_MASK_STROKE = 1n << 34n;
 const CAP_RICH_TEXT_AUTHORING = 1n << 35n;
 const CAP_MULTI_LAYER_AUTHORING = 1n << 36n;
+const CAP_MULTI_LAYER_TRANSFER = 1n << 37n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -684,6 +685,19 @@ export class EmscriptenPatchyEngine {
         targetSession, targetSnapshot.stateId, targetSnapshot.revision,
         sourceSession, sourceSnapshot.stateId, sourceSnapshot.revision,
         sourceLayerId, event, error));
+  }
+
+  copyLayersToSession(targetSession, targetSnapshot, sourceSession,
+                      sourceSnapshot, sourceLayerIds) {
+    const symbol = "_patchy_engine_session_copy_layers";
+    if (!(this.#capabilities & CAP_MULTI_LAYER_TRANSFER) ||
+        typeof this.#module[symbol] !== "function") {
+      throw new PatchyEngineError(2, "Multi-layer transfer is unavailable");
+    }
+    return this.#layerBatch(sourceSession, sourceSnapshot, sourceLayerIds,
+      LAYER_BATCH_SIZE, null, (input, event, error) => this.#module[symbol](
+        targetSession, targetSnapshot.stateId, targetSnapshot.revision,
+        sourceSession, input, event, error));
   }
 
   previewLayerTransform(session, snapshot, layerId, quad, interpolation = 1,

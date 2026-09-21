@@ -53,6 +53,28 @@ export class PatchyWorkerHost {
         this.#activateDocument(targetId);
         return this.#snapshot();
       }
+      case "copyLayersToDocument": {
+        const sourceId = Number(message.sourceDocumentId);
+        const targetId = Number(message.targetDocumentId);
+        const source = this.#sessions.get(sourceId);
+        const target = this.#sessions.get(targetId);
+        if (!source || !target) throw new Error("Patchy source or target document does not exist");
+        const sourceSnapshot = this.#engine.snapshot(source.session);
+        const targetSnapshot = this.#engine.snapshot(target.session);
+        if (sourceSnapshot.stateId !== BigInt(message.expectedSourceStateId) ||
+            sourceSnapshot.revision !== BigInt(message.expectedSourceRevision) ||
+            targetSnapshot.stateId !== BigInt(message.expectedTargetStateId) ||
+            targetSnapshot.revision !== BigInt(message.expectedTargetRevision)) {
+          const error = new Error("Layer transfer was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6;
+          throw error;
+        }
+        if (!Array.isArray(message.layerIds)) throw new TypeError("Layer transfer requires a layer id array");
+        this.#engine.copyLayersToSession(target.session, targetSnapshot,
+          source.session, sourceSnapshot, message.layerIds.map(BigInt));
+        this.#activateDocument(targetId);
+        return this.#snapshot();
+      }
       case "previewLayerTransform": {
         const before = this.#snapshot();
         if (before.stateId !== BigInt(message.expectedStateId) ||

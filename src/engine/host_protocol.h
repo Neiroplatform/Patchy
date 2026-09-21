@@ -51,6 +51,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_LAYER_MASK_STROKE = UINT64_C(1) << 34,
   PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING = UINT64_C(1) << 35,
   PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING = UINT64_C(1) << 36,
+  PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFER = UINT64_C(1) << 37,
 };
 
 enum patchy_engine_error_code {
@@ -1442,6 +1443,11 @@ int patchy_engine_session_copy_layer(
     uint64_t expected_source_state_id, uint64_t expected_source_revision,
     uint64_t source_layer_id, patchy_engine_event *event,
     patchy_engine_error *error);
+int patchy_engine_session_copy_layers(
+    patchy_engine_session *target, uint64_t expected_target_state_id,
+    uint64_t expected_target_revision, const patchy_engine_session *source,
+    const patchy_engine_layer_batch *source_input,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_preview_layer_transform(
     const patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const patchy_engine_layer_transform *transform,

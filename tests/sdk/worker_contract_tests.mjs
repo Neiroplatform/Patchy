@@ -96,7 +96,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     assert.match(html, new RegExp(`id="${id}"`));
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
-    "client.copyLayerToDocument",
+    "client.copyLayersToDocument",
     "client.editLayers", "client.moveLayers", "client.addPixelLayer",
     "client.groupLayers", "client.ungroupLayers", "client.removeLayers",
     "client.renameLayer",
@@ -199,7 +199,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "quickSelect(", "magneticLasso(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel(",
-    "editLayers(", "moveLayers(", "groupLayers(", "removeLayers(",
+    "editLayers(", "moveLayers(", "groupLayers(", "removeLayers(", "copyLayersToDocument(",
     "TextStyleRun", "TextParagraphRun"]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
@@ -363,7 +363,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 37n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 38n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -530,6 +530,18 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
         source, sourceState, sourceRevision, layerId) {
       assert.deepEqual([target, targetState, targetRevision, source, sourceState,
         sourceRevision, layerId], [22, 9n, 4n, 22, 9n, 4n, 7n]);
+      return 1;
+    },
+    _patchy_engine_session_copy_layers(target, targetState, targetRevision,
+        source, input) {
+      assert.deepEqual([target, targetState, targetRevision, source],
+        [22, 9n, 4n, 22]);
+      assert.equal(view.getUint32(input, true), 32);
+      assert.equal(view.getBigUint64(input + 8, true), 9n);
+      assert.equal(view.getBigUint64(input + 16, true), 4n);
+      const ids = view.getUint32(input + 24, true);
+      assert.equal(view.getUint32(input + 28, true), 2);
+      assert.deepEqual([view.getBigUint64(ids, true), view.getBigUint64(ids + 8, true)], [8n, 7n]);
       return 1;
     },
     _patchy_engine_session_preview_layer_transform(session, state, revision,
@@ -743,7 +755,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 37n) - 1n);
+  assert.equal(engine.capabilities, (1n << 38n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -781,6 +793,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.groupLayers(session, snapshot, [8n, 7n], "Batch");
   engine.ungroupLayers(session, snapshot, [9n]);
   engine.removeLayers(session, snapshot, [8n, 7n]);
+  engine.copyLayersToSession(session, snapshot, session, snapshot, [8n, 7n]);
   assert.throws(() => engine.editLayers(session, snapshot, [7n, 7n], 0,
     { value: 1 }), /non-zero and unique/);
   assert.throws(() => engine.editLayers(session, snapshot,
@@ -792,6 +805,13 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     /valid target layer id/);
   assert.throws(() => engine.removeLayers(session, snapshot, [1n << 64n]),
     /non-zero and unique/);
+  assert.throws(() => engine.copyLayersToSession(
+    session, snapshot, session, snapshot, [7n, 7n]), /non-zero and unique/);
+  assert.throws(() => engine.copyLayersToSession(
+    session, snapshot, session, snapshot,
+    Array.from({ length: 257 }, (_, index) => BigInt(index + 1))), /1 through 256/);
+  assert.throws(() => engine.copyLayersToSession(
+    session, snapshot, session, snapshot, [0n]), /non-zero and unique/);
   engine.setLayerOpacity(session, snapshot, 7n, 0.5);
   engine.setLayerFillOpacity(session, snapshot, 7n, 0.75);
   engine.setLayerLocks(session, snapshot, 7n, 7);
@@ -988,6 +1008,10 @@ test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsup
   assert.throws(() => engine.editLayers(
     99, { stateId: 1n, revision: 1n }, [1n], 0, { value: 1 }),
   (error) => error instanceof Error && error.code === 2 && /Multi-layer authoring/.test(error.message));
+  assert.throws(() => engine.copyLayersToSession(
+    99, { stateId: 1n, revision: 1n }, 99,
+    { stateId: 1n, revision: 1n }, [1n]),
+  (error) => error instanceof Error && error.code === 2 && /Multi-layer transfer/.test(error.message));
   engine.dispose();
 });
 
@@ -1328,6 +1352,47 @@ test("worker copies one exact editable layer state into one atomic target revisi
     expectedTargetStateId: "1", expectedTargetRevision: "1" }),
   (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.equal(calls.length, 1);
+  host.dispose();
+});
+
+test("worker copies one bounded layer set into one exact target revision", async () => {
+  let nextSession = 200;
+  const revisions = new Map();
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 37n,
+    create() { const session = nextSession++; revisions.set(session, 1n); return session; },
+    snapshot(session) {
+      const revision = revisions.get(session);
+      return { ...projection(Number(revision)), revision, stateId: revision };
+    },
+    copyLayersToSession(target, targetSnapshot, source, sourceSnapshot, layerIds) {
+      calls.push({ target, targetSnapshot, source, sourceSnapshot, layerIds });
+      revisions.set(target, revisions.get(target) + 1n);
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  const source = await host.dispatch({ method: "create", width: 3, height: 2, name: "Source.psd" });
+  const target = await host.dispatch({ method: "create", width: 3, height: 2, name: "Target.psd" });
+  const copied = await host.dispatch({ method: "copyLayersToDocument",
+    sourceDocumentId: source.documentId, targetDocumentId: target.documentId,
+    layerIds: ["9", "7"], expectedSourceStateId: "1", expectedSourceRevision: "1",
+    expectedTargetStateId: "1", expectedTargetRevision: "1" });
+  assert.equal(copied.documentId, target.documentId);
+  assert.equal(copied.revision, 2n);
+  assert.equal(revisions.get(calls[0].source), 1n);
+  assert.deepEqual(calls[0].layerIds, [9n, 7n]);
+  await assert.rejects(host.dispatch({ method: "copyLayersToDocument",
+    sourceDocumentId: source.documentId, targetDocumentId: target.documentId,
+    layerIds: ["9", "7"], expectedSourceStateId: "1", expectedSourceRevision: "1",
+    expectedTargetStateId: "1", expectedTargetRevision: "1" }),
+  (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.equal(calls.length, 1);
+  await assert.rejects(host.dispatch({ method: "copyLayersToDocument",
+    sourceDocumentId: source.documentId, targetDocumentId: target.documentId,
+    layerIds: "9", expectedSourceStateId: "1", expectedSourceRevision: "1",
+    expectedTargetStateId: "2", expectedTargetRevision: "2" }), TypeError);
   host.dispose();
 });
 

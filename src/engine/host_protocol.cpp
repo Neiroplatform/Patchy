@@ -177,7 +177,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_PSB_SAVE_AS |
     PATCHY_ENGINE_CAP_LAYER_MASK_STROKE |
     PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING |
-    PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING;
+    PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING |
+    PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFER;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -368,6 +369,18 @@ patchy::Layer clone_transferable_layer(const patchy::Layer &source,
                                  next_photoshop_id));
   }
   return clone;
+}
+
+bool contains_selected_descendant(
+    const patchy::Layer &layer,
+    const std::set<patchy::LayerId> &selected_ids) {
+  for (const auto &child : layer.children()) {
+    if (selected_ids.contains(child.id()) ||
+        contains_selected_descendant(child, selected_ids)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool valid_rgba_payload(const std::uint8_t *rgba, std::size_t rgba_size,
@@ -4584,31 +4597,64 @@ int patchy_engine_session_copy_layer(
     std::uint64_t expected_source_state_id,
     std::uint64_t expected_source_revision, std::uint64_t source_layer_id,
     patchy_engine_event *event, patchy_engine_error *error) {
+  patchy_engine_layer_batch input{};
+  input.struct_size = sizeof(input);
+  input.expected_state_id = expected_source_state_id;
+  input.expected_revision = expected_source_revision;
+  input.layer_ids = &source_layer_id;
+  input.layer_count = 1U;
+  return patchy_engine_session_copy_layers(
+      target, expected_target_state_id, expected_target_revision, source,
+      &input, event, error);
+}
+
+int patchy_engine_session_copy_layers(
+    patchy_engine_session *target, std::uint64_t expected_target_state_id,
+    std::uint64_t expected_target_revision,
+    const patchy_engine_session *source,
+    const patchy_engine_layer_batch *source_input,
+    patchy_engine_event *event, patchy_engine_error *error) {
   clear_error(error);
   if (target == nullptr || target->value == nullptr || source == nullptr ||
-      source->value == nullptr || source_layer_id == 0) {
+      source->value == nullptr || source_input == nullptr ||
+      source_input->struct_size != sizeof(*source_input) ||
+      source_input->reserved != 0U) {
     return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
-                "source, target and source layer are required");
+                "source, target and a complete source layer batch are required");
   }
   if (!expected_state(target, expected_target_state_id,
                       expected_target_revision, error) ||
-      !expected_state(source, expected_source_state_id,
-                      expected_source_revision, error)) {
+      !expected_state(source, source_input->expected_state_id,
+                      source_input->expected_revision, error)) {
+    return 0;
+  }
+  std::vector<patchy::LayerId> source_layer_ids;
+  if (!copy_layer_ids(source_input->layer_ids, source_input->layer_count,
+                      source_layer_ids, error)) {
     return 0;
   }
   try {
     const auto &source_document = source->value->document();
-    const auto *source_layer = source_document.find_layer(source_layer_id);
-    if (source_layer == nullptr) {
-      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
-                  "source layer does not exist");
-    }
     if (source_document.format() != target->value->document().format()) {
       return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
                   "source and target pixel formats must match");
     }
-    if (!transferable_layer_tree(*source_layer, error)) {
-      return 0;
+    std::vector<const patchy::Layer *> source_layers;
+    source_layers.reserve(source_layer_ids.size());
+    const std::set<patchy::LayerId> selected_ids(
+        source_layer_ids.begin(), source_layer_ids.end());
+    for (const auto id : source_layer_ids) {
+      const auto *layer = source_document.find_layer(id);
+      if (layer == nullptr) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "source layer does not exist");
+      }
+      if (contains_selected_descendant(*layer, selected_ids)) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "source layer batch cannot contain an ancestor and its descendant");
+      }
+      if (!transferable_layer_tree(*layer, error)) return 0;
+      source_layers.push_back(layer);
     }
 
     auto prepared = target->value->document();
@@ -4626,15 +4672,24 @@ int patchy_engine_session_copy_layer(
     collect_ids(collect_ids, prepared.layers());
     auto next_photoshop_id =
         patchy::next_photoshop_layer_id(prepared.layers());
-    auto clone = clone_transferable_layer(*source_layer, prepared,
-                                          photoshop_ids, next_photoshop_id);
-    const auto new_layer_id = clone.id();
-    const auto affected = clone.bounds();
-    prepared.add_layer(std::move(clone));
+    patchy::LayerId new_layer_id{0};
+    std::optional<patchy::Rect> affected;
+    // The caller supplies top-to-bottom ids. Append bottom-to-top so the
+    // target's top-to-bottom projection retains the exact selected order.
+    for (auto iterator = source_layers.rbegin();
+         iterator != source_layers.rend(); ++iterator) {
+      auto clone = clone_transferable_layer(**iterator, prepared,
+                                            photoshop_ids, next_photoshop_id);
+      new_layer_id = clone.id();
+      affected = affected.has_value()
+          ? patchy::unite_rect(*affected, clone.bounds())
+          : clone.bounds();
+      prepared.add_layer(std::move(clone));
+    }
     auto result = target->value->execute(
         patchy::engine::CommitPreparedDocumentState{
             patchy::engine::PreparedDocumentMutationKind::CopyLayerTree,
-            expected_target_state_id, std::move(prepared), affected});
+            expected_target_state_id, std::move(prepared), *affected});
     if (!result) {
       return fail(error, result.error);
     }
@@ -4643,12 +4698,12 @@ int patchy_engine_session_copy_layer(
     return 1;
   } catch (const std::bad_alloc &) {
     return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
-                "could not allocate transferred layer tree");
+                "could not allocate transferred layer forest");
   } catch (const std::exception &exception) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
-                "unknown cross-document layer transfer failure");
+                "unknown cross-document layer forest transfer failure");
   }
 }
 
