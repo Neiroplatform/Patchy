@@ -61,7 +61,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "adjustmentDialog", "commitAdjustmentButton", "smartFilterDialog", "commitSmartFilterButton",
     "undoButton", "redoButton", "saveButton", "errorBanner", "recoveryButton",
     "recoveryCount", "recoveryLabel", "recoveryDialog", "recoveryList", "recoveryQuota",
-    "cleanupRecoveryButton", "memoryLabel", "memoryBudgetSelect"]) {
+    "cleanupRecoveryButton", "memoryLabel", "memoryBudgetSelect", "historyList",
+    "historyCount", "historyEmpty"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
@@ -92,7 +93,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
-    "client.undo", "client.redo", "client.renderFrame", "client.saveBlob", "client.saveDocument",
+    "client.historyTravel", "client.renderFrame", "client.saveBlob", "client.saveDocument",
     "client.setMemoryBudget", "client.openBlob", "client.inspectBlob", "client.placePsdSmartObject"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -138,7 +139,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   }
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
-    "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset("]) {
+    "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel("]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
   assert.match(types, /addStateListener\(listener:/);
@@ -151,6 +152,39 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(html, /role="alert"/);
   assert.match(nodeServer, /'\.css': 'text\/css; charset=utf-8'/);
   assert.match(pythonServer, /"\.css": "text\/css; charset=utf-8"/);
+});
+
+test("Worker history travel is stale-guarded, bounded and returns one final projection", async () => {
+  let revision = 5n; let stateId = 5n; let undoStates = 4; let redoStates = 1;
+  const calls = [];
+  const engine = {
+    capabilities: 0n,
+    create() { return 1; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId,
+      canUndo: undoStates > 0, canRedo: redoStates > 0 }; },
+    memoryUsage() { return { documentPixelBytes: 0, historyPixelBytes: 0,
+      previewPixelBytes: 0, selectionBytes: 0, historySelectionBytes: 0,
+      previewSelectionBytes: 0, historyRetainedBytes: 0, totalRetainedBytes: 0,
+      undoStates, redoStates, renderCacheBytes: 0, renderCacheEntries: 0,
+      renderCacheHits: 0, renderCacheMisses: 0, renderCacheEvictions: 0 }; },
+    undo() { calls.push("undo"); undoStates--; redoStates++; revision++; stateId--; },
+    redo() { calls.push("redo"); redoStates--; undoStates++; revision++; stateId++; },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 1, height: 1, name: "History.psd" });
+  const moved = await host.dispatch({ method: "historyTravel", steps: -3,
+    expectedStateId: "5", expectedRevision: "5" });
+  assert.deepEqual(calls, ["undo", "undo", "undo"]);
+  assert.equal(moved.stateId, 2n); assert.equal(moved.memory.undoStates, 1);
+  await assert.rejects(host.dispatch({ method: "historyTravel", steps: 2,
+    expectedStateId: "5", expectedRevision: "5" }),
+  (error) => error.name === "PatchyEngineError" && error.code === 6);
+  await assert.rejects(host.dispatch({ method: "historyTravel", steps: -2,
+    expectedStateId: "2", expectedRevision: "8" }), /available states/);
+  await assert.rejects(host.dispatch({ method: "historyTravel", steps: 41,
+    expectedStateId: "2", expectedRevision: "8" }), /1\.\.40/);
+  host.dispose();
 });
 
 test("Worker Blob ingress validates before allocation and returns exact owned bytes", async () => {

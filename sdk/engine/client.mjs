@@ -295,6 +295,10 @@ export class PatchyWorkerClient {
   }
   undo() { return this.#request("undo"); }
   redo() { return this.#request("redo"); }
+  historyTravel(steps, expectedStateId, expectedRevision) {
+    return this.#request("historyTravel", { steps,
+      expectedStateId: String(expectedStateId), expectedRevision: String(expectedRevision) });
+  }
   applyFilter(layerId, filterId, parameters = [], onProgress) {
     const cancellation = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     const promise = this.#request("applyFilter", {

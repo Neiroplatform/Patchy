@@ -55,6 +55,7 @@ let renderedDocument = null;
 let frameTransport = "waiting";
 let layerWindowFrame = 0;
 const layerThumbnailCache = new Map();
+const documentHistoryLabels = new Map();
 const LAYER_ROW_HEIGHT = 48;
 const LAYER_OVERSCAN = 5;
 const MAX_LAYER_THUMBNAILS = 256;
@@ -104,6 +105,69 @@ function selectedLayer() {
 
 function selectedChannel() { return snapshot?.channels.find((item) => item.id === selectedChannelId) || null; }
 function selectedPath() { return snapshot?.paths.find((item) => item.id === selectedPathId) || null; }
+
+function historyLabels(documentId = snapshot?.documentId) {
+  if (documentId == null) return { undo: [], redo: [] };
+  let labels = documentHistoryLabels.get(documentId);
+  if (!labels) { labels = { undo: [], redo: [] }; documentHistoryLabels.set(documentId, labels); }
+  return labels;
+}
+
+function reconcileHistoryLabels(projection, labels = historyLabels(projection?.documentId)) {
+  const undoCount = projection?.memory?.undoStates || 0;
+  const redoCount = projection?.memory?.redoStates || 0;
+  if (labels.undo.length > undoCount) labels.undo.splice(0, labels.undo.length - undoCount);
+  while (labels.undo.length < undoCount) labels.undo.unshift("Earlier edit");
+  if (labels.redo.length > redoCount) labels.redo.splice(0, labels.redo.length - redoCount);
+  while (labels.redo.length < redoCount) labels.redo.unshift("Later edit");
+  return labels;
+}
+
+function recordHistoryMutation(before, after, title) {
+  if (!after || (before?.documentId === after.documentId && before.revision === after.revision)) return;
+  const labels = historyLabels(after.documentId);
+  labels.undo.push(title); labels.redo.length = 0;
+  reconcileHistoryLabels(after, labels);
+}
+
+function recordHistoryTravel(before, after, steps) {
+  const labels = historyLabels(after.documentId);
+  reconcileHistoryLabels(before, labels);
+  for (let index = 0; index < Math.abs(steps); ++index) {
+    if (steps < 0) labels.redo.push(labels.undo.pop() || "Earlier edit");
+    else labels.undo.push(labels.redo.pop() || "Later edit");
+  }
+  reconcileHistoryLabels(after, labels);
+}
+
+function renderHistory() {
+  const list = $("historyList"); list.replaceChildren();
+  const undoCount = snapshot?.memory?.undoStates || 0;
+  const redoCount = snapshot?.memory?.redoStates || 0;
+  $("historyCount").textContent = String(undoCount + redoCount + (snapshot ? 1 : 0));
+  $("historyEmpty").hidden = Boolean(snapshot && (undoCount || redoCount));
+  if (!snapshot) return;
+  const labels = reconcileHistoryLabels(snapshot);
+  const rows = [
+    { label: "Opened document", steps: -undoCount, direction: undoCount ? "undo" : "current" },
+    ...labels.undo.map((label, index) => ({ label,
+      steps: -(undoCount - index - 1), direction: index === undoCount - 1 ? "current" : "undo" })),
+    ...labels.redo.slice().reverse().map((label, index) => ({ label, steps: index + 1, direction: "redo" })),
+  ];
+  for (const row of rows) {
+    const button = document.createElement("button"); button.type = "button";
+    button.className = "history-row"; button.dataset.direction = row.direction;
+    button.setAttribute("role", "option"); button.setAttribute("aria-selected", String(row.steps === 0));
+    button.disabled = busy || row.steps === 0;
+    const marker = document.createElement("span"); marker.className = "history-marker";
+    marker.textContent = row.steps === 0 ? "●" : row.direction === "undo" ? "↶" : "↷";
+    const label = document.createElement("span"); label.className = "history-label"; label.textContent = row.label;
+    button.append(marker, label);
+    if (row.steps) button.addEventListener("click", () => navigateHistory(row.steps));
+    list.append(button);
+  }
+  list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+}
 
 function setSessionState(state, label) {
   shell.dataset.state = state;
@@ -195,6 +259,7 @@ function updateControls() {
   $("pathAnchorXInput").disabled = busy || !selectedPath()?.anchors?.length;
   $("pathAnchorYInput").disabled = busy || !selectedPath()?.anchors?.length;
   syncCommands();
+  renderHistory();
 }
 
 function openDocumentDialog() {
@@ -343,6 +408,7 @@ async function recoverEngineAfterCrash() {
       const historyBytes = Number($("memoryBudgetSelect").value) * MIB;
       await client.setMemoryBudget(historyBytes, Math.min(3 * 1024 * MIB, historyBytes * 3));
       workspaceIds.clear(); checkpointStates.clear(); checkpointQueues.clear();
+      documentHistoryLabels.clear();
       for (const item of result.restored) {
         workspaceIds.set(item.documentId, item.workspaceId);
         checkpointStates.set(item.documentId, "confirmed");
@@ -1067,7 +1133,7 @@ async function acceptSnapshot(next, rerender = true) {
     snapshot = null; selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     renderedDocument = null;
     $("emptyState").hidden = false; setSessionState("ready", "Engine ready");
-    renderLayers(); renderLayerProperties(); renderStructure(); renderMetadata(); renderDocumentTabs();
+    renderLayers(); renderLayerProperties(); renderStructure(); renderMetadata(); renderDocumentTabs(); renderHistory();
     renderRecoveryStatus();
     return;
   }
@@ -1085,6 +1151,7 @@ async function acceptSnapshot(next, rerender = true) {
   renderStructure();
   renderMetadata();
   renderDocumentTabs();
+  renderHistory();
   renderRecoveryStatus(snapshot.documentId);
   if (rerender) await renderDocument();
 }
@@ -1115,6 +1182,7 @@ async function closeDocumentTab(documentTab) {
     const next = await client.closeDocument(documentTab.id);
     workspaceIds.delete(documentTab.id); checkpointStates.delete(documentTab.id);
     checkpointQueues.delete(documentTab.id);
+    documentHistoryLabels.delete(documentTab.id);
     await acceptSnapshot(next);
   } catch (error) { showError("Could not close document", error); }
   finally { setBusy(false); }
@@ -1125,11 +1193,25 @@ async function mutate(title, operation) {
   clearError();
   setBusy(true, title, "Committing one canonical engine revision");
   try {
+    const before = snapshot;
     const next = await operation();
+    recordHistoryMutation(before, next, title);
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
   }
   catch (error) { showError(`${title} failed`, error); }
+  finally { setBusy(false); }
+}
+
+async function navigateHistory(steps) {
+  if (busy || !snapshot || !Number.isSafeInteger(steps) || steps === 0) return;
+  const before = snapshot;
+  clearError(); setBusy(true, "Navigating history", `Moving ${Math.abs(steps)} state${Math.abs(steps) === 1 ? "" : "s"}`);
+  try {
+    const next = await client.historyTravel(steps, before.stateId, before.revision);
+    recordHistoryTravel(before, next, steps);
+    await acceptSnapshot(next); scheduleCheckpoint(next);
+  } catch (error) { showError("History navigation failed", error); }
   finally { setBusy(false); }
 }
 
@@ -1171,7 +1253,9 @@ async function saveDocument() {
     applyingContents ? "Committing one guarded parent revision" : "Preparing a local browser download");
   try {
     if (applyingContents) {
+      const before = snapshot;
       const next = await client.saveSmartObjectContents(snapshot.documentId);
+      recordHistoryMutation(before, next, "Applying Smart Object contents");
       selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
       await acceptSnapshot(next);
       scheduleCheckpoint(next);
@@ -1312,6 +1396,7 @@ async function transferLayerReference(reference, targetDocumentId) {
     const next = await client.copyLayerToDocument({ ...reference,
       targetDocumentId, expectedTargetStateId: target.stateId,
       expectedTargetRevision: target.revision });
+    recordHistoryMutation(target, next, "Copying editable layer");
     selectedLayerId = next.activeLayerId;
     await acceptSnapshot(next); scheduleCheckpoint(next);
   } catch (error) { showError("Could not copy editable layer", error); }
@@ -1356,10 +1441,12 @@ async function importPixelLayer(file, createDocument = false) {
     if (!snapshot) {
       await acceptSnapshot(await client.create(image.width, image.height, `${name}.psd`));
     }
+    const before = snapshot;
     const next = await client.addPixelLayer({
       name, width: image.width, height: image.height,
       bounds: { x: 0, y: 0, width: image.width, height: image.height }, rgba,
     }, { transferOwnership: true });
+    recordHistoryMutation(before, next, "Importing pixels");
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
   } catch (error) { showError("Could not import pixels", error); }
@@ -1696,8 +1783,12 @@ async function placeSmartObject(file) {
   try {
     if (/\.(?:psd|psb)$/i.test(file.name)) {
       const layer = selectedLayer();
-      await acceptSnapshot(await client.placePsdSmartObject(
-        file, file.name, layer?.kind === 5 ? layer.id : null));
+      const before = snapshot;
+      const next = await client.placePsdSmartObject(
+        file, file.name, layer?.kind === 5 ? layer.id : null);
+      recordHistoryMutation(before, next,
+        layer?.kind === 5 ? "Replacing Smart Object" : "Placing Smart Object");
+      await acceptSnapshot(next);
       return;
     }
     const sourceBytes = new Uint8Array(await file.arrayBuffer());
@@ -1716,9 +1807,13 @@ async function placeSmartObject(file) {
       bounds: selectedLayer()?.kind === 5 ? selectedLayer().bounds :
         { x: 0, y: 0, width: image.width, height: image.height }, rgba, sourceBytes };
     const layer = selectedLayer();
-    await acceptSnapshot(await (layer?.kind === 5
+    const before = snapshot;
+    const next = await (layer?.kind === 5
       ? client.replaceSmartObject(layer.id, input, { transferOwnership: true })
-      : client.addSmartObject(input, { transferOwnership: true })));
+      : client.addSmartObject(input, { transferOwnership: true }));
+    recordHistoryMutation(before, next,
+      layer?.kind === 5 ? "Replacing Smart Object" : "Placing Smart Object");
+    await acceptSnapshot(next);
   } catch (error) { showError("Could not place Smart Object", error); }
   finally { image?.close?.(); setBusy(false); }
 }
@@ -2065,8 +2160,8 @@ registerCommand("document.export", "exportButton", exportDocument, () => !busy &
 registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
 registerCommand("document.pastePixels", "pastePixelsButton", pastePixels, () => !busy && Boolean(snapshot) &&
   Boolean(layerClipboard || clipboardImageBlob || navigator.clipboard?.read));
-registerCommand("history.undo", "undoButton", () => mutate("Undo", () => client.undo()), () => !busy && Boolean(snapshot?.canUndo));
-registerCommand("history.redo", "redoButton", () => mutate("Redo", () => client.redo()), () => !busy && Boolean(snapshot?.canRedo));
+registerCommand("history.undo", "undoButton", () => navigateHistory(-1), () => !busy && Boolean(snapshot?.canUndo));
+registerCommand("history.redo", "redoButton", () => navigateHistory(1), () => !busy && Boolean(snapshot?.canRedo));
 registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
 registerCommand("tool.move", "moveToolButton", () => setCanvasTool("move"));
 registerCommand("tool.marquee", "marqueeToolButton", () => setCanvasTool("marquee"));

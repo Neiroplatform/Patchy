@@ -180,6 +180,8 @@ export class PatchyWorkerClient {
             position: number): Promise<DocumentProjection>;
   undo(): Promise<DocumentProjection>;
   redo(): Promise<DocumentProjection>;
+  historyTravel(steps: number, expectedStateId: bigint,
+    expectedRevision: bigint): Promise<DocumentProjection>;
   applyFilter(layerId: bigint, filterId: string, parameters?: FilterParameterInput[],
               onProgress?: (progress: FilterProgress) => void):
     CancellableOperation<DocumentProjection>;

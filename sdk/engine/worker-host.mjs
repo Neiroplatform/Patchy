@@ -529,6 +529,27 @@ export class PatchyWorkerHost {
         return this.#snapshot();
       case "undo": this.#engine.undo(this.#requireSession()); return this.#snapshot();
       case "redo": this.#engine.redo(this.#requireSession()); return this.#snapshot();
+      case "historyTravel": {
+        const before = this.#snapshot();
+        const steps = Number(message.steps);
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("History navigation was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        if (!Number.isSafeInteger(steps) || steps === 0 || Math.abs(steps) > 40) {
+          throw new TypeError("History navigation requires 1..40 whole steps");
+        }
+        const available = steps < 0 ? before.memory?.undoStates : before.memory?.redoStates;
+        if (!Number.isSafeInteger(available) || available < Math.abs(steps)) {
+          throw new RangeError("History navigation exceeds the available states");
+        }
+        for (let index = 0; index < Math.abs(steps); ++index) {
+          if (steps < 0) this.#engine.undo(this.#requireSession());
+          else this.#engine.redo(this.#requireSession());
+        }
+        return this.#snapshot();
+      }
       case "applyFilter":
         this.#engine.applyFilter(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
