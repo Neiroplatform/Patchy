@@ -36,6 +36,7 @@ let automaticRecoveryEnabled = false;
 let recoveryPromise = null;
 let preferenceTimer = null;
 let renderedDocument = null;
+let frameTransport = "waiting";
 const workingSetLimit = browserWorkingSetLimit({
   heapLimitBytes: performance.memory?.jsHeapSizeLimit,
   deviceMemoryGiB: navigator.deviceMemory,
@@ -591,7 +592,7 @@ function renderMetadata() {
   $("detailRevision").textContent = snapshot ? String(snapshot.revision) : "-";
   const memory = snapshot?.memory;
   $("memoryLabel").textContent = memory
-    ? `${formatBytes(memory.totalRetainedBytes)} retained · ${formatBytes(memory.historyRetainedBytes)} history · ${formatBytes(memory.renderCacheBytes)} cache`
+    ? `${formatBytes(memory.totalRetainedBytes)} retained · ${formatBytes(memory.historyRetainedBytes)} history · ${formatBytes(memory.renderCacheBytes)} cache · ${frameTransport === "bitmap" ? "bitmap frames" : frameTransport === "rgba" ? "RGBA fallback" : "frame transport waiting"}`
     : "Memory ready";
   updateControls();
 }
@@ -623,9 +624,12 @@ async function renderDocument() {
   if (!region) {
     applyViewport(); renderSelection(); renderTransformOverlay(); return;
   }
-  const bytes = await client.render(region);
+  const frame = await client.renderFrame(region);
   const expected = region.width * region.height * 4;
-  if (bytes.byteLength !== expected) throw new Error(`Engine returned ${bytes.byteLength} RGBA bytes, expected ${expected}`);
+  if (frame.width !== region.width || frame.height !== region.height) {
+    frame.bitmap?.close();
+    throw new Error(`Engine returned a ${frame.width} × ${frame.height} frame, expected ${region.width} × ${region.height}`);
+  }
   if (canvas.width !== snapshot.width || canvas.height !== snapshot.height ||
       renderedDocument?.documentId !== snapshot.documentId) {
     canvas.width = snapshot.width;
@@ -633,8 +637,21 @@ async function renderDocument() {
     $("gestureCanvas").width = snapshot.width;
     $("gestureCanvas").height = snapshot.height;
   }
-  const pixels = new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  context.putImageData(new ImageData(pixels, region.width, region.height), region.x, region.y);
+  if (frame.kind === "bitmap") {
+    frameTransport = "bitmap";
+    try { context.drawImage(frame.bitmap, region.x, region.y); }
+    finally { frame.bitmap.close(); }
+  } else if (frame.kind === "rgba") {
+    if (frame.bytes.byteLength !== expected) {
+      throw new Error(`Engine returned ${frame.bytes.byteLength} RGBA bytes, expected ${expected}`);
+    }
+    frameTransport = "rgba";
+    const pixels = new Uint8ClampedArray(
+      frame.bytes.buffer, frame.bytes.byteOffset, frame.bytes.byteLength);
+    context.putImageData(new ImageData(pixels, region.width, region.height), region.x, region.y);
+  } else {
+    throw new Error(`Engine returned an unsupported frame transport: ${frame.kind}`);
+  }
   renderedDocument = { documentId: snapshot.documentId, width: snapshot.width, height: snapshot.height };
   $("gestureCanvas").getContext("2d").clearRect(region.x, region.y, region.width, region.height);
   applyViewport();

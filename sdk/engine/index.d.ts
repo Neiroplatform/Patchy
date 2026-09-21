@@ -40,6 +40,9 @@ export interface FilterProgress {
   completed: number; total: number; stage: number; ratio: number;
 }
 export interface CancellableOperation<T> { promise: Promise<T>; cancel(): void }
+export type RenderFrame =
+  | { kind: "bitmap"; bitmap: ImageBitmap; width: number; height: number }
+  | { kind: "rgba"; bytes: Uint8Array; width: number; height: number };
 
 export class PatchyWorkerClient {
   constructor(worker: Worker);
@@ -128,6 +131,7 @@ export class PatchyWorkerClient {
               onProgress?: (progress: FilterProgress) => void):
     CancellableOperation<DocumentProjection>;
   render(region: Rect): Promise<Uint8Array>;
+  renderFrame(region: Rect): Promise<RenderFrame>;
   save(): Promise<Uint8Array>;
   saveDocument(documentId: number): Promise<Uint8Array>;
   close(): Promise<null>;

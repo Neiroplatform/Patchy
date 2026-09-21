@@ -568,6 +568,7 @@ if(PATCHY_BUILD_WASM_SDK)
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${PROJECT_SOURCE_DIR}/sdk/engine/client.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/frame-transport.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker-host.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/module-adapter.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/memory-policy.mjs"

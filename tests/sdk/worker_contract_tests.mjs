@@ -5,6 +5,7 @@ import { PatchyWorkerHost } from "../../sdk/engine/worker-host.mjs";
 import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "../../sdk/engine/memory-policy.mjs";
+import { createRenderFrame } from "../../sdk/engine/frame-transport.mjs";
 
 test("WASM export manifest covers every engine symbol used by the adapter", async () => {
   const root = new URL("../../", import.meta.url);
@@ -22,6 +23,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const html = await readFile(new URL("sdk/engine/site/patchy.html", root), "utf8");
   const css = await readFile(new URL("sdk/engine/site/editor.css", root), "utf8");
   const script = await readFile(new URL("sdk/engine/site/editor.mjs", root), "utf8");
+  const worker = await readFile(new URL("sdk/engine/worker.mjs", root), "utf8");
   const types = await readFile(new URL("sdk/engine/index.d.ts", root), "utf8");
   const nodeServer = await readFile(new URL("scripts/wasm/serve.mjs", root), "utf8");
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
@@ -79,7 +81,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
-    "client.undo", "client.redo", "client.render", "client.save", "client.saveDocument",
+    "client.undo", "client.redo", "client.renderFrame", "client.save", "client.saveDocument",
     "client.setMemoryBudget"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -87,6 +89,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /from "\.\/engine\/workspace-store\.mjs"/);
   assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
   assert.match(script, /recoverWorkerSession/);
+  assert.match(worker, /method === "renderFrame"/);
+  assert.match(worker, /createRenderFrame\(bytes, payload\.region\)/);
+  assert.match(script, /context\.drawImage\(frame\.bitmap/);
+  assert.match(script, /frame\.bitmap\.close\(\)/);
   assert.match(script, /loadPreferences/);
   assert.match(script, /cleanupRecoveryWorkspaces/);
   assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
@@ -115,6 +121,49 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(html, /role="alert"/);
   assert.match(nodeServer, /'\.css': 'text\/css; charset=utf-8'/);
   assert.match(pythonServer, /"\.css": "text\/css; charset=utf-8"/);
+});
+
+test("Worker frame transport transfers ImageBitmap without exposing RGBA bytes", () => {
+  const bitmap = { close() {} };
+  let imageData;
+  class FakeImageData {
+    constructor(pixels, width, height) {
+      Object.assign(this, { pixels, width, height }); imageData = this;
+    }
+  }
+  class FakeOffscreenCanvas {
+    constructor(width, height) { assert.deepEqual([width, height], [2, 1]); }
+    getContext(kind, options) {
+      assert.equal(kind, "2d"); assert.deepEqual(options, { alpha: true });
+      return { putImageData(value, x, y) {
+        assert.equal(value, imageData); assert.deepEqual([x, y], [0, 0]);
+      } };
+    }
+    transferToImageBitmap() { return bitmap; }
+  }
+  const bytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+  const frame = createRenderFrame(bytes, { width: 2, height: 1 }, {
+    ImageData: FakeImageData, OffscreenCanvas: FakeOffscreenCanvas,
+  });
+  assert.deepEqual(frame.value, { kind: "bitmap", bitmap, width: 2, height: 1 });
+  assert.deepEqual(frame.transfer, [bitmap]);
+  assert.equal("bytes" in frame.value, false);
+  assert.equal(imageData.pixels.buffer, bytes.buffer);
+});
+
+test("Worker frame transport falls back to one transferable RGBA buffer", () => {
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  const unavailable = createRenderFrame(bytes, { width: 1, height: 1 }, {});
+  assert.deepEqual(unavailable.value, { kind: "rgba", bytes, width: 1, height: 1 });
+  assert.deepEqual(unavailable.transfer, [bytes.buffer]);
+  class BrokenCanvas { getContext() { throw new Error("allocation failed"); } }
+  const failed = createRenderFrame(bytes, { width: 1, height: 1 }, {
+    ImageData: class {}, OffscreenCanvas: BrokenCanvas,
+  });
+  assert.equal(failed.value.kind, "rgba");
+  assert.equal(failed.value.bytes, bytes);
+  assert.throws(() => createRenderFrame(bytes, { width: 2, height: 1 }, {}),
+    /expected 8/);
 });
 
 test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
@@ -793,20 +842,25 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   assert.equal(worker.sent[2].transfer.length, 1);
   worker.reply({ id: 3, ok: true, value: projection(2) });
   await pixels;
+  const renderedFrame = client.renderFrame({ x: 0, y: 0, width: 1, height: 1 });
+  assert.equal(worker.sent[3].message.method, "renderFrame");
+  worker.reply({ id: 4, ok: true, value: { kind: "rgba",
+    bytes: new Uint8Array([1, 2, 3, 4]), width: 1, height: 1 } });
+  assert.equal((await renderedFrame).kind, "rgba");
   const filterProgress = [];
   const filter = client.invertLayer(7n, (value) => filterProgress.push(value.ratio));
-  const filterMessage = worker.sent[3].message;
+  const filterMessage = worker.sent[4].message;
   assert.ok(filterMessage.cancellation instanceof SharedArrayBuffer);
-  worker.reply({ id: 4, progress: { completed: 1, total: 2, stage: 0, ratio: 0.5 } });
+  worker.reply({ id: 5, progress: { completed: 1, total: 2, stage: 0, ratio: 0.5 } });
   assert.deepEqual(filterProgress, [0.5]);
   filter.cancel();
   assert.equal(Atomics.load(new Int32Array(filterMessage.cancellation), 0), 1);
-  worker.reply({ id: 4, ok: true, value: projection(3) });
+  worker.reply({ id: 5, ok: true, value: projection(3) });
   await filter.promise;
   const savedDocument = client.saveDocument(23);
-  assert.equal(worker.sent[4].message.method, "saveDocument");
-  assert.equal(worker.sent[4].message.documentId, 23);
-  worker.reply({ id: 5, ok: true, value: new Uint8Array([56, 66, 80, 83]) });
+  assert.equal(worker.sent[5].message.method, "saveDocument");
+  assert.equal(worker.sent[5].message.documentId, 23);
+  worker.reply({ id: 6, ok: true, value: new Uint8Array([56, 66, 80, 83]) });
   assert.equal((await savedDocument).byteLength, 4);
   const pending = client.save();
   worker.fail("worker trap");

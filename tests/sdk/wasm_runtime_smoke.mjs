@@ -100,6 +100,10 @@ try {
       "partial render cleared an uncovered dirty region");
     const rendered = await client.render({ x: 0, y: 0, width: 4, height: 3 });
     check(rendered.length === rgba.length, "bounded render byte count mismatch");
+    const frame = await client.renderFrame({ x: 0, y: 0, width: 4, height: 3 });
+    check(frame.width === 4 && frame.height === 3, "render frame dimensions mismatch");
+    check(frame.kind === "bitmap", `Worker ImageBitmap transport unavailable: ${frame.kind}`);
+    frame.bitmap.close();
     const renderedSnapshot = await client.snapshot();
     check(renderedSnapshot.dirtyRegion == null,
       "complete render did not clear the covered dirty region");

@@ -1,4 +1,5 @@
 import { createWorkerHost } from "./worker-host.mjs";
+import { createRenderFrame } from "./frame-transport.mjs";
 
 let hostPromise;
 
@@ -14,6 +15,17 @@ self.onmessage = async ({ data }) => {
     }
     if (!hostPromise) throw new Error("Patchy worker is not initialized");
     const host = await hostPromise;
+    if (method === "renderFrame") {
+      const bytes = await host.dispatch({ method: "render", ...payload });
+      const frame = createRenderFrame(bytes, payload.region);
+      try {
+        self.postMessage({ id, ok: true, value: frame.value }, frame.transfer);
+      } catch (error) {
+        frame.value.bitmap?.close();
+        throw error;
+      }
+      return;
+    }
     const value = await host.dispatch({ method, ...payload,
       progress: (progress) => self.postMessage({ id, progress }) });
     const transfer = value instanceof Uint8Array ? [value.buffer] : [];
