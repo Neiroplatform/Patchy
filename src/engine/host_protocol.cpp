@@ -334,6 +334,27 @@ selection_from_channel(const patchy::DocumentChannel &channel) {
   return result;
 }
 
+patchy::engine::SelectionSnapshot selection_from_mask(
+    patchy::PixelBuffer pixels, patchy::Rect bounds) {
+  patchy::engine::SelectionSnapshot result;
+  result.selection = rects_from_gray8(pixels, 1U);
+  result.display_region = rects_from_gray8(pixels, 128U);
+  for (auto *rects : {&result.selection, &result.display_region}) {
+    for (auto &rect : *rects) {
+      rect.x += bounds.x;
+      rect.y += bounds.y;
+    }
+  }
+  const bool partial = std::any_of(
+      pixels.data().begin(), pixels.data().end(),
+      [](std::uint8_t value) { return value != 0U && value != 255U; });
+  if (partial && !result.selection.empty()) {
+    result.mask_bounds = bounds;
+    result.mask_alpha = std::move(pixels);
+  }
+  return result;
+}
+
 std::optional<patchy::VectorPath>
 vector_path_from_input(const patchy_engine_path_input &input,
                        patchy_engine_error *error) {
@@ -725,6 +746,52 @@ int patchy_engine_session_set_selection(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown selection authoring failure");
+  }
+}
+
+int patchy_engine_session_set_selection_mask(
+    patchy_engine_session *session,
+    const patchy_engine_selection_mask_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->gray == nullptr ||
+      input->width <= 0 || input->height <= 0 ||
+      input->bounds.width != input->width ||
+      input->bounds.height != input->height ||
+      static_cast<std::size_t>(input->width) >
+          std::numeric_limits<std::size_t>::max() /
+              static_cast<std::size_t>(input->height) ||
+      input->gray_size != static_cast<std::size_t>(input->width) *
+                              static_cast<std::size_t>(input->height)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "selection mask dimensions are invalid");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  try {
+    patchy::PixelBuffer pixels(input->width, input->height,
+                               patchy::PixelFormat::gray8());
+    std::copy_n(input->gray, input->gray_size, pixels.data().begin());
+    const auto result = session->value->execute(patchy::engine::SetSelection{
+        selection_from_mask(std::move(pixels),
+                            {input->bounds.x, input->bounds.y,
+                             input->bounds.width, input->bounds.height})});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate selection mask");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown selection mask authoring failure");
   }
 }
 
@@ -2914,6 +2981,16 @@ int patchy_engine_session_execute(patchy_engine_session *session,
       result = session->value->execute(patchy::engine::ModifySelection{
           patchy::engine::SelectionOperation::Border,
           command->payload.selection_radius.pixels});
+      break;
+    case PATCHY_ENGINE_COMMAND_GROW_SELECTION:
+      result = session->value->execute(patchy::engine::SelectByColorSimilarity{
+          patchy::engine::SelectionSimilarityMode::Grow,
+          command->payload.selection_tolerance.tolerance});
+      break;
+    case PATCHY_ENGINE_COMMAND_SELECT_SIMILAR:
+      result = session->value->execute(patchy::engine::SelectByColorSimilarity{
+          patchy::engine::SelectionSimilarityMode::Similar,
+          command->payload.selection_tolerance.tolerance});
       break;
     case PATCHY_ENGINE_COMMAND_SELECT_CHANNEL: {
       const auto *channel = session->value->document().find_channel(

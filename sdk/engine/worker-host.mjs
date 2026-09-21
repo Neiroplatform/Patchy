@@ -74,6 +74,11 @@ export class PatchyWorkerHost {
         this.#engine.setSelection(
           this.#requireSession(), this.#snapshot(), message.rects);
         return this.#snapshot();
+      case "setSelectionMask":
+        this.#engine.setSelectionMask(this.#requireSession(), this.#snapshot(), {
+          bounds: message.bounds, gray: new Uint8Array(message.gray),
+        });
+        return this.#snapshot();
       case "modifySelection":
         this.#engine.modifySelection(this.#requireSession(), this.#snapshot(), message.type, message.pixels);
         return this.#snapshot();
@@ -285,6 +290,11 @@ export class PatchyWorkerHost {
 }
 
 function selectionMask(snapshot) {
+  if (snapshot.selectionMask) {
+    return { bounds: { ...snapshot.selectionMask.bounds },
+      gray: snapshot.selectionMask.gray.slice(), defaultColor: 0,
+      disabled: false, linked: true };
+  }
   if (!snapshot.selection.length) {
     const pixelCount = checkedMaskPixelCount(snapshot.width, snapshot.height);
     return { bounds: { x: 0, y: 0, width: snapshot.width, height: snapshot.height },
@@ -319,6 +329,15 @@ function checkedMaskPixelCount(width, height) {
 }
 
 function selectionGray(snapshot) {
+  if (snapshot.selectionMask) {
+    const gray = new Uint8Array(checkedMaskPixelCount(snapshot.width, snapshot.height));
+    const { bounds, gray: source } = snapshot.selectionMask;
+    for (let y = 0; y < bounds.height; ++y) {
+      gray.set(source.subarray(y * bounds.width, (y + 1) * bounds.width),
+        (bounds.y + y) * snapshot.width + bounds.x);
+    }
+    return gray;
+  }
   const gray = new Uint8Array(checkedMaskPixelCount(snapshot.width, snapshot.height));
   for (const rect of snapshot.selection) {
     const x0 = Math.max(0, rect.x); const y0 = Math.max(0, rect.y);

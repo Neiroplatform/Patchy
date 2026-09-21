@@ -61,11 +61,17 @@ export class PatchyWorkerClient {
   }
   cropDocument(crop) { return this.#request("cropDocument", { crop }); }
   setSelection(rects) { return this.#request("setSelection", { rects }); }
+  setSelectionMask(bounds, gray) {
+    const owned = gray.slice();
+    return this.#request("setSelectionMask", { bounds, gray: owned.buffer }, [owned.buffer]);
+  }
   clearSelection() { return this.#request("setSelection", { rects: [] }); }
   invertSelection() { return this.#request("modifySelection", { type: 19, pixels: 0 }); }
   expandSelection(pixels) { return this.#request("modifySelection", { type: 20, pixels }); }
   contractSelection(pixels) { return this.#request("modifySelection", { type: 21, pixels }); }
   borderSelection(pixels) { return this.#request("modifySelection", { type: 22, pixels }); }
+  growSelection(tolerance) { return this.#request("modifySelection", { type: 33, pixels: tolerance }); }
+  selectSimilar(tolerance) { return this.#request("modifySelection", { type: 34, pixels: tolerance }); }
   addAlphaChannel(name = "Alpha 1") { return this.#request("addAlphaChannel", { name }); }
   addDocumentPath(input) { return this.#request("addDocumentPath", { input }); }
   selectChannel(channelId) { return this.#request("selectChannel", { channelId: String(channelId) }); }

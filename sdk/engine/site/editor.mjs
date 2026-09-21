@@ -24,6 +24,8 @@ let paintDraft = null;
 let textEditingId = null;
 let cloneSource = null;
 let gradientDraft = null;
+let lassoDraft = null;
+let polygonDraft = null;
 
 const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
 const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
@@ -113,7 +115,8 @@ function updateControls() {
   $("layerClipInput").disabled = busy || !layer;
   $("layerLockInput").disabled = busy || !layer;
   for (const id of ["invertSelectionButton", "expandSelectionButton", "contractSelectionButton",
-    "borderSelectionButton", "saveChannelButton", "savePathButton"]) {
+    "borderSelectionButton", "growSelectionButton", "similarSelectionButton",
+    "smoothSelectionButton", "featherSelectionButton", "saveChannelButton", "savePathButton"]) {
     $(id).disabled = busy || !snapshot?.selection?.length;
   }
   $("rasterizeLayerButton").disabled = busy || ![3, 4, 5].includes(layer?.kind);
@@ -339,12 +342,119 @@ function setCanvasTool(tool) {
   canvasTool = tool;
   $("canvasViewport").dataset.tool = tool;
   for (const [id, value] of [["moveToolButton", "move"], ["marqueeToolButton", "marquee"],
+    ["lassoToolButton", "lasso"], ["polygonToolButton", "polygon"], ["magicToolButton", "magic"],
     ["panToolButton", "pan"], ["brushToolButton", "brush"],
     ["eraserToolButton", "eraser"], ["cloneToolButton", "clone"],
     ["healToolButton", "heal"], ["gradientToolButton", "gradient"],
     ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
   }
+}
+
+function fullSelectionMask() {
+  const gray = new Uint8Array(snapshot.width * snapshot.height);
+  if (snapshot.selectionMask) {
+    const { bounds, gray: source } = snapshot.selectionMask;
+    for (let y = 0; y < bounds.height; ++y) {
+      gray.set(source.subarray(y * bounds.width, (y + 1) * bounds.width),
+        (bounds.y + y) * snapshot.width + bounds.x);
+    }
+  } else {
+    for (const rect of snapshot.selection || []) {
+      for (let y = rect.y; y < rect.y + rect.height; ++y) {
+        gray.fill(255, y * snapshot.width + rect.x, y * snapshot.width + rect.x + rect.width);
+      }
+    }
+  }
+  return gray;
+}
+
+function commitSelectionMask(title, gray) {
+  return mutate(title, () => client.setSelectionMask(
+    { x: 0, y: 0, width: snapshot.width, height: snapshot.height }, gray));
+}
+
+function combinedSelectionMask(next, mode = "replace") {
+  if (mode === "replace") return next;
+  const current = fullSelectionMask();
+  for (let index = 0; index < next.length; ++index) {
+    if (mode === "add") next[index] = Math.max(current[index], next[index]);
+    else if (mode === "subtract") next[index] = Math.round(current[index] * (255 - next[index]) / 255);
+    else next[index] = Math.min(current[index], next[index]);
+  }
+  return next;
+}
+
+function selectionMode(event) {
+  return event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" : "replace";
+}
+
+function polygonMask(points) {
+  const target = document.createElement("canvas"); target.width = snapshot.width; target.height = snapshot.height;
+  const targetContext = target.getContext("2d", { alpha: true, willReadFrequently: true });
+  targetContext.fillStyle = "#fff"; targetContext.beginPath();
+  targetContext.moveTo(points[0].x, points[0].y);
+  for (const point of points.slice(1)) targetContext.lineTo(point.x, point.y);
+  targetContext.closePath(); targetContext.fill();
+  const rgba = targetContext.getImageData(0, 0, snapshot.width, snapshot.height).data;
+  const gray = new Uint8Array(snapshot.width * snapshot.height);
+  for (let index = 0; index < gray.length; ++index) gray[index] = rgba[index * 4 + 3];
+  return gray;
+}
+
+function previewPolygon(points, closed = false) {
+  const overlay = $("gestureCanvas").getContext("2d");
+  overlay.clearRect(0, 0, canvas.width, canvas.height);
+  if (!points.length) return;
+  overlay.strokeStyle = "#fff"; overlay.lineWidth = Math.max(1, 1 / zoom);
+  overlay.setLineDash([Math.max(2, 4 / zoom), Math.max(2, 4 / zoom)]);
+  overlay.beginPath(); overlay.moveTo(points[0].x, points[0].y);
+  for (const point of points.slice(1)) overlay.lineTo(point.x, point.y);
+  if (closed) overlay.closePath(); overlay.stroke(); overlay.setLineDash([]);
+}
+
+function boxBlurMask(source, width, height, radius) {
+  const horizontal = new Uint32Array(source.length); const result = new Uint8Array(source.length);
+  for (let y = 0; y < height; ++y) {
+    let sum = 0;
+    for (let x = -radius; x <= radius; ++x) sum += source[y * width + Math.max(0, Math.min(width - 1, x))];
+    for (let x = 0; x < width; ++x) {
+      horizontal[y * width + x] = Math.round(sum / (radius * 2 + 1));
+      sum += source[y * width + Math.min(width - 1, x + radius + 1)] -
+        source[y * width + Math.max(0, x - radius)];
+    }
+  }
+  for (let x = 0; x < width; ++x) {
+    let sum = 0;
+    for (let y = -radius; y <= radius; ++y) sum += horizontal[Math.max(0, Math.min(height - 1, y)) * width + x];
+    for (let y = 0; y < height; ++y) {
+      result[y * width + x] = Math.round(sum / (radius * 2 + 1));
+      sum += horizontal[Math.min(height - 1, y + radius + 1) * width + x] -
+        horizontal[Math.max(0, y - radius) * width + x];
+    }
+  }
+  return result;
+}
+
+function magicMask(point) {
+  const pixels = context.getImageData(0, 0, snapshot.width, snapshot.height).data;
+  const x = Math.min(snapshot.width - 1, Math.max(0, Math.floor(point.x)));
+  const y = Math.min(snapshot.height - 1, Math.max(0, Math.floor(point.y)));
+  const seed = (y * snapshot.width + x) * 4;
+  const target = [pixels[seed], pixels[seed + 1], pixels[seed + 2], pixels[seed + 3]];
+  const tolerance = Number($("selectionToleranceInput").value); const limit = tolerance * tolerance * 4;
+  const gray = new Uint8Array(snapshot.width * snapshot.height); const queue = [y * snapshot.width + x]; gray[queue[0]] = 255;
+  const matches = (index) => { let distance = 0; const offset = index * 4;
+    for (let channel = 0; channel < 4; ++channel) { const delta = pixels[offset + channel] - target[channel]; distance += delta * delta; }
+    return distance <= limit; };
+  for (let offset = 0; offset < queue.length; ++offset) {
+    const index = queue[offset]; const px = index % snapshot.width; const py = Math.floor(index / snapshot.width);
+    for (const next of [px > 0 ? index - 1 : -1, px + 1 < snapshot.width ? index + 1 : -1,
+      py > 0 ? index - snapshot.width : -1, py + 1 < snapshot.height ? index + snapshot.width : -1]) {
+      if (next >= 0 && gray[next] === 0 && matches(next)) { gray[next] = 255; queue.push(next); }
+    }
+  }
+  return gray;
 }
 
 function renderTransformOverlay(bounds = moveDraft?.bounds) {
@@ -468,6 +578,60 @@ function rectanglePath(bounds) {
     { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
     { x: bounds.x, y: bounds.y + bounds.height },
   ] };
+}
+
+function selectionBounds() {
+  const rects = snapshot?.selection || [];
+  if (!rects.length) return null;
+  const left = Math.min(...rects.map((rect) => rect.x));
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function selectionPath() {
+  const bounds = selectionBounds();
+  if (!bounds) return null;
+  const mask = fullSelectionMask(); const width = snapshot.width; const vertexWidth = width + 1;
+  const edges = new Map();
+  const addEdge = (ax, ay, bx, by) => {
+    const start = ay * vertexWidth + ax; const end = by * vertexWidth + bx;
+    const values = edges.get(start) || []; values.push(end); edges.set(start, values);
+  };
+  const selected = (x, y) => x >= 0 && y >= 0 && x < width && y < snapshot.height &&
+    mask[y * width + x] >= 128;
+  for (let y = bounds.y; y < bounds.y + bounds.height; ++y) {
+    for (let x = bounds.x; x < bounds.x + bounds.width; ++x) {
+      if (!selected(x, y)) continue;
+      if (!selected(x, y - 1)) addEdge(x, y, x + 1, y);
+      if (!selected(x + 1, y)) addEdge(x + 1, y, x + 1, y + 1);
+      if (!selected(x, y + 1)) addEdge(x + 1, y + 1, x, y + 1);
+      if (!selected(x - 1, y)) addEdge(x, y + 1, x, y);
+    }
+  }
+  const loops = [];
+  while (edges.size) {
+    const start = edges.keys().next().value; let cursor = start; const points = [];
+    do {
+      points.push({ x: cursor % vertexWidth, y: Math.floor(cursor / vertexWidth) });
+      const choices = edges.get(cursor);
+      if (!choices?.length) break;
+      cursor = choices.pop(); if (!choices.length) edges.delete(points.at(-1).y * vertexWidth + points.at(-1).x);
+    } while (cursor !== start && points.length <= mask.length * 4);
+    if (cursor === start && points.length >= 3) {
+      const simplified = points.filter((point, index) => {
+        const before = points[(index + points.length - 1) % points.length];
+        const after = points[(index + 1) % points.length];
+        return (point.x - before.x) * (after.y - point.y) !==
+          (point.y - before.y) * (after.x - point.x);
+      });
+      if (simplified.length >= 3) loops.push(simplified);
+    }
+  }
+  const anchorCount = loops.reduce((sum, loop) => sum + loop.length, 0);
+  if (!loops.length || anchorCount > 4096) return rectanglePath(bounds);
+  return { subpaths: loops.map((anchors) => ({ anchors, shapeGroup: 0, combine: 1, closed: true })) };
 }
 
 function adjustmentName(kind) {
@@ -843,6 +1007,9 @@ registerCommand("history.redo", "redoButton", () => mutate("Redo", () => client.
 registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
 registerCommand("tool.move", "moveToolButton", () => setCanvasTool("move"));
 registerCommand("tool.marquee", "marqueeToolButton", () => setCanvasTool("marquee"));
+registerCommand("tool.lasso", "lassoToolButton", () => setCanvasTool("lasso"));
+registerCommand("tool.polygon", "polygonToolButton", () => setCanvasTool("polygon"));
+registerCommand("tool.magic", "magicToolButton", () => setCanvasTool("magic"));
 registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"));
 registerCommand("tool.brush", "brushToolButton", () => setCanvasTool("brush"));
 registerCommand("tool.eraser", "eraserToolButton", () => setCanvasTool("eraser"));
@@ -920,9 +1087,9 @@ $("removeMaskButton").addEventListener("click", () => {
   if (layer?.mask) mutate("Removing layer mask", () => client.removeLayerMask(layer.id));
 });
 $("createVectorMaskButton").addEventListener("click", () => {
-  const layer = selectedLayer(); const bounds = snapshot?.selection?.[0];
-  if (layer && bounds) mutate("Creating vector mask", () => client.setVectorMask(layer.id,
-    { path: rectanglePath(bounds), feather: 0, density: 255 }));
+  const layer = selectedLayer(); const path = selectionPath();
+  if (layer && path) mutate("Creating vector mask", () => client.setVectorMask(layer.id,
+    { path, feather: 0, density: 255 }));
 });
 $("cancelOperationButton").addEventListener("click", () => {
   cancelActiveOperation?.();
@@ -984,11 +1151,25 @@ $("invertSelectionButton").addEventListener("click", () => mutate("Inverting sel
 $("expandSelectionButton").addEventListener("click", () => mutate("Expanding selection", () => client.expandSelection(4)));
 $("contractSelectionButton").addEventListener("click", () => mutate("Contracting selection", () => client.contractSelection(4)));
 $("borderSelectionButton").addEventListener("click", () => mutate("Bordering selection", () => client.borderSelection(4)));
+$("growSelectionButton").addEventListener("click", () => mutate("Growing selection by color", () =>
+  client.growSelection(Number($("selectionToleranceInput").value))));
+$("similarSelectionButton").addEventListener("click", () => mutate("Selecting similar colors", () =>
+  client.selectSimilar(Number($("selectionToleranceInput").value))));
+$("smoothSelectionButton").addEventListener("click", () => {
+  const blurred = boxBlurMask(fullSelectionMask(), snapshot.width, snapshot.height, 4);
+  for (let index = 0; index < blurred.length; ++index) blurred[index] = blurred[index] >= 128 ? 255 : 0;
+  commitSelectionMask("Smoothing selection", blurred);
+});
+$("featherSelectionButton").addEventListener("click", () => commitSelectionMask(
+  "Feathering selection", boxBlurMask(fullSelectionMask(), snapshot.width, snapshot.height, 4)));
+$("selectionToleranceInput").addEventListener("input", () => {
+  $("selectionToleranceOutput").textContent = $("selectionToleranceInput").value;
+});
 $("saveChannelButton").addEventListener("click", () => mutate("Saving alpha channel", () => client.addAlphaChannel(`Alpha ${snapshot.channels.length + 1}`)));
 $("savePathButton").addEventListener("click", () => {
-  const bounds = snapshot?.selection?.[0];
-  if (bounds) mutate("Saving document path", () => client.addDocumentPath({
-    name: `Path ${snapshot.paths.length + 1}`, kind: 0, path: rectanglePath(bounds) }));
+  const path = selectionPath();
+  if (path) mutate("Saving document path", () => client.addDocumentPath({
+    name: `Path ${snapshot.paths.length + 1}`, kind: 0, path }));
 });
 $("rasterizeLayerButton").addEventListener("click", () => {
   const layer = selectedLayer(); if (layer) mutate("Rasterizing layer", () => client.rasterizeLayer(layer.id));
@@ -1055,6 +1236,23 @@ canvas.addEventListener("pointerdown", (event) => {
   if (["brush", "eraser", "clone", "heal"].includes(canvasTool)) { beginPaint(event); return; }
   if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "text") { openTextDialog(); return; }
+  if (canvasTool === "magic") {
+    commitSelectionMask("Selecting connected color", combinedSelectionMask(
+      magicMask(canvasPoint(event)), selectionMode(event)));
+    return;
+  }
+  if (canvasTool === "polygon") {
+    const point = canvasPoint(event);
+    polygonDraft ??= { points: [], mode: selectionMode(event) };
+    polygonDraft.points.push(point); previewPolygon(polygonDraft.points);
+    return;
+  }
+  if (canvasTool === "lasso") {
+    canvas.setPointerCapture(event.pointerId);
+    lassoDraft = { pointerId: event.pointerId, points: [canvasPoint(event)], mode: selectionMode(event) };
+    previewPolygon(lassoDraft.points);
+    return;
+  }
   if (canvasTool === "move") {
     const layer = selectedLayer();
     if (![0, 3].includes(layer?.kind) ||
@@ -1093,6 +1291,11 @@ canvas.addEventListener("pointerdown", (event) => {
 
 canvas.addEventListener("pointermove", (event) => {
   movePaint(event);
+  if (lassoDraft?.pointerId === event.pointerId) {
+    const point = canvasPoint(event); const last = lassoDraft.points.at(-1);
+    if (Math.hypot(point.x - last.x, point.y - last.y) >= 1) lassoDraft.points.push(point);
+    previewPolygon(lassoDraft.points);
+  }
   if (gradientDraft?.pointerId === event.pointerId) gradientDraft.end = canvasPoint(event);
   if (!moveDraft) return;
   const point = canvasPoint(event);
@@ -1104,12 +1307,24 @@ canvas.addEventListener("pointermove", (event) => {
 canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
   finishGradient(event);
+  if (lassoDraft?.pointerId === event.pointerId) {
+    const draft = lassoDraft; lassoDraft = null; previewPolygon([]);
+    if (draft.points.length >= 3) commitSelectionMask("Selecting freehand area",
+      combinedSelectionMask(polygonMask(draft.points), draft.mode));
+  }
   if (!moveDraft) return;
   const draft = moveDraft; moveDraft = null; renderTransformOverlay();
   commitLayerBounds(draft.layer, draft.bounds, "Moving layer");
 });
 canvas.addEventListener("pointercancel", (event) => {
-  finishPaint(event, true); gradientDraft = null; moveDraft = null; renderTransformOverlay();
+  finishPaint(event, true); gradientDraft = null; moveDraft = null; lassoDraft = null;
+  previewPolygon([]); renderTransformOverlay();
+});
+canvas.addEventListener("dblclick", (event) => {
+  if (canvasTool !== "polygon" || !polygonDraft) return;
+  event.preventDefault(); const draft = polygonDraft; polygonDraft = null; previewPolygon([]);
+  if (draft.points.length >= 3) commitSelectionMask("Selecting polygonal area",
+    combinedSelectionMask(polygonMask(draft.points), draft.mode));
 });
 
 $("canvasViewport").addEventListener("pointerdown", (event) => {
@@ -1154,11 +1369,19 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target?.matches?.("input, select, textarea")) return;
   if (event.key.toLowerCase() === "m") executeCommand("tool.marquee");
+  if (event.key.toLowerCase() === "l") executeCommand(event.shiftKey ? "tool.polygon" : "tool.lasso");
+  if (event.key.toLowerCase() === "w") executeCommand("tool.magic");
   if (event.key.toLowerCase() === "h") executeCommand("tool.pan");
   if (event.key.toLowerCase() === "v") executeCommand("tool.move");
   if (event.key.toLowerCase() === "b") executeCommand("tool.brush");
   if (event.key.toLowerCase() === "e") executeCommand("tool.eraser");
   if (event.key.toLowerCase() === "t") executeCommand("tool.text");
+  if (event.key === "Enter" && polygonDraft) {
+    const draft = polygonDraft; polygonDraft = null; previewPolygon([]);
+    if (draft.points.length >= 3) commitSelectionMask("Selecting polygonal area",
+      combinedSelectionMask(polygonMask(draft.points), draft.mode));
+  }
+  if (event.key === "Escape" && polygonDraft) { polygonDraft = null; previewPolygon([]); }
 });
 
 for (const type of ["dragenter", "dragover"]) {

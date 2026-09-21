@@ -70,14 +70,12 @@ skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
 
 ## Qt-free browser SDK
 
-`wasm-sdk` produces a no-entry Worker module/site with BigInt IDs. It
-opens/drops PSD, authors documents/layers/editable text, renders and downloads.
-One registry drives toolbar/keys; canvas tools cover geometry, zoom/pan,
-marquee, masks, move/transform, brush/eraser and text. The inspector authors
-shapes/vector masks, adjustments, Smart Objects and five Smart Filters. Fill,
-gradient, clone/heal and linked-mask transforms also commit through that owner.
-Channels/paths, rasterize and merge share one undo/save owner.
-Assets stay local and failures explicit.
+`wasm-sdk` is a no-entry Worker module/site with BigInt IDs. It opens PSD,
+authors layers/text, renders and downloads. One toolbar/key registry covers
+geometry, zoom/pan, marquee/freehand/polygon/magic selection, soft-mask
+refinement, move/transform, paint and text. The inspector authors masks,
+shapes, adjustments, Smart Objects/Filters, channels/paths, rasterize and
+merge. Every gesture shares one undo/save owner; assets stay local.
 
 `client.mjs` owns correlation/crash state, `worker.mjs` the runtime/session,
 and `module-adapter.mjs` reads C structures. Filter cancellation uses shared

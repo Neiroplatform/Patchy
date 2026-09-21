@@ -32,12 +32,14 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "zoomOutButton", "zoomFitButton", "zoomInButton", "createMaskButton",
     "toggleMaskButton", "invertMaskButton", "removeMaskButton",
     "gestureCanvas", "transformOverlay", "moveToolButton", "brushToolButton",
+    "lassoToolButton", "polygonToolButton", "magicToolButton", "selectionToleranceInput",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton",
     "textDialog", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
     "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "smartFilterButton",
     "cloneToolButton", "healToolButton", "gradientToolButton", "fillToolButton",
     "layerFillInput", "layerClipInput", "layerLockInput", "invertSelectionButton",
     "expandSelectionButton", "contractSelectionButton", "borderSelectionButton",
+    "growSelectionButton", "similarSelectionButton", "smoothSelectionButton", "featherSelectionButton",
     "saveChannelButton", "savePathButton", "channelList", "pathList",
     "rasterizeLayerButton", "mergeVisibleButton", "channelRenameButton",
     "channelInvertButton", "channelUpButton", "channelDownButton", "channelDeleteButton",
@@ -53,7 +55,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameLayer", "client.setLayerOpacity", "client.setLayerBlendMode",
     "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
     "client.cropDocument", "client.invertLayer",
-    "client.setSelection", "client.clearSelection", "client.createLayerMask",
+    "client.setSelection", "client.setSelectionMask", "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
     "client.layerPixels", "client.layerMaskPixels", "client.replacePixelLayer",
     "client.replacePixelLayerAndMask", "client.addTextLayer",
@@ -63,7 +65,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.replaceSmartObject", "client.setSmartFilter",
     "client.setLayerFillOpacity", "client.setLayerLocks", "client.setLayerClipping",
     "client.invertSelection", "client.expandSelection", "client.contractSelection",
-    "client.borderSelection", "client.addAlphaChannel", "client.addDocumentPath",
+    "client.borderSelection", "client.growSelection", "client.selectSimilar",
+    "client.addAlphaChannel", "client.addDocumentPath",
     "client.selectChannel", "client.selectPath",
     "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
@@ -197,6 +200,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       if (type === 13) assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true), view.getInt32(command + 40, true), view.getInt32(command + 44, true)], [1, 1, 4, 3]);
       return 1;
     },
+    _patchy_engine_session_set_selection_mask() { return 1; },
     _patchy_engine_session_group_layer(session, state, revision, layer, name, nameSize) {
       assert.deepEqual([session, state, revision, layer], [22, 9n, 4n, 7n]);
       assert.equal(new TextDecoder().decode(heap.subarray(name, name + nameSize)), "Group");
@@ -332,7 +336,11 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.rotateCanvas(session, snapshot, 90);
   engine.cropDocument(session, snapshot, { x: 1, y: 1, width: 4, height: 3 });
   engine.setSelection(session, snapshot, [{ x: 0, y: 0, width: 2, height: 1 }]);
+  engine.setSelectionMask(session, snapshot, { bounds: { x: 0, y: 0, width: 3, height: 2 },
+    gray: new Uint8Array([0, 64, 255, 255, 64, 0]) });
   engine.modifySelection(session, snapshot, 20, 4);
+  engine.modifySelection(session, snapshot, 33, 32);
+  engine.modifySelection(session, snapshot, 34, 32);
   engine.selectChannel(session, snapshot, 31n);
   engine.selectPath(session, snapshot, 41n, 0, 0, true);
   engine.renameChannel(session, snapshot, 31n, "Renamed channel");
@@ -391,7 +399,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   Atomics.store(cancellation, 0, 1);
   engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", cancellation);
   assert.deepEqual(callbackReturns, [1, 1, 0, 0]);
-  assert.deepEqual(commandTypes, [2, 3, 6, 7, 4, 5, 9, 10, 11, 12, 13, 20, 23, 28,
+  assert.deepEqual(commandTypes, [2, 3, 6, 7, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
@@ -443,6 +451,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     rotateCanvas(session, before, degrees) { calls.push(["rotate", degrees]); revision++; },
     cropDocument(session, before, crop) { calls.push(["crop", crop]); revision++; },
     setSelection(session, before, rects) { calls.push(["selection", rects]); selection = rects; revision++; },
+    setSelectionMask(session, before, input) {
+      calls.push(["selectionMask", input.gray.byteLength]); selection = [{ x: 0, y: 0, width: 3, height: 2 }]; revision++;
+    },
     modifySelection(session, before, type, pixels) { calls.push(["modifySelection", type, pixels]); revision++; },
     selectChannel(session, before, id) { calls.push(["selectChannel", id]); revision++; },
     selectPath(session, before, id) { calls.push(["selectPath", id]); revision++; },
@@ -514,6 +525,8 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "rotateCanvas", clockwiseDegrees: 90 });
   await host.dispatch({ method: "cropDocument", crop: { x: 1, y: 1, width: 4, height: 3 } });
   await host.dispatch({ method: "setSelection", rects: [{ x: 0, y: 0, width: 1, height: 1 }] });
+  await host.dispatch({ method: "setSelectionMask", bounds: { x: 0, y: 0, width: 3, height: 2 },
+    gray: new Uint8Array([0, 64, 255, 255, 64, 0]).buffer });
   await host.dispatch({ method: "modifySelection", type: 20, pixels: 4 });
   await host.dispatch({ method: "addAlphaChannel", name: "Alpha 1" });
   await host.dispatch({ method: "addDocumentPath", input: { path: { anchors: [{}, {}, {}] } } });

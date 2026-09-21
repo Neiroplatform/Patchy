@@ -10,6 +10,7 @@ const PIXEL_LAYER_INPUT_SIZE = 80;
 const FILTER_INPUT_SIZE = 56;
 const SELECTION_SIZE = 32;
 const SELECTION_INPUT_SIZE = 32;
+const SELECTION_MASK_INPUT_SIZE = 64;
 const RECT_SIZE = 16;
 const LAYER_MASK_INPUT_SIZE = 72;
 const LAYER_MASK_SIZE = 24;
@@ -126,11 +127,14 @@ export class EmscriptenPatchyEngine {
           canRedo: view.getUint8(55) !== 0,
           layers: [],
           selection: [],
+          selectionMask: null,
           channels: [],
           paths: [],
         };
         result.layers = this.#layers(session, result.layerCount, error);
-        result.selection = this.#selection(session, error);
+        const selection = this.#selection(session, error);
+        result.selection = selection.rects;
+        result.selectionMask = selection.mask;
         result.channels = this.#channels(session, error);
         result.paths = this.#paths(session, error);
         return result;
@@ -271,8 +275,31 @@ export class EmscriptenPatchyEngine {
     }
   }
 
+  setSelectionMask(session, snapshot, input) {
+    this.#rect(input?.bounds);
+    if (!(input?.gray instanceof Uint8Array) ||
+        input.gray.byteLength !== input.bounds.width * input.bounds.height) {
+      throw new TypeError("Selection mask requires one gray byte per bounded pixel");
+    }
+    const gray = this.#alloc(input.gray.byteLength);
+    const value = this.#alloc(SELECTION_MASK_INPUT_SIZE);
+    try {
+      this.#module.HEAPU8.set(input.gray, gray);
+      const view = this.#view(value, SELECTION_MASK_INPUT_SIZE);
+      view.setUint32(0, SELECTION_MASK_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true);
+      view.setInt32(24, input.bounds.x, true); view.setInt32(28, input.bounds.y, true);
+      view.setInt32(32, input.bounds.width, true); view.setInt32(36, input.bounds.height, true);
+      view.setInt32(40, input.bounds.width, true); view.setInt32(44, input.bounds.height, true);
+      view.setUint32(48, gray, true); view.setUint32(52, input.gray.byteLength, true);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_set_selection_mask(session, value, event, error));
+    } finally { this.#module._free(value); this.#module._free(gray); }
+  }
+
   modifySelection(session, snapshot, type, pixels = 0) {
-    if (![19, 20, 21, 22].includes(type) || !Number.isInteger(pixels)) {
+    if (![19, 20, 21, 22, 33, 34].includes(type) || !Number.isInteger(pixels)) {
       throw new TypeError("Supported selection morphology command is required");
     }
     return this.#command(session, snapshot, type, (view) => view.setInt32(32, pixels, true));
@@ -913,7 +940,21 @@ export class EmscriptenPatchyEngine {
         result.push({ x: view.getInt32(0, true), y: view.getInt32(4, true),
           width: view.getInt32(8, true), height: view.getInt32(12, true) });
       }
-      return result;
+      const projection = this.#view(selection, SELECTION_SIZE);
+      let mask = null;
+      if (projection.getUint8(28) !== 0) {
+        const buffer = this.#alloc(BUFFER_SIZE);
+        try {
+          this.#check(this.#module._patchy_engine_session_selection_mask(
+            session, buffer, error), error);
+          const bufferView = this.#view(buffer, BUFFER_SIZE);
+          const data = bufferView.getUint32(0, true); const size = bufferView.getUint32(4, true);
+          mask = { bounds: { x: projection.getInt32(12, true), y: projection.getInt32(16, true),
+            width: projection.getInt32(20, true), height: projection.getInt32(24, true) },
+          gray: this.#module.HEAPU8.slice(data, data + size) };
+        } finally { this.#module._patchy_engine_buffer_release(buffer); this.#module._free(buffer); }
+      }
+      return { rects: result, mask };
     } finally {
       this.#module._free(rect);
       this.#module._free(selection);

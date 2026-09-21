@@ -60,6 +60,8 @@ static_assert(sizeof(patchy_engine_selection_projection) == 32);
 static_assert(offsetof(patchy_engine_selection_projection, mask_bounds) == 12);
 static_assert(sizeof(patchy_engine_selection_input) == 32);
 static_assert(offsetof(patchy_engine_selection_input, rects) == 24);
+static_assert(sizeof(patchy_engine_selection_mask_input) == 64);
+static_assert(offsetof(patchy_engine_selection_mask_input, gray) == 48);
 static_assert(sizeof(patchy_engine_layer_mask_input) == 72);
 static_assert(offsetof(patchy_engine_layer_mask_input, bounds) == 32);
 static_assert(offsetof(patchy_engine_layer_mask_input, gray) == 56);

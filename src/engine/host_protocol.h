@@ -244,6 +244,17 @@ typedef struct patchy_engine_selection_input {
   size_t rect_count;
 } patchy_engine_selection_input;
 
+typedef struct patchy_engine_selection_mask_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  patchy_engine_rect bounds;
+  int32_t width;
+  int32_t height;
+  const uint8_t *gray;
+  size_t gray_size;
+} patchy_engine_selection_mask_input;
+
 typedef struct patchy_engine_layer_mask_projection {
   uint32_t struct_size;
   patchy_engine_rect bounds;
@@ -619,6 +630,8 @@ enum patchy_engine_command_type {
   PATCHY_ENGINE_COMMAND_REMOVE_DOCUMENT_PATH = 30,
   PATCHY_ENGINE_COMMAND_MOVE_DOCUMENT_PATH = 31,
   PATCHY_ENGINE_COMMAND_SET_CLIPPING_PATH = 32,
+  PATCHY_ENGINE_COMMAND_GROW_SELECTION = 33,
+  PATCHY_ENGINE_COMMAND_SELECT_SIMILAR = 34,
 };
 
 typedef struct patchy_engine_command {
@@ -714,6 +727,9 @@ typedef struct patchy_engine_command {
     struct {
       int32_t pixels;
     } selection_radius;
+    struct {
+      int32_t tolerance;
+    } selection_tolerance;
     struct {
       uint64_t channel_id;
     } select_channel;
@@ -819,6 +835,10 @@ int patchy_engine_session_selection_mask(
 int patchy_engine_session_set_selection(
     patchy_engine_session *session,
     const patchy_engine_selection_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_set_selection_mask(
+    patchy_engine_session *session,
+    const patchy_engine_selection_mask_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
 
 int patchy_engine_session_layer_count(const patchy_engine_session *session,

@@ -32,6 +32,9 @@
       <aside class="tool-rail" aria-label="Workspace tools">
         <button class="tool-button" id="moveToolButton" type="button" aria-label="Move layer" aria-pressed="false" title="Move layer (V)">↗</button>
         <button class="tool-button" id="marqueeToolButton" type="button" aria-label="Rectangular selection" aria-pressed="true" title="Rectangular selection (M)">□</button>
+        <button class="tool-button" id="lassoToolButton" type="button" aria-label="Freehand lasso" aria-pressed="false" title="Freehand lasso (L)">⌑</button>
+        <button class="tool-button" id="polygonToolButton" type="button" aria-label="Polygonal lasso" aria-pressed="false" title="Polygonal lasso (Shift+L)">⬠</button>
+        <button class="tool-button" id="magicToolButton" type="button" aria-label="Magic selection" aria-pressed="false" title="Magic selection (W)">✦</button>
         <button class="tool-button" id="panToolButton" type="button" aria-label="Pan canvas" aria-pressed="false" title="Pan canvas (H)">✋</button>
         <button class="tool-button" id="brushToolButton" type="button" aria-label="Brush" aria-pressed="false" title="Brush (B)">●</button>
         <button class="tool-button" id="eraserToolButton" type="button" aria-label="Eraser" aria-pressed="false" title="Eraser (E)">◇</button>
@@ -52,6 +55,7 @@
           <span class="tool-options" id="toolOptions">
             <label>Size <input id="brushSizeInput" type="range" min="1" max="128" value="24"><output id="brushSizeOutput">24 px</output></label>
             <label>Color <input id="brushColorInput" type="color" value="#111111"></label>
+            <label>Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
           </span>
           <span id="documentMetrics"></span>
         </div>
@@ -142,6 +146,10 @@
             <button id="expandSelectionButton" type="button" disabled>Expand 4 px</button>
             <button id="contractSelectionButton" type="button" disabled>Contract 4 px</button>
             <button id="borderSelectionButton" type="button" disabled>Border 4 px</button>
+            <button id="growSelectionButton" type="button" disabled>Grow by color</button>
+            <button id="similarSelectionButton" type="button" disabled>Select similar</button>
+            <button id="smoothSelectionButton" type="button" disabled>Smooth 4 px</button>
+            <button id="featherSelectionButton" type="button" disabled>Feather 4 px</button>
             <button id="saveChannelButton" type="button" disabled>Save channel</button>
             <button id="savePathButton" type="button" disabled>Save path</button>
             <button id="rasterizeLayerButton" type="button" disabled>Rasterize layer</button>

@@ -2572,6 +2572,42 @@ void engine_host_protocol_authors_pixels_channels_and_selection() {
   CHECK(selection_rect.width == 5);
   CHECK(selection_rect.height == 4);
 
+  std::vector<std::uint8_t> authored_selection(20U, 0U);
+  authored_selection[6] = 96U;
+  authored_selection[7] = 255U;
+  const auto before_mask_selection = project();
+  patchy_engine_selection_mask_input selection_input{};
+  selection_input.struct_size = sizeof(selection_input);
+  selection_input.expected_state_id = before_mask_selection.state_id;
+  selection_input.expected_revision = before_mask_selection.revision;
+  selection_input.bounds = {0, 0, 5, 4};
+  selection_input.width = 5;
+  selection_input.height = 4;
+  selection_input.gray = authored_selection.data();
+  selection_input.gray_size = authored_selection.size();
+  CHECK(patchy_engine_session_set_selection_mask(
+            session, &selection_input, &event, &error) == 1);
+  selection = {};
+  selection.struct_size = sizeof(selection);
+  CHECK(patchy_engine_session_selection(session, &selection, &error) == 1);
+  CHECK(selection.has_mask == 1);
+  patchy_engine_buffer authored_mask{};
+  CHECK(patchy_engine_session_selection_mask(session, &authored_mask,
+                                              &error) == 1);
+  CHECK(authored_mask.size == authored_selection.size());
+  CHECK(authored_mask.data[6] == 96U);
+  patchy_engine_buffer_release(&authored_mask);
+
+  patchy_engine_command grow_selection{};
+  grow_selection.type = PATCHY_ENGINE_COMMAND_GROW_SELECTION;
+  grow_selection.payload.selection_tolerance.tolerance = 255;
+  CHECK(execute(grow_selection).changed == 1);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  patchy_engine_command select_similar{};
+  select_similar.type = PATCHY_ENGINE_COMMAND_SELECT_SIMILAR;
+  select_similar.payload.selection_tolerance.tolerance = 0;
+  (void)execute(select_similar);
+
   std::vector<std::uint8_t> channel_pixels(20U, 0U);
   channel_pixels[6] = 128;
   channel_pixels[7] = 255;
