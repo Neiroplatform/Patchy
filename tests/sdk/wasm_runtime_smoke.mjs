@@ -42,7 +42,7 @@ try {
     const first = recovered.restored[0].snapshot;
     const second = recovered.restored[1].snapshot;
     check(recovered.restored[0].manifest.generation === 2 &&
-      recovered.restored[0].manifest.revision === "9",
+      recovered.restored[0].manifest.revision === "10",
       "latest complete first generation was not selected");
     check(recovered.restored[1].manifest.generation === 1,
       "second workspace generation was not isolated");
@@ -126,6 +126,24 @@ try {
     check(renderedSnapshot.memory?.renderCacheEntries === 1 &&
       renderedSnapshot.memory?.renderCacheHits >= 1,
     "render tile cache was not reused or projected through wasm32");
+    const transformQuad = [0, 0, 3, 0, 3, 2, 0, 2];
+    const transformPreview = await client.previewLayerTransform({ layerId,
+      quad: transformQuad, expectedStateId: renderedSnapshot.stateId,
+      expectedRevision: renderedSnapshot.revision });
+    check(transformPreview.region.width === 4 && transformPreview.region.height === 3 &&
+      transformPreview.rgba.length === 4 * 3 * 4,
+    "engine-owned layer transform preview did not cross wasm32");
+    const previewState = await client.snapshot();
+    check(previewState.revision === renderedSnapshot.revision &&
+      previewState.stateId === renderedSnapshot.stateId,
+    "layer transform preview mutated canonical state");
+    const transformed = await client.transformLayer({ layerId, quad: transformQuad,
+      expectedStateId: renderedSnapshot.stateId,
+      expectedRevision: renderedSnapshot.revision });
+    const transformedLayer = transformed.layers.find((layer) => layer.id === layerId);
+    check(transformed.revision === renderedSnapshot.revision + 1n &&
+      transformedLayer.bounds.width === 3 && transformedLayer.bounds.height === 2,
+    "layer transform was not one canonical wasm32 revision");
     const saved = await client.saveDocument(first.documentId);
     check(saved.length > 26 && String.fromCharCode(...saved.subarray(0, 4)) === "8BPS",
       "layered PSD encoding mismatch");

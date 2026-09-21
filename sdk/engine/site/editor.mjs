@@ -24,6 +24,13 @@ let zoom = 1;
 let marqueeDraft = null;
 let panStart = null;
 let moveDraft = null;
+let transformDraft = null;
+let transformDialogDraft = null;
+let transformPreviewPending = null;
+let transformPreviewInFlight = false;
+let transformPreviewGeneration = 0;
+let transformPreviewRestore = null;
+let transformPreviewCancellation = null;
 let paintDraft = null;
 let textEditingId = null;
 let cloneSource = null;
@@ -841,14 +848,81 @@ function magicMask(point) {
   return gray;
 }
 
-function renderTransformOverlay(bounds = moveDraft?.bounds) {
+function quadFromBounds(bounds) {
+  return [bounds.x, bounds.y, bounds.x + bounds.width, bounds.y,
+    bounds.x + bounds.width, bounds.y + bounds.height, bounds.x, bounds.y + bounds.height];
+}
+
+function renderTransformOverlay(quad = moveDraft?.quad || transformDraft?.quad || transformDialogDraft?.quad) {
   const overlay = $("transformOverlay");
-  if (!snapshot || !bounds) { overlay.hidden = true; return; }
-  overlay.style.left = `${bounds.x / snapshot.width * 100}%`;
-  overlay.style.top = `${bounds.y / snapshot.height * 100}%`;
-  overlay.style.width = `${bounds.width / snapshot.width * 100}%`;
-  overlay.style.height = `${bounds.height / snapshot.height * 100}%`;
+  if (!snapshot || !quad) { overlay.hidden = true; return; }
+  overlay.setAttribute("viewBox", `0 0 ${snapshot.width} ${snapshot.height}`);
+  $("transformPolygon").setAttribute("points", Array.from({ length: 4 }, (_, index) =>
+    `${quad[index * 2]},${quad[index * 2 + 1]}`).join(" "));
+  [...overlay.querySelectorAll("circle")].forEach((handle, index) => {
+    handle.setAttribute("cx", String(quad[index * 2]));
+    handle.setAttribute("cy", String(quad[index * 2 + 1]));
+    handle.setAttribute("r", String(Math.max(3, 6 / Math.max(zoom, .05))));
+  });
   overlay.hidden = false;
+}
+
+function clearTransformPreview(clearOverlay = false) {
+  ++transformPreviewGeneration; transformPreviewPending = null;
+  if (transformPreviewCancellation) Atomics.store(transformPreviewCancellation, 0, 1);
+  transformPreviewCancellation = null;
+  if (transformPreviewRestore) {
+    context.putImageData(transformPreviewRestore.pixels,
+      transformPreviewRestore.region.x, transformPreviewRestore.region.y);
+    transformPreviewRestore = null;
+  }
+  $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  if (clearOverlay) {
+    transformDraft = null; transformDialogDraft = null; renderTransformOverlay(null);
+  }
+}
+
+async function drainTransformPreview() {
+  if (transformPreviewInFlight) return;
+  transformPreviewInFlight = true;
+  try {
+    while (transformPreviewPending) {
+      const pending = transformPreviewPending; transformPreviewPending = null;
+      try {
+        const preview = await client.previewLayerTransform({ layerId: pending.layer.id,
+          quad: pending.quad, interpolation: 1, expectedStateId: pending.stateId,
+          expectedRevision: pending.revision, cancellation: pending.cancellation });
+        if (pending.generation !== transformPreviewGeneration || transformPreviewPending) continue;
+        if (transformPreviewRestore) {
+          context.putImageData(transformPreviewRestore.pixels,
+            transformPreviewRestore.region.x, transformPreviewRestore.region.y);
+          transformPreviewRestore = null;
+        }
+        if (preview.region.width <= 0 || preview.region.height <= 0) continue;
+        transformPreviewRestore = { region: preview.region,
+          pixels: context.getImageData(preview.region.x, preview.region.y,
+            preview.region.width, preview.region.height) };
+        context.putImageData(new ImageData(new Uint8ClampedArray(
+          preview.rgba.buffer, preview.rgba.byteOffset, preview.rgba.byteLength),
+        preview.region.width, preview.region.height), preview.region.x, preview.region.y);
+      } catch (error) {
+        if (error?.code !== 7 && pending.generation === transformPreviewGeneration) {
+          showError("Transform preview failed", error);
+        }
+      }
+    }
+  } finally { transformPreviewInFlight = false; }
+}
+
+function scheduleTransformPreview(layer, quad) {
+  if (!snapshot || !layer || quad.some((value) => !Number.isFinite(value))) return;
+  if (transformPreviewCancellation) Atomics.store(transformPreviewCancellation, 0, 1);
+  transformPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
+  const generation = ++transformPreviewGeneration;
+  transformPreviewPending = { layer, quad: [...quad], stateId: snapshot.stateId,
+    revision: snapshot.revision, generation,
+    cancellation: transformPreviewCancellation };
+  drainTransformPreview();
 }
 
 function setZoom(next) {
@@ -863,6 +937,12 @@ function canvasPoint(event) {
     x: Math.max(0, Math.min(snapshot.width, (event.clientX - bounds.left) / bounds.width * snapshot.width)),
     y: Math.max(0, Math.min(snapshot.height, (event.clientY - bounds.top) / bounds.height * snapshot.height)),
   };
+}
+
+function canvasPointUnclamped(event) {
+  const bounds = canvas.getBoundingClientRect();
+  return { x: (event.clientX - bounds.left) / bounds.width * snapshot.width,
+    y: (event.clientY - bounds.top) / bounds.height * snapshot.height };
 }
 
 async function acceptSnapshot(next, rerender = true) {
@@ -1599,57 +1679,53 @@ function openLayerTransformDialog() {
       (layer?.mask && !(layer.kind === 0 && layer.mask.linked))) return;
   for (const [id, value] of [["layerXInput", layer.bounds.x], ["layerYInput", layer.bounds.y],
     ["layerWidthInput", layer.bounds.width], ["layerHeightInput", layer.bounds.height]]) $(id).value = String(value);
-  $("layerTransformDialog").showModal();
+  $("layerAngleInput").value = "0";
+  $("layerFlipXInput").checked = false; $("layerFlipYInput").checked = false;
+  $("layerTransformModeInput").value = "affine";
+  $("layerTransformModeInput").querySelector('option[value="perspective"]').disabled = layer.kind === 3;
+  transformDialogDraft = { layer, quad: quadFromBounds(layer.bounds) };
+  updateTransformDialogPreview();
+  $("layerTransformDialog").show();
 }
 
-async function transformedLayerSnapshot(layer, bounds) {
-  const byteLength = bounds.width * bounds.height * 4;
-  if (!Number.isSafeInteger(byteLength) || byteLength <= 0 || byteLength > 512 * 1024 * 1024) {
-    throw new RangeError("Transformed layer exceeds the 512 MB browser editing limit");
-  }
-  if (layer.kind === 3) {
-    return client.updateTextLayer(layer.id,
-      textLayerPayload(layer.text, bounds, layer.name), { transferOwnership: true });
-  }
-  const sourceBytes = await client.layerPixels(layer.id);
-  const source = document.createElement("canvas");
-  source.width = layer.bounds.width; source.height = layer.bounds.height;
-  source.getContext("2d").putImageData(new ImageData(
-    new Uint8ClampedArray(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength),
-    source.width, source.height), 0, 0);
-  const target = document.createElement("canvas");
-  target.width = bounds.width; target.height = bounds.height;
-  const targetContext = target.getContext("2d", { alpha: true, willReadFrequently: true });
-  targetContext.drawImage(source, 0, 0, bounds.width, bounds.height);
-  const rgba = new Uint8Array(targetContext.getImageData(0, 0, bounds.width, bounds.height).data);
-  const layerInput = { name: layer.name, width: bounds.width, height: bounds.height, bounds, rgba };
-  if (!layer.mask?.linked) return client.replacePixelLayer(
-    layer.id, layerInput, { transferOwnership: true });
-  const maskBytes = await client.layerMaskPixels(layer.id);
-  const oldMask = document.createElement("canvas");
-  oldMask.width = layer.mask.bounds.width; oldMask.height = layer.mask.bounds.height;
-  const oldMaskContext = oldMask.getContext("2d");
-  const grayRgba = new Uint8ClampedArray(maskBytes.byteLength * 4);
-  maskBytes.forEach((value, index) => grayRgba.set([value, value, value, 255], index * 4));
-  oldMaskContext.putImageData(new ImageData(grayRgba, oldMask.width, oldMask.height), 0, 0);
-  const scaleX = bounds.width / layer.bounds.width; const scaleY = bounds.height / layer.bounds.height;
-  const maskBounds = { x: Math.round(bounds.x + (layer.mask.bounds.x - layer.bounds.x) * scaleX),
-    y: Math.round(bounds.y + (layer.mask.bounds.y - layer.bounds.y) * scaleY),
-    width: Math.max(1, Math.round(layer.mask.bounds.width * scaleX)),
-    height: Math.max(1, Math.round(layer.mask.bounds.height * scaleY)) };
-  const nextMask = document.createElement("canvas"); nextMask.width = maskBounds.width; nextMask.height = maskBounds.height;
-  const nextMaskContext = nextMask.getContext("2d", { willReadFrequently: true });
-  nextMaskContext.drawImage(oldMask, 0, 0, maskBounds.width, maskBounds.height);
-  const maskPixels = nextMaskContext.getImageData(0, 0, maskBounds.width, maskBounds.height).data;
-  const gray = new Uint8Array(maskBounds.width * maskBounds.height);
-  for (let index = 0; index < gray.length; ++index) gray[index] = maskPixels[index * 4];
-  return client.replacePixelLayerAndMask(layer.id, layerInput, { width: maskBounds.width,
-    height: maskBounds.height, bounds: maskBounds, gray, defaultColor: layer.mask.defaultColor,
-    disabled: layer.mask.disabled }, { transferOwnership: true });
+const layerCornerInputIds = ["layerTlXInput", "layerTlYInput", "layerTrXInput", "layerTrYInput",
+  "layerBrXInput", "layerBrYInput", "layerBlXInput", "layerBlYInput"];
+
+function affineDialogQuad() {
+  const x = Number($("layerXInput").value); const y = Number($("layerYInput").value);
+  const width = Number($("layerWidthInput").value); const height = Number($("layerHeightInput").value);
+  const angle = Number($("layerAngleInput").value) * Math.PI / 180;
+  if (![x, y, width, height, angle].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  const centerX = x + width / 2; const centerY = y + height / 2;
+  const flipX = $("layerFlipXInput").checked ? -1 : 1;
+  const flipY = $("layerFlipYInput").checked ? -1 : 1;
+  const cosine = Math.cos(angle); const sine = Math.sin(angle);
+  return [[-width / 2, -height / 2], [width / 2, -height / 2],
+    [width / 2, height / 2], [-width / 2, height / 2]].flatMap(([localX, localY]) => {
+    const px = localX * flipX; const py = localY * flipY;
+    return [centerX + px * cosine - py * sine, centerY + px * sine + py * cosine];
+  });
 }
 
-function commitLayerBounds(layer, bounds, title = "Transforming layer") {
-  return mutate(title, () => transformedLayerSnapshot(layer, bounds));
+function updateTransformDialogPreview() {
+  if (!transformDialogDraft) return;
+  const perspective = $("layerTransformModeInput").value === "perspective";
+  let quad = perspective ? layerCornerInputIds.map((id) => Number($(id).value)) : affineDialogQuad();
+  if (!quad || quad.some((value) => !Number.isFinite(value))) {
+    transformDialogDraft.quad = null; clearTransformPreview(); renderTransformOverlay(null); return;
+  }
+  if (!perspective) layerCornerInputIds.forEach((id, index) => { $(id).value = quad[index].toFixed(2); });
+  layerCornerInputIds.forEach((id) => { $(id).readOnly = !perspective; });
+  transformDialogDraft.quad = quad; renderTransformOverlay(quad);
+  scheduleTransformPreview(transformDialogDraft.layer, quad);
+}
+
+function commitLayerQuad(layer, quad, title = "Transforming layer") {
+  if (!snapshot) return;
+  const expectedStateId = snapshot.stateId; const expectedRevision = snapshot.revision;
+  clearTransformPreview(true);
+  return mutate(title, () => client.transformLayer({ layerId: layer.id, quad,
+    interpolation: 1, expectedStateId, expectedRevision }));
 }
 
 function drawPaintSegment(draft, from, to) {
@@ -1888,13 +1964,55 @@ $("commitSmartFilterButton").addEventListener("click", commitSmartFilter);
 $("layerTransformButton").addEventListener("click", openLayerTransformDialog);
 $("commitTextButton").addEventListener("click", commitTextDialog);
 $("commitLayerTransformButton").addEventListener("click", () => {
-  const layer = selectedLayer();
-  const x = integerInput("layerXInput"); const y = integerInput("layerYInput");
-  const width = integerInput("layerWidthInput", true); const height = integerInput("layerHeightInput", true);
-  if (!layer || [x, y, width, height].some((value) => value == null)) return;
+  const draft = transformDialogDraft;
+  if (!draft?.layer || !Array.isArray(draft.quad) ||
+      draft.quad.some((value) => !Number.isFinite(value))) return;
+  const quad = [...draft.quad]; transformDialogDraft = null;
   $("layerTransformDialog").close();
-  commitLayerBounds(layer, { x, y, width, height });
+  commitLayerQuad(draft.layer, quad);
 });
+for (const id of ["layerXInput", "layerYInput", "layerWidthInput", "layerHeightInput",
+  "layerAngleInput", "layerFlipXInput", "layerFlipYInput", "layerTransformModeInput",
+  ...layerCornerInputIds]) $(id).addEventListener("input", updateTransformDialogPreview);
+$("layerTransformDialog").addEventListener("close", () => {
+  if (transformDialogDraft) { transformDialogDraft = null; clearTransformPreview(true); }
+});
+for (const handle of $("transformOverlay").querySelectorAll("circle")) {
+  handle.addEventListener("pointerdown", (event) => {
+    if (!transformDialogDraft || busy || event.button !== 0) return;
+    event.preventDefault(); event.stopPropagation();
+    handle.setPointerCapture(event.pointerId);
+    transformDraft = { pointerId: event.pointerId,
+      index: Number(handle.dataset.transformHandle), layer: transformDialogDraft.layer,
+      quad: [...transformDialogDraft.quad] };
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (transformDraft?.pointerId !== event.pointerId || !transformDialogDraft) return;
+    const point = canvasPointUnclamped(event); const index = transformDraft.index;
+    if (transformDraft.layer.kind === 3) {
+      const opposite = (index + 2) % 4;
+      const oppositeX = transformDraft.quad[opposite * 2];
+      const oppositeY = transformDraft.quad[opposite * 2 + 1];
+      $("layerXInput").value = String(Math.min(point.x, oppositeX));
+      $("layerYInput").value = String(Math.min(point.y, oppositeY));
+      $("layerWidthInput").value = String(Math.max(.01, Math.abs(point.x - oppositeX)));
+      $("layerHeightInput").value = String(Math.max(.01, Math.abs(point.y - oppositeY)));
+      $("layerAngleInput").value = "0"; $("layerFlipXInput").checked = false;
+      $("layerFlipYInput").checked = false; updateTransformDialogPreview();
+      return;
+    }
+    const quad = [...transformDraft.quad]; quad[index * 2] = point.x; quad[index * 2 + 1] = point.y;
+    $("layerTransformModeInput").value = "perspective";
+    layerCornerInputIds.forEach((id, coordinate) => { $(id).readOnly = false; $(id).value = quad[coordinate].toFixed(2); });
+    transformDialogDraft.quad = quad; renderTransformOverlay(quad);
+    scheduleTransformPreview(transformDialogDraft.layer, quad);
+  });
+  const finishHandle = (event) => {
+    if (transformDraft?.pointerId === event.pointerId) transformDraft = null;
+  };
+  handle.addEventListener("pointerup", finishHandle);
+  handle.addEventListener("pointercancel", finishHandle);
+}
 $("brushSizeInput").addEventListener("input", () => {
   $("brushSizeOutput").textContent = `${$("brushSizeInput").value} px`;
   persistPreferences();
@@ -2106,7 +2224,8 @@ canvas.addEventListener("pointerdown", (event) => {
         (layer?.mask && !(layer.kind === 0 && layer.mask.linked))) return;
     const start = canvasPoint(event);
     canvas.setPointerCapture(event.pointerId);
-    moveDraft = { layer, start, bounds: { ...layer.bounds } };
+    moveDraft = { layer, start, quad: quadFromBounds(layer.bounds),
+      originalQuad: quadFromBounds(layer.bounds) };
     renderTransformOverlay();
     return;
   }
@@ -2146,10 +2265,10 @@ canvas.addEventListener("pointermove", (event) => {
   if (gradientDraft?.pointerId === event.pointerId) gradientDraft.end = canvasPoint(event);
   if (!moveDraft) return;
   const point = canvasPoint(event);
-  moveDraft.bounds = { ...moveDraft.layer.bounds,
-    x: Math.round(moveDraft.layer.bounds.x + point.x - moveDraft.start.x),
-    y: Math.round(moveDraft.layer.bounds.y + point.y - moveDraft.start.y) };
+  const dx = Math.round(point.x - moveDraft.start.x); const dy = Math.round(point.y - moveDraft.start.y);
+  moveDraft.quad = moveDraft.originalQuad.map((coordinate, index) => coordinate + (index % 2 ? dy : dx));
   renderTransformOverlay();
+  scheduleTransformPreview(moveDraft.layer, moveDraft.quad);
 });
 canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
@@ -2160,12 +2279,12 @@ canvas.addEventListener("pointerup", (event) => {
       combinedSelectionMask(polygonMask(draft.points), draft.mode));
   }
   if (!moveDraft) return;
-  const draft = moveDraft; moveDraft = null; renderTransformOverlay();
-  commitLayerBounds(draft.layer, draft.bounds, "Moving layer");
+  const draft = moveDraft; moveDraft = null;
+  commitLayerQuad(draft.layer, draft.quad, "Moving layer");
 });
 canvas.addEventListener("pointercancel", (event) => {
   finishPaint(event, true); gradientDraft = null; moveDraft = null; lassoDraft = null;
-  previewPolygon([]); renderTransformOverlay();
+  previewPolygon([]); clearTransformPreview(true);
 });
 canvas.addEventListener("dblclick", (event) => {
   if (canvasTool !== "polygon" || !polygonDraft) return;

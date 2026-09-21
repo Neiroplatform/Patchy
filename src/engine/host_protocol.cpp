@@ -3,7 +3,9 @@
 #include "engine/document_session.hpp"
 #include "core/adjustment_layer.hpp"
 #include "core/layer_metadata.hpp"
+#include "core/layer_transform.hpp"
 #include "core/pattern_resource.hpp"
+#include "core/rect_utils.hpp"
 #include "core/smart_object.hpp"
 #include "filters/smart_filter_renderer.hpp"
 #include "formats/document_flatten.hpp"
@@ -138,7 +140,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING |
     PATCHY_ENGINE_CAP_SELECTION_AUTHORING |
     PATCHY_ENGINE_CAP_MEMORY_CONTROL |
-    PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS;
+    PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS |
+    PATCHY_ENGINE_CAP_LAYER_TRANSFORM;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -505,6 +508,25 @@ int copy_buffer(std::span<const std::uint8_t> source,
   destination->data = data;
   destination->size = source.size();
   return 1;
+}
+
+std::optional<patchy::LayerTransformRequest> layer_transform_request(
+    const patchy_engine_layer_transform *input, patchy_engine_error *error) {
+  if (input == nullptr || input->struct_size != sizeof(*input) ||
+      input->layer_id == 0 ||
+      input->interpolation > PATCHY_ENGINE_TRANSFORM_BILINEAR) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "a versioned layer transform is required");
+    return std::nullopt;
+  }
+  patchy::LayerTransformRequest request;
+  std::copy(std::begin(input->quad), std::end(input->quad),
+            request.quad.begin());
+  request.interpolation =
+      input->interpolation == PATCHY_ENGINE_TRANSFORM_NEAREST
+          ? patchy::LayerTransformInterpolation::Nearest
+          : patchy::LayerTransformInterpolation::Bilinear;
+  return request;
 }
 
 template <typename Operation>
@@ -3366,6 +3388,123 @@ int patchy_engine_session_copy_layer(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown cross-document layer transfer failure");
+  }
+}
+
+int patchy_engine_session_preview_layer_transform(
+    const patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision,
+    const patchy_engine_layer_transform *transform,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || region == nullptr ||
+      rgba == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, preview region and buffer are required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  auto request = layer_transform_request(transform, error);
+  if (!request.has_value()) {
+    return 0;
+  }
+  std::int32_t completed_rows = 0;
+  request->continue_operation = [progress, progress_user_data,
+                                 &completed_rows]() {
+    ++completed_rows;
+    return progress == nullptr ||
+           progress(completed_rows, 0, progress_user_data) != 0;
+  };
+  try {
+    auto preview_document = session->value->document();
+    patchy::LayerTransformResult transformed;
+    std::string transform_error;
+    if (!patchy::transform_layer(preview_document, transform->layer_id, *request,
+                                 &transformed, &transform_error)) {
+      return fail(error,
+                  transform_error == "layer transform was cancelled"
+                      ? PATCHY_ENGINE_ERROR_CANCELLED
+                      : PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  transform_error.c_str());
+    }
+    const auto preview_region = patchy::intersect_rect(
+        transformed.affected_region,
+        patchy::Rect::from_size(preview_document.width(),
+                                preview_document.height()));
+    if (preview_region.empty()) {
+      *region = {};
+      return 1;
+    }
+    DocumentSession preview(std::move(preview_document));
+    const auto rendered = preview.render(preview_region);
+    if (!rendered) {
+      return fail(error, rendered.error);
+    }
+    if (!copy_buffer(rendered.pixels.data(), rgba, error)) {
+      return 0;
+    }
+    *region = {preview_region.x, preview_region.y, preview_region.width,
+               preview_region.height};
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer-transform preview");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer-transform preview failure");
+  }
+}
+
+int patchy_engine_session_transform_layer(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision,
+    const patchy_engine_layer_transform *transform, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  const auto request = layer_transform_request(transform, error);
+  if (!request.has_value()) {
+    return 0;
+  }
+  try {
+    auto prepared = session->value->document();
+    patchy::LayerTransformResult transformed;
+    std::string transform_error;
+    if (!patchy::transform_layer(prepared, transform->layer_id, *request,
+                                 &transformed, &transform_error)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  transform_error.c_str());
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::TransformLayer,
+            expected_state_id, std::move(prepared),
+            transformed.affected_region});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    result.affected_layer_id = transform->layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate transformed layer");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer-transform failure");
   }
 }
 

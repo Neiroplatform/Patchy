@@ -2128,6 +2128,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             case PreparedDocumentMutationKind::Path:
             case PreparedDocumentMutationKind::MergeRasterize:
             case PreparedDocumentMutationKind::CopyLayerTree:
+            case PreparedDocumentMutationKind::TransformLayer:
               break;
             default:
               error = make_error(SessionErrorCode::InvalidArgument,

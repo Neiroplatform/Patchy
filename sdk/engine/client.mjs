@@ -70,6 +70,28 @@ export class PatchyWorkerClient {
       expectedTargetRevision: String(input.expectedTargetRevision),
     });
   }
+  previewLayerTransform(input) {
+    const cancellation = input.cancellation instanceof Int32Array
+      ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
+    if (!(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Transform preview cancellation must use shared Int32 storage");
+    }
+    return this.#request("previewLayerTransform", {
+      layerId: String(input.layerId), quad: [...input.quad],
+      interpolation: input.interpolation ?? 1,
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision),
+      cancellation: cancellation.buffer,
+    });
+  }
+  transformLayer(input) {
+    return this.#request("transformLayer", {
+      layerId: String(input.layerId), quad: [...input.quad],
+      interpolation: input.interpolation ?? 1,
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision),
+    });
+  }
   closeDocument(documentId) { return this.#request("closeDocument", { documentId }); }
   setMemoryBudget(documentBytes, globalBytes) {
     return this.#request("setMemoryBudget", { documentBytes, globalBytes });

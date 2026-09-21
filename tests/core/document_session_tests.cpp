@@ -4,6 +4,7 @@
 #include "core/smart_filter.hpp"
 #include "core/smart_object.hpp"
 #include "core/layer_metadata.hpp"
+#include "core/layer_transform.hpp"
 #include "core/vector_raster.hpp"
 #include "core/vector_live_shapes.hpp"
 #include "psd/psd_document_io.hpp"
@@ -2142,6 +2143,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_VECTOR_AUTHORING) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_MEMORY_CONTROL) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_TRANSFORM) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -3936,6 +3938,268 @@ void engine_host_protocol_copies_layers_between_sessions_atomically() {
   patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_transforms_layers_with_engine_preview_and_atomic_commit() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 8, 6, &error);
+  CHECK(session != nullptr);
+
+  patchy_engine_document_projection before{};
+  before.struct_size = sizeof(before);
+  CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+  const std::array<std::uint8_t, 16> rgba{
+      255, 0, 0, 255, 0, 255, 0, 255,
+      0, 0, 255, 255, 255, 255, 255, 255};
+  patchy_engine_pixel_layer_input input{};
+  input.struct_size = sizeof(input);
+  input.expected_state_id = before.state_id;
+  input.expected_revision = before.revision;
+  input.bounds = {1, 1, 2, 2};
+  input.width = 2;
+  input.height = 2;
+  input.rgba = rgba.data();
+  input.rgba_size = rgba.size();
+  constexpr char name[] = "Perspective target";
+  input.name = name;
+  input.name_size = sizeof(name) - 1U;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event, &error) ==
+        1);
+  const auto layer_id = event.affected_layer_id;
+
+  patchy_engine_document_projection with_layer{};
+  with_layer.struct_size = sizeof(with_layer);
+  CHECK(patchy_engine_session_document(session, &with_layer, &error) == 1);
+  const std::array<std::uint8_t, 4> gray{255, 192, 64, 0};
+  patchy_engine_layer_mask_input mask{};
+  mask.struct_size = sizeof(mask);
+  mask.expected_state_id = with_layer.state_id;
+  mask.expected_revision = with_layer.revision;
+  mask.layer_id = layer_id;
+  mask.bounds = {1, 1, 2, 2};
+  mask.width = 2;
+  mask.height = 2;
+  mask.gray = gray.data();
+  mask.gray_size = gray.size();
+  mask.default_color = 255;
+  mask.linked = 1;
+  mask.has_mask = 1;
+  CHECK(patchy_engine_session_set_layer_mask(session, &mask, &event, &error) ==
+        1);
+
+  patchy_engine_document_projection ready{};
+  ready.struct_size = sizeof(ready);
+  CHECK(patchy_engine_session_document(session, &ready, &error) == 1);
+  patchy_engine_layer_transform transform{};
+  transform.struct_size = sizeof(transform);
+  transform.interpolation = PATCHY_ENGINE_TRANSFORM_BILINEAR;
+  transform.layer_id = layer_id;
+  const std::array<double, 8> quad{1.0, 0.0, 5.0, 1.0,
+                                   4.0, 5.0, 0.0, 3.0};
+  std::copy(quad.begin(), quad.end(), std::begin(transform.quad));
+
+  patchy_engine_rect cancelled_region{};
+  patchy_engine_buffer cancelled_preview{};
+  const auto cancel_immediately = [](std::int32_t, std::int32_t, void*) {
+    return 0;
+  };
+  CHECK(patchy_engine_session_preview_layer_transform(
+            session, ready.state_id, ready.revision, &transform,
+            cancel_immediately, nullptr, &cancelled_region,
+            &cancelled_preview, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(cancelled_preview.data == nullptr);
+
+  patchy_engine_rect preview_region{};
+  patchy_engine_buffer preview{};
+  CHECK(patchy_engine_session_preview_layer_transform(
+            session, ready.state_id, ready.revision, &transform,
+            nullptr, nullptr, &preview_region, &preview, &error) == 1);
+  CHECK(preview_region.x == 0);
+  CHECK(preview_region.y == 0);
+  CHECK(preview_region.width == 5);
+  CHECK(preview_region.height == 5);
+  CHECK(preview.size == static_cast<std::size_t>(preview_region.width) *
+                            static_cast<std::size_t>(preview_region.height) * 4U);
+  patchy_engine_document_projection after_preview{};
+  after_preview.struct_size = sizeof(after_preview);
+  CHECK(patchy_engine_session_document(session, &after_preview, &error) == 1);
+  CHECK(after_preview.state_id == ready.state_id);
+  CHECK(after_preview.revision == ready.revision);
+  patchy_engine_buffer_release(&preview);
+
+  CHECK(patchy_engine_session_transform_layer(
+            session, ready.state_id, ready.revision, &transform, &event,
+            &error) == 1);
+  CHECK(event.changed == 1);
+  CHECK(event.revision == ready.revision + 1U);
+  CHECK(event.affected_layer_id == layer_id);
+  patchy_engine_layer_projection projected{};
+  CHECK(patchy_engine_session_layer_at(session, 0, &projected, &error) == 1);
+  CHECK(projected.bounds.x == 0);
+  CHECK(projected.bounds.y == 0);
+  CHECK(projected.bounds.width == 5);
+  CHECK(projected.bounds.height == 5);
+  patchy_engine_layer_mask_projection projected_mask{};
+  projected_mask.struct_size = sizeof(projected_mask);
+  CHECK(patchy_engine_session_layer_mask(session, layer_id, &projected_mask,
+                                         &error) == 1);
+  CHECK(projected_mask.bounds.x == projected.bounds.x);
+  CHECK(projected_mask.bounds.y == projected.bounds.y);
+  CHECK(projected_mask.bounds.width == projected.bounds.width);
+  CHECK(projected_mask.bounds.height == projected.bounds.height);
+
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_layer_at(session, 0, &projected, &error) == 1);
+  CHECK(projected.bounds.x == 1);
+  CHECK(projected.bounds.y == 1);
+  CHECK(projected.bounds.width == 2);
+  CHECK(projected.bounds.height == 2);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_layer_at(session, 0, &projected, &error) == 1);
+  CHECK(projected.bounds.width == 5);
+  CHECK(projected.bounds.height == 5);
+
+  patchy_engine_buffer psd{};
+  CHECK(patchy_engine_session_save_psd(session, &psd, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
+                                                  &error);
+  CHECK(reopened != nullptr);
+  CHECK(patchy_engine_session_layer_at(reopened, 0, &projected, &error) == 1);
+  CHECK(projected.bounds.x == 0);
+  CHECK(projected.bounds.y == 0);
+  CHECK(projected.bounds.width == 5);
+  CHECK(projected.bounds.height == 5);
+  patchy_engine_buffer_release(&psd);
+  patchy_engine_session_destroy(reopened);
+
+  CHECK(patchy_engine_session_transform_layer(
+            session, ready.state_id, ready.revision, &transform, &event,
+            &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+
+  patchy_engine_document_projection before_text{};
+  before_text.struct_size = sizeof(before_text);
+  CHECK(patchy_engine_session_document(session, &before_text, &error) == 1);
+  patchy_engine_text_layer_input text{};
+  text.struct_size = sizeof(text);
+  text.expected_state_id = before_text.state_id;
+  text.expected_revision = before_text.revision;
+  text.bounds = {2, 2, 2, 2};
+  text.width = 2;
+  text.height = 2;
+  text.rgba = rgba.data();
+  text.rgba_size = rgba.size();
+  text.name = "Transformable text";
+  text.name_size = std::strlen(text.name);
+  text.text = "Still editable";
+  text.text_size = std::strlen(text.text);
+  text.font = "Inter";
+  text.font_size = std::strlen(text.font);
+  text.size_pixels = 18.0;
+  CHECK(patchy_engine_session_add_text_layer(session, &text, &event, &error) ==
+        1);
+  const auto text_id = event.affected_layer_id;
+
+  patchy_engine_document_projection text_ready{};
+  text_ready.struct_size = sizeof(text_ready);
+  CHECK(patchy_engine_session_document(session, &text_ready, &error) == 1);
+  transform.layer_id = text_id;
+  const std::array<double, 8> text_quad{3.0, 1.0, 7.0, 1.0,
+                                       7.0, 5.0, 3.0, 5.0};
+  std::copy(text_quad.begin(), text_quad.end(), std::begin(transform.quad));
+  CHECK(patchy_engine_session_transform_layer(
+            session, text_ready.state_id, text_ready.revision, &transform,
+            &event, &error) == 1);
+  CHECK(event.revision == text_ready.revision + 1U);
+  patchy_engine_text_projection projected_text{};
+  projected_text.struct_size = sizeof(projected_text);
+  CHECK(patchy_engine_session_text(session, text_id, &projected_text, &error) ==
+        1);
+  CHECK(std::string(projected_text.text, projected_text.text_size) ==
+        "Still editable");
+
+  patchy_engine_buffer text_before_save{};
+  CHECK(patchy_engine_session_render(session, {0, 0, 8, 6},
+                                     &text_before_save, &event, &error) == 1);
+  patchy_engine_buffer text_psd{};
+  CHECK(patchy_engine_session_save_psd(session, &text_psd, &event, &error) ==
+        1);
+  auto *text_reopened = patchy_engine_session_open_psd(
+      runtime, text_psd.data, text_psd.size, &error);
+  CHECK(text_reopened != nullptr);
+  projected_text = {};
+  projected_text.struct_size = sizeof(projected_text);
+  CHECK(patchy_engine_session_text(text_reopened, text_id, &projected_text,
+                                   &error) == 1);
+  CHECK(std::string(projected_text.text, projected_text.text_size) ==
+        "Still editable");
+  patchy_engine_buffer text_after_reopen{};
+  CHECK(patchy_engine_session_render(text_reopened, {0, 0, 8, 6},
+                                     &text_after_reopen, &event, &error) == 1);
+  CHECK(text_after_reopen.size == text_before_save.size);
+  CHECK(std::equal(text_after_reopen.data,
+                   text_after_reopen.data + text_after_reopen.size,
+                   text_before_save.data));
+  patchy_engine_buffer_release(&text_after_reopen);
+  patchy_engine_buffer_release(&text_before_save);
+  patchy_engine_buffer_release(&text_psd);
+  patchy_engine_session_destroy(text_reopened);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
+void core_layer_transform_preserves_editable_text_and_fails_closed() {
+  Document document(12, 10, PixelFormat::rgba8());
+  PixelBuffer pixels(2, 2, PixelFormat::rgba8());
+  pixels.clear(255);
+  const auto layer_id = document.allocate_layer_id();
+  patchy::Layer text(layer_id, "Editable", patchy::LayerKind::Text);
+  text.set_pixels(std::move(pixels));
+  text.set_bounds({2, 3, 2, 2});
+  text.metadata()[patchy::kLayerMetadataText] = "Editable";
+  text.metadata()[patchy::kLayerMetadataTextTransform] = "1 0 0 1 2 3";
+  text.metadata()[patchy::kLayerMetadataTextRasterStatus] = "patchy_raster";
+  document.add_layer(std::move(text));
+
+  patchy::LayerTransformResult transformed;
+  std::string error;
+  CHECK(patchy::transform_layer(document, layer_id,
+      patchy::LayerTransformRequest{{4.0, 1.0, 4.0, 5.0,
+                                     0.0, 5.0, 0.0, 1.0},
+                                    patchy::LayerTransformInterpolation::Nearest},
+      &transformed, &error));
+  const auto *layer = document.find_layer(layer_id);
+  CHECK(layer != nullptr);
+  CHECK(patchy::layer_is_text(*layer));
+  CHECK(layer->metadata().at(patchy::kLayerMetadataText) == "Editable");
+  const auto affine = patchy::parse_layer_affine_transform(
+      layer->metadata().at(patchy::kLayerMetadataTextTransform));
+  CHECK(affine.has_value());
+  CHECK(std::abs((*affine)[0]) < 1.0e-9);
+  CHECK(std::abs((*affine)[1] - 2.0) < 1.0e-9);
+  CHECK(std::abs((*affine)[2] + 2.0) < 1.0e-9);
+  CHECK(std::abs((*affine)[3]) < 1.0e-9);
+  CHECK(layer->bounds().x == 0);
+  CHECK(layer->bounds().y == 1);
+  CHECK(layer->bounds().width == 4);
+  CHECK(layer->bounds().height == 4);
+
+  const auto before_rejection = *layer;
+  CHECK(!patchy::transform_layer(document, layer_id,
+      patchy::LayerTransformRequest{{0.0, 0.0, 5.0, 0.0,
+                                     4.0, 5.0, 0.0, 4.0},
+                                    patchy::LayerTransformInterpolation::Bilinear},
+      nullptr, &error));
+  CHECK(error.find("affine") != std::string::npos);
+  CHECK(document.find_layer(layer_id)->bounds().x == before_rejection.bounds().x);
+  CHECK(std::equal(document.find_layer(layer_id)->pixels().data().begin(),
+                   document.find_layer(layer_id)->pixels().data().end(),
+                   before_rejection.pixels().data().begin()));
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -4020,5 +4284,9 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_authors_nondestructive_workflow},
       {"engine_host_protocol_copies_layers_between_sessions_atomically",
        engine_host_protocol_copies_layers_between_sessions_atomically},
+      {"engine_host_protocol_transforms_layers_with_engine_preview_and_atomic_commit",
+       engine_host_protocol_transforms_layers_with_engine_preview_and_atomic_commit},
+      {"core_layer_transform_preserves_editable_text_and_fails_closed",
+       core_layer_transform_preserves_editable_text_and_fails_closed},
   };
 }

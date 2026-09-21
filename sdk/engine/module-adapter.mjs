@@ -32,6 +32,7 @@ const ALPHA_CHANNEL_INPUT_SIZE = 40;
 const DOCUMENT_PATH_INPUT_SIZE = 56;
 const DOCUMENT_PATH_PROJECTION_SIZE = 288;
 const PATH_SUBPATH_PROJECTION_SIZE = 16;
+const LAYER_TRANSFORM_SIZE = 80;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -441,6 +442,51 @@ export class EmscriptenPatchyEngine {
         targetSession, targetSnapshot.stateId, targetSnapshot.revision,
         sourceSession, sourceSnapshot.stateId, sourceSnapshot.revision,
         sourceLayerId, event, error));
+  }
+
+  previewLayerTransform(session, snapshot, layerId, quad, interpolation = 1,
+                        cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    if (!(cancellation instanceof Int32Array) ||
+        !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Transform preview cancellation must use shared Int32 storage");
+    }
+    return this.#withError((error) => {
+      const transform = this.#layerTransform(layerId, quad, interpolation);
+      let region = 0; let buffer = 0; let callback = 0;
+      try {
+        region = this.#alloc(RECT_SIZE);
+        buffer = this.#alloc(BUFFER_SIZE);
+        callback = this.#module.addFunction(
+          () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
+        this.#check(this.#module._patchy_engine_session_preview_layer_transform(
+          session, snapshot.stateId, snapshot.revision, transform, callback, 0, region,
+          buffer, error), error);
+        const regionView = this.#view(region, RECT_SIZE);
+        const bufferView = this.#view(buffer, BUFFER_SIZE);
+        const data = bufferView.getUint32(0, true);
+        const size = bufferView.getUint32(4, true);
+        return { region: { x: regionView.getInt32(0, true), y: regionView.getInt32(4, true),
+          width: regionView.getInt32(8, true), height: regionView.getInt32(12, true) },
+        rgba: this.#module.HEAPU8.slice(data, data + size) };
+      } finally {
+        if (callback) this.#module.removeFunction(callback);
+        if (buffer) {
+          this.#module._patchy_engine_buffer_release(buffer);
+          this.#module._free(buffer);
+        }
+        if (region) this.#module._free(region);
+        this.#module._free(transform);
+      }
+    });
+  }
+
+  transformLayer(session, snapshot, layerId, quad, interpolation = 1) {
+    const transform = this.#layerTransform(layerId, quad, interpolation);
+    try {
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_transform_layer(
+          session, snapshot.stateId, snapshot.revision, transform, event, error));
+    } finally { this.#module._free(transform); }
   }
 
   rasterizeLayer(session, snapshot, layerId) {
@@ -1394,6 +1440,21 @@ export class EmscriptenPatchyEngine {
         this.#module._free(event);
       }
     });
+  }
+
+  #layerTransform(layerId, quad, interpolation) {
+    if (typeof layerId !== "bigint" || layerId <= 0n ||
+        !Array.isArray(quad) || quad.length !== 8 ||
+        !quad.every(Number.isFinite) || ![0, 1].includes(interpolation)) {
+      throw new TypeError("A layer id, eight finite quad coordinates and interpolation are required");
+    }
+    const transform = this.#alloc(LAYER_TRANSFORM_SIZE);
+    const view = this.#view(transform, LAYER_TRANSFORM_SIZE);
+    view.setUint32(0, LAYER_TRANSFORM_SIZE, true);
+    view.setUint32(4, interpolation, true);
+    view.setBigUint64(8, layerId, true);
+    quad.forEach((coordinate, index) => view.setFloat64(16 + index * 8, coordinate, true));
+    return transform;
   }
 
   #bufferCall(call) {

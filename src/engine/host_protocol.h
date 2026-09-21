@@ -42,6 +42,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_SELECTION_AUTHORING = UINT64_C(1) << 25,
   PATCHY_ENGINE_CAP_MEMORY_CONTROL = UINT64_C(1) << 26,
   PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS = UINT64_C(1) << 27,
+  PATCHY_ENGINE_CAP_LAYER_TRANSFORM = UINT64_C(1) << 28,
 };
 
 enum patchy_engine_error_code {
@@ -78,6 +79,23 @@ typedef struct patchy_engine_rect {
   int32_t width;
   int32_t height;
 } patchy_engine_rect;
+
+enum patchy_engine_transform_interpolation {
+  PATCHY_ENGINE_TRANSFORM_NEAREST = 0,
+  PATCHY_ENGINE_TRANSFORM_BILINEAR = 1,
+};
+
+typedef struct patchy_engine_layer_transform {
+  uint32_t struct_size;
+  uint32_t interpolation;
+  uint64_t layer_id;
+  /* top-left, top-right, bottom-right, bottom-left document-space x/y pairs */
+  double quad[8];
+} patchy_engine_layer_transform;
+
+typedef int (*patchy_engine_transform_progress_fn)(int32_t completed_rows,
+                                                   int32_t total_rows,
+                                                   void *user_data);
 
 typedef struct patchy_engine_memory_usage {
   uint32_t struct_size;
@@ -1032,6 +1050,16 @@ int patchy_engine_session_copy_layer(
     uint64_t expected_source_state_id, uint64_t expected_source_revision,
     uint64_t source_layer_id, patchy_engine_event *event,
     patchy_engine_error *error);
+int patchy_engine_session_preview_layer_transform(
+    const patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_layer_transform *transform,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error);
+int patchy_engine_session_transform_layer(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_layer_transform *transform,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,
                                patchy_engine_error *error);

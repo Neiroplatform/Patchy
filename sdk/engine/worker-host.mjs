@@ -53,6 +53,30 @@ export class PatchyWorkerHost {
         this.#activateDocument(targetId);
         return this.#snapshot();
       }
+      case "previewLayerTransform": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Layer transform was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6;
+          throw error;
+        }
+        return this.#engine.previewLayerTransform(this.#requireSession(), before,
+          BigInt(message.layerId), message.quad, message.interpolation,
+          new Int32Array(message.cancellation));
+      }
+      case "transformLayer": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Layer transform was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6;
+          throw error;
+        }
+        this.#engine.transformLayer(this.#requireSession(), before,
+          BigInt(message.layerId), message.quad, message.interpolation);
+        return this.#snapshot();
+      }
       case "closeDocument": return this.#closeDocument(message.documentId);
       case "addPsdSmartObject": {
         const parent = this.#sessions.get(this.#activeDocumentId);

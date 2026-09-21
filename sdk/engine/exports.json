@@ -54,6 +54,8 @@
   "_patchy_engine_session_move_layer",
   "_patchy_engine_session_group_layer",
   "_patchy_engine_session_copy_layer",
+  "_patchy_engine_session_preview_layer_transform",
+  "_patchy_engine_session_transform_layer",
   "_patchy_engine_session_undo",
   "_patchy_engine_session_redo",
   "_patchy_engine_session_memory_usage",

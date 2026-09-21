@@ -110,6 +110,7 @@ add_library(patchy_core
   src/core/layer_metadata.cpp
   src/core/layer_render_utils.cpp
   src/core/layer_tree.cpp
+  src/core/layer_transform.cpp
   src/core/liquify.cpp
   src/core/magnetic_lasso.cpp
   src/core/mask_outline.cpp
@@ -542,6 +543,7 @@ if(PATCHY_BUILD_WASM_SDK)
     -sEXPORTED_RUNTIME_METHODS=HEAPU8,addFunction,removeFunction
     -sENVIRONMENT=worker
     -sALLOW_MEMORY_GROWTH=1
+    -sALLOW_TABLE_GROWTH=1
     -sINITIAL_MEMORY=256MB
     -sMAXIMUM_MEMORY=4GB
     -sSTACK_SIZE=8MB

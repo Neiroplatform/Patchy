@@ -69,6 +69,11 @@ export class PatchyWorkerClient {
   copyLayerToDocument(input: { sourceDocumentId: number; targetDocumentId: number;
     layerId: bigint; expectedSourceStateId: bigint; expectedSourceRevision: bigint;
     expectedTargetStateId: bigint; expectedTargetRevision: bigint }): Promise<DocumentProjection>;
+  previewLayerTransform(input: { layerId: bigint; quad: number[]; interpolation?: 0 | 1;
+    cancellation?: Int32Array;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<{ region: Rect; rgba: Uint8Array }>;
+  transformLayer(input: { layerId: bigint; quad: number[]; interpolation?: 0 | 1;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   closeDocument(documentId: number): Promise<DocumentProjection | null>;
   setMemoryBudget(documentBytes: number, globalBytes: number): Promise<DocumentProjection>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;
