@@ -20,7 +20,8 @@
         <span class="action-divider" aria-hidden="true"></span>
         <button class="icon-button" id="undoButton" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>↶</button>
         <button class="icon-button" id="redoButton" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
-        <button class="button" id="saveButton" type="button" disabled>Download PSD</button>
+        <button class="button" id="transformButton" type="button" disabled>Canvas</button>
+        <button class="button" id="saveButton" type="button" disabled><span class="download-label">Download PSD</span><span class="save-label">Save</span></button>
       </nav>
       <div class="session-indicator" id="sessionIndicator" aria-live="polite">
         <span class="status-dot"></span><span>Starting engine</span>
@@ -54,6 +55,8 @@
             <span class="spinner" aria-hidden="true"></span>
             <strong id="busyTitle">Opening document</strong>
             <span id="busyDetail">Reading layers and rendering pixels</span>
+            <progress id="busyProgress" max="1" value="0" hidden></progress>
+            <button class="button" id="cancelOperationButton" type="button" hidden>Cancel</button>
           </div>
           <div class="drop-state" id="dropState" hidden>
             <strong>Drop to open locally</strong><span>No upload, no cloud copy</span>
@@ -77,6 +80,7 @@
             <button type="button" id="groupLayerButton" disabled>Group</button>
             <button type="button" id="ungroupLayerButton" disabled>Ungroup</button>
             <button type="button" id="removeLayerButton" disabled>Delete</button>
+            <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
           </div>
           <div class="layer-list" id="layerList" role="list" aria-label="Layers"></div>
           <div class="panel-empty" id="layersEmpty">Open a document to inspect its layers.</div>
@@ -112,6 +116,33 @@
     </div>
     <input id="fileInput" type="file" accept=".psd,.psb,application/octet-stream" hidden>
     <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif" hidden>
+    <dialog class="document-dialog" id="documentDialog" aria-labelledby="documentDialogTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">DOCUMENT</p><h2 id="documentDialogTitle">Canvas operations</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section>
+          <h3>Size</h3>
+          <div class="field-row">
+            <label><span>Width</span><input id="documentWidthInput" type="number" min="1" step="1" required></label>
+            <label><span>Height</span><input id="documentHeightInput" type="number" min="1" step="1" required></label>
+          </div>
+          <div class="dialog-actions"><button class="button" id="resizeImageButton" type="button">Scale image</button><button class="button" id="resizeCanvasButton" type="button">Resize canvas</button></div>
+        </section>
+        <section>
+          <h3>Rotate</h3>
+          <div class="dialog-actions"><button class="button" id="rotateLeftButton" type="button">90° left</button><button class="button" id="rotateRightButton" type="button">90° right</button></div>
+        </section>
+        <section>
+          <h3>Crop</h3>
+          <div class="field-row field-row-four">
+            <label><span>X</span><input id="cropXInput" type="number" step="1" value="0" required></label>
+            <label><span>Y</span><input id="cropYInput" type="number" step="1" value="0" required></label>
+            <label><span>Width</span><input id="cropWidthInput" type="number" min="1" step="1" required></label>
+            <label><span>Height</span><input id="cropHeightInput" type="number" min="1" step="1" required></label>
+          </div>
+          <div class="dialog-actions"><button class="button button-primary" id="cropButton" type="button">Crop document</button></div>
+        </section>
+      </form>
+    </dialog>
   </div>
   <script type="module" src="./editor.mjs"></script>
 </body>

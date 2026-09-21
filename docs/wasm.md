@@ -70,20 +70,21 @@ skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
 
 ## Qt-free browser SDK
 
-`cmake --preset wasm-sdk` and `cmake --build --preset wasm-sdk` produce a
-no-entry Dedicated-Worker ES module (`patchy-engine.mjs` plus `.wasm`) and a
-deployable `build/wasm-sdk/site`. The module uses wasm BigInt for 64-bit IDs,
-a 256 MB–4 GB heap and no Qt. The local-first editor opens or drops PSD,
-creates documents, imports RGBA8 layers, groups/removes/reorders/renames them,
-edits visibility/opacity/blend, undo/redoes, renders and downloads PSD. It has
-no remote assets and exposes empty, busy, drop, error/crash states.
+The `wasm-sdk` preset produces a no-entry Worker ES module
+(`patchy-engine.mjs` plus `.wasm`) and deployable `build/wasm-sdk/site`.
+The module uses wasm BigInt for 64-bit IDs,
+a 256 MB–4 GB heap and no Qt. The local-first editor opens/drops PSD, creates
+documents, authors RGBA8 layers, resizes/rotates/crops, runs cancellable invert
+with progress, undo/redoes, renders and downloads PSD. Assets are local; empty,
+busy, drop, cancellation, error and crash states are explicit.
 
 `client.mjs` owns correlation/crash state, `worker.mjs` the runtime/session,
-and `module-adapter.mjs` reads C structures. Input is copied once; render/PSD
-outputs become owned JS buffers before engine release. Checked exports and
-wasm32 layout assertions fail closed on ABI drift. The Node contract covers
-self-hosted asset closure and CSS MIME support in both local servers;
-the real artifact still requires pinned emsdk and the hosted wasm gate.
+and `module-adapter.mjs` reads C structures. Filter cancellation uses shared
+atomic storage so UI can stop a synchronous call at engine checkpoints. Inputs
+are owned; render/PSD outputs are copied before release.
+Checked exports and wasm32 layout assertions fail closed on drift. Node covers
+the Worker workflow, self-hosted assets and server MIME; the real artifact
+still requires pinned emsdk and the hosted wasm gate.
 
 ## wasm-core preset decisions (all in CMakePresets.json)
 

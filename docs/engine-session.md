@@ -226,15 +226,19 @@ WASM configurations enforce the same boundary.
 transfers an owned copy of input bytes to one Dedicated Worker, correlates
 typed requests and rejects every pending request if the Worker traps or message
 decoding fails. The Worker alone owns the Emscripten runtime and active session;
-it exposes `open`/`create`, document and layer projections, visibility and move,
+it exposes `open`/`create`, document and layer projections, layer authoring,
+image/canvas resize, rotate/crop, progress-aware destructive filter,
 undo/redo, bounded render and layered PSD save. Canonical document state never
-enters the UI process.
+enters the UI process. Filter cancellation is a main-thread `SharedArrayBuffer`
+flag sampled by the C progress callback while the Worker is synchronously in
+Wasm, so cancellation remains responsive without concurrent session access.
 
 The `wasm-sdk` preset builds a no-entry ES module named `patchy-engine.mjs`.
 Its checked export manifest contains only allocator functions and the C ABI
 surface used by the binding. `wasm_sdk_main.cpp` pins every wasm32 structure
-size and offset consumed by JavaScript, so an Emscripten ABI-layout change
-fails the build instead of corrupting projections. Node contract tests cover
+size and offset consumed by JavaScript, including geometry commands and filter
+inputs, so an Emscripten ABI-layout change fails the build instead of
+corrupting projections. Node contract tests cover
 the complete Worker workflow, transferable input ownership, output-buffer
 release, export closure and explicit crash state. The actual Emscripten build
 remains a required hosted gate when the pinned toolchain is available.
@@ -244,6 +248,8 @@ editor shell. It closes the browser product loop from open/drop or blank
 creation through layered PSD download. The screen can import decoded RGBA8
 pixels as layers, select/remove/group/ungroup/reorder/rename them and edit
 visibility, opacity and common blend modes before undo/redo and render. Every
+document can also be scaled, canvas-resized around the center, rotated or
+cropped; a selected pixel layer can be inverted with progress and cancel. Every
 mutation crosses the revision/state-guarded Worker RPC; UI selection remains
 view state, not a second document owner. Empty, busy, drop, engine-error and
 Worker-crash states remain explicit. Download completion deliberately does not

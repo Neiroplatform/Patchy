@@ -6,6 +6,7 @@ const LAYER_SIZE = 320;
 const BUFFER_SIZE = 8;
 const COMMAND_SIZE = 304;
 const PIXEL_LAYER_INPUT_SIZE = 80;
+const FILTER_INPUT_SIZE = 56;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -129,6 +130,86 @@ export class EmscriptenPatchyEngine {
   removeLayer(session, snapshot, layerId) {
     return this.#command(session, snapshot, 9, (view) =>
       view.setBigUint64(32, layerId, true));
+  }
+
+  resizeImage(session, snapshot, width, height) {
+    this.#dimensions(width, height);
+    return this.#command(session, snapshot, 10, (view) => {
+      view.setInt32(32, width, true);
+      view.setInt32(36, height, true);
+    });
+  }
+
+  resizeCanvas(session, snapshot, width, height, anchor = 4, color = [0, 0, 0, 0]) {
+    this.#dimensions(width, height);
+    if (!Number.isInteger(anchor) || anchor < 0 || anchor > 8) {
+      throw new TypeError("Canvas anchor must be an integer from 0 through 8");
+    }
+    const rgba = this.#color(color);
+    return this.#command(session, snapshot, 11, (view) => {
+      view.setInt32(32, width, true);
+      view.setInt32(36, height, true);
+      view.setUint32(40, anchor, true);
+      rgba.forEach((component, index) => view.setUint8(44 + index, component));
+    });
+  }
+
+  rotateCanvas(session, snapshot, clockwiseDegrees, color = [0, 0, 0, 0]) {
+    if (!Number.isFinite(clockwiseDegrees)) throw new TypeError("Rotation must be finite");
+    const rgba = this.#color(color);
+    return this.#command(session, snapshot, 12, (view) => {
+      view.setFloat64(32, clockwiseDegrees, true);
+      rgba.forEach((component, index) => view.setUint8(40 + index, component));
+    });
+  }
+
+  cropDocument(session, snapshot, crop, clockwiseDegrees = 0,
+               color = [0, 0, 0, 0], clipToCanvas = true) {
+    this.#rect(crop);
+    if (!Number.isFinite(clockwiseDegrees)) throw new TypeError("Crop rotation must be finite");
+    const rgba = this.#color(color);
+    return this.#command(session, snapshot, 13, (view) => {
+      view.setInt32(32, crop.x, true);
+      view.setInt32(36, crop.y, true);
+      view.setInt32(40, crop.width, true);
+      view.setInt32(44, crop.height, true);
+      view.setFloat64(48, clockwiseDegrees, true);
+      rgba.forEach((component, index) => view.setUint8(56 + index, component));
+      view.setUint8(60, clipToCanvas ? 1 : 0);
+    });
+  }
+
+  applyFilter(session, snapshot, layerId, filterId, cancellation, onProgress) {
+    const filter = this.#text(filterId, "Filter identifiers", 128);
+    if (filter.byteLength === 0) throw new TypeError("Filter identifier is required");
+    if (!(cancellation instanceof Int32Array) ||
+        !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Filter cancellation must use shared Int32 storage");
+    }
+    const filterPointer = this.#alloc(filter.byteLength || 1);
+    const input = this.#alloc(FILTER_INPUT_SIZE);
+    this.#module.HEAPU8.set(filter, filterPointer);
+    const view = this.#view(input, FILTER_INPUT_SIZE);
+    view.setUint32(0, FILTER_INPUT_SIZE, true);
+    view.setBigUint64(8, snapshot.stateId, true);
+    view.setBigUint64(16, snapshot.revision, true);
+    view.setBigUint64(24, layerId, true);
+    view.setUint32(32, filterPointer, true);
+    view.setUint32(36, filter.byteLength, true);
+    const callback = this.#module.addFunction((completed, total, stage) => {
+      onProgress?.({ completed, total, stage,
+        ratio: total > 0 ? Math.max(0, Math.min(1, completed / total)) : 0 });
+      return Atomics.load(cancellation, 0) === 0 ? 1 : 0;
+    }, "iiiii");
+    try {
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_apply_filter(
+          session, input, callback, 0, 0, event, error));
+    } finally {
+      this.#module.removeFunction(callback);
+      this.#module._free(input);
+      this.#module._free(filterPointer);
+    }
   }
 
   groupLayer(session, snapshot, layerId, name) {
@@ -287,12 +368,34 @@ export class EmscriptenPatchyEngine {
     }
   }
 
-  #text(value) {
+  #text(value, subject = "Layer names", maximum = 256) {
     const bytes = encoder.encode(String(value));
-    if (bytes.byteLength > 256 || bytes.includes(0)) {
-      throw new TypeError("Layer names must be valid UTF-8 without NUL and at most 256 bytes");
+    if (bytes.byteLength > maximum || bytes.includes(0)) {
+      throw new TypeError(`${subject} must be valid UTF-8 without NUL and at most ${maximum} bytes`);
     }
     return bytes;
+  }
+
+  #dimensions(width, height) {
+    if (!Number.isInteger(width) || !Number.isInteger(height) ||
+        width <= 0 || height <= 0 || width > 0x7fffffff || height > 0x7fffffff) {
+      throw new TypeError("Document dimensions must be positive 32-bit integers");
+    }
+  }
+
+  #rect(rect) {
+    if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isInteger) ||
+        rect.width <= 0 || rect.height <= 0) {
+      throw new TypeError("Crop rectangle must contain integer coordinates and positive dimensions");
+    }
+  }
+
+  #color(color) {
+    if (!Array.isArray(color) || color.length !== 4 ||
+        !color.every((component) => Number.isInteger(component) && component >= 0 && component <= 255)) {
+      throw new TypeError("Fill color must contain four byte values");
+    }
+    return color;
   }
 
   #mutation(call) {

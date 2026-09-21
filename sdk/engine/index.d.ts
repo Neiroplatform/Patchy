@@ -11,6 +11,10 @@ export interface DocumentProjection {
   canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
 }
 export type WorkerState = "starting" | "ready" | "crashed" | "closed";
+export interface FilterProgress {
+  completed: number; total: number; stage: number; ratio: number;
+}
+export interface CancellableOperation<T> { promise: Promise<T>; cancel(): void }
 
 export class PatchyWorkerClient {
   constructor(worker: Worker);
@@ -24,6 +28,10 @@ export class PatchyWorkerClient {
   setLayerBlendMode(layerId: bigint, blendMode: number): Promise<DocumentProjection>;
   renameLayer(layerId: bigint, name: string): Promise<DocumentProjection>;
   removeLayer(layerId: bigint): Promise<DocumentProjection>;
+  resizeImage(width: number, height: number): Promise<DocumentProjection>;
+  resizeCanvas(width: number, height: number, anchor?: number): Promise<DocumentProjection>;
+  rotateCanvas(clockwiseDegrees: number): Promise<DocumentProjection>;
+  cropDocument(crop: Rect): Promise<DocumentProjection>;
   groupLayer(layerId: bigint, name?: string): Promise<DocumentProjection>;
   ungroup(layerId: bigint): Promise<DocumentProjection>;
   addPixelLayer(input: { name: string; width: number; height: number;
@@ -32,6 +40,9 @@ export class PatchyWorkerClient {
             position: number): Promise<DocumentProjection>;
   undo(): Promise<DocumentProjection>;
   redo(): Promise<DocumentProjection>;
+  invertLayer(layerId: bigint,
+              onProgress?: (progress: FilterProgress) => void):
+    CancellableOperation<DocumentProjection>;
   render(region: Rect): Promise<Uint8Array>;
   save(): Promise<Uint8Array>;
   close(): Promise<null>;

@@ -25,12 +25,17 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "layerList",
     "importLayerButton", "groupLayerButton", "removeLayerButton", "layerNameInput",
-    "layerOpacityInput", "layerBlendSelect", "undoButton", "redoButton", "saveButton", "errorBanner"]) {
+    "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
+    "documentDialog", "resizeImageButton", "resizeCanvasButton", "rotateLeftButton",
+    "rotateRightButton", "cropButton", "busyProgress", "cancelOperationButton",
+    "undoButton", "redoButton", "saveButton", "errorBanner"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   for (const method of ["client.open", "client.setLayerVisibility",
     "client.moveLayer", "client.addPixelLayer", "client.groupLayer", "client.removeLayer",
     "client.renameLayer", "client.setLayerOpacity", "client.setLayerBlendMode",
+    "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
+    "client.cropDocument", "client.invertLayer",
     "client.undo", "client.redo", "client.render", "client.save"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -52,6 +57,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   let next = 1024;
   let released = 0;
   let destroyed = 0;
+  let callback = null;
+  const callbackReturns = [];
   const commandTypes = [];
   const alloc = (size) => { const at = next; next += (size + 7) & ~7; return at; };
   const module = {
@@ -60,6 +67,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _free() {},
     _patchy_engine_runtime_create() { return 11; },
     _patchy_engine_runtime_destroy() { destroyed++; },
+    addFunction(value, signature) { assert.equal(signature, "iiiii"); callback = value; return 71; },
+    removeFunction(pointer) { assert.equal(pointer, 71); callback = null; },
     _patchy_engine_session_create_rgba8() { return 22; },
     _patchy_engine_session_destroy() { destroyed++; },
     _patchy_engine_session_document(session, output) {
@@ -101,6 +110,10 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
         const size = view.getUint32(command + 32, true);
         assert.equal(new TextDecoder().decode(heap.subarray(command + 36, command + 36 + size)), "Group");
       }
+      if (type === 10) assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true)], [6, 4]);
+      if (type === 11) assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true), view.getUint32(command + 40, true)], [8, 6, 4]);
+      if (type === 12) assert.equal(view.getFloat64(command + 32, true), 90);
+      if (type === 13) assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true), view.getInt32(command + 40, true), view.getInt32(command + 44, true)], [1, 1, 4, 3]);
       return 1;
     },
     _patchy_engine_session_group_layer(session, state, revision, layer, name, nameSize) {
@@ -114,6 +127,17 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.equal(view.getInt32(input + 48, true), 1);
       assert.equal(view.getInt32(input + 52, true), 1);
       assert.equal(view.getUint32(input + 60, true), 4);
+      return 1;
+    },
+    _patchy_engine_session_apply_filter(session, input, progress) {
+      assert.equal(session, 22);
+      assert.equal(view.getUint32(input, true), 56);
+      assert.equal(view.getBigUint64(input + 24, true), 7n);
+      const filterPointer = view.getUint32(input + 32, true);
+      const filterSize = view.getUint32(input + 36, true);
+      assert.equal(new TextDecoder().decode(heap.subarray(filterPointer, filterPointer + filterSize)), "patchy.filters.invert");
+      assert.equal(progress, 71);
+      callbackReturns.push(callback(1, 2, 0, 0), callback(2, 2, 0, 0));
       return 1;
     },
     _patchy_engine_session_render_region(session, x, y, width, height, output) {
@@ -140,11 +164,23 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.setLayerBlendMode(session, snapshot, 7n, 2);
   engine.renameLayer(session, snapshot, 7n, "Renamed");
   engine.removeLayer(session, snapshot, 7n);
+  engine.resizeImage(session, snapshot, 6, 4);
+  engine.resizeCanvas(session, snapshot, 8, 6);
+  engine.rotateCanvas(session, snapshot, 90);
+  engine.cropDocument(session, snapshot, { x: 1, y: 1, width: 4, height: 3 });
   engine.groupLayer(session, snapshot, 7n, "Group");
   engine.ungroup(session, snapshot, 7n);
   engine.addPixelLayer(session, snapshot, { name: "Pixel", width: 1, height: 1,
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) });
-  assert.deepEqual(commandTypes, [2, 4, 5, 9, 16]);
+  const progress = [];
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert",
+    cancellation, (value) => progress.push(value.ratio));
+  assert.deepEqual(progress, [0.5, 1]);
+  Atomics.store(cancellation, 0, 1);
+  engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", cancellation);
+  assert.deepEqual(callbackReturns, [1, 1, 0, 0]);
+  assert.deepEqual(commandTypes, [2, 4, 5, 9, 10, 11, 12, 13, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
   assert.equal(released, 2);
@@ -182,6 +218,13 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     setLayerBlendMode(session, before, layerId, mode) { calls.push(["blend", layerId, mode]); revision++; },
     renameLayer(session, before, layerId, name) { calls.push(["rename", layerId, name]); revision++; },
     removeLayer(session, before, layerId) { calls.push(["remove", layerId]); revision++; },
+    resizeImage(session, before, width, height) { calls.push(["resizeImage", width, height]); revision++; },
+    resizeCanvas(session, before, width, height, anchor) { calls.push(["resizeCanvas", width, height, anchor]); revision++; },
+    rotateCanvas(session, before, degrees) { calls.push(["rotate", degrees]); revision++; },
+    cropDocument(session, before, crop) { calls.push(["crop", crop]); revision++; },
+    applyFilter(session, before, layerId, filterId, cancellation, progress) {
+      calls.push(["filter", layerId, filterId]); progress({ completed: 1, total: 1, stage: 0, ratio: 1 }); revision++;
+    },
     groupLayer(session, before, layerId, name) { calls.push(["group", layerId, name]); revision++; },
     ungroup(session, before, layerId) { calls.push(["ungroup", layerId]); revision++; },
     addPixelLayer(session, before, input) { calls.push(["pixels", input.name, input.rgba.byteLength]); revision++; },
@@ -200,10 +243,18 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "setLayerBlendMode", layerId: "7", blendMode: 2 });
   await host.dispatch({ method: "renameLayer", layerId: "7", name: "Renamed" });
   await host.dispatch({ method: "removeLayer", layerId: "7" });
+  await host.dispatch({ method: "resizeImage", width: 6, height: 4 });
+  await host.dispatch({ method: "resizeCanvas", width: 8, height: 6, anchor: 4 });
+  await host.dispatch({ method: "rotateCanvas", clockwiseDegrees: 90 });
+  await host.dispatch({ method: "cropDocument", crop: { x: 1, y: 1, width: 4, height: 3 } });
   await host.dispatch({ method: "groupLayer", layerId: "7", name: "Group" });
   await host.dispatch({ method: "ungroup", layerId: "7" });
   await host.dispatch({ method: "addPixelLayer", name: "Pixels", width: 1, height: 1,
     bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]).buffer });
+  const filterProgress = [];
+  await host.dispatch({ method: "invertLayer", layerId: "7",
+    cancellation: new SharedArrayBuffer(4), progress: (value) => filterProgress.push(value.ratio) });
+  assert.deepEqual(filterProgress, [1]);
   await host.dispatch({ method: "undo" });
   await host.dispatch({ method: "redo" });
   assert.equal((await host.dispatch({ method: "render", region: { x: 0, y: 0, width: 3, height: 2 } })).byteLength, 24);
@@ -245,6 +296,16 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   assert.equal(worker.sent[2].transfer.length, 1);
   worker.reply({ id: 3, ok: true, value: projection(2) });
   await pixels;
+  const filterProgress = [];
+  const filter = client.invertLayer(7n, (value) => filterProgress.push(value.ratio));
+  const filterMessage = worker.sent[3].message;
+  assert.ok(filterMessage.cancellation instanceof SharedArrayBuffer);
+  worker.reply({ id: 4, progress: { completed: 1, total: 2, stage: 0, ratio: 0.5 } });
+  assert.deepEqual(filterProgress, [0.5]);
+  filter.cancel();
+  assert.equal(Atomics.load(new Int32Array(filterMessage.cancellation), 0), 1);
+  worker.reply({ id: 4, ok: true, value: projection(3) });
+  await filter.promise;
   const pending = client.save();
   worker.fail("worker trap");
   await assert.rejects(pending, /worker trap/);

@@ -39,6 +39,23 @@ export class PatchyWorkerHost {
         this.#engine.removeLayer(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId));
         return this.#snapshot();
+      case "resizeImage":
+        this.#engine.resizeImage(
+          this.#requireSession(), this.#snapshot(), message.width, message.height);
+        return this.#snapshot();
+      case "resizeCanvas":
+        this.#engine.resizeCanvas(
+          this.#requireSession(), this.#snapshot(), message.width, message.height,
+          message.anchor);
+        return this.#snapshot();
+      case "rotateCanvas":
+        this.#engine.rotateCanvas(
+          this.#requireSession(), this.#snapshot(), message.clockwiseDegrees);
+        return this.#snapshot();
+      case "cropDocument":
+        this.#engine.cropDocument(
+          this.#requireSession(), this.#snapshot(), message.crop);
+        return this.#snapshot();
       case "groupLayer":
         this.#engine.groupLayer(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
@@ -62,6 +79,11 @@ export class PatchyWorkerHost {
         return this.#snapshot();
       case "undo": this.#engine.undo(this.#requireSession()); return this.#snapshot();
       case "redo": this.#engine.redo(this.#requireSession()); return this.#snapshot();
+      case "invertLayer":
+        this.#engine.applyFilter(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          "patchy.filters.invert", new Int32Array(message.cancellation), message.progress);
+        return this.#snapshot();
       case "render":
         return this.#engine.render(this.#requireSession(), message.region);
       case "save": return this.#engine.save(this.#requireSession());

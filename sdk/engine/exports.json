@@ -10,6 +10,7 @@
   "_patchy_engine_session_layer_at",
   "_patchy_engine_session_execute",
   "_patchy_engine_session_add_rgba8_layer",
+  "_patchy_engine_session_apply_filter",
   "_patchy_engine_session_set_layer_visibility",
   "_patchy_engine_session_move_layer",
   "_patchy_engine_session_group_layer",

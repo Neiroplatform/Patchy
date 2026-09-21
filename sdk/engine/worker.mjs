@@ -14,7 +14,8 @@ self.onmessage = async ({ data }) => {
     }
     if (!hostPromise) throw new Error("Patchy worker is not initialized");
     const host = await hostPromise;
-    const value = await host.dispatch({ method, ...payload });
+    const value = await host.dispatch({ method, ...payload,
+      progress: (progress) => self.postMessage({ id, progress }) });
     const transfer = value instanceof Uint8Array ? [value.buffer] : [];
     self.postMessage({ id, ok: true, value }, transfer);
   } catch (error) {

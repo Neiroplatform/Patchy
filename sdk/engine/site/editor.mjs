@@ -11,6 +11,7 @@ let selectedLayerId = null;
 let documentName = "Untitled.psd";
 let busy = false;
 let dragDepth = 0;
+let cancelActiveOperation = null;
 
 const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
 const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
@@ -30,6 +31,13 @@ function setBusy(active, title = "Working", detail = "The engine is updating the
   $("busyState").hidden = !active;
   $("busyTitle").textContent = title;
   $("busyDetail").textContent = detail;
+  if (!active) {
+    cancelActiveOperation = null;
+    $("busyProgress").hidden = true;
+    $("cancelOperationButton").hidden = true;
+    $("cancelOperationButton").disabled = false;
+    $("busyProgress").value = 0;
+  }
   for (const button of [$("openButton"), $("newButton"), $("saveButton"), $("undoButton"), $("redoButton")]) {
     button.dataset.busyDisabled = active ? "true" : "false";
   }
@@ -47,9 +55,61 @@ function updateControls() {
   $("groupLayerButton").disabled = busy || !layer;
   $("ungroupLayerButton").disabled = busy || layer?.kind !== 1;
   $("removeLayerButton").disabled = busy || !layer;
+  $("invertLayerButton").disabled = busy || layer?.kind !== 0;
+  $("transformButton").disabled = busy || !snapshot;
   $("layerNameInput").disabled = busy || !layer;
   $("layerOpacityInput").disabled = busy || !layer;
   $("layerBlendSelect").disabled = busy || !layer;
+}
+
+function openDocumentDialog() {
+  if (busy || !snapshot) return;
+  for (const id of ["documentWidthInput", "cropWidthInput"]) $(id).value = String(snapshot.width);
+  for (const id of ["documentHeightInput", "cropHeightInput"]) $(id).value = String(snapshot.height);
+  $("cropXInput").value = "0";
+  $("cropYInput").value = "0";
+  $("documentDialog").showModal();
+}
+
+function integerInput(id, positive = false) {
+  const input = $(id);
+  if (!input.reportValidity()) return null;
+  const value = Number(input.value);
+  if (!Number.isInteger(value) || (positive && value <= 0)) {
+    input.setCustomValidity(positive ? "Enter a positive whole number" : "Enter a whole number");
+    input.reportValidity();
+    input.setCustomValidity("");
+    return null;
+  }
+  return value;
+}
+
+function documentMutation(title, operation) {
+  $("documentDialog").close();
+  mutate(title, operation);
+}
+
+async function invertSelectedLayer() {
+  const layer = selectedLayer();
+  if (busy || !snapshot || layer?.kind !== 0) return;
+  clearError();
+  setBusy(true, "Inverting pixels", "Filtering selected layer locally");
+  $("busyProgress").hidden = false;
+  $("cancelOperationButton").hidden = false;
+  $("cancelOperationButton").disabled = false;
+  const operation = client.invertLayer(layer.id, (progress) => {
+    $("busyProgress").value = progress.ratio;
+    $("busyDetail").textContent = `Filtering selected layer · ${Math.round(progress.ratio * 100)}%`;
+  });
+  cancelActiveOperation = operation.cancel;
+  try {
+    await acceptSnapshot(await operation.promise);
+  } catch (error) {
+    if (error?.code !== 7) showError("Could not invert layer", error);
+    else setSessionState("document", "Filter cancelled");
+  } finally {
+    setBusy(false);
+  }
 }
 
 function showError(title, error) {
@@ -238,6 +298,7 @@ $("openButton").addEventListener("click", openPicker);
 $("emptyOpenButton").addEventListener("click", openPicker);
 $("newButton").addEventListener("click", newDocument);
 $("saveButton").addEventListener("click", saveDocument);
+$("transformButton").addEventListener("click", openDocumentDialog);
 $("undoButton").addEventListener("click", () => mutate("Undo", () => client.undo()));
 $("redoButton").addEventListener("click", () => mutate("Redo", () => client.redo()));
 $("fileInput").addEventListener("change", () => { openFile($("fileInput").files[0]); $("fileInput").value = ""; });
@@ -255,6 +316,33 @@ $("groupLayerButton").addEventListener("click", () => {
 $("ungroupLayerButton").addEventListener("click", () => {
   const layer = selectedLayer();
   if (layer?.kind === 1) mutate("Ungrouping layers", () => client.ungroup(layer.id));
+});
+$("invertLayerButton").addEventListener("click", invertSelectedLayer);
+$("cancelOperationButton").addEventListener("click", () => {
+  cancelActiveOperation?.();
+  $("cancelOperationButton").disabled = true;
+  $("busyDetail").textContent = "Cancelling at the next safe filter checkpoint…";
+});
+$("resizeImageButton").addEventListener("click", () => {
+  const width = integerInput("documentWidthInput", true);
+  const height = integerInput("documentHeightInput", true);
+  if (width != null && height != null) documentMutation("Scaling image", () => client.resizeImage(width, height));
+});
+$("resizeCanvasButton").addEventListener("click", () => {
+  const width = integerInput("documentWidthInput", true);
+  const height = integerInput("documentHeightInput", true);
+  if (width != null && height != null) documentMutation("Resizing canvas", () => client.resizeCanvas(width, height));
+});
+$("rotateLeftButton").addEventListener("click", () => documentMutation("Rotating canvas", () => client.rotateCanvas(-90)));
+$("rotateRightButton").addEventListener("click", () => documentMutation("Rotating canvas", () => client.rotateCanvas(90)));
+$("cropButton").addEventListener("click", () => {
+  const x = integerInput("cropXInput");
+  const y = integerInput("cropYInput");
+  const width = integerInput("cropWidthInput", true);
+  const height = integerInput("cropHeightInput", true);
+  if ([x, y, width, height].every((value) => value != null)) {
+    documentMutation("Cropping document", () => client.cropDocument({ x, y, width, height }));
+  }
 });
 $("layerNameInput").addEventListener("change", () => {
   const layer = selectedLayer();

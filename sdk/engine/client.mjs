@@ -40,6 +40,14 @@ export class PatchyWorkerClient {
     return this.#request("renameLayer", { layerId: String(layerId), name });
   }
   removeLayer(layerId) { return this.#request("removeLayer", { layerId: String(layerId) }); }
+  resizeImage(width, height) { return this.#request("resizeImage", { width, height }); }
+  resizeCanvas(width, height, anchor = 4) {
+    return this.#request("resizeCanvas", { width, height, anchor });
+  }
+  rotateCanvas(clockwiseDegrees) {
+    return this.#request("rotateCanvas", { clockwiseDegrees });
+  }
+  cropDocument(crop) { return this.#request("cropDocument", { crop }); }
   groupLayer(layerId, name = "Group") {
     return this.#request("groupLayer", { layerId: String(layerId), name });
   }
@@ -59,6 +67,16 @@ export class PatchyWorkerClient {
   }
   undo() { return this.#request("undo"); }
   redo() { return this.#request("redo"); }
+  invertLayer(layerId, onProgress) {
+    const cancellation = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    const promise = this.#request("invertLayer", {
+      layerId: String(layerId), cancellation: cancellation.buffer,
+    }, [], onProgress);
+    return {
+      promise,
+      cancel() { Atomics.store(cancellation, 0, 1); },
+    };
+  }
   render(region) { return this.#request("render", { region }); }
   save() { return this.#request("save"); }
   close() { return this.#request("close"); }
@@ -68,13 +86,13 @@ export class PatchyWorkerClient {
     this.#crash(new Error("Patchy worker was terminated"), "closed");
   }
 
-  #request(method, payload = {}, transfer = []) {
+  #request(method, payload = {}, transfer = [], onProgress) {
     if (this.#state === "crashed" || this.#state === "closed") {
       return Promise.reject(new Error(`Patchy worker is ${this.#state}`));
     }
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      this.#pending.set(id, { resolve, reject, onProgress });
       this.#worker.postMessage({ id, method, ...payload }, transfer);
     });
   }
@@ -82,6 +100,10 @@ export class PatchyWorkerClient {
   #onMessage(message) {
     const pending = this.#pending.get(message.id);
     if (!pending) return;
+    if (message.progress) {
+      pending.onProgress?.(message.progress);
+      return;
+    }
     this.#pending.delete(message.id);
     if (message.ok) pending.resolve(message.value);
     else {
