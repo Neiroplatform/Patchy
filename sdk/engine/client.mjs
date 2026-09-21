@@ -3,6 +3,7 @@ export class PatchyWorkerClient {
   #nextId = 1;
   #pending = new Map();
   #state = "starting";
+  #capabilities = 0n;
 
   constructor(worker) {
     this.#worker = worker;
@@ -12,12 +13,14 @@ export class PatchyWorkerClient {
   }
 
   get state() { return this.#state; }
+  get capabilities() { return this.#capabilities; }
 
   async initialize(moduleUrl, moduleOptions = {}) {
     if (typeof window !== "undefined" && !globalThis.crossOriginIsolated) {
       throw new Error("Patchy Worker requires COOP/COEP cross-origin isolation");
     }
-    await this.#request("initialize", { moduleUrl, moduleOptions });
+    const info = await this.#request("initialize", { moduleUrl, moduleOptions });
+    this.#capabilities = info.capabilities;
     this.#state = "ready";
   }
 
@@ -48,6 +51,20 @@ export class PatchyWorkerClient {
     return this.#request("rotateCanvas", { clockwiseDegrees });
   }
   cropDocument(crop) { return this.#request("cropDocument", { crop }); }
+  setSelection(rects) { return this.#request("setSelection", { rects }); }
+  clearSelection() { return this.#request("setSelection", { rects: [] }); }
+  createLayerMask(layerId) {
+    return this.#request("createLayerMask", { layerId: String(layerId) });
+  }
+  toggleLayerMask(layerId) {
+    return this.#request("toggleLayerMask", { layerId: String(layerId) });
+  }
+  invertLayerMask(layerId) {
+    return this.#request("invertLayerMask", { layerId: String(layerId) });
+  }
+  removeLayerMask(layerId) {
+    return this.#request("removeLayerMask", { layerId: String(layerId) });
+  }
   groupLayer(layerId, name = "Group") {
     return this.#request("groupLayer", { layerId: String(layerId), name });
   }

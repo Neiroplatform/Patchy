@@ -6,6 +6,8 @@ export class PatchyWorkerHost {
 
   constructor(engine) { this.#engine = engine; }
 
+  get capabilities() { return this.#engine.capabilities; }
+
   async dispatch(message) {
     switch (message.method) {
       case "open":
@@ -55,6 +57,34 @@ export class PatchyWorkerHost {
       case "cropDocument":
         this.#engine.cropDocument(
           this.#requireSession(), this.#snapshot(), message.crop);
+        return this.#snapshot();
+      case "setSelection":
+        this.#engine.setSelection(
+          this.#requireSession(), this.#snapshot(), message.rects);
+        return this.#snapshot();
+      case "createLayerMask": {
+        const before = this.#snapshot();
+        const mask = selectionMask(before);
+        this.#engine.setLayerMask(
+          this.#requireSession(), before, BigInt(message.layerId), mask);
+        return this.#snapshot();
+      }
+      case "toggleLayerMask":
+        this.#mutateExistingMask(message.layerId, (mask) => {
+          mask.disabled = !mask.disabled;
+        });
+        return this.#snapshot();
+      case "invertLayerMask":
+        this.#mutateExistingMask(message.layerId, (mask) => {
+          for (let index = 0; index < mask.gray.length; ++index) {
+            mask.gray[index] = 255 - mask.gray[index];
+          }
+          mask.defaultColor = 255 - mask.defaultColor;
+        });
+        return this.#snapshot();
+      case "removeLayerMask":
+        this.#engine.setLayerMask(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId), null);
         return this.#snapshot();
       case "groupLayer":
         this.#engine.groupLayer(
@@ -108,6 +138,51 @@ export class PatchyWorkerHost {
     if (this.#session) this.#engine.close(this.#session);
     this.#session = next;
   }
+
+  #mutateExistingMask(layerId, change) {
+    const before = this.#snapshot();
+    const id = BigInt(layerId);
+    const layer = before.layers.find((candidate) => candidate.id === id);
+    if (!layer?.mask) throw new Error("Selected layer has no raster mask");
+    const mask = { ...layer.mask, bounds: { ...layer.mask.bounds },
+      gray: this.#engine.layerMaskPixels(this.#requireSession(), id) };
+    change(mask);
+    this.#engine.setLayerMask(this.#requireSession(), before, id, mask);
+  }
+}
+
+function selectionMask(snapshot) {
+  if (!snapshot.selection.length) {
+    const pixelCount = checkedMaskPixelCount(snapshot.width, snapshot.height);
+    return { bounds: { x: 0, y: 0, width: snapshot.width, height: snapshot.height },
+      gray: new Uint8Array(pixelCount).fill(255),
+      defaultColor: 255, disabled: false, linked: true };
+  }
+  const left = Math.min(...snapshot.selection.map((rect) => rect.x));
+  const top = Math.min(...snapshot.selection.map((rect) => rect.y));
+  const right = Math.max(...snapshot.selection.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...snapshot.selection.map((rect) => rect.y + rect.height));
+  const bounds = { x: left, y: top, width: right - left, height: bottom - top };
+  const gray = new Uint8Array(checkedMaskPixelCount(bounds.width, bounds.height));
+  for (const rect of snapshot.selection) {
+    const x0 = Math.max(rect.x, left);
+    const y0 = Math.max(rect.y, top);
+    const x1 = Math.min(rect.x + rect.width, right);
+    const y1 = Math.min(rect.y + rect.height, bottom);
+    for (let y = y0; y < y1; ++y) {
+      gray.fill(255, (y - top) * bounds.width + x0 - left,
+        (y - top) * bounds.width + x1 - left);
+    }
+  }
+  return { bounds, gray, defaultColor: 0, disabled: false, linked: true };
+}
+
+function checkedMaskPixelCount(width, height) {
+  const pixelCount = width * height;
+  if (!Number.isSafeInteger(pixelCount) || pixelCount <= 0) {
+    throw new RangeError("Raster mask dimensions exceed the browser allocation limit");
+  }
+  return pixelCount;
 }
 
 export async function createWorkerHost(moduleUrl, moduleOptions = {}) {

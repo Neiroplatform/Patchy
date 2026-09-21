@@ -39,6 +39,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_ADJUSTMENT_AUTHORING = UINT64_C(1) << 22,
   PATCHY_ENGINE_CAP_VECTOR_MASK_AUTHORING = UINT64_C(1) << 23,
   PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING = UINT64_C(1) << 24,
+  PATCHY_ENGINE_CAP_SELECTION_AUTHORING = UINT64_C(1) << 25,
 };
 
 enum patchy_engine_error_code {
@@ -234,6 +235,23 @@ typedef struct patchy_engine_layer_mask_input {
   uint8_t linked;
   uint8_t has_mask;
 } patchy_engine_layer_mask_input;
+
+typedef struct patchy_engine_selection_input {
+  uint32_t struct_size;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const patchy_engine_rect *rects;
+  size_t rect_count;
+} patchy_engine_selection_input;
+
+typedef struct patchy_engine_layer_mask_projection {
+  uint32_t struct_size;
+  patchy_engine_rect bounds;
+  uint8_t default_color;
+  uint8_t disabled;
+  uint8_t linked;
+  uint8_t has_mask;
+} patchy_engine_layer_mask_projection;
 
 enum patchy_engine_filter_parameter_kind {
   PATCHY_ENGINE_FILTER_PARAMETER_INTEGER = 0,
@@ -798,6 +816,10 @@ int patchy_engine_session_selection_display_rect_at(
 int patchy_engine_session_selection_mask(
     const patchy_engine_session *session, patchy_engine_buffer *gray,
     patchy_engine_error *error);
+int patchy_engine_session_set_selection(
+    patchy_engine_session *session,
+    const patchy_engine_selection_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
 
 int patchy_engine_session_layer_count(const patchy_engine_session *session,
                                       size_t *count,
@@ -828,6 +850,12 @@ int patchy_engine_session_set_layer_mask(
     patchy_engine_session *session,
     const patchy_engine_layer_mask_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_layer_mask(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_layer_mask_projection *mask, patchy_engine_error *error);
+int patchy_engine_session_layer_mask_pixels(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_buffer *gray, patchy_engine_error *error);
 int patchy_engine_session_apply_filter(
     patchy_engine_session *session, const patchy_engine_filter_input *input,
     patchy_engine_filter_progress_fn progress, void *progress_user_data,

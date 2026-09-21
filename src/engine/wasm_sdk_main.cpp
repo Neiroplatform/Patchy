@@ -5,6 +5,7 @@
 // These are the wasm32 layouts consumed by sdk/engine/module-adapter.mjs.
 // A toolchain ABI change must fail the SDK build instead of corrupting memory.
 static_assert(sizeof(patchy_engine_error) == 260);
+static_assert(sizeof(patchy_engine_protocol_info) == 16);
 static_assert(sizeof(patchy_engine_buffer) == 8);
 static_assert(sizeof(patchy_engine_document_projection) == 56);
 static_assert(offsetof(patchy_engine_document_projection, layer_count) == 48);
@@ -25,6 +26,14 @@ static_assert(sizeof(patchy_engine_pixel_layer_input) == 80);
 static_assert(offsetof(patchy_engine_pixel_layer_input, bounds) == 32);
 static_assert(offsetof(patchy_engine_pixel_layer_input, rgba) == 56);
 static_assert(offsetof(patchy_engine_pixel_layer_input, name) == 64);
+static_assert(sizeof(patchy_engine_selection_projection) == 32);
+static_assert(offsetof(patchy_engine_selection_projection, mask_bounds) == 12);
+static_assert(sizeof(patchy_engine_selection_input) == 32);
+static_assert(offsetof(patchy_engine_selection_input, rects) == 24);
+static_assert(sizeof(patchy_engine_layer_mask_input) == 72);
+static_assert(offsetof(patchy_engine_layer_mask_input, bounds) == 32);
+static_assert(offsetof(patchy_engine_layer_mask_input, gray) == 56);
+static_assert(sizeof(patchy_engine_layer_mask_projection) == 24);
 static_assert(sizeof(patchy_engine_filter_parameter) == 208);
 static_assert(offsetof(patchy_engine_filter_parameter, value) == 72);
 static_assert(sizeof(patchy_engine_filter_input) == 56);

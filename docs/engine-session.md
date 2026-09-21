@@ -173,14 +173,16 @@ solid layers and groups, remove/move/ungroup them, edit visibility/name/opacity/
 fill/blend/locks/clipping, resize image/canvas, rotate or crop, then render,
 undo/redo, encode layered PSD and acknowledge durable persistence separately.
 The save acknowledgement is also state-guarded, so bytes from an older state
-cannot clear the dirty flag of a newer edit. The protocol also projects
-committed selection rectangles/soft mask, saved
-channels and complete document-path knots. It accepts bounded RGBA8 layer
+cannot clear the dirty flag of a newer edit. The protocol also projects and
+authors canonical rectangular selections, and projects committed soft masks,
+saved channels and complete document-path knots. It accepts bounded RGBA8 layer
 add/replace payloads, full-canvas alpha-channel payloads and solid-fill/stroke
 vector shapes, while selection morphology, channel CRUD/reorder/load and path
 CRUD/reorder/clipping/select commands reuse the same canonical engine history.
-Raster layer masks and parameterized destructive filters now cross the same
-revision-and-state guarded boundary. Render, PSD encode and filter execution
+Raster-mask metadata/pixels and add/disable/invert/remove lifecycle, plus
+parameterized destructive filters, cross the same revision-and-state guarded
+boundary. Filters consume canonical committed selection instead of a second
+UI-owned region. Render, PSD encode and filter execution
 expose C callbacks for cooperative progress/cancellation; cancellation returns
 a typed error, publishes no partial output and does not advance canonical
 state. Each session also drains engine events through a fixed-capacity FIFO:
@@ -226,10 +228,11 @@ WASM configurations enforce the same boundary.
 transfers an owned copy of input bytes to one Dedicated Worker, correlates
 typed requests and rejects every pending request if the Worker traps or message
 decoding fails. The Worker alone owns the Emscripten runtime and active session;
-it exposes `open`/`create`, document and layer projections, layer authoring,
-image/canvas resize, rotate/crop, progress-aware destructive filter,
-undo/redo, bounded render and layered PSD save. Canonical document state never
-enters the UI process. Filter cancellation is a main-thread `SharedArrayBuffer`
+it exposes `open`/`create`, document/layer/selection/mask projections, layer
+authoring, image/canvas resize, rotate/crop, canonical rectangular selection,
+raster-mask lifecycle, progress-aware selected-area filtering, undo/redo,
+bounded render and layered PSD save. Canonical document state never enters the
+UI process. Filter cancellation is a main-thread `SharedArrayBuffer`
 flag sampled by the C progress callback while the Worker is synchronously in
 Wasm, so cancellation remains responsive without concurrent session access.
 
@@ -249,11 +252,14 @@ creation through layered PSD download. The screen can import decoded RGBA8
 pixels as layers, select/remove/group/ungroup/reorder/rename them and edit
 visibility, opacity and common blend modes before undo/redo and render. Every
 document can also be scaled, canvas-resized around the center, rotated or
-cropped; a selected pixel layer can be inverted with progress and cancel. Every
-mutation crosses the revision/state-guarded Worker RPC; UI selection remains
-view state, not a second document owner. Empty, busy, drop, engine-error and
-Worker-crash states remain explicit. Download completion deliberately does not
-acknowledge durable save because the browser cannot prove the file was kept.
+cropped. A shared command registry drives toolbar and keyboard actions; the
+canvas adds fit/zoom/pan, rulers and marquee selection. A selected pixel layer
+can be inverted inside that canonical selection with progress/cancel, and can
+add, disable, invert or remove a raster mask. Every mutation crosses the
+revision/state-guarded Worker RPC; the shell never owns a second selection or
+document state. Empty, busy, drop, engine-error and Worker-crash states remain
+explicit. Download completion deliberately does not acknowledge durable save
+because the browser cannot prove the file was kept.
 
 ## Desktop transition
 

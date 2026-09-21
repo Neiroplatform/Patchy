@@ -72,19 +72,19 @@ skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
 
 The `wasm-sdk` preset produces a no-entry Worker ES module
 (`patchy-engine.mjs` plus `.wasm`) and deployable `build/wasm-sdk/site`.
-The module uses wasm BigInt for 64-bit IDs,
-a 256 MB–4 GB heap and no Qt. The local-first editor opens/drops PSD, creates
-documents, authors RGBA8 layers, resizes/rotates/crops, runs cancellable invert
-with progress, undo/redoes, renders and downloads PSD. Assets are local; empty,
-busy, drop, cancellation, error and crash states are explicit.
+The module has BigInt IDs and a 256 MB–4 GB heap. It
+opens/drops PSD, creates documents/layers, resizes/rotates/crops, renders and
+downloads. One command registry drives toolbar/keys; the canvas has
+fit/zoom/pan, rulers and canonical marquee selection. Selected-area invert is
+cancellable; masks can be added from selection, disabled, inverted or removed.
+Assets are local and failures explicit.
 
 `client.mjs` owns correlation/crash state, `worker.mjs` the runtime/session,
 and `module-adapter.mjs` reads C structures. Filter cancellation uses shared
 atomic storage so UI can stop a synchronous call at engine checkpoints. Inputs
 are owned; render/PSD outputs are copied before release.
-Checked exports and wasm32 layout assertions fail closed on drift. Node covers
-the Worker workflow, self-hosted assets and server MIME; the real artifact
-still requires pinned emsdk and the hosted wasm gate.
+Exports and wasm32 layouts fail closed on drift. Node covers the Worker flow,
+selection/masks, assets and MIME; the real artifact still needs pinned emsdk.
 
 ## wasm-core preset decisions (all in CMakePresets.json)
 

@@ -12,9 +12,31 @@ let documentName = "Untitled.psd";
 let busy = false;
 let dragDepth = 0;
 let cancelActiveOperation = null;
+let canvasTool = "marquee";
+let zoomMode = "fit";
+let zoom = 1;
+let marqueeDraft = null;
+let panStart = null;
 
 const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
 const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
+const commandRegistry = new Map();
+
+function registerCommand(id, buttonId, run, enabled = () => true) {
+  commandRegistry.set(id, { run, enabled, button: buttonId ? $(buttonId) : null });
+}
+
+function executeCommand(id) {
+  const command = commandRegistry.get(id);
+  if (!command || !command.enabled()) return;
+  command.run();
+}
+
+function syncCommands() {
+  for (const command of commandRegistry.values()) {
+    if (command.button) command.button.disabled = !command.enabled();
+  }
+}
 
 function selectedLayer() {
   return snapshot?.layers.find((layer) => layer.id === selectedLayerId) || null;
@@ -56,10 +78,18 @@ function updateControls() {
   $("ungroupLayerButton").disabled = busy || layer?.kind !== 1;
   $("removeLayerButton").disabled = busy || !layer;
   $("invertLayerButton").disabled = busy || layer?.kind !== 0;
+  $("createMaskButton").disabled = busy || layer?.kind !== 0 || Boolean(layer?.mask);
+  $("toggleMaskButton").disabled = busy || !layer?.mask;
+  $("toggleMaskButton").textContent = layer?.mask?.disabled ? "Enable mask" : "Disable mask";
+  $("invertMaskButton").disabled = busy || !layer?.mask;
+  $("removeMaskButton").disabled = busy || !layer?.mask;
   $("transformButton").disabled = busy || !snapshot;
+  $("selectAllButton").disabled = busy || !snapshot;
+  $("clearSelectionButton").disabled = busy || !snapshot?.selection?.length;
   $("layerNameInput").disabled = busy || !layer;
   $("layerOpacityInput").disabled = busy || !layer;
   $("layerBlendSelect").disabled = busy || !layer;
+  syncCommands();
 }
 
 function openDocumentDialog() {
@@ -143,7 +173,7 @@ function renderLayers() {
       <button class="reorder-button" type="button" aria-label="Move layer up" ${index === 0 ? "disabled" : ""}>↑</button>
       <button class="reorder-button" type="button" aria-label="Move layer down" ${index === layers.length - 1 ? "disabled" : ""}>↓</button>`;
     row.querySelector(".layer-name").textContent = layer.name || "Unnamed layer";
-    row.querySelector(".layer-kind").textContent = formatKind(layer);
+    row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}`;
     row.querySelector(".layer-select-button").setAttribute("aria-label", `Select ${layer.name || "unnamed layer"}`);
     row.querySelector(".layer-select-button").addEventListener("click", () => {
       selectedLayerId = layer.id;
@@ -200,6 +230,57 @@ async function renderDocument() {
   canvas.height = snapshot.height;
   const pixels = new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   context.putImageData(new ImageData(pixels, snapshot.width, snapshot.height), 0, 0);
+  applyViewport();
+  renderSelection();
+}
+
+function applyViewport() {
+  if (!snapshot) return;
+  const viewport = $("canvasViewport");
+  if (zoomMode === "fit") {
+    zoom = Math.min(1, Math.max(0.02,
+      Math.min((viewport.clientWidth - 80) / snapshot.width,
+        (viewport.clientHeight - 80) / snapshot.height)));
+  }
+  $("canvasFrame").style.width = `${Math.max(1, snapshot.width * zoom)}px`;
+  $("canvasFrame").style.height = `${Math.max(1, snapshot.height * zoom)}px`;
+  $("zoomLabel").textContent = zoomMode === "fit" ? `Fit · ${Math.round(zoom * 100)}%` : `${Math.round(zoom * 100)}%`;
+}
+
+function renderSelection(rect = marqueeDraft) {
+  const overlay = $("selectionOverlay");
+  const rects = rect ? [rect] : snapshot?.selection || [];
+  if (!snapshot || !rects.length) { overlay.hidden = true; return; }
+  const left = Math.min(...rects.map((item) => item.x));
+  const top = Math.min(...rects.map((item) => item.y));
+  const right = Math.max(...rects.map((item) => item.x + item.width));
+  const bottom = Math.max(...rects.map((item) => item.y + item.height));
+  overlay.style.left = `${left / snapshot.width * 100}%`;
+  overlay.style.top = `${top / snapshot.height * 100}%`;
+  overlay.style.width = `${(right - left) / snapshot.width * 100}%`;
+  overlay.style.height = `${(bottom - top) / snapshot.height * 100}%`;
+  overlay.hidden = false;
+}
+
+function setCanvasTool(tool) {
+  canvasTool = tool;
+  $("canvasViewport").dataset.tool = tool;
+  $("marqueeToolButton").setAttribute("aria-pressed", String(tool === "marquee"));
+  $("panToolButton").setAttribute("aria-pressed", String(tool === "pan"));
+}
+
+function setZoom(next) {
+  zoomMode = next === "fit" ? "fit" : "manual";
+  if (next !== "fit") zoom = Math.min(8, Math.max(0.05, next));
+  applyViewport();
+}
+
+function canvasPoint(event) {
+  const bounds = canvas.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(snapshot.width, (event.clientX - bounds.left) / bounds.width * snapshot.width)),
+    y: Math.max(0, Math.min(snapshot.height, (event.clientY - bounds.top) / bounds.height * snapshot.height)),
+  };
 }
 
 async function acceptSnapshot(next, rerender = true) {
@@ -294,13 +375,27 @@ function escapeHtml(value) {
 }
 
 function openPicker() { if (!busy) $("fileInput").click(); }
-$("openButton").addEventListener("click", openPicker);
+registerCommand("document.open", "openButton", openPicker, () => !busy);
+registerCommand("document.new", "newButton", newDocument, () => !busy);
+registerCommand("document.save", "saveButton", saveDocument, () => !busy && Boolean(snapshot));
+registerCommand("history.undo", "undoButton", () => mutate("Undo", () => client.undo()), () => !busy && Boolean(snapshot?.canUndo));
+registerCommand("history.redo", "redoButton", () => mutate("Redo", () => client.redo()), () => !busy && Boolean(snapshot?.canRedo));
+registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
+registerCommand("tool.marquee", "marqueeToolButton", () => setCanvasTool("marquee"));
+registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"));
+registerCommand("selection.all", "selectAllButton", () => {
+  mutate("Selecting all", () => client.setSelection([{ x: 0, y: 0, width: snapshot.width, height: snapshot.height }]));
+}, () => !busy && Boolean(snapshot));
+registerCommand("selection.clear", "clearSelectionButton", () => mutate("Clearing selection", () => client.clearSelection()),
+  () => !busy && Boolean(snapshot?.selection?.length));
+registerCommand("view.zoomOut", "zoomOutButton", () => setZoom(zoom / 1.25), () => Boolean(snapshot));
+registerCommand("view.zoomIn", "zoomInButton", () => setZoom(zoom * 1.25), () => Boolean(snapshot));
+registerCommand("view.fit", "zoomFitButton", () => setZoom("fit"), () => Boolean(snapshot));
+for (const [id, command] of commandRegistry) {
+  command.button?.addEventListener("click", () => executeCommand(id));
+}
+
 $("emptyOpenButton").addEventListener("click", openPicker);
-$("newButton").addEventListener("click", newDocument);
-$("saveButton").addEventListener("click", saveDocument);
-$("transformButton").addEventListener("click", openDocumentDialog);
-$("undoButton").addEventListener("click", () => mutate("Undo", () => client.undo()));
-$("redoButton").addEventListener("click", () => mutate("Redo", () => client.redo()));
 $("fileInput").addEventListener("change", () => { openFile($("fileInput").files[0]); $("fileInput").value = ""; });
 $("dismissErrorButton").addEventListener("click", clearError);
 $("importLayerButton").addEventListener("click", () => { if (!busy && snapshot) $("imageInput").click(); });
@@ -318,6 +413,22 @@ $("ungroupLayerButton").addEventListener("click", () => {
   if (layer?.kind === 1) mutate("Ungrouping layers", () => client.ungroup(layer.id));
 });
 $("invertLayerButton").addEventListener("click", invertSelectedLayer);
+$("createMaskButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer) mutate("Creating layer mask", () => client.createLayerMask(layer.id));
+});
+$("toggleMaskButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer?.mask) mutate(layer.mask.disabled ? "Enabling layer mask" : "Disabling layer mask", () => client.toggleLayerMask(layer.id));
+});
+$("invertMaskButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer?.mask) mutate("Inverting layer mask", () => client.invertLayerMask(layer.id));
+});
+$("removeMaskButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  if (layer?.mask) mutate("Removing layer mask", () => client.removeLayerMask(layer.id));
+});
 $("cancelOperationButton").addEventListener("click", () => {
   cancelActiveOperation?.();
   $("cancelOperationButton").disabled = true;
@@ -366,16 +477,76 @@ $("togglePanelsButton").addEventListener("click", () => {
   $("togglePanelsButton").setAttribute("aria-pressed", String(hidden));
 });
 
+canvas.addEventListener("pointerdown", (event) => {
+  if (busy || !snapshot || canvasTool !== "marquee" || event.button !== 0) return;
+  const start = canvasPoint(event);
+  canvas.setPointerCapture(event.pointerId);
+  marqueeDraft = { x: Math.floor(start.x), y: Math.floor(start.y), width: 1, height: 1 };
+  const move = (nextEvent) => {
+    const point = canvasPoint(nextEvent);
+    const x = Math.floor(Math.min(start.x, point.x));
+    const y = Math.floor(Math.min(start.y, point.y));
+    marqueeDraft = { x, y, width: Math.max(1, Math.ceil(Math.max(start.x, point.x)) - x),
+      height: Math.max(1, Math.ceil(Math.max(start.y, point.y)) - y) };
+    renderSelection();
+  };
+  const finish = () => {
+    canvas.removeEventListener("pointermove", move);
+    canvas.removeEventListener("pointerup", finish);
+    canvas.removeEventListener("pointercancel", cancel);
+    const selection = marqueeDraft;
+    marqueeDraft = null;
+    if (selection) mutate("Selecting area", () => client.setSelection([selection]));
+  };
+  const cancel = () => { marqueeDraft = null; renderSelection(); finish(); };
+  canvas.addEventListener("pointermove", move);
+  canvas.addEventListener("pointerup", finish);
+  canvas.addEventListener("pointercancel", cancel);
+});
+
+$("canvasViewport").addEventListener("pointerdown", (event) => {
+  if (canvasTool !== "pan" || event.button !== 0) return;
+  const viewport = $("canvasViewport");
+  viewport.setPointerCapture(event.pointerId);
+  viewport.dataset.panning = "true";
+  panStart = { x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+});
+$("canvasViewport").addEventListener("pointermove", (event) => {
+  if (!panStart) return;
+  const viewport = $("canvasViewport");
+  viewport.scrollLeft = panStart.left - (event.clientX - panStart.x);
+  viewport.scrollTop = panStart.top - (event.clientY - panStart.y);
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  $("canvasViewport").addEventListener(type, () => {
+    panStart = null; delete $("canvasViewport").dataset.panning;
+  });
+}
+$("canvasViewport").addEventListener("wheel", (event) => {
+  if (!snapshot || !(event.ctrlKey || event.metaKey)) return;
+  event.preventDefault();
+  setZoom(zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15));
+}, { passive: false });
+window.addEventListener("resize", applyViewport);
+
 window.addEventListener("keydown", (event) => {
   if (!(event.ctrlKey || event.metaKey)) return;
   const key = event.key.toLowerCase();
-  if (key === "o") { event.preventDefault(); openPicker(); }
-  if (key === "s") { event.preventDefault(); saveDocument(); }
+  if (key === "o") { event.preventDefault(); executeCommand("document.open"); }
+  if (key === "s") { event.preventDefault(); executeCommand("document.save"); }
   if (key === "z") {
     event.preventDefault();
     const redo = event.shiftKey;
-    mutate(redo ? "Redo" : "Undo", () => redo ? client.redo() : client.undo());
+    executeCommand(redo ? "history.redo" : "history.undo");
   }
+  if (key === "a") { event.preventDefault(); executeCommand("selection.all"); }
+  if (key === "d") { event.preventDefault(); executeCommand("selection.clear"); }
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.target?.matches?.("input, select, textarea")) return;
+  if (event.key.toLowerCase() === "m") executeCommand("tool.marquee");
+  if (event.key.toLowerCase() === "h") executeCommand("tool.pan");
 });
 
 for (const type of ["dragenter", "dragover"]) {
@@ -396,6 +567,7 @@ try {
   setSessionState("ready", "Engine ready");
   $("busyState").hidden = true;
   updateControls();
+  setCanvasTool("marquee");
 } catch (error) {
   showError("Could not start engine", error);
   $("busyState").hidden = true;

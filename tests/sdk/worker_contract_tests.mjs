@@ -28,6 +28,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
     "documentDialog", "resizeImageButton", "resizeCanvasButton", "rotateLeftButton",
     "rotateRightButton", "cropButton", "busyProgress", "cancelOperationButton",
+    "canvasFrame", "selectionOverlay", "marqueeToolButton", "panToolButton",
+    "zoomOutButton", "zoomFitButton", "zoomInButton", "createMaskButton",
+    "toggleMaskButton", "invertMaskButton", "removeMaskButton",
     "undoButton", "redoButton", "saveButton", "errorBanner"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
@@ -36,12 +39,16 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameLayer", "client.setLayerOpacity", "client.setLayerBlendMode",
     "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
     "client.cropDocument", "client.invertLayer",
+    "client.setSelection", "client.clearSelection", "client.createLayerMask",
+    "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
     "client.undo", "client.redo", "client.render", "client.save"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
   assert.match(script, /from "\.\/engine\/client\.mjs"/);
   assert.match(script, /new URL\("\.\/engine\/worker\.mjs", import\.meta\.url\)/);
   assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
+  assert.match(script, /const commandRegistry = new Map\(\)/);
+  assert.match(script, /registerCommand\("selection\.all"/);
   assert.doesNotMatch(`${html}\n${css}\n${script}`, /https?:\/\//);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 560px\)/);
@@ -65,6 +72,12 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     HEAPU8: heap,
     _malloc: alloc,
     _free() {},
+    _patchy_engine_get_protocol_info(info) {
+      assert.equal(view.getUint32(info, true), 16);
+      view.setUint32(info + 4, 1, true);
+      view.setBigUint64(info + 8, (1n << 26n) - 1n, true);
+      return 1;
+    },
     _patchy_engine_runtime_create() { return 11; },
     _patchy_engine_runtime_destroy() { destroyed++; },
     addFunction(value, signature) { assert.equal(signature, "iiiii"); callback = value; return 71; },
@@ -89,6 +102,14 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       view.setFloat32(output + 292, 1, true); view.setInt32(output + 312, 3, true);
       view.setInt32(output + 316, 2, true); return 1;
     },
+    _patchy_engine_session_layer_mask(session, layerId, output) {
+      assert.equal(layerId, 7n); view.setUint32(output, 24, true); return 1;
+    },
+    _patchy_engine_session_selection(session, output) {
+      assert.equal(session, 22); assert.equal(view.getUint32(output, true), 32);
+      view.setUint32(output + 4, 0, true); heap[output + 29] = 1; return 1;
+    },
+    _patchy_engine_session_selection_rect_at() { throw new Error("no selection rectangles expected"); },
     _patchy_engine_session_set_layer_visibility(session, state, revision, layer, visible) {
       assert.deepEqual([session, state, revision, layer, visible], [22, 9n, 4n, 7n, 0]); return 1;
     },
@@ -140,6 +161,24 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       callbackReturns.push(callback(1, 2, 0, 0), callback(2, 2, 0, 0));
       return 1;
     },
+    _patchy_engine_session_set_selection(session, input) {
+      assert.equal(view.getUint32(input, true), 32);
+      assert.equal(view.getUint32(input + 28, true), 1);
+      const rect = view.getUint32(input + 24, true);
+      assert.deepEqual([view.getInt32(rect, true), view.getInt32(rect + 4, true),
+        view.getInt32(rect + 8, true), view.getInt32(rect + 12, true)], [0, 0, 2, 1]);
+      return 1;
+    },
+    _patchy_engine_session_set_layer_mask(session, input) {
+      assert.equal(view.getUint32(input, true), 72);
+      assert.equal(view.getBigUint64(input + 24, true), 7n);
+      assert.equal(heap[input + 67], 1);
+      return 1;
+    },
+    _patchy_engine_session_layer_mask_pixels(session, layerId, output) {
+      const data = alloc(2); heap.set([0, 255], data);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 2, true); return 1;
+    },
     _patchy_engine_session_render_region(session, x, y, width, height, output) {
       assert.deepEqual([x, y, width, height], [0, 0, 3, 2]);
       const data = alloc(24); heap.fill(17, data, data + 24);
@@ -155,10 +194,12 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
+  assert.equal(engine.capabilities, (1n << 26n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
   assert.equal(snapshot.layers[0].bounds.width, 3);
+  assert.deepEqual(snapshot.selection, []);
   engine.setLayerVisibility(session, snapshot, 7n, false);
   engine.setLayerOpacity(session, snapshot, 7n, 0.5);
   engine.setLayerBlendMode(session, snapshot, 7n, 2);
@@ -168,6 +209,10 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.resizeCanvas(session, snapshot, 8, 6);
   engine.rotateCanvas(session, snapshot, 90);
   engine.cropDocument(session, snapshot, { x: 1, y: 1, width: 4, height: 3 });
+  engine.setSelection(session, snapshot, [{ x: 0, y: 0, width: 2, height: 1 }]);
+  engine.setLayerMask(session, snapshot, 7n, { bounds: { x: 0, y: 0, width: 2, height: 1 },
+    gray: new Uint8Array([255, 0]), defaultColor: 0, linked: true });
+  assert.deepEqual(Array.from(engine.layerMaskPixels(session, 7n)), [0, 255]);
   engine.groupLayer(session, snapshot, 7n, "Group");
   engine.ungroup(session, snapshot, 7n);
   engine.addPixelLayer(session, snapshot, { name: "Pixel", width: 1, height: 1,
@@ -183,12 +228,12 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(commandTypes, [2, 4, 5, 9, 10, 11, 12, 13, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
-  assert.equal(released, 2);
+  assert.equal(released, 3);
   engine.dispose();
   assert.equal(destroyed, 2);
 });
 
-function projection(revision, visible = true) {
+function projection(revision, visible = true, mask = null, selection = []) {
   return {
     width: 3, height: 2, colorMode: 3, bitDepth: 8, channels: 4,
     activeLayerId: 7n, revision: BigInt(revision), stateId: BigInt(revision),
@@ -196,17 +241,22 @@ function projection(revision, visible = true) {
     canUndo: revision > 1, canRedo: false,
     layers: [{ id: 7n, parentId: 0n, kind: 0, visible, opacity: 1,
       name: "Layer", clipped: false, fillOpacity: 1, blendMode: 0,
-      lockFlags: 0, bounds: { x: 0, y: 0, width: 3, height: 2 } }],
+      lockFlags: 0, bounds: { x: 0, y: 0, width: 3, height: 2 }, mask }],
+    selection,
   };
 }
 
 test("worker host runs the minimal browser editing vertical workflow", async () => {
   let revision = 1;
   let visible = true;
+  let selection = [];
+  let mask = null;
+  let maskPixels = new Uint8Array();
   const calls = [];
   const engine = {
+    capabilities: (1n << 26n) - 1n,
     create(width, height) { calls.push(["create", width, height]); return 41; },
-    snapshot(session) { assert.equal(session, 41); return projection(revision, visible); },
+    snapshot(session) { assert.equal(session, 41); return projection(revision, visible, mask, selection); },
     setLayerVisibility(session, before, layerId, next) {
       calls.push(["visibility", before.revision, layerId, next]);
       visible = next; revision++;
@@ -222,6 +272,14 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     resizeCanvas(session, before, width, height, anchor) { calls.push(["resizeCanvas", width, height, anchor]); revision++; },
     rotateCanvas(session, before, degrees) { calls.push(["rotate", degrees]); revision++; },
     cropDocument(session, before, crop) { calls.push(["crop", crop]); revision++; },
+    setSelection(session, before, rects) { calls.push(["selection", rects]); selection = rects; revision++; },
+    setLayerMask(session, before, layerId, next) {
+      calls.push(["mask", layerId, next]);
+      mask = next ? { bounds: next.bounds, defaultColor: next.defaultColor,
+        disabled: next.disabled, linked: next.linked } : null;
+      maskPixels = next?.gray?.slice() || new Uint8Array(); revision++;
+    },
+    layerMaskPixels() { return maskPixels.slice(); },
     applyFilter(session, before, layerId, filterId, cancellation, progress) {
       calls.push(["filter", layerId, filterId]); progress({ completed: 1, total: 1, stage: 0, ratio: 1 }); revision++;
     },
@@ -247,6 +305,12 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "resizeCanvas", width: 8, height: 6, anchor: 4 });
   await host.dispatch({ method: "rotateCanvas", clockwiseDegrees: 90 });
   await host.dispatch({ method: "cropDocument", crop: { x: 1, y: 1, width: 4, height: 3 } });
+  await host.dispatch({ method: "setSelection", rects: [{ x: 0, y: 0, width: 1, height: 1 }] });
+  assert.equal((await host.dispatch({ method: "createLayerMask", layerId: "7" })).layers[0].mask.defaultColor, 0);
+  assert.equal((await host.dispatch({ method: "toggleLayerMask", layerId: "7" })).layers[0].mask.disabled, true);
+  await host.dispatch({ method: "invertLayerMask", layerId: "7" });
+  assert.equal(maskPixels[0], 0);
+  assert.equal((await host.dispatch({ method: "removeLayerMask", layerId: "7" })).layers[0].mask, null);
   await host.dispatch({ method: "groupLayer", layerId: "7", name: "Group" });
   await host.dispatch({ method: "ungroup", layerId: "7" });
   await host.dispatch({ method: "addPixelLayer", name: "Pixels", width: 1, height: 1,
@@ -282,9 +346,10 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   const worker = new FakeWorker();
   const client = new PatchyWorkerClient(worker);
   const init = client.initialize("./patchy-engine.mjs");
-  worker.reply({ id: 1, ok: true, value: null });
+  worker.reply({ id: 1, ok: true, value: { capabilities: (1n << 26n) - 1n } });
   await init;
   assert.equal(client.state, "ready");
+  assert.equal(client.capabilities, (1n << 26n) - 1n);
   const source = new Uint8Array([1, 2, 3]);
   const opened = client.open(source);
   assert.equal(worker.sent[1].transfer.length, 1);

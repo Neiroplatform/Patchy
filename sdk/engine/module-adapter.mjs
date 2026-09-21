@@ -1,5 +1,6 @@
 const PROTOCOL_VERSION = 1;
 const ERROR_SIZE = 260;
+const PROTOCOL_INFO_SIZE = 16;
 const EVENT_SIZE = 64;
 const DOCUMENT_SIZE = 56;
 const LAYER_SIZE = 320;
@@ -7,6 +8,11 @@ const BUFFER_SIZE = 8;
 const COMMAND_SIZE = 304;
 const PIXEL_LAYER_INPUT_SIZE = 80;
 const FILTER_INPUT_SIZE = 56;
+const SELECTION_SIZE = 32;
+const SELECTION_INPUT_SIZE = 32;
+const RECT_SIZE = 16;
+const LAYER_MASK_INPUT_SIZE = 72;
+const LAYER_MASK_SIZE = 24;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -27,17 +33,32 @@ export class EmscriptenPatchyEngine {
   #module;
   #runtime = 0;
   #sessions = new Set();
+  #capabilities = 0n;
 
   constructor(module) {
     this.#module = module;
     const error = this.#alloc(ERROR_SIZE);
     try {
+      const info = this.#alloc(PROTOCOL_INFO_SIZE);
+      try {
+        this.#view(info, PROTOCOL_INFO_SIZE).setUint32(0, PROTOCOL_INFO_SIZE, true);
+        this.#check(module._patchy_engine_get_protocol_info(info, error), error);
+        const view = this.#view(info, PROTOCOL_INFO_SIZE);
+        if (view.getUint32(4, true) !== PROTOCOL_VERSION) {
+          throw new PatchyEngineError(2, "Patchy engine protocol version mismatch");
+        }
+        this.#capabilities = u64(view, 8);
+      } finally {
+        module._free(info);
+      }
       this.#runtime = module._patchy_engine_runtime_create(PROTOCOL_VERSION, error);
       if (!this.#runtime) this.#throwError(error);
     } finally {
       module._free(error);
     }
   }
+
+  get capabilities() { return this.#capabilities; }
 
   open(bytes) {
     const input = this.#alloc(bytes.byteLength || 1);
@@ -88,8 +109,10 @@ export class EmscriptenPatchyEngine {
           canUndo: view.getUint8(54) !== 0,
           canRedo: view.getUint8(55) !== 0,
           layers: [],
+          selection: [],
         };
         result.layers = this.#layers(session, result.layerCount, error);
+        result.selection = this.#selection(session, error);
         return result;
       } finally {
         this.#module._free(document);
@@ -179,6 +202,84 @@ export class EmscriptenPatchyEngine {
     });
   }
 
+  setSelection(session, snapshot, rects) {
+    if (!Array.isArray(rects) || rects.length > 1) {
+      throw new TypeError("Selection must contain at most one rectangle");
+    }
+    rects.forEach((rect) => this.#rect(rect));
+    const values = this.#alloc(Math.max(1, rects.length * RECT_SIZE));
+    const input = this.#alloc(SELECTION_INPUT_SIZE);
+    try {
+      const rectView = this.#view(values, Math.max(1, rects.length * RECT_SIZE));
+      rects.forEach((rect, index) => {
+        const offset = index * RECT_SIZE;
+        rectView.setInt32(offset, rect.x, true);
+        rectView.setInt32(offset + 4, rect.y, true);
+        rectView.setInt32(offset + 8, rect.width, true);
+        rectView.setInt32(offset + 12, rect.height, true);
+      });
+      const view = this.#view(input, SELECTION_INPUT_SIZE);
+      view.setUint32(0, SELECTION_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true);
+      view.setUint32(24, rects.length ? values : 0, true);
+      view.setUint32(28, rects.length, true);
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_set_selection(
+          session, input, event, error));
+    } finally {
+      this.#module._free(input);
+      this.#module._free(values);
+    }
+  }
+
+  setLayerMask(session, snapshot, layerId, mask) {
+    const gray = mask?.gray;
+    if (mask) {
+      this.#rect(mask.bounds);
+      if (!(gray instanceof Uint8Array) ||
+          gray.byteLength !== mask.bounds.width * mask.bounds.height) {
+        throw new TypeError("Layer mask must contain one gray byte per bounded pixel");
+      }
+    }
+    const pixels = this.#alloc(gray?.byteLength || 1);
+    const input = this.#alloc(LAYER_MASK_INPUT_SIZE);
+    try {
+      if (gray) this.#module.HEAPU8.set(gray, pixels);
+      const view = this.#view(input, LAYER_MASK_INPUT_SIZE);
+      view.setUint32(0, LAYER_MASK_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true);
+      view.setBigUint64(24, layerId, true);
+      if (mask) {
+        view.setInt32(32, mask.bounds.x, true);
+        view.setInt32(36, mask.bounds.y, true);
+        view.setInt32(40, mask.bounds.width, true);
+        view.setInt32(44, mask.bounds.height, true);
+        view.setInt32(48, mask.bounds.width, true);
+        view.setInt32(52, mask.bounds.height, true);
+        view.setUint32(56, pixels, true);
+        view.setUint32(60, gray.byteLength, true);
+        view.setUint8(64, mask.defaultColor ?? 0);
+        view.setUint8(65, mask.disabled ? 1 : 0);
+        view.setUint8(66, mask.linked === false ? 0 : 1);
+        view.setUint8(67, 1);
+      }
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_set_layer_mask(
+          session, input, event, error));
+    } finally {
+      this.#module._free(input);
+      this.#module._free(pixels);
+    }
+  }
+
+  layerMaskPixels(session, layerId) {
+    return this.#bufferCall((buffer, event, error) =>
+      this.#module._patchy_engine_session_layer_mask_pixels(
+        session, layerId, buffer, error));
+  }
+
   applyFilter(session, snapshot, layerId, filterId, cancellation, onProgress) {
     const filter = this.#text(filterId, "Filter identifiers", 128);
     if (filter.byteLength === 0) throw new TypeError("Filter identifier is required");
@@ -188,7 +289,17 @@ export class EmscriptenPatchyEngine {
     }
     const filterPointer = this.#alloc(filter.byteLength || 1);
     const input = this.#alloc(FILTER_INPUT_SIZE);
+    const selection = snapshot.selection || [];
+    const selectionPointer = this.#alloc(Math.max(1, selection.length * RECT_SIZE));
     this.#module.HEAPU8.set(filter, filterPointer);
+    const selectionView = this.#view(selectionPointer, Math.max(1, selection.length * RECT_SIZE));
+    selection.forEach((rect, index) => {
+      const offset = index * RECT_SIZE;
+      selectionView.setInt32(offset, rect.x, true);
+      selectionView.setInt32(offset + 4, rect.y, true);
+      selectionView.setInt32(offset + 8, rect.width, true);
+      selectionView.setInt32(offset + 12, rect.height, true);
+    });
     const view = this.#view(input, FILTER_INPUT_SIZE);
     view.setUint32(0, FILTER_INPUT_SIZE, true);
     view.setBigUint64(8, snapshot.stateId, true);
@@ -196,6 +307,8 @@ export class EmscriptenPatchyEngine {
     view.setBigUint64(24, layerId, true);
     view.setUint32(32, filterPointer, true);
     view.setUint32(36, filter.byteLength, true);
+    view.setUint32(48, selection.length ? selectionPointer : 0, true);
+    view.setUint32(52, selection.length, true);
     const callback = this.#module.addFunction((completed, total, stage) => {
       onProgress?.({ completed, total, stage,
         ratio: total > 0 ? Math.max(0, Math.min(1, completed / total)) : 0 });
@@ -209,6 +322,7 @@ export class EmscriptenPatchyEngine {
       this.#module.removeFunction(callback);
       this.#module._free(input);
       this.#module._free(filterPointer);
+      this.#module._free(selectionPointer);
     }
   }
 
@@ -319,6 +433,7 @@ export class EmscriptenPatchyEngine {
 
   #layers(session, count, error) {
     const layer = this.#alloc(LAYER_SIZE);
+    const mask = this.#alloc(LAYER_MASK_SIZE);
     try {
       const layers = [];
       for (let index = 0; index < count; ++index) {
@@ -326,6 +441,10 @@ export class EmscriptenPatchyEngine {
           session, index, layer, error), error);
         const view = this.#view(layer, LAYER_SIZE);
         const nameSize = view.getUint32(28, true);
+        this.#view(mask, LAYER_MASK_SIZE).setUint32(0, LAYER_MASK_SIZE, true);
+        this.#check(this.#module._patchy_engine_session_layer_mask(
+          session, u64(view, 0), mask, error), error);
+        const maskView = this.#view(mask, LAYER_MASK_SIZE);
         layers.push({
           id: u64(view, 0),
           parentId: u64(view, 8),
@@ -342,11 +461,41 @@ export class EmscriptenPatchyEngine {
             x: view.getInt32(304, true), y: view.getInt32(308, true),
             width: view.getInt32(312, true), height: view.getInt32(316, true),
           },
+          mask: maskView.getUint8(23) ? {
+            bounds: { x: maskView.getInt32(4, true), y: maskView.getInt32(8, true),
+              width: maskView.getInt32(12, true), height: maskView.getInt32(16, true) },
+            defaultColor: maskView.getUint8(20), disabled: maskView.getUint8(21) !== 0,
+            linked: maskView.getUint8(22) !== 0,
+          } : null,
         });
       }
       return layers;
     } finally {
+      this.#module._free(mask);
       this.#module._free(layer);
+    }
+  }
+
+  #selection(session, error) {
+    const selection = this.#alloc(SELECTION_SIZE);
+    const rect = this.#alloc(RECT_SIZE);
+    try {
+      this.#view(selection, SELECTION_SIZE).setUint32(0, SELECTION_SIZE, true);
+      this.#check(this.#module._patchy_engine_session_selection(
+        session, selection, error), error);
+      const count = this.#view(selection, SELECTION_SIZE).getUint32(4, true);
+      const result = [];
+      for (let index = 0; index < count; ++index) {
+        this.#check(this.#module._patchy_engine_session_selection_rect_at(
+          session, index, rect, error), error);
+        const view = this.#view(rect, RECT_SIZE);
+        result.push({ x: view.getInt32(0, true), y: view.getInt32(4, true),
+          width: view.getInt32(8, true), height: view.getInt32(12, true) });
+      }
+      return result;
+    } finally {
+      this.#module._free(rect);
+      this.#module._free(selection);
     }
   }
 

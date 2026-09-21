@@ -2869,6 +2869,42 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
   CHECK(patchy_engine_session_set_layer_mask(session, &mask, &event, &error) ==
         1);
 
+  patchy_engine_layer_mask_projection projected_mask{};
+  projected_mask.struct_size = sizeof(projected_mask);
+  CHECK(patchy_engine_session_layer_mask(session, layer_id, &projected_mask,
+                                         &error) == 1);
+  CHECK(projected_mask.has_mask == 1);
+  CHECK(projected_mask.bounds.width == 2);
+  CHECK(projected_mask.default_color == 255);
+  CHECK(projected_mask.linked == 0);
+  patchy_engine_buffer projected_mask_pixels{};
+  CHECK(patchy_engine_session_layer_mask_pixels(
+            session, layer_id, &projected_mask_pixels, &error) == 1);
+  CHECK(projected_mask_pixels.size == mask_pixels.size());
+  CHECK(projected_mask_pixels.data[1] == 0);
+  patchy_engine_buffer_release(&projected_mask_pixels);
+
+  const auto before_selection = project();
+  const std::array<patchy_engine_rect, 1> selection_rects{{{0, 0, 1, 2}}};
+  patchy_engine_selection_input selection_input{};
+  selection_input.struct_size = sizeof(selection_input);
+  selection_input.expected_state_id = before_selection.state_id;
+  selection_input.expected_revision = before_selection.revision;
+  selection_input.rects = selection_rects.data();
+  selection_input.rect_count = selection_rects.size();
+  CHECK(patchy_engine_session_set_selection(
+            session, &selection_input, &event, &error) == 1);
+  patchy_engine_selection_projection projected_selection{};
+  projected_selection.struct_size = sizeof(projected_selection);
+  CHECK(patchy_engine_session_selection(
+            session, &projected_selection, &error) == 1);
+  CHECK(projected_selection.selection_rect_count == 1);
+  patchy_engine_rect projected_selection_rect{};
+  CHECK(patchy_engine_session_selection_rect_at(
+            session, 0, &projected_selection_rect, &error) == 1);
+  CHECK(projected_selection_rect.width == 1);
+  CHECK(projected_selection_rect.height == 2);
+
   struct FilterProgressState {
     int calls{0};
     int completed{0};
@@ -2888,6 +2924,8 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
   filter.layer_id = layer_id;
   filter.filter_id = "patchy.filters.invert";
   filter.filter_id_size = std::strlen(filter.filter_id);
+  filter.selection = selection_rects.data();
+  filter.selection_count = selection_rects.size();
   CHECK(patchy_engine_session_apply_filter(
             session, &filter, filter_callback, &filter_state, nullptr, &event,
             &error) == 1);
@@ -2943,14 +2981,19 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
   std::uint64_t dropped = 0;
   CHECK(patchy_engine_session_event_count(session, &event_count, &dropped,
                                           &error) == 1);
-  CHECK(event_count == 3);
+  CHECK(event_count == 4);
   CHECK(dropped == 0);
+  std::size_t selection_events = 0;
   for (std::size_t index = 0; index < event_count; ++index) {
     patchy_engine_event queued{};
     CHECK(patchy_engine_session_pop_event(session, &queued, &error) == 1);
-    CHECK(queued.kind == PATCHY_ENGINE_EVENT_COMMAND_APPLIED);
+    CHECK(queued.kind == PATCHY_ENGINE_EVENT_COMMAND_APPLIED ||
+          queued.kind == PATCHY_ENGINE_EVENT_SELECTION_CHANGED);
+    selection_events +=
+        queued.kind == PATCHY_ENGINE_EVENT_SELECTION_CHANGED ? 1U : 0U;
     CHECK(queued.state_id != 0);
   }
+  CHECK(selection_events == 1);
 
   struct SaveProgressState {
     int calls{0};
@@ -2977,6 +3020,14 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
   auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
                                                   &error);
   CHECK(reopened != nullptr);
+  patchy_engine_layer_mask_projection reopened_mask{};
+  reopened_mask.struct_size = sizeof(reopened_mask);
+  CHECK(patchy_engine_session_layer_mask(reopened, layer_id, &reopened_mask,
+                                         &error) == 1);
+  CHECK(reopened_mask.has_mask == 1);
+  CHECK(reopened_mask.bounds.width == 2);
+  CHECK(reopened_mask.bounds.height == 2);
+  CHECK(reopened_mask.default_color == 255);
   patchy_engine_buffer reopened_render{};
   CHECK(patchy_engine_session_render(reopened, {0, 0, 2, 2}, &reopened_render,
                                      &event, &error) == 1);

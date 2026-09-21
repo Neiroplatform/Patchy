@@ -3,12 +3,14 @@ export interface LayerProjection {
   id: bigint; parentId: bigint; kind: number; visible: boolean;
   opacity: number; name: string; clipped: boolean; fillOpacity: number;
   blendMode: number; lockFlags: number; bounds: Rect;
+  mask: null | { bounds: Rect; defaultColor: number; disabled: boolean; linked: boolean };
 }
 export interface DocumentProjection {
   width: number; height: number; colorMode: number; bitDepth: number;
   channels: number; activeLayerId: bigint; revision: bigint; stateId: bigint;
   layerCount: number; hasActiveLayer: boolean; dirty: boolean;
   canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
+  selection: Rect[];
 }
 export type WorkerState = "starting" | "ready" | "crashed" | "closed";
 export interface FilterProgress {
@@ -19,6 +21,7 @@ export interface CancellableOperation<T> { promise: Promise<T>; cancel(): void }
 export class PatchyWorkerClient {
   constructor(worker: Worker);
   readonly state: WorkerState;
+  readonly capabilities: bigint;
   initialize(moduleUrl: string, moduleOptions?: object): Promise<void>;
   open(bytes: Uint8Array): Promise<DocumentProjection>;
   create(width: number, height: number): Promise<DocumentProjection>;
@@ -32,6 +35,12 @@ export class PatchyWorkerClient {
   resizeCanvas(width: number, height: number, anchor?: number): Promise<DocumentProjection>;
   rotateCanvas(clockwiseDegrees: number): Promise<DocumentProjection>;
   cropDocument(crop: Rect): Promise<DocumentProjection>;
+  setSelection(rects: Rect[]): Promise<DocumentProjection>;
+  clearSelection(): Promise<DocumentProjection>;
+  createLayerMask(layerId: bigint): Promise<DocumentProjection>;
+  toggleLayerMask(layerId: bigint): Promise<DocumentProjection>;
+  invertLayerMask(layerId: bigint): Promise<DocumentProjection>;
+  removeLayerMask(layerId: bigint): Promise<DocumentProjection>;
   groupLayer(layerId: bigint, name?: string): Promise<DocumentProjection>;
   ungroup(layerId: bigint): Promise<DocumentProjection>;
   addPixelLayer(input: { name: string; width: number; height: number;

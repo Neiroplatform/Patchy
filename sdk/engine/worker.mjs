@@ -8,8 +8,8 @@ self.onmessage = async ({ data }) => {
     if (method === "initialize") {
       if (hostPromise) throw new Error("Patchy worker is already initialized");
       hostPromise = createWorkerHost(moduleUrl, moduleOptions);
-      await hostPromise;
-      self.postMessage({ id, ok: true, value: null });
+      const host = await hostPromise;
+      self.postMessage({ id, ok: true, value: { capabilities: host.capabilities } });
       return;
     }
     if (!hostPromise) throw new Error("Patchy worker is not initialized");

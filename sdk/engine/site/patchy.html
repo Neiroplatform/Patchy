@@ -30,6 +30,10 @@
 
     <main class="workspace" id="workspace">
       <aside class="tool-rail" aria-label="Workspace tools">
+        <button class="tool-button" id="marqueeToolButton" type="button" aria-label="Rectangular selection" aria-pressed="true" title="Rectangular selection (M)">□</button>
+        <button class="tool-button" id="panToolButton" type="button" aria-label="Pan canvas" aria-pressed="false" title="Pan canvas (H)">✋</button>
+        <button class="tool-button" id="selectAllButton" type="button" aria-label="Select all" title="Select all (Ctrl+A)" disabled>▣</button>
+        <button class="tool-button" id="clearSelectionButton" type="button" aria-label="Clear selection" title="Clear selection (Ctrl+D)" disabled>×</button>
         <span class="tool-spacer"></span>
         <button class="tool-button" id="togglePanelsButton" type="button" aria-label="Toggle panels" aria-pressed="false" title="Toggle panels">◫</button>
       </aside>
@@ -40,7 +44,12 @@
           <span id="documentMetrics"></span>
         </div>
         <div class="canvas-viewport" id="canvasViewport" tabindex="0">
-          <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
+          <span class="ruler ruler-horizontal" aria-hidden="true"></span>
+          <span class="ruler ruler-vertical" aria-hidden="true"></span>
+          <div class="canvas-frame" id="canvasFrame">
+            <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
+            <div class="selection-overlay" id="selectionOverlay" aria-hidden="true" hidden></div>
+          </div>
           <div class="empty-state" id="emptyState">
             <div class="empty-glyph" aria-hidden="true"><span></span></div>
             <p class="eyebrow">LOCAL-FIRST WORKSPACE</p>
@@ -63,7 +72,7 @@
           </div>
         </div>
         <footer class="stage-footer">
-          <span id="zoomLabel">Fit</span>
+          <span class="zoom-controls"><button id="zoomOutButton" type="button" aria-label="Zoom out">−</button><button id="zoomFitButton" type="button">Fit</button><button id="zoomInButton" type="button" aria-label="Zoom in">+</button><output id="zoomLabel">Fit</output></span>
           <span class="privacy-label"><b></b>Local session</span>
           <span id="memoryLabel">Worker isolated</span>
         </footer>
@@ -81,6 +90,10 @@
             <button type="button" id="ungroupLayerButton" disabled>Ungroup</button>
             <button type="button" id="removeLayerButton" disabled>Delete</button>
             <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
+            <button type="button" id="createMaskButton" disabled>Add mask</button>
+            <button type="button" id="toggleMaskButton" disabled>Disable mask</button>
+            <button type="button" id="invertMaskButton" disabled>Invert mask</button>
+            <button type="button" id="removeMaskButton" disabled>Remove mask</button>
           </div>
           <div class="layer-list" id="layerList" role="list" aria-label="Layers"></div>
           <div class="panel-empty" id="layersEmpty">Open a document to inspect its layers.</div>

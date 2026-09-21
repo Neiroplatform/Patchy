@@ -132,7 +132,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_SMART_OBJECT_AUTHORING |
     PATCHY_ENGINE_CAP_ADJUSTMENT_AUTHORING |
     PATCHY_ENGINE_CAP_VECTOR_MASK_AUTHORING |
-    PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING;
+    PATCHY_ENGINE_CAP_SMART_FILTER_AUTHORING |
+    PATCHY_ENGINE_CAP_SELECTION_AUTHORING;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -684,6 +685,48 @@ int patchy_engine_session_selection_mask(
                      error);
 }
 
+int patchy_engine_session_set_selection(
+    patchy_engine_session *session,
+    const patchy_engine_selection_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->rect_count > 1U ||
+      (input->rect_count != 0 && input->rects == nullptr)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "zero or one rectangular selection is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  try {
+    patchy::engine::SelectionSnapshot selection;
+    selection.selection.reserve(input->rect_count);
+    for (std::size_t index = 0; index < input->rect_count; ++index) {
+      const auto &source = input->rects[index];
+      selection.selection.push_back(
+          {source.x, source.y, source.width, source.height});
+    }
+    selection.display_region = selection.selection;
+    const auto result = session->value->execute(
+        patchy::engine::SetSelection{std::move(selection)});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate selection rectangles");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown selection authoring failure");
+  }
+}
+
 int patchy_engine_session_layer_count(const patchy_engine_session *session,
                                       std::size_t *count,
                                       patchy_engine_error *error) {
@@ -984,6 +1027,53 @@ int patchy_engine_session_set_layer_mask(
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown layer mask authoring failure");
   }
+}
+
+int patchy_engine_session_layer_mask(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_layer_mask_projection *mask, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || mask == nullptr ||
+      mask->struct_size != sizeof(*mask) || layer_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, layer and initialized mask projection are required");
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  if (layer == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "mask layer does not exist");
+  }
+  const auto struct_size = mask->struct_size;
+  *mask = {};
+  mask->struct_size = struct_size;
+  const auto *source = layer->mask() ? &*layer->mask() : nullptr;
+  if (source == nullptr) {
+    return 1;
+  }
+  mask->bounds = {source->bounds.x, source->bounds.y, source->bounds.width,
+                  source->bounds.height};
+  mask->default_color = source->default_color;
+  mask->disabled = source->disabled ? 1U : 0U;
+  mask->linked = patchy::layer_mask_linked(*layer) ? 1U : 0U;
+  mask->has_mask = 1U;
+  return 1;
+}
+
+int patchy_engine_session_layer_mask_pixels(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_buffer *gray, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || gray == nullptr ||
+      layer_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, layer and mask output are required");
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  if (layer == nullptr || !layer->mask()) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer has no raster mask");
+  }
+  return copy_buffer(layer->mask()->pixels.data(), gray, error);
 }
 
 int patchy_engine_session_apply_filter(
