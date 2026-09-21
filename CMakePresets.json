@@ -119,6 +119,21 @@
       }
     },
     {
+      "name": "wasm-sdk",
+      "displayName": "Qt-free browser engine SDK (Emscripten Worker module)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/wasm-sdk",
+      "toolchainFile": "${sourceDir}/.deps/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PATCHY_BUILD_APP": "OFF",
+        "PATCHY_BUILD_TESTS": "OFF",
+        "PATCHY_BUILD_WASM_SDK": "ON",
+        "CMAKE_C_FLAGS": "-pthread -fwasm-exceptions",
+        "CMAKE_CXX_FLAGS": "-pthread -fwasm-exceptions"
+      }
+    },
+    {
       "name": "wasm-release",
       "displayName": "WebAssembly app build (Qt for wasm, multithreaded; see docs/wasm.md)",
       "generator": "Ninja",
@@ -192,6 +207,10 @@
     {
       "name": "wasm-core",
       "configurePreset": "wasm-core"
+    },
+    {
+      "name": "wasm-sdk",
+      "configurePreset": "wasm-sdk"
     },
     {
       "name": "wasm-release",

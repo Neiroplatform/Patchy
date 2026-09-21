@@ -2562,6 +2562,39 @@ int patchy_engine_session_execute(patchy_engine_session *session,
   }
 }
 
+int patchy_engine_session_set_layer_visibility(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, std::uint64_t layer_id,
+    std::uint8_t visible, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  patchy_engine_command command{};
+  command.struct_size = sizeof(command);
+  command.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  command.type = PATCHY_ENGINE_COMMAND_SET_LAYER_VISIBILITY;
+  command.expected_state_id = expected_state_id;
+  command.expected_revision = expected_revision;
+  command.payload.set_layer_visibility = {layer_id,
+                                          static_cast<std::uint8_t>(visible != 0)};
+  return patchy_engine_session_execute(session, &command, event, error);
+}
+
+int patchy_engine_session_move_layer(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, std::uint64_t layer_id,
+    std::uint64_t target_layer_id, std::uint32_t position,
+    std::uint8_t has_target_layer, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  patchy_engine_command command{};
+  command.struct_size = sizeof(command);
+  command.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  command.type = PATCHY_ENGINE_COMMAND_MOVE_LAYER;
+  command.expected_state_id = expected_state_id;
+  command.expected_revision = expected_revision;
+  command.payload.move_layer = {layer_id, target_layer_id, position,
+                                static_cast<std::uint8_t>(has_target_layer != 0)};
+  return patchy_engine_session_execute(session, &command, event, error);
+}
+
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,
                                patchy_engine_error *error) {
@@ -2627,6 +2660,14 @@ int patchy_engine_session_render_with_progress(
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown render failure");
   }
+}
+
+int patchy_engine_session_render_region(
+    patchy_engine_session *session, std::int32_t x, std::int32_t y,
+    std::int32_t width, std::int32_t height, patchy_engine_buffer *rgba,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  return patchy_engine_session_render(session, {x, y, width, height}, rgba,
+                                      event, error);
 }
 
 int patchy_engine_session_save_psd(patchy_engine_session *session,

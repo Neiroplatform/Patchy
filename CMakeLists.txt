@@ -34,6 +34,7 @@ include(GNUInstallDirs)
 
 option(PATCHY_BUILD_APP "Build the Qt desktop application when Qt 6 is available" ON)
 option(PATCHY_BUILD_TESTS "Build unit tests" ON)
+option(PATCHY_BUILD_WASM_SDK "Build the Qt-free browser engine SDK" OFF)
 option(PATCHY_ENABLE_STRICT_WARNINGS "Enable strict compiler warnings" ON)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -522,6 +523,48 @@ foreach(engine_boundary_source
       "Qt-free engine boundary violated by a Qt include in ${engine_boundary_source}")
   endif()
 endforeach()
+
+if(PATCHY_BUILD_WASM_SDK)
+  if(NOT EMSCRIPTEN)
+    message(FATAL_ERROR "PATCHY_BUILD_WASM_SDK requires the Emscripten toolchain")
+  endif()
+  add_executable(patchy_engine_wasm_sdk src/engine/wasm_sdk_main.cpp)
+  target_link_libraries(patchy_engine_wasm_sdk PRIVATE patchy_engine)
+  target_compile_options(patchy_engine_wasm_sdk PRIVATE -pthread -fwasm-exceptions)
+  target_link_options(patchy_engine_wasm_sdk PRIVATE
+    --no-entry
+    -pthread
+    -fwasm-exceptions
+    -sWASM_BIGINT=1
+    -sMODULARIZE=1
+    -sEXPORT_ES6=1
+    -sEXPORT_NAME=createPatchyEngineModule
+    -sEXPORTED_RUNTIME_METHODS=HEAPU8
+    -sENVIRONMENT=worker
+    -sALLOW_MEMORY_GROWTH=1
+    -sINITIAL_MEMORY=256MB
+    -sMAXIMUM_MEMORY=4GB
+    -sSTACK_SIZE=8MB
+    -sDEFAULT_PTHREAD_STACK_SIZE=1MB
+    -sPTHREAD_POOL_SIZE=32
+    -sPTHREAD_POOL_SIZE_STRICT=2
+    -Wno-pthreads-mem-growth
+    "SHELL:-sEXPORTED_FUNCTIONS=@${PROJECT_SOURCE_DIR}/sdk/engine/exports.json"
+  )
+  set_target_properties(patchy_engine_wasm_sdk PROPERTIES
+    OUTPUT_NAME patchy-engine
+    SUFFIX ".mjs")
+  patchy_configure_target(patchy_engine_wasm_sdk)
+endif()
+
+if(PATCHY_BUILD_TESTS)
+  find_program(PATCHY_NODE_EXECUTABLE node)
+  if(PATCHY_NODE_EXECUTABLE)
+    add_test(NAME patchy_sdk_contract_tests
+      COMMAND "${PATCHY_NODE_EXECUTABLE}" --test
+              "${PROJECT_SOURCE_DIR}/tests/sdk/worker_contract_tests.mjs")
+  endif()
+endif()
 
 if(PATCHY_BUILD_APP)
   # Qt ships no PrintSupport (or Test need) for WebAssembly; requesting it

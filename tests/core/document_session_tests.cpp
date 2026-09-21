@@ -2297,16 +2297,29 @@ void engine_host_protocol_authors_layers_and_document_geometry() {
   CHECK(upper.clipped == 1);
   CHECK(upper.bounds.width == 4);
 
+  const auto before_visibility = project();
+  CHECK(patchy_engine_session_set_layer_visibility(
+            session, before_visibility.state_id, before_visibility.revision,
+            upper_id, 0, &ignored, &error) == 1);
+  CHECK(patchy_engine_session_set_layer_visibility(
+            session, before_visibility.state_id, before_visibility.revision,
+            upper_id, 1, &ignored, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  const auto hidden = project();
+  CHECK(patchy_engine_session_set_layer_visibility(
+            session, hidden.state_id, hidden.revision, upper_id, 1, &ignored,
+            &error) == 1);
+
   patchy_engine_command add_group{};
   add_group.type = PATCHY_ENGINE_COMMAND_ADD_GROUP;
   set_name(add_group.payload.add_group.name,
            add_group.payload.add_group.name_size, "Browser group");
   const auto group = execute(add_group);
-  patchy_engine_command move_base{};
-  move_base.type = PATCHY_ENGINE_COMMAND_MOVE_LAYER;
-  move_base.payload.move_layer = {base_id, group.affected_layer_id,
-                                  PATCHY_ENGINE_DROP_ON_ITEM, 1};
-  execute(move_base);
+  const auto before_move = project();
+  CHECK(patchy_engine_session_move_layer(
+            session, before_move.state_id, before_move.revision, base_id,
+            group.affected_layer_id, PATCHY_ENGINE_DROP_ON_ITEM, 1, &ignored,
+            &error) == 1);
   patchy_engine_command move_upper{};
   move_upper.type = PATCHY_ENGINE_COMMAND_MOVE_LAYER;
   move_upper.payload.move_layer = {upper_id, group.affected_layer_id,

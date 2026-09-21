@@ -1,0 +1,18 @@
+[
+  "_malloc",
+  "_free",
+  "_patchy_engine_runtime_create",
+  "_patchy_engine_runtime_destroy",
+  "_patchy_engine_session_open_psd",
+  "_patchy_engine_session_create_rgba8",
+  "_patchy_engine_session_destroy",
+  "_patchy_engine_session_document",
+  "_patchy_engine_session_layer_at",
+  "_patchy_engine_session_set_layer_visibility",
+  "_patchy_engine_session_move_layer",
+  "_patchy_engine_session_undo",
+  "_patchy_engine_session_redo",
+  "_patchy_engine_session_render_region",
+  "_patchy_engine_session_save_psd",
+  "_patchy_engine_buffer_release"
+]

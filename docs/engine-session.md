@@ -220,6 +220,25 @@ tree and rejects Qt includes in the public engine facade at configure time. A
 negative CMake fixture proves the guard fails closed, so native, Windows and
 WASM configurations enforce the same boundary.
 
+## Browser Worker SDK
+
+`sdk/engine` is the first private browser binding for the C ABI. The client
+transfers an owned copy of input bytes to one Dedicated Worker, correlates
+typed requests and rejects every pending request if the Worker traps or message
+decoding fails. The Worker alone owns the Emscripten runtime and active session;
+it exposes `open`/`create`, document and layer projections, visibility and move,
+undo/redo, bounded render and layered PSD save. Canonical document state never
+enters the UI process.
+
+The `wasm-sdk` preset builds a no-entry ES module named `patchy-engine.mjs`.
+Its checked export manifest contains only allocator functions and the C ABI
+surface used by the binding. `wasm_sdk_main.cpp` pins every wasm32 structure
+size and offset consumed by JavaScript, so an Emscripten ABI-layout change
+fails the build instead of corrupting projections. Node contract tests cover
+the complete Worker workflow, transferable input ownership, output-buffer
+release, export closure and explicit crash state. The actual Emscripten build
+remains a required hosted gate when the pinned toolchain is available.
+
 ## Desktop transition
 
 The Qt shell now stores its canonical document, committed selection and all

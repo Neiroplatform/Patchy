@@ -1,0 +1,31 @@
+export interface Rect { x: number; y: number; width: number; height: number }
+export interface LayerProjection {
+  id: bigint; parentId: bigint; kind: number; visible: boolean;
+  opacity: number; name: string; clipped: boolean; fillOpacity: number;
+  blendMode: number; lockFlags: number; bounds: Rect;
+}
+export interface DocumentProjection {
+  width: number; height: number; colorMode: number; bitDepth: number;
+  channels: number; activeLayerId: bigint; revision: bigint; stateId: bigint;
+  layerCount: number; hasActiveLayer: boolean; dirty: boolean;
+  canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
+}
+export type WorkerState = "starting" | "ready" | "crashed" | "closed";
+
+export class PatchyWorkerClient {
+  constructor(worker: Worker);
+  readonly state: WorkerState;
+  initialize(moduleUrl: string, moduleOptions?: object): Promise<void>;
+  open(bytes: Uint8Array): Promise<DocumentProjection>;
+  create(width: number, height: number): Promise<DocumentProjection>;
+  snapshot(): Promise<DocumentProjection>;
+  setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;
+  moveLayer(layerId: bigint, targetLayerId: bigint | null,
+            position: number): Promise<DocumentProjection>;
+  undo(): Promise<DocumentProjection>;
+  redo(): Promise<DocumentProjection>;
+  render(region: Rect): Promise<Uint8Array>;
+  save(): Promise<Uint8Array>;
+  close(): Promise<null>;
+  terminate(): void;
+}

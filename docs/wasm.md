@@ -33,16 +33,8 @@ surface.
 pwsh -File scripts\wasm\setup-emsdk.ps1
 ```
 
-Idempotent: clones emsdk into `.deps\emsdk` (gitignored), `git pull`s an
-existing clone (a stale checkout fails with "unknown version"), installs +
-activates Emscripten 4.0.7, the Qt-supported version (`-EmsdkVersion`
-provisions others; versions coexist, and emsdk swaps `upstream/` in place on
-activate, so serialize builds across versions and reactivate 4.0.7 when
-done). The bundled node 22.16.0 runs the tests; the scripts glob
-`.deps\emsdk\node\*\bin\node.exe` and build-wasm.bat existence-checks for the
-`bin\node.exe` layout, so extra node version directories (newer emsdk node
-packages drop the `bin\` level) are tolerated as long as exactly one
-directory matches that layout.
+The script activates pinned Emscripten 4.0.7 under `.deps\emsdk`. Serialize
+other-version builds, then reactivate 4.0.7. Bundled Node 22.16.0 runs tests.
 
 ## Configure and build (wasm-core)
 
@@ -75,6 +67,24 @@ The suite passes at the Windows count with the 2.4 GB
 (its fixture exceeds a 32-bit address space, the wasm32 cap). The engine
 libraries carry no wasm `#ifdef`s; the one guard, in `tests/core/main.cpp`,
 skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
+
+## Qt-free browser SDK
+
+`cmake --preset wasm-sdk` followed by `cmake --build --preset wasm-sdk`
+produces `build/wasm-sdk/patchy-engine.mjs` and its `.wasm` sidecar. The target
+is a no-entry ES module for Dedicated Workers, uses wasm BigInt for the C ABI's
+64-bit IDs and keeps the same growable 256 MB to 4 GB heap envelope as
+`wasm-core`. It contains no Qt or browser UI.
+
+`sdk/engine/client.mjs` owns request correlation and crash state;
+`worker.mjs` owns one runtime/session; `module-adapter.mjs` is the only code
+that reads C ABI structures. Input is copied once into a transferable buffer
+before leaving the UI thread. Render and PSD outputs are copied into owned JS
+buffers before the engine buffer is released. The checked export manifest and
+wasm32 layout assertions fail closed when the C ABI or toolchain layout drifts.
+Run the platform-independent contract with
+`node --test tests/sdk/worker_contract_tests.mjs`; the real artifact still
+requires the pinned emsdk and the hosted wasm gate.
 
 ## wasm-core preset decisions (all in CMakePresets.json)
 
@@ -110,23 +120,11 @@ pwsh -File scripts\wasm\setup-emsdk.ps1
 pwsh -File scripts\wasm\setup-qt-wasm.ps1
 ```
 
-The second script installs Qt 6.10.3 `wasm_multithread` (plus qtimageformats)
-into `.deps\Qt\6.10.3\wasm_multithread` via aqtinstall (venv
-`.deps\aqt-venv`, upgraded each run), and the matching `win64_msvc2022_64`
-host kit beside it. `QT_HOST_PATH` must be the same Qt version as the wasm
-kit (moc, rcc, lrelease, lupdate, and the staged `qtbase_<code>.qm` files come from it;
-verified after install). `-WasmArch wasm_singlethread` and `-QtVersion`
-select other kits; kits coexist under `.deps\Qt\<version>\`, so rollback is
-a preset edit. Desktop presets stay on their vendored 6.8.3 kit. The preset
-chains Qt's toolchain file into emsdk's via `QT_CHAINLOAD_TOOLCHAIN_FILE`.
-
-Not 6.11 yet: released aqtinstall (3.3.0) cannot install a 6.11 desktop
-host kit (per-arch folders, no base `Updates.xml`); revisit when aqtinstall
-understands the layout.
-
-Kit facts: 6.10 suspends via `EM_ASYNC_JS` (no `-sASYNCIFY_IMPORTS`);
-Emscripten 3.1.58+ folds the pthread bootstrap into `patchy.js` (no
-`patchy.worker.js`).
+The second script installs Qt 6.10.3 `wasm_multithread`, qtimageformats and
+the matching host kit under `.deps\Qt\6.10.3`. `QT_HOST_PATH` must match the
+wasm kit. `-WasmArch wasm_singlethread` selects the ST kit; desktop stays on
+6.8.3. Qt 6.10 suspends through `EM_ASYNC_JS`; current Emscripten folds the
+pthread bootstrap into `patchy.js`.
 
 ### Build, serve, stop
 
@@ -148,9 +146,8 @@ When wasm work is finished, stop every local server you started with
 `scripts\wasm\free-server-port.ps1 -Port <port>`, one call per port (repo
 rule; see AGENTS.md). It only stops node listeners.
 
-A hidden tab never fires requestAnimationFrame, so Qt stops presenting and
-the tab looks frozen; nothing is wrong. Keep the tab foregrounded, or shim
-requestAnimationFrame onto setTimeout before qtloader runs (harness below).
+A hidden tab does not present because requestAnimationFrame stops. Keep wasm
+tests foregrounded; the stress harness supplies its own timer shim.
 
 ### Decisions and gates
 
@@ -189,12 +186,9 @@ requestAnimationFrame onto setTimeout before qtloader runs (harness below).
 - **JSPI needs a source-built Qt** with wasm EH and `-feature-wasm_jspi`.
   Stock Qt's JS-exception libraries cannot mix with it, so the shipped aqt
   kit stays on Asyncify.
-- **Codegen: compile `-msimd128`, link `-O3`, `-sMALLOC=dlmalloc`.** SIMD wins
-  5-16% on compute steps (canaries stay byte-identical) and `-O3` beats `-Os`
-  at runtime. Mimalloc was 5-8% faster in a warm stress A/B, but the exact 350
-  MB C2Kyoto PSD drives it to wasm32's 4 GB ceiling and `std::bad_alloc`; the
-  threaded dlmalloc build opens it. `PATCHY_WASM_ALLOCATOR=mimalloc` remains a
-  benchmark option.
+- **Codegen: compile `-msimd128`, link `-O3`, use `dlmalloc`.** These choices
+  pass byte canaries and open the 350 MB C2Kyoto PSD. Mimalloc remains an
+  explicit benchmark option but reaches the wasm32 ceiling on that file.
 - **QtQuick is excluded** (Qt6::Qml is linked for QJSEngine only):
   `QT_QML_MODULE_NO_IMPORT_SCAN TRUE` plus
   `qt_import_plugins(patchy EXCLUDE_BY_TYPE qmltooling)`, both required (the
