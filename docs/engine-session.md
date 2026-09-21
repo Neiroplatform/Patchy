@@ -161,11 +161,20 @@ typed editing commands.
 must negotiate `PATCHY_ENGINE_HOST_PROTOCOL_VERSION` before opening a session;
 opaque runtime/session handles, fixed-width command/event envelopes, inline
 diagnostics and explicitly released output buffers keep C++ objects and
-exceptions behind the boundary. Version 1 reports capabilities and exposes a
-flat layer projection, bounded RGBA render, layer-visibility command, undo,
-redo and layered PSD save. The core contract test executes the same
-`open → inspect → render → mutate → undo → redo → save → reopen` sequence in
-every native or wasm-core build, and the header is valid C11.
+exceptions behind the boundary. Version 1 reports capabilities and now exposes
+both opened PSD and new RGBA8 document sessions; complete document identity,
+geometry, format, history and dirty projection; plus flat layer-tree projection
+with parent, kind, name, bounds, appearance, locks and clipping state. Every
+mutating envelope carries the exact expected document state identity, so a
+stale browser command fails before it reaches the model. Browser hosts can add
+solid layers and groups, remove/move/ungroup them, edit visibility/name/opacity/
+fill/blend/locks/clipping, resize image/canvas, rotate or crop, then render,
+undo/redo, encode layered PSD and acknowledge durable persistence separately.
+The save acknowledgement is also state-guarded, so bytes from an older state
+cannot clear the dirty flag of a newer edit. Core contract fixtures execute
+both `open → inspect → render → mutate → undo → redo → save → reopen` and
+`create → author layers/tree/geometry → render → save-ack → reopen` in every
+native or wasm-core build, and the header is valid strict C11.
 
 The build recursively rejects any Qt target in `patchy_engine`'s dependency
 tree and rejects Qt includes in the public engine facade at configure time. A
@@ -213,6 +222,8 @@ or a second dirty/revision counter is forbidden.
 
 - run the versioned host sequence under the supported wasm-core/Qt-WASM
   toolchain and compare its event/projection/output contract with native;
+- add channel/path/selection projections and pixel/vector authoring payloads to
+  the private host protocol without stabilizing it as public ABI prematurely;
 - migrate remaining unrelated direct shell mutations by cohesive command
   family while keeping desktop, scripting and browser hosts on one model;
 - complete Windows/WASM, corpus, Photoshop and independent review gates before
