@@ -13,6 +13,8 @@ const SELECTION_INPUT_SIZE = 32;
 const RECT_SIZE = 16;
 const LAYER_MASK_INPUT_SIZE = 72;
 const LAYER_MASK_SIZE = 24;
+const TEXT_INPUT_SIZE = 96;
+const TEXT_PROJECTION_SIZE = 1312;
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -383,6 +385,28 @@ export class EmscriptenPatchyEngine {
     }
   }
 
+  replacePixelLayer(session, snapshot, layerId, input) {
+    return this.#pixelLayerMutation(
+      "_patchy_engine_session_replace_rgba8_layer", session, snapshot,
+      { ...input, layerId });
+  }
+
+  layerPixels(session, layerId) {
+    return this.#bufferCall((buffer, event, error) =>
+      this.#module._patchy_engine_session_layer_rgba8_pixels(
+        session, layerId, buffer, error));
+  }
+
+  addTextLayer(session, snapshot, input) {
+    return this.#textLayerMutation(
+      "_patchy_engine_session_add_text_layer", session, snapshot, null, input);
+  }
+
+  updateTextLayer(session, snapshot, layerId, input) {
+    return this.#textLayerMutation(
+      "_patchy_engine_session_update_text_layer", session, snapshot, layerId, input);
+  }
+
   moveLayer(session, snapshot, layerId, targetLayerId, position) {
     return this.#mutation((event, error) =>
       this.#module._patchy_engine_session_move_layer(
@@ -434,6 +458,7 @@ export class EmscriptenPatchyEngine {
   #layers(session, count, error) {
     const layer = this.#alloc(LAYER_SIZE);
     const mask = this.#alloc(LAYER_MASK_SIZE);
+    const text = this.#alloc(TEXT_PROJECTION_SIZE);
     try {
       const layers = [];
       for (let index = 0; index < count; ++index) {
@@ -445,10 +470,28 @@ export class EmscriptenPatchyEngine {
         this.#check(this.#module._patchy_engine_session_layer_mask(
           session, u64(view, 0), mask, error), error);
         const maskView = this.#view(mask, LAYER_MASK_SIZE);
+        const kind = view.getUint32(16, true);
+        let textValue = null;
+        if (kind === 3) {
+          this.#view(text, TEXT_PROJECTION_SIZE).setUint32(0, TEXT_PROJECTION_SIZE, true);
+          this.#check(this.#module._patchy_engine_session_text(
+            session, u64(view, 0), text, error), error);
+          const textView = this.#view(text, TEXT_PROJECTION_SIZE);
+          const valueSize = textView.getUint32(4, true);
+          const fontSize = textView.getUint32(1032, true);
+          textValue = {
+            value: decoder.decode(this.#module.HEAPU8.subarray(text + 8, text + 8 + valueSize)),
+            font: decoder.decode(this.#module.HEAPU8.subarray(text + 1036, text + 1036 + fontSize)),
+            sizePixels: textView.getFloat64(1296, true),
+            color: [textView.getUint8(1304), textView.getUint8(1305), textView.getUint8(1306)],
+            bold: textView.getUint8(1307) !== 0, italic: textView.getUint8(1308) !== 0,
+            boxText: textView.getUint8(1309) !== 0,
+          };
+        }
         layers.push({
           id: u64(view, 0),
           parentId: u64(view, 8),
-          kind: view.getUint32(16, true),
+          kind,
           visible: view.getUint8(20) !== 0,
           opacity: view.getFloat32(24, true),
           name: decoder.decode(this.#module.HEAPU8.subarray(
@@ -467,10 +510,12 @@ export class EmscriptenPatchyEngine {
             defaultColor: maskView.getUint8(20), disabled: maskView.getUint8(21) !== 0,
             linked: maskView.getUint8(22) !== 0,
           } : null,
+          text: textValue,
         });
       }
       return layers;
     } finally {
+      this.#module._free(text);
       this.#module._free(mask);
       this.#module._free(layer);
     }
@@ -514,6 +559,78 @@ export class EmscriptenPatchyEngine {
           session, command, event, error));
     } finally {
       this.#module._free(command);
+    }
+  }
+
+  #pixelLayerMutation(symbol, session, snapshot, input) {
+    const name = this.#text(input.name);
+    const rgba = input.rgba;
+    const expected = input.width * input.height * 4;
+    if (!(rgba instanceof Uint8Array) || !Number.isSafeInteger(expected) ||
+        input.width <= 0 || input.height <= 0 || rgba.byteLength !== expected) {
+      throw new TypeError("Complete RGBA8 pixel layer input is required");
+    }
+    this.#rect(input.bounds);
+    const pixels = this.#alloc(rgba.byteLength);
+    const namePointer = this.#alloc(name.byteLength || 1);
+    const value = this.#alloc(PIXEL_LAYER_INPUT_SIZE);
+    try {
+      this.#module.HEAPU8.set(rgba, pixels);
+      this.#module.HEAPU8.set(name, namePointer);
+      const view = this.#view(value, PIXEL_LAYER_INPUT_SIZE);
+      view.setUint32(0, PIXEL_LAYER_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true);
+      view.setBigUint64(24, input.layerId ?? 0n, true);
+      view.setInt32(32, input.bounds.x, true); view.setInt32(36, input.bounds.y, true);
+      view.setInt32(40, input.bounds.width, true); view.setInt32(44, input.bounds.height, true);
+      view.setInt32(48, input.width, true); view.setInt32(52, input.height, true);
+      view.setUint32(56, pixels, true); view.setUint32(60, rgba.byteLength, true);
+      view.setUint32(64, namePointer, true); view.setUint32(68, name.byteLength, true);
+      return this.#mutation((event, error) =>
+        this.#module[symbol](session, value, event, error));
+    } finally {
+      this.#module._free(value); this.#module._free(namePointer); this.#module._free(pixels);
+    }
+  }
+
+  #textLayerMutation(symbol, session, snapshot, layerId, input) {
+    const name = this.#text(input.name);
+    const text = this.#text(input.text, "Text content", 1024);
+    const font = this.#text(input.font, "Font family", 256);
+    const rgba = input.rgba;
+    const expected = input.width * input.height * 4;
+    const color = input.color;
+    if (!(rgba instanceof Uint8Array) || rgba.byteLength !== expected ||
+        !Number.isSafeInteger(expected) || !Number.isFinite(input.sizePixels) ||
+        input.sizePixels <= 0 || !Array.isArray(color) || color.length !== 3 ||
+        !color.every((component) => Number.isInteger(component) && component >= 0 && component <= 255)) {
+      throw new TypeError("Complete text layer input is required");
+    }
+    this.#rect(input.bounds);
+    const pointers = [rgba, name, text, font].map((bytes) => this.#alloc(bytes.byteLength || 1));
+    const value = this.#alloc(TEXT_INPUT_SIZE);
+    try {
+      [rgba, name, text, font].forEach((bytes, index) => this.#module.HEAPU8.set(bytes, pointers[index]));
+      const view = this.#view(value, TEXT_INPUT_SIZE);
+      view.setUint32(0, TEXT_INPUT_SIZE, true);
+      view.setBigUint64(8, snapshot.stateId, true); view.setBigUint64(16, snapshot.revision, true);
+      view.setInt32(24, input.bounds.x, true); view.setInt32(28, input.bounds.y, true);
+      view.setInt32(32, input.bounds.width, true); view.setInt32(36, input.bounds.height, true);
+      view.setInt32(40, input.width, true); view.setInt32(44, input.height, true);
+      view.setUint32(48, pointers[0], true); view.setUint32(52, rgba.byteLength, true);
+      view.setUint32(56, pointers[1], true); view.setUint32(60, name.byteLength, true);
+      view.setUint32(64, pointers[2], true); view.setUint32(68, text.byteLength, true);
+      view.setUint32(72, pointers[3], true); view.setUint32(76, font.byteLength, true);
+      view.setFloat64(80, input.sizePixels, true);
+      color.forEach((component, index) => view.setUint8(88 + index, component));
+      view.setUint8(91, input.bold ? 1 : 0); view.setUint8(92, input.italic ? 1 : 0);
+      view.setUint8(93, input.boxText ? 1 : 0);
+      return this.#mutation((event, error) => layerId == null
+        ? this.#module[symbol](session, value, event, error)
+        : this.#module[symbol](session, layerId, value, event, error));
+    } finally {
+      this.#module._free(value); pointers.forEach((pointer) => this.#module._free(pointer));
     }
   }
 

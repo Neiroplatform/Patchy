@@ -75,6 +75,17 @@ export class PatchyWorkerClient {
       name, width, height, bounds, rgba: owned.buffer,
     }, [owned.buffer]);
   }
+  layerPixels(layerId) { return this.#request("layerPixels", { layerId: String(layerId) }); }
+  replacePixelLayer(layerId, { name, width, height, bounds, rgba }) {
+    const owned = rgba.slice();
+    return this.#request("replacePixelLayer", {
+      layerId: String(layerId), name, width, height, bounds, rgba: owned.buffer,
+    }, [owned.buffer]);
+  }
+  addTextLayer(input) { return this.#textLayerRequest("addTextLayer", null, input); }
+  updateTextLayer(layerId, input) {
+    return this.#textLayerRequest("updateTextLayer", layerId, input);
+  }
   moveLayer(layerId, targetLayerId, position) {
     return this.#request("moveLayer", {
       layerId: String(layerId),
@@ -97,6 +108,14 @@ export class PatchyWorkerClient {
   render(region) { return this.#request("render", { region }); }
   save() { return this.#request("save"); }
   close() { return this.#request("close"); }
+
+  #textLayerRequest(method, layerId, input) {
+    const owned = input.rgba.slice();
+    return this.#request(method, {
+      ...(layerId == null ? {} : { layerId: String(layerId) }),
+      input: { ...input, rgba: owned.buffer },
+    }, [owned.buffer]);
+  }
 
   terminate() {
     this.#worker.terminate();

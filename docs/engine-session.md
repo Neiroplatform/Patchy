@@ -192,7 +192,12 @@ dropped counter makes a slow browser consumer observable without allocating
 inside the engine event callback.
 Browser-authored text accepts editable UTF-8 text/font/style metadata together
 with the host-rasterized RGBA preview that remains the committed reference
-pixels. Embedded and linked Smart Objects accept the same bounded preview plus
+pixels. Browser text updates retain stable layer identity, rebuild the editable
+metadata/reference raster in one prepared-document commit and round-trip
+through undo/redo and PSD reopen. Editable RGBA8 layer pixels can be exported
+through an owned buffer and atomically replaced with new pixels/bounds for one-
+commit paint and transform gestures. Embedded and linked Smart Objects accept
+the same bounded preview plus
 either immutable source bytes or explicit external URI/absolute/relative link
 metadata. Both families commit through the stale-safe prepared-document
 boundary, project their editable/source identity back to the host and preserve
@@ -228,11 +233,11 @@ WASM configurations enforce the same boundary.
 transfers an owned copy of input bytes to one Dedicated Worker, correlates
 typed requests and rejects every pending request if the Worker traps or message
 decoding fails. The Worker alone owns the Emscripten runtime and active session;
-it exposes `open`/`create`, document/layer/selection/mask projections, layer
-authoring, image/canvas resize, rotate/crop, canonical rectangular selection,
-raster-mask lifecycle, progress-aware selected-area filtering, undo/redo,
-bounded render and layered PSD save. Canonical document state never enters the
-UI process. Filter cancellation is a main-thread `SharedArrayBuffer`
+it exposes `open`/`create`, document/layer/selection/mask/text projections,
+layer and editable-text authoring, image/canvas geometry, canonical selection,
+raster masks, one-commit RGBA paint/transform, selected-area filtering,
+undo/redo, render and layered PSD save. Canonical document state never enters
+the UI process. Filter cancellation is a main-thread `SharedArrayBuffer`
 flag sampled by the C progress callback while the Worker is synchronously in
 Wasm, so cancellation remains responsive without concurrent session access.
 
@@ -253,11 +258,14 @@ pixels as layers, select/remove/group/ungroup/reorder/rename them and edit
 visibility, opacity and common blend modes before undo/redo and render. Every
 document can also be scaled, canvas-resized around the center, rotated or
 cropped. A shared command registry drives toolbar and keyboard actions; the
-canvas adds fit/zoom/pan, rulers and marquee selection. A selected pixel layer
-can be inverted inside that canonical selection with progress/cancel, and can
-add, disable, invert or remove a raster mask. Every mutation crosses the
+canvas adds fit/zoom/pan, rulers and marquee selection. Selected pixels support
+invert plus brush/eraser; pixel or text layers support direct move/numeric free
+transform, and editable text can be created/restyled from a browser-rasterized
+reference. Raster masks can be added, disabled, inverted or removed. Every
+completed gesture crosses the
 revision/state-guarded Worker RPC; the shell never owns a second selection or
-document state. Empty, busy, drop, engine-error and Worker-crash states remain
+document state. Masked-layer transform is deliberately refused until linked
+mask geometry can commit atomically. Empty, busy, drop, engine-error and Worker-crash states remain
 explicit. Download completion deliberately does not acknowledge durable save
 because the browser cannot prove the file was kept.
 

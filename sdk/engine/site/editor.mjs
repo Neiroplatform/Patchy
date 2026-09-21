@@ -17,6 +17,9 @@ let zoomMode = "fit";
 let zoom = 1;
 let marqueeDraft = null;
 let panStart = null;
+let moveDraft = null;
+let paintDraft = null;
+let textEditingId = null;
 
 const layerKinds = ["Pixels", "Group", "Adjustment", "Text", "Shape", "Smart object"];
 const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
@@ -78,6 +81,9 @@ function updateControls() {
   $("ungroupLayerButton").disabled = busy || layer?.kind !== 1;
   $("removeLayerButton").disabled = busy || !layer;
   $("invertLayerButton").disabled = busy || layer?.kind !== 0;
+  $("textLayerButton").disabled = busy || !snapshot;
+  $("textLayerButton").textContent = layer?.kind === 3 ? "Edit text" : "Add text";
+  $("layerTransformButton").disabled = busy || ![0, 3].includes(layer?.kind) || Boolean(layer?.mask);
   $("createMaskButton").disabled = busy || layer?.kind !== 0 || Boolean(layer?.mask);
   $("toggleMaskButton").disabled = busy || !layer?.mask;
   $("toggleMaskButton").textContent = layer?.mask?.disabled ? "Enable mask" : "Disable mask";
@@ -228,10 +234,14 @@ async function renderDocument() {
   if (bytes.byteLength !== expected) throw new Error(`Engine returned ${bytes.byteLength} RGBA bytes, expected ${expected}`);
   canvas.width = snapshot.width;
   canvas.height = snapshot.height;
+  $("gestureCanvas").width = snapshot.width;
+  $("gestureCanvas").height = snapshot.height;
   const pixels = new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   context.putImageData(new ImageData(pixels, snapshot.width, snapshot.height), 0, 0);
+  $("gestureCanvas").getContext("2d").clearRect(0, 0, snapshot.width, snapshot.height);
   applyViewport();
   renderSelection();
+  renderTransformOverlay();
 }
 
 function applyViewport() {
@@ -265,8 +275,21 @@ function renderSelection(rect = marqueeDraft) {
 function setCanvasTool(tool) {
   canvasTool = tool;
   $("canvasViewport").dataset.tool = tool;
-  $("marqueeToolButton").setAttribute("aria-pressed", String(tool === "marquee"));
-  $("panToolButton").setAttribute("aria-pressed", String(tool === "pan"));
+  for (const [id, value] of [["moveToolButton", "move"], ["marqueeToolButton", "marquee"],
+    ["panToolButton", "pan"], ["brushToolButton", "brush"],
+    ["eraserToolButton", "eraser"], ["textToolButton", "text"]]) {
+    $(id).setAttribute("aria-pressed", String(tool === value));
+  }
+}
+
+function renderTransformOverlay(bounds = moveDraft?.bounds) {
+  const overlay = $("transformOverlay");
+  if (!snapshot || !bounds) { overlay.hidden = true; return; }
+  overlay.style.left = `${bounds.x / snapshot.width * 100}%`;
+  overlay.style.top = `${bounds.y / snapshot.height * 100}%`;
+  overlay.style.width = `${bounds.width / snapshot.width * 100}%`;
+  overlay.style.height = `${bounds.height / snapshot.height * 100}%`;
+  overlay.hidden = false;
 }
 
 function setZoom(next) {
@@ -370,6 +393,175 @@ async function importPixelLayer(file) {
   finally { image?.close?.(); setBusy(false); }
 }
 
+function colorBytes(value) {
+  const match = /^#([0-9a-f]{6})$/i.exec(value);
+  if (!match) throw new TypeError("Color must be a six-digit hex value");
+  const number = Number.parseInt(match[1], 16);
+  return [(number >> 16) & 255, (number >> 8) & 255, number & 255];
+}
+
+function textLayerPayload(style, bounds, name) {
+  const byteLength = bounds.width * bounds.height * 4;
+  if (!Number.isSafeInteger(byteLength) || byteLength <= 0 || byteLength > 512 * 1024 * 1024) {
+    throw new RangeError("Text raster exceeds the 512 MB browser editing limit");
+  }
+  const scratch = document.createElement("canvas");
+  scratch.width = bounds.width;
+  scratch.height = bounds.height;
+  const scratchContext = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
+  scratchContext.clearRect(0, 0, bounds.width, bounds.height);
+  scratchContext.fillStyle = `rgb(${style.color.join(" ")})`;
+  scratchContext.textBaseline = "top";
+  scratchContext.font = `${style.italic ? "italic " : ""}${style.bold ? "700 " : ""}${style.sizePixels}px ${style.font}`;
+  const lineHeight = style.sizePixels * 1.2;
+  String(style.value).split(/\r?\n/).forEach((line, index) =>
+    scratchContext.fillText(line || " ", 0, index * lineHeight, bounds.width));
+  return { name, text: style.value, font: style.font, sizePixels: style.sizePixels,
+    color: style.color, bold: style.bold, italic: style.italic, boxText: true,
+    width: bounds.width, height: bounds.height, bounds,
+    rgba: new Uint8Array(scratchContext.getImageData(0, 0, bounds.width, bounds.height).data) };
+}
+
+function openTextDialog() {
+  if (busy || !snapshot) return;
+  const layer = selectedLayer();
+  textEditingId = layer?.kind === 3 ? layer.id : null;
+  const selectedBounds = snapshot.selection?.[0];
+  const bounds = textEditingId ? layer.bounds : selectedBounds || {
+    x: Math.round(snapshot.width * .1), y: Math.round(snapshot.height * .1),
+    width: Math.max(160, Math.round(snapshot.width * .5)),
+    height: Math.max(80, Math.round(snapshot.height * .2)),
+  };
+  const style = layer?.text || { value: "Text", font: "Arial", sizePixels: 48,
+    color: [17, 17, 17], bold: false, italic: false };
+  $("textDialogTitle").textContent = textEditingId ? "Edit text layer" : "Create text layer";
+  $("commitTextButton").textContent = textEditingId ? "Update text" : "Create text";
+  $("textValueInput").value = style.value;
+  $("textFontInput").value = style.font;
+  $("textSizeInput").value = String(style.sizePixels);
+  $("textColorInput").value = `#${style.color.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
+  $("textBoldInput").checked = style.bold;
+  $("textItalicInput").checked = style.italic;
+  for (const [id, value] of [["textXInput", bounds.x], ["textYInput", bounds.y],
+    ["textWidthInput", bounds.width], ["textHeightInput", bounds.height]]) $(id).value = String(value);
+  $("textDialog").showModal();
+}
+
+async function commitTextDialog() {
+  const x = integerInput("textXInput"); const y = integerInput("textYInput");
+  const width = integerInput("textWidthInput", true); const height = integerInput("textHeightInput", true);
+  const sizePixels = Number($("textSizeInput").value);
+  const value = $("textValueInput").value; const font = $("textFontInput").value.trim();
+  if ([x, y, width, height].some((item) => item == null) || !value || !font ||
+      !Number.isFinite(sizePixels) || sizePixels <= 0) return;
+  const layer = selectedLayer();
+  let payload;
+  try {
+    payload = textLayerPayload({ value, font, sizePixels,
+      color: colorBytes($("textColorInput").value), bold: $("textBoldInput").checked,
+      italic: $("textItalicInput").checked }, { x, y, width, height },
+      textEditingId ? layer?.name || "Text" : value.split(/\s+/)[0] || "Text");
+  } catch (error) { showError("Could not prepare text", error); return; }
+  $("textDialog").close();
+  const editing = textEditingId; textEditingId = null;
+  await mutate(editing ? "Updating text" : "Creating text", () => editing
+    ? client.updateTextLayer(editing, payload) : client.addTextLayer(payload));
+}
+
+function openLayerTransformDialog() {
+  const layer = selectedLayer();
+  if (busy || ![0, 3].includes(layer?.kind) || layer?.mask) return;
+  for (const [id, value] of [["layerXInput", layer.bounds.x], ["layerYInput", layer.bounds.y],
+    ["layerWidthInput", layer.bounds.width], ["layerHeightInput", layer.bounds.height]]) $(id).value = String(value);
+  $("layerTransformDialog").showModal();
+}
+
+async function transformedLayerSnapshot(layer, bounds) {
+  const byteLength = bounds.width * bounds.height * 4;
+  if (!Number.isSafeInteger(byteLength) || byteLength <= 0 || byteLength > 512 * 1024 * 1024) {
+    throw new RangeError("Transformed layer exceeds the 512 MB browser editing limit");
+  }
+  if (layer.kind === 3) {
+    return client.updateTextLayer(layer.id,
+      textLayerPayload(layer.text, bounds, layer.name));
+  }
+  const sourceBytes = await client.layerPixels(layer.id);
+  const source = document.createElement("canvas");
+  source.width = layer.bounds.width; source.height = layer.bounds.height;
+  source.getContext("2d").putImageData(new ImageData(
+    new Uint8ClampedArray(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength),
+    source.width, source.height), 0, 0);
+  const target = document.createElement("canvas");
+  target.width = bounds.width; target.height = bounds.height;
+  const targetContext = target.getContext("2d", { alpha: true, willReadFrequently: true });
+  targetContext.drawImage(source, 0, 0, bounds.width, bounds.height);
+  const rgba = new Uint8Array(targetContext.getImageData(0, 0, bounds.width, bounds.height).data);
+  return client.replacePixelLayer(layer.id, { name: layer.name,
+    width: bounds.width, height: bounds.height, bounds, rgba });
+}
+
+function commitLayerBounds(layer, bounds, title = "Transforming layer") {
+  return mutate(title, () => transformedLayerSnapshot(layer, bounds));
+}
+
+function drawPaintSegment(draft, from, to) {
+  const size = Number($("brushSizeInput").value);
+  const erase = draft.tool === "eraser";
+  const localFrom = { x: from.x - draft.layer.bounds.x, y: from.y - draft.layer.bounds.y };
+  const localTo = { x: to.x - draft.layer.bounds.x, y: to.y - draft.layer.bounds.y };
+  const paint = (target, a, b, color, composite) => {
+    target.save(); target.lineCap = "round"; target.lineJoin = "round";
+    target.lineWidth = size; target.globalCompositeOperation = composite;
+    target.strokeStyle = color; target.beginPath(); target.moveTo(a.x, a.y); target.lineTo(b.x, b.y); target.stroke();
+    target.beginPath(); target.arc(b.x, b.y, size / 2, 0, Math.PI * 2); target.fillStyle = color; target.fill(); target.restore();
+  };
+  paint(draft.context, localFrom, localTo, $("brushColorInput").value,
+    erase ? "destination-out" : "source-over");
+  paint(draft.overlay, from, to, erase ? "#ffffff88" : $("brushColorInput").value,
+    "source-over");
+}
+
+async function beginPaint(event) {
+  const layer = selectedLayer();
+  if (busy || layer?.kind !== 0 || event.button !== 0) return;
+  canvas.setPointerCapture(event.pointerId);
+  const point = canvasPoint(event);
+  const draft = { pointerId: event.pointerId, tool: canvasTool, layer, last: point, ready: false };
+  paintDraft = draft;
+  try {
+    const bytes = await client.layerPixels(layer.id);
+    if (paintDraft !== draft) return;
+    const scratch = document.createElement("canvas");
+    scratch.width = layer.bounds.width; scratch.height = layer.bounds.height;
+    draft.context = scratch.getContext("2d", { alpha: true, willReadFrequently: true });
+    draft.context.putImageData(new ImageData(
+      new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      scratch.width, scratch.height), 0, 0);
+    draft.overlay = $("gestureCanvas").getContext("2d");
+    draft.ready = true;
+    drawPaintSegment(draft, point, point);
+  } catch (error) { paintDraft = null; showError("Could not start painting", error); }
+}
+
+function movePaint(event) {
+  if (!paintDraft?.ready || event.pointerId !== paintDraft.pointerId) return;
+  const point = canvasPoint(event); drawPaintSegment(paintDraft, paintDraft.last, point); paintDraft.last = point;
+}
+
+function finishPaint(event, cancelled = false) {
+  const draft = paintDraft;
+  if (!draft || event.pointerId !== draft.pointerId) return;
+  paintDraft = null;
+  $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  if (cancelled || !draft.ready) return;
+  const rgba = new Uint8Array(draft.context.getImageData(
+    0, 0, draft.layer.bounds.width, draft.layer.bounds.height).data);
+  mutate(draft.tool === "eraser" ? "Erasing pixels" : "Painting pixels", () =>
+    client.replacePixelLayer(draft.layer.id, { name: draft.layer.name,
+      width: draft.layer.bounds.width, height: draft.layer.bounds.height,
+      bounds: draft.layer.bounds, rgba }));
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
 }
@@ -381,8 +573,12 @@ registerCommand("document.save", "saveButton", saveDocument, () => !busy && Bool
 registerCommand("history.undo", "undoButton", () => mutate("Undo", () => client.undo()), () => !busy && Boolean(snapshot?.canUndo));
 registerCommand("history.redo", "redoButton", () => mutate("Redo", () => client.redo()), () => !busy && Boolean(snapshot?.canRedo));
 registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
+registerCommand("tool.move", "moveToolButton", () => setCanvasTool("move"));
 registerCommand("tool.marquee", "marqueeToolButton", () => setCanvasTool("marquee"));
 registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"));
+registerCommand("tool.brush", "brushToolButton", () => setCanvasTool("brush"));
+registerCommand("tool.eraser", "eraserToolButton", () => setCanvasTool("eraser"));
+registerCommand("tool.text", "textToolButton", () => { setCanvasTool("text"); openTextDialog(); });
 registerCommand("selection.all", "selectAllButton", () => {
   mutate("Selecting all", () => client.setSelection([{ x: 0, y: 0, width: snapshot.width, height: snapshot.height }]));
 }, () => !busy && Boolean(snapshot));
@@ -413,6 +609,20 @@ $("ungroupLayerButton").addEventListener("click", () => {
   if (layer?.kind === 1) mutate("Ungrouping layers", () => client.ungroup(layer.id));
 });
 $("invertLayerButton").addEventListener("click", invertSelectedLayer);
+$("textLayerButton").addEventListener("click", openTextDialog);
+$("layerTransformButton").addEventListener("click", openLayerTransformDialog);
+$("commitTextButton").addEventListener("click", commitTextDialog);
+$("commitLayerTransformButton").addEventListener("click", () => {
+  const layer = selectedLayer();
+  const x = integerInput("layerXInput"); const y = integerInput("layerYInput");
+  const width = integerInput("layerWidthInput", true); const height = integerInput("layerHeightInput", true);
+  if (!layer || [x, y, width, height].some((value) => value == null)) return;
+  $("layerTransformDialog").close();
+  commitLayerBounds(layer, { x, y, width, height });
+});
+$("brushSizeInput").addEventListener("input", () => {
+  $("brushSizeOutput").textContent = `${$("brushSizeInput").value} px`;
+});
 $("createMaskButton").addEventListener("click", () => {
   const layer = selectedLayer();
   if (layer) mutate("Creating layer mask", () => client.createLayerMask(layer.id));
@@ -478,7 +688,19 @@ $("togglePanelsButton").addEventListener("click", () => {
 });
 
 canvas.addEventListener("pointerdown", (event) => {
-  if (busy || !snapshot || canvasTool !== "marquee" || event.button !== 0) return;
+  if (busy || !snapshot || event.button !== 0) return;
+  if (canvasTool === "brush" || canvasTool === "eraser") { beginPaint(event); return; }
+  if (canvasTool === "text") { openTextDialog(); return; }
+  if (canvasTool === "move") {
+    const layer = selectedLayer();
+    if (![0, 3].includes(layer?.kind) || layer?.mask) return;
+    const start = canvasPoint(event);
+    canvas.setPointerCapture(event.pointerId);
+    moveDraft = { layer, start, bounds: { ...layer.bounds } };
+    renderTransformOverlay();
+    return;
+  }
+  if (canvasTool !== "marquee") return;
   const start = canvasPoint(event);
   canvas.setPointerCapture(event.pointerId);
   marqueeDraft = { x: Math.floor(start.x), y: Math.floor(start.y), width: 1, height: 1 };
@@ -502,6 +724,25 @@ canvas.addEventListener("pointerdown", (event) => {
   canvas.addEventListener("pointermove", move);
   canvas.addEventListener("pointerup", finish);
   canvas.addEventListener("pointercancel", cancel);
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  movePaint(event);
+  if (!moveDraft) return;
+  const point = canvasPoint(event);
+  moveDraft.bounds = { ...moveDraft.layer.bounds,
+    x: Math.round(moveDraft.layer.bounds.x + point.x - moveDraft.start.x),
+    y: Math.round(moveDraft.layer.bounds.y + point.y - moveDraft.start.y) };
+  renderTransformOverlay();
+});
+canvas.addEventListener("pointerup", (event) => {
+  finishPaint(event);
+  if (!moveDraft) return;
+  const draft = moveDraft; moveDraft = null; renderTransformOverlay();
+  commitLayerBounds(draft.layer, draft.bounds, "Moving layer");
+});
+canvas.addEventListener("pointercancel", (event) => {
+  finishPaint(event, true); moveDraft = null; renderTransformOverlay();
 });
 
 $("canvasViewport").addEventListener("pointerdown", (event) => {
@@ -547,6 +788,10 @@ window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target?.matches?.("input, select, textarea")) return;
   if (event.key.toLowerCase() === "m") executeCommand("tool.marquee");
   if (event.key.toLowerCase() === "h") executeCommand("tool.pan");
+  if (event.key.toLowerCase() === "v") executeCommand("tool.move");
+  if (event.key.toLowerCase() === "b") executeCommand("tool.brush");
+  if (event.key.toLowerCase() === "e") executeCommand("tool.eraser");
+  if (event.key.toLowerCase() === "t") executeCommand("tool.text");
 });
 
 for (const type of ["dragenter", "dragover"]) {

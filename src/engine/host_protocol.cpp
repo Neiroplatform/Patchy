@@ -973,6 +973,24 @@ int patchy_engine_session_replace_rgba8_layer(
   }
 }
 
+int patchy_engine_session_layer_rgba8_pixels(
+    const patchy_engine_session *session, std::uint64_t layer_id,
+    patchy_engine_buffer *rgba, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || rgba == nullptr ||
+      layer_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, layer and pixel output are required");
+  }
+  const auto *layer = session->value->document().find_layer(layer_id);
+  if (layer == nullptr || layer->pixels().empty() ||
+      layer->pixels().format() != patchy::PixelFormat::rgba8()) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "layer has no editable RGBA8 pixels");
+  }
+  return copy_buffer(layer->pixels().data(), rgba, error);
+}
+
 int patchy_engine_session_set_layer_mask(
     patchy_engine_session *session,
     const patchy_engine_layer_mask_input *input,
@@ -1258,6 +1276,87 @@ int patchy_engine_session_add_text_layer(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown text layer authoring failure");
+  }
+}
+
+int patchy_engine_session_update_text_layer(
+    patchy_engine_session *session, std::uint64_t layer_id,
+    const patchy_engine_text_layer_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      layer_id == 0 || input->struct_size != sizeof(*input) ||
+      input->size_pixels <= 0.0 || !std::isfinite(input->size_pixels) ||
+      !valid_rgba_payload(input->rgba, input->rgba_size, input->width,
+                          input->height, input->bounds, error)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete text layer update is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::string name;
+  std::string text_value;
+  std::string font;
+  if (!copy_command_text(input->name, input->name_size, 256U, name, error) ||
+      !copy_command_text(input->text, input->text_size, 1024U, text_value,
+                         error) ||
+      !copy_command_text(input->font, input->font_size, 256U, font, error)) {
+    return 0;
+  }
+  try {
+    auto prepared = session->value->document();
+    auto *layer = prepared.find_layer(layer_id);
+    if (layer == nullptr || !patchy::layer_is_text(*layer)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "layer is not editable text");
+    }
+    patchy::PixelBuffer pixels(input->width, input->height,
+                               patchy::PixelFormat::rgba8());
+    std::copy_n(input->rgba, input->rgba_size, pixels.data().begin());
+    layer->set_name(std::move(name));
+    layer->set_pixels(std::move(pixels));
+    layer->set_bounds({input->bounds.x, input->bounds.y, input->bounds.width,
+                       input->bounds.height});
+    auto &metadata = layer->metadata();
+    metadata.erase(patchy::kLayerMetadataTextHtml);
+    metadata.erase(patchy::kLayerMetadataTextRuns);
+    metadata.erase(patchy::kLayerMetadataTextParagraphRuns);
+    metadata.erase(patchy::kLayerMetadataTextSourceBlock);
+    metadata[patchy::kLayerMetadataText] = std::move(text_value);
+    metadata[patchy::kLayerMetadataTextFont] = std::move(font);
+    metadata[patchy::kLayerMetadataTextSize] = std::to_string(input->size_pixels);
+    char color[8]{};
+    std::snprintf(color, sizeof(color), "#%02x%02x%02x", input->red,
+                  input->green, input->blue);
+    metadata[patchy::kLayerMetadataTextColor] = color;
+    metadata[patchy::kLayerMetadataTextBold] = input->bold != 0 ? "true" : "false";
+    metadata[patchy::kLayerMetadataTextItalic] = input->italic != 0 ? "true" : "false";
+    metadata[patchy::kLayerMetadataTextFlow] = input->box_text != 0 ? "box" : "point";
+    metadata[patchy::kLayerMetadataTextBoxWidth] = std::to_string(input->bounds.width);
+    metadata[patchy::kLayerMetadataTextBoxHeight] = std::to_string(input->bounds.height);
+    metadata[patchy::kLayerMetadataTextRasterStatus] = "patchy_raster";
+    metadata[patchy::kLayerMetadataTextTransform] =
+        "1 0 0 1 " + std::to_string(input->bounds.x) + " " +
+        std::to_string(input->bounds.y);
+    const patchy::Rect affected{0, 0, prepared.width(), prepared.height()};
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::Text,
+            input->expected_state_id, std::move(prepared), affected});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate text layer update");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown text layer update failure");
   }
 }
 

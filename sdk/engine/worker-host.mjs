@@ -101,6 +101,29 @@ export class PatchyWorkerHost {
           bounds: message.bounds, rgba: new Uint8Array(message.rgba),
         });
         return this.#snapshot();
+      case "layerPixels":
+        return this.#engine.layerPixels(
+          this.#requireSession(), BigInt(message.layerId));
+      case "replacePixelLayer": {
+        const before = this.#snapshot();
+        const layer = before.layers.find((candidate) => candidate.id === BigInt(message.layerId));
+        if (!layer) throw new Error("Editable layer does not exist");
+        this.#engine.replacePixelLayer(this.#requireSession(), before, layer.id, {
+          name: message.name ?? layer.name, width: message.width, height: message.height,
+          bounds: message.bounds, rgba: new Uint8Array(message.rgba),
+        });
+        return this.#snapshot();
+      }
+      case "addTextLayer":
+        this.#engine.addTextLayer(this.#requireSession(), this.#snapshot(), {
+          ...message.input, rgba: new Uint8Array(message.input.rgba),
+        });
+        return this.#snapshot();
+      case "updateTextLayer":
+        this.#engine.updateTextLayer(
+          this.#requireSession(), this.#snapshot(), BigInt(message.layerId),
+          { ...message.input, rgba: new Uint8Array(message.input.rgba) });
+        return this.#snapshot();
       case "moveLayer":
         this.#engine.moveLayer(
           this.#requireSession(), this.#snapshot(), BigInt(message.layerId),

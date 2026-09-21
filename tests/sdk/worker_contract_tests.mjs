@@ -31,6 +31,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "canvasFrame", "selectionOverlay", "marqueeToolButton", "panToolButton",
     "zoomOutButton", "zoomFitButton", "zoomInButton", "createMaskButton",
     "toggleMaskButton", "invertMaskButton", "removeMaskButton",
+    "gestureCanvas", "transformOverlay", "moveToolButton", "brushToolButton",
+    "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton",
+    "textDialog", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
     "undoButton", "redoButton", "saveButton", "errorBanner"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
@@ -41,6 +44,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.cropDocument", "client.invertLayer",
     "client.setSelection", "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
+    "client.layerPixels", "client.replacePixelLayer", "client.addTextLayer",
+    "client.updateTextLayer",
     "client.undo", "client.redo", "client.render", "client.save"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -96,7 +101,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     },
     _patchy_engine_session_layer_at(session, index, output) {
       assert.equal(index, 0);
-      view.setBigUint64(output, 7n, true); view.setUint32(output + 16, 0, true);
+      view.setBigUint64(output, 7n, true); view.setUint32(output + 16, 3, true);
       heap[output + 20] = 1; view.setFloat32(output + 24, 1, true);
       view.setUint32(output + 28, 5, true); heap.set(new TextEncoder().encode("Layer"), output + 32);
       view.setFloat32(output + 292, 1, true); view.setInt32(output + 312, 3, true);
@@ -104,6 +109,14 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     },
     _patchy_engine_session_layer_mask(session, layerId, output) {
       assert.equal(layerId, 7n); view.setUint32(output, 24, true); return 1;
+    },
+    _patchy_engine_session_text(session, layerId, output) {
+      assert.equal(layerId, 7n); assert.equal(view.getUint32(output, true), 1312);
+      const value = new TextEncoder().encode("Hello"); const font = new TextEncoder().encode("Arial");
+      view.setUint32(output + 4, value.length, true); heap.set(value, output + 8);
+      view.setUint32(output + 1032, font.length, true); heap.set(font, output + 1036);
+      view.setFloat64(output + 1296, 18, true); heap.set([10, 20, 30, 1, 0, 1], output + 1304);
+      return 1;
     },
     _patchy_engine_session_selection(session, output) {
       assert.equal(session, 22); assert.equal(view.getUint32(output, true), 32);
@@ -179,6 +192,20 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       const data = alloc(2); heap.set([0, 255], data);
       view.setUint32(output, data, true); view.setUint32(output + 4, 2, true); return 1;
     },
+    _patchy_engine_session_layer_rgba8_pixels(session, layerId, output) {
+      const data = alloc(4); heap.set([1, 2, 3, 4], data);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 4, true); return 1;
+    },
+    _patchy_engine_session_replace_rgba8_layer(session, input) {
+      assert.equal(view.getBigUint64(input + 24, true), 7n); return 1;
+    },
+    _patchy_engine_session_add_text_layer(session, input) {
+      assert.equal(view.getUint32(input, true), 96);
+      assert.equal(view.getFloat64(input + 80, true), 12); return 1;
+    },
+    _patchy_engine_session_update_text_layer(session, layerId, input) {
+      assert.equal(layerId, 7n); assert.equal(heap[input + 91], 1); return 1;
+    },
     _patchy_engine_session_render_region(session, x, y, width, height, output) {
       assert.deepEqual([x, y, width, height], [0, 0, 3, 2]);
       const data = alloc(24); heap.fill(17, data, data + 24);
@@ -199,6 +226,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
   assert.equal(snapshot.layers[0].bounds.width, 3);
+  assert.deepEqual(snapshot.layers[0].text, { value: "Hello", font: "Arial", sizePixels: 18,
+    color: [10, 20, 30], bold: true, italic: false, boxText: true });
   assert.deepEqual(snapshot.selection, []);
   engine.setLayerVisibility(session, snapshot, 7n, false);
   engine.setLayerOpacity(session, snapshot, 7n, 0.5);
@@ -213,6 +242,14 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.setLayerMask(session, snapshot, 7n, { bounds: { x: 0, y: 0, width: 2, height: 1 },
     gray: new Uint8Array([255, 0]), defaultColor: 0, linked: true });
   assert.deepEqual(Array.from(engine.layerMaskPixels(session, 7n)), [0, 255]);
+  assert.deepEqual(Array.from(engine.layerPixels(session, 7n)), [1, 2, 3, 4]);
+  engine.replacePixelLayer(session, snapshot, 7n, { name: "Layer", width: 1, height: 1,
+    bounds: { x: 1, y: 1, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) });
+  const textInput = { name: "Text", text: "Hi", font: "Arial", sizePixels: 12,
+    color: [1, 2, 3], bold: true, italic: false, boxText: true, width: 1, height: 1,
+    bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array([1, 2, 3, 4]) };
+  engine.addTextLayer(session, snapshot, textInput);
+  engine.updateTextLayer(session, snapshot, 7n, textInput);
   engine.groupLayer(session, snapshot, 7n, "Group");
   engine.ungroup(session, snapshot, 7n);
   engine.addPixelLayer(session, snapshot, { name: "Pixel", width: 1, height: 1,
@@ -228,7 +265,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(commandTypes, [2, 4, 5, 9, 10, 11, 12, 13, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
-  assert.equal(released, 3);
+  assert.equal(released, 4);
   engine.dispose();
   assert.equal(destroyed, 2);
 });
@@ -241,7 +278,7 @@ function projection(revision, visible = true, mask = null, selection = []) {
     canUndo: revision > 1, canRedo: false,
     layers: [{ id: 7n, parentId: 0n, kind: 0, visible, opacity: 1,
       name: "Layer", clipped: false, fillOpacity: 1, blendMode: 0,
-      lockFlags: 0, bounds: { x: 0, y: 0, width: 3, height: 2 }, mask }],
+      lockFlags: 0, bounds: { x: 0, y: 0, width: 3, height: 2 }, mask, text: null }],
     selection,
   };
 }
@@ -280,6 +317,14 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
       maskPixels = next?.gray?.slice() || new Uint8Array(); revision++;
     },
     layerMaskPixels() { return maskPixels.slice(); },
+    layerPixels() { return new Uint8Array(24).fill(9); },
+    replacePixelLayer(session, before, layerId, input) {
+      calls.push(["replacePixels", layerId, input.bounds]); revision++;
+    },
+    addTextLayer(session, before, input) { calls.push(["addText", input.text]); revision++; },
+    updateTextLayer(session, before, layerId, input) {
+      calls.push(["updateText", layerId, input.text]); revision++;
+    },
     applyFilter(session, before, layerId, filterId, cancellation, progress) {
       calls.push(["filter", layerId, filterId]); progress({ completed: 1, total: 1, stage: 0, ratio: 1 }); revision++;
     },
@@ -311,6 +356,15 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "invertLayerMask", layerId: "7" });
   assert.equal(maskPixels[0], 0);
   assert.equal((await host.dispatch({ method: "removeLayerMask", layerId: "7" })).layers[0].mask, null);
+  assert.equal((await host.dispatch({ method: "layerPixels", layerId: "7" })).byteLength, 24);
+  await host.dispatch({ method: "replacePixelLayer", layerId: "7", name: "Layer",
+    width: 3, height: 2, bounds: { x: 1, y: 1, width: 3, height: 2 },
+    rgba: new Uint8Array(24).buffer });
+  const browserText = { name: "Text", text: "Browser", font: "Arial", sizePixels: 20,
+    color: [0, 0, 0], bold: false, italic: false, boxText: true, width: 1, height: 1,
+    bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba: new Uint8Array(4).buffer };
+  await host.dispatch({ method: "addTextLayer", input: browserText });
+  await host.dispatch({ method: "updateTextLayer", layerId: "7", input: browserText });
   await host.dispatch({ method: "groupLayer", layerId: "7", name: "Group" });
   await host.dispatch({ method: "ungroup", layerId: "7" });
   await host.dispatch({ method: "addPixelLayer", name: "Pixels", width: 1, height: 1,

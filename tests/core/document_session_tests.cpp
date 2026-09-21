@@ -3097,6 +3097,54 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   CHECK(projected_text.size_pixels == 24.0);
   CHECK(projected_text.red == 12);
   CHECK(projected_text.bold == 1);
+  patchy_engine_buffer text_pixels{};
+  CHECK(patchy_engine_session_layer_rgba8_pixels(
+            session, text_id, &text_pixels, &error) == 1);
+  CHECK(text_pixels.size == pixels.size());
+  CHECK(text_pixels.data[0] == 200);
+  patchy_engine_buffer_release(&text_pixels);
+
+  const auto before_text_update = project();
+  text.expected_state_id = before_text_update.state_id;
+  text.expected_revision = before_text_update.revision;
+  text.bounds = {1, 1, 2, 2};
+  text.name = "Edited text";
+  text.name_size = std::strlen(text.name);
+  text.text = "Edited browser text";
+  text.text_size = std::strlen(text.text);
+  text.font = "Arial";
+  text.font_size = std::strlen(text.font);
+  text.size_pixels = 30.0;
+  text.red = 90;
+  text.green = 80;
+  text.blue = 70;
+  text.bold = 0;
+  text.italic = 1;
+  CHECK(patchy_engine_session_update_text_layer(
+            session, text_id, &text, &event, &error) == 1);
+  projected_text = {};
+  projected_text.struct_size = sizeof(projected_text);
+  CHECK(patchy_engine_session_text(session, text_id, &projected_text, &error) ==
+        1);
+  CHECK(std::string(projected_text.text, projected_text.text_size) ==
+        "Edited browser text");
+  CHECK(std::string(projected_text.font, projected_text.font_size) == "Arial");
+  CHECK(projected_text.size_pixels == 30.0);
+  CHECK(projected_text.italic == 1);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  projected_text = {};
+  projected_text.struct_size = sizeof(projected_text);
+  CHECK(patchy_engine_session_text(session, text_id, &projected_text, &error) ==
+        1);
+  CHECK(std::string(projected_text.text, projected_text.text_size) ==
+        "Hello browser");
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  projected_text = {};
+  projected_text.struct_size = sizeof(projected_text);
+  CHECK(patchy_engine_session_text(session, text_id, &projected_text, &error) ==
+        1);
+  CHECK(std::string(projected_text.text, projected_text.text_size) ==
+        "Edited browser text");
 
   const std::array<std::uint8_t, 6> embedded_bytes{'8', 'B', 'P', 'S', 1, 2};
   const auto before_embedded = project();
@@ -3188,7 +3236,7 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   CHECK(patchy_engine_session_text(reopened, text_id, &projected_text, &error) ==
         1);
   CHECK(std::string(projected_text.text, projected_text.text_size) ==
-        "Hello browser");
+        "Edited browser text");
   projected_smart = {};
   projected_smart.struct_size = sizeof(projected_smart);
   CHECK(patchy_engine_session_smart_object(

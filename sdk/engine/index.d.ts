@@ -4,6 +4,8 @@ export interface LayerProjection {
   opacity: number; name: string; clipped: boolean; fillOpacity: number;
   blendMode: number; lockFlags: number; bounds: Rect;
   mask: null | { bounds: Rect; defaultColor: number; disabled: boolean; linked: boolean };
+  text: null | { value: string; font: string; sizePixels: number;
+    color: [number, number, number]; bold: boolean; italic: boolean; boxText: boolean };
 }
 export interface DocumentProjection {
   width: number; height: number; colorMode: number; bitDepth: number;
@@ -45,6 +47,11 @@ export class PatchyWorkerClient {
   ungroup(layerId: bigint): Promise<DocumentProjection>;
   addPixelLayer(input: { name: string; width: number; height: number;
     bounds: Rect; rgba: Uint8Array }): Promise<DocumentProjection>;
+  layerPixels(layerId: bigint): Promise<Uint8Array>;
+  replacePixelLayer(layerId: bigint, input: { name: string; width: number;
+    height: number; bounds: Rect; rgba: Uint8Array }): Promise<DocumentProjection>;
+  addTextLayer(input: TextLayerInput): Promise<DocumentProjection>;
+  updateTextLayer(layerId: bigint, input: TextLayerInput): Promise<DocumentProjection>;
   moveLayer(layerId: bigint, targetLayerId: bigint | null,
             position: number): Promise<DocumentProjection>;
   undo(): Promise<DocumentProjection>;
@@ -56,4 +63,10 @@ export class PatchyWorkerClient {
   save(): Promise<Uint8Array>;
   close(): Promise<null>;
   terminate(): void;
+}
+
+export interface TextLayerInput {
+  name: string; text: string; font: string; sizePixels: number;
+  color: [number, number, number]; bold: boolean; italic: boolean;
+  boxText: boolean; width: number; height: number; bounds: Rect; rgba: Uint8Array;
 }

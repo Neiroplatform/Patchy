@@ -846,6 +846,9 @@ int patchy_engine_session_replace_rgba8_layer(
     patchy_engine_session *session,
     const patchy_engine_pixel_layer_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_layer_rgba8_pixels(
+    const patchy_engine_session *session, uint64_t layer_id,
+    patchy_engine_buffer *rgba, patchy_engine_error *error);
 int patchy_engine_session_set_layer_mask(
     patchy_engine_session *session,
     const patchy_engine_layer_mask_input *input,
@@ -863,6 +866,10 @@ int patchy_engine_session_apply_filter(
     patchy_engine_error *error);
 int patchy_engine_session_add_text_layer(
     patchy_engine_session *session,
+    const patchy_engine_text_layer_input *input,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_update_text_layer(
+    patchy_engine_session *session, uint64_t layer_id,
     const patchy_engine_text_layer_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_text(

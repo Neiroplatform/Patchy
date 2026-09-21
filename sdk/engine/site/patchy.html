@@ -30,8 +30,12 @@
 
     <main class="workspace" id="workspace">
       <aside class="tool-rail" aria-label="Workspace tools">
+        <button class="tool-button" id="moveToolButton" type="button" aria-label="Move layer" aria-pressed="false" title="Move layer (V)">↗</button>
         <button class="tool-button" id="marqueeToolButton" type="button" aria-label="Rectangular selection" aria-pressed="true" title="Rectangular selection (M)">□</button>
         <button class="tool-button" id="panToolButton" type="button" aria-label="Pan canvas" aria-pressed="false" title="Pan canvas (H)">✋</button>
+        <button class="tool-button" id="brushToolButton" type="button" aria-label="Brush" aria-pressed="false" title="Brush (B)">●</button>
+        <button class="tool-button" id="eraserToolButton" type="button" aria-label="Eraser" aria-pressed="false" title="Eraser (E)">◇</button>
+        <button class="tool-button" id="textToolButton" type="button" aria-label="Text" aria-pressed="false" title="Text (T)">T</button>
         <button class="tool-button" id="selectAllButton" type="button" aria-label="Select all" title="Select all (Ctrl+A)" disabled>▣</button>
         <button class="tool-button" id="clearSelectionButton" type="button" aria-label="Clear selection" title="Clear selection (Ctrl+D)" disabled>×</button>
         <span class="tool-spacer"></span>
@@ -41,6 +45,10 @@
       <section class="stage" aria-label="Document canvas">
         <div class="stage-meta" id="stageMeta" hidden>
           <span id="documentName">Untitled</span>
+          <span class="tool-options" id="toolOptions">
+            <label>Size <input id="brushSizeInput" type="range" min="1" max="128" value="24"><output id="brushSizeOutput">24 px</output></label>
+            <label>Color <input id="brushColorInput" type="color" value="#111111"></label>
+          </span>
           <span id="documentMetrics"></span>
         </div>
         <div class="canvas-viewport" id="canvasViewport" tabindex="0">
@@ -48,7 +56,9 @@
           <span class="ruler ruler-vertical" aria-hidden="true"></span>
           <div class="canvas-frame" id="canvasFrame">
             <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
+            <canvas id="gestureCanvas" aria-hidden="true"></canvas>
             <div class="selection-overlay" id="selectionOverlay" aria-hidden="true" hidden></div>
+            <div class="transform-overlay" id="transformOverlay" aria-hidden="true" hidden></div>
           </div>
           <div class="empty-state" id="emptyState">
             <div class="empty-glyph" aria-hidden="true"><span></span></div>
@@ -90,6 +100,8 @@
             <button type="button" id="ungroupLayerButton" disabled>Ungroup</button>
             <button type="button" id="removeLayerButton" disabled>Delete</button>
             <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
+            <button type="button" id="textLayerButton" disabled>Add text</button>
+            <button type="button" id="layerTransformButton" disabled>Transform</button>
             <button type="button" id="createMaskButton" disabled>Add mask</button>
             <button type="button" id="toggleMaskButton" disabled>Disable mask</button>
             <button type="button" id="invertMaskButton" disabled>Invert mask</button>
@@ -153,6 +165,44 @@
             <label><span>Height</span><input id="cropHeightInput" type="number" min="1" step="1" required></label>
           </div>
           <div class="dialog-actions"><button class="button button-primary" id="cropButton" type="button">Crop document</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="textDialog" aria-labelledby="textDialogTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">TEXT</p><h2 id="textDialogTitle">Create text layer</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section>
+          <label class="dialog-field"><span>Content</span><textarea id="textValueInput" maxlength="1024" rows="4" required></textarea></label>
+          <div class="field-row">
+            <label><span>Font</span><input id="textFontInput" type="text" value="Arial" maxlength="256" required></label>
+            <label><span>Size</span><input id="textSizeInput" type="number" min="1" max="512" value="48" required></label>
+          </div>
+          <div class="field-row text-style-row">
+            <label><span>Color</span><input id="textColorInput" type="color" value="#111111"></label>
+            <label class="check-field"><input id="textBoldInput" type="checkbox"><span>Bold</span></label>
+            <label class="check-field"><input id="textItalicInput" type="checkbox"><span>Italic</span></label>
+          </div>
+          <div class="field-row field-row-four">
+            <label><span>X</span><input id="textXInput" type="number" step="1" required></label>
+            <label><span>Y</span><input id="textYInput" type="number" step="1" required></label>
+            <label><span>Width</span><input id="textWidthInput" type="number" min="1" step="1" required></label>
+            <label><span>Height</span><input id="textHeightInput" type="number" min="1" step="1" required></label>
+          </div>
+          <div class="dialog-actions"><button class="button button-primary" id="commitTextButton" type="button">Create text</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="layerTransformDialog" aria-labelledby="layerTransformTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">LAYER</p><h2 id="layerTransformTitle">Free transform</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section>
+          <div class="field-row field-row-four">
+            <label><span>X</span><input id="layerXInput" type="number" step="1" required></label>
+            <label><span>Y</span><input id="layerYInput" type="number" step="1" required></label>
+            <label><span>Width</span><input id="layerWidthInput" type="number" min="1" step="1" required></label>
+            <label><span>Height</span><input id="layerHeightInput" type="number" min="1" step="1" required></label>
+          </div>
+          <div class="dialog-actions"><button class="button button-primary" id="commitLayerTransformButton" type="button">Apply transform</button></div>
         </section>
       </form>
     </dialog>
