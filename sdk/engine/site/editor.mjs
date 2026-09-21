@@ -397,7 +397,8 @@ async function restoreWorkspace(id) {
       return;
     }
     const recovered = await workspaceStore.restore(id);
-    const next = await client.open(recovered.bytes, recovered.manifest.name);
+    const next = await client.open(recovered.bytes, recovered.manifest.name,
+      { transferOwnership: true });
     workspaceIds.set(next.documentId, id);
     checkpointStates.set(next.documentId, "confirmed");
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
@@ -722,7 +723,8 @@ function fullSelectionMask() {
 
 function commitSelectionMask(title, gray) {
   return mutate(title, () => client.setSelectionMask(
-    { x: 0, y: 0, width: snapshot.width, height: snapshot.height }, gray));
+    { x: 0, y: 0, width: snapshot.width, height: snapshot.height }, gray,
+    { transferOwnership: true }));
 }
 
 function combinedSelectionMask(next, mode = "replace") {
@@ -910,7 +912,8 @@ async function openFile(file) {
   try {
     ensureMemorySafe({ sourceBytes: file.size }, file.name || "Document");
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const next = await client.open(bytes, file.name || "Document.psd");
+    const next = await client.open(bytes, file.name || "Document.psd",
+      { transferOwnership: true });
     selectedLayerId = null; selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
@@ -1076,7 +1079,7 @@ async function importPixelLayer(file, createDocument = false) {
     const next = await client.addPixelLayer({
       name, width: image.width, height: image.height,
       bounds: { x: 0, y: 0, width: image.width, height: image.height }, rgba,
-    });
+    }, { transferOwnership: true });
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
   } catch (error) { showError("Could not import pixels", error); }
@@ -1228,7 +1231,8 @@ async function placeSmartObject(file) {
         { x: 0, y: 0, width: image.width, height: image.height }, rgba, sourceBytes };
     const layer = selectedLayer();
     await acceptSnapshot(await (layer?.kind === 5
-      ? client.replaceSmartObject(layer.id, input) : client.addSmartObject(input)));
+      ? client.replaceSmartObject(layer.id, input, { transferOwnership: true })
+      : client.addSmartObject(input, { transferOwnership: true })));
   } catch (error) { showError("Could not place Smart Object", error); }
   finally { image?.close?.(); setBusy(false); }
 }
@@ -1317,7 +1321,8 @@ async function commitTextDialog() {
   $("textDialog").close();
   const editing = textEditingId; textEditingId = null;
   await mutate(editing ? "Updating text" : "Creating text", () => editing
-    ? client.updateTextLayer(editing, payload) : client.addTextLayer(payload));
+    ? client.updateTextLayer(editing, payload, { transferOwnership: true })
+    : client.addTextLayer(payload, { transferOwnership: true }));
 }
 
 function openLayerTransformDialog() {
@@ -1336,7 +1341,7 @@ async function transformedLayerSnapshot(layer, bounds) {
   }
   if (layer.kind === 3) {
     return client.updateTextLayer(layer.id,
-      textLayerPayload(layer.text, bounds, layer.name));
+      textLayerPayload(layer.text, bounds, layer.name), { transferOwnership: true });
   }
   const sourceBytes = await client.layerPixels(layer.id);
   const source = document.createElement("canvas");
@@ -1350,7 +1355,8 @@ async function transformedLayerSnapshot(layer, bounds) {
   targetContext.drawImage(source, 0, 0, bounds.width, bounds.height);
   const rgba = new Uint8Array(targetContext.getImageData(0, 0, bounds.width, bounds.height).data);
   const layerInput = { name: layer.name, width: bounds.width, height: bounds.height, bounds, rgba };
-  if (!layer.mask?.linked) return client.replacePixelLayer(layer.id, layerInput);
+  if (!layer.mask?.linked) return client.replacePixelLayer(
+    layer.id, layerInput, { transferOwnership: true });
   const maskBytes = await client.layerMaskPixels(layer.id);
   const oldMask = document.createElement("canvas");
   oldMask.width = layer.mask.bounds.width; oldMask.height = layer.mask.bounds.height;
@@ -1371,7 +1377,7 @@ async function transformedLayerSnapshot(layer, bounds) {
   for (let index = 0; index < gray.length; ++index) gray[index] = maskPixels[index * 4];
   return client.replacePixelLayerAndMask(layer.id, layerInput, { width: maskBounds.width,
     height: maskBounds.height, bounds: maskBounds, gray, defaultColor: layer.mask.defaultColor,
-    disabled: layer.mask.disabled });
+    disabled: layer.mask.disabled }, { transferOwnership: true });
 }
 
 function commitLayerBounds(layer, bounds, title = "Transforming layer") {
@@ -1454,7 +1460,7 @@ async function fillSelectedPixels() {
     for (const rect of rects) target.fillRect(rect.x - layer.bounds.x, rect.y - layer.bounds.y, rect.width, rect.height);
     const rgba = new Uint8Array(target.getImageData(0, 0, scratch.width, scratch.height).data);
     return client.replacePixelLayer(layer.id, { name: layer.name, width: scratch.width,
-      height: scratch.height, bounds: layer.bounds, rgba });
+      height: scratch.height, bounds: layer.bounds, rgba }, { transferOwnership: true });
   });
 }
 
@@ -1509,7 +1515,7 @@ async function finishGradient(event) {
     for (const rect of rects) target.fillRect(rect.x - draft.layer.bounds.x, rect.y - draft.layer.bounds.y, rect.width, rect.height);
     const rgba = new Uint8Array(target.getImageData(0, 0, scratch.width, scratch.height).data);
     return client.replacePixelLayer(draft.layer.id, { name: draft.layer.name, width: scratch.width,
-      height: scratch.height, bounds: draft.layer.bounds, rgba });
+      height: scratch.height, bounds: draft.layer.bounds, rgba }, { transferOwnership: true });
   });
 }
 
@@ -1529,7 +1535,7 @@ function finishPaint(event, cancelled = false) {
   mutate(draft.tool === "eraser" ? "Erasing pixels" : "Painting pixels", () =>
     client.replacePixelLayer(draft.layer.id, { name: draft.layer.name,
       width: draft.layer.bounds.width, height: draft.layer.bounds.height,
-      bounds: draft.layer.bounds, rgba }));
+      bounds: draft.layer.bounds, rgba }, { transferOwnership: true }));
 }
 
 function escapeHtml(value) {

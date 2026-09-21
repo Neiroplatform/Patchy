@@ -10,7 +10,10 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
   const calls = []; let nextId = 100;
   const client = {
     async initialize(url) { calls.push(["initialize", url]); },
-    async open(bytes, name) { calls.push(["open", name, bytes.at(-1)]); return projection(nextId++, name); },
+    async open(bytes, name, options) {
+      calls.push(["open", name, bytes.at(-1), options?.transferOwnership]);
+      return projection(nextId++, name);
+    },
     async activateDocument(id) { calls.push(["activate", id]); return projection(id, `active-${id}.psd`); },
   };
   const store = { async restore(id) {
@@ -33,6 +36,7 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
   assert.equal(result.activeSnapshot.documentId, 101);
   assert.equal(result.restored[1].confirmedAtCrash, false);
   assert.deepEqual(calls.map((item) => item[0]), ["initialize", "open", "open", "open", "activate"]);
+  assert.ok(calls.filter((item) => item[0] === "open").every((item) => item[3] === true));
 });
 
 test("worker recovery terminates a replacement that cannot initialize", async () => {

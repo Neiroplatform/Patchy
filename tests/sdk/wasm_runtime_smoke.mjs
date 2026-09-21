@@ -76,17 +76,22 @@ try {
     "WASM memory census or budget projection is unavailable");
 
     const rgba = new Uint8Array(4 * 3 * 4);
+    const rgbaLength = rgba.length;
     for (let pixel = 0; pixel < 12; ++pixel) {
       rgba.set([32 + pixel, 96, 192, 255], pixel * 4);
     }
     const authored = await client.addPixelLayer({ name: "Pixels", width: 4, height: 3,
-      bounds: { x: 0, y: 0, width: 4, height: 3 }, rgba });
+      bounds: { x: 0, y: 0, width: 4, height: 3 }, rgba }, { transferOwnership: true });
+    check(rgba.byteLength === 0, "owned pixel input was not detached after Worker transfer");
     const layerId = authored.activeLayerId;
     check(layerId !== 0n && authored.layers.length === 1, "pixel layer was not authored");
 
     const gray = new Uint8Array([0, 32, 64, 96, 128, 160, 192, 224, 255, 224, 160, 96]);
-    const selected = await client.setSelectionMask({ x: 0, y: 0, width: 4, height: 3 }, gray);
-    check(selected.selectionMask?.gray.length === gray.length,
+    const grayLength = gray.length;
+    const selected = await client.setSelectionMask(
+      { x: 0, y: 0, width: 4, height: 3 }, gray, { transferOwnership: true });
+    check(gray.byteLength === 0, "owned selection input was not detached after Worker transfer");
+    check(selected.selectionMask?.gray.length === grayLength,
       "soft selection did not cross the wasm32 ABI");
     const styled = await client.setLayerStylePreset(
       layerId, "57a1e500-0015-4c6d-8f2a-9b3d4e55c015");
@@ -99,7 +104,7 @@ try {
     check((await client.snapshot()).dirtyRegion != null,
       "partial render cleared an uncovered dirty region");
     const rendered = await client.render({ x: 0, y: 0, width: 4, height: 3 });
-    check(rendered.length === rgba.length, "bounded render byte count mismatch");
+    check(rendered.length === rgbaLength, "bounded render byte count mismatch");
     const frame = await client.renderFrame({ x: 0, y: 0, width: 4, height: 3 });
     check(frame.width === 4 && frame.height === 3, "render frame dimensions mismatch");
     check(frame.kind === "bitmap", `Worker ImageBitmap transport unavailable: ${frame.kind}`);

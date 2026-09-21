@@ -1,3 +1,12 @@
+function transferableInput(bytes, transferOwnership) {
+  if (!(bytes instanceof Uint8Array)) throw new TypeError("Worker byte input must be a Uint8Array");
+  if (transferOwnership && bytes.buffer instanceof ArrayBuffer &&
+      bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+    return bytes;
+  }
+  return bytes.slice();
+}
+
 export class PatchyWorkerClient {
   #worker;
   #nextId = 1;
@@ -31,8 +40,8 @@ export class PatchyWorkerClient {
     this.#setState("ready");
   }
 
-  open(bytes, name = "Document.psd") {
-    const owned = bytes.slice();
+  open(bytes, name = "Document.psd", { transferOwnership = false } = {}) {
+    const owned = transferableInput(bytes, transferOwnership);
     return this.#request("open", { bytes: owned.buffer, name }, [owned.buffer]);
   }
   create(width, height, name = "Untitled.psd") {
@@ -79,8 +88,8 @@ export class PatchyWorkerClient {
   }
   cropDocument(crop) { return this.#request("cropDocument", { crop }); }
   setSelection(rects) { return this.#request("setSelection", { rects }); }
-  setSelectionMask(bounds, gray) {
-    const owned = gray.slice();
+  setSelectionMask(bounds, gray, { transferOwnership = false } = {}) {
+    const owned = transferableInput(gray, transferOwnership);
     return this.#request("setSelectionMask", { bounds, gray: owned.buffer }, [owned.buffer]);
   }
   clearSelection() { return this.#request("setSelection", { rects: [] }); }
@@ -133,29 +142,33 @@ export class PatchyWorkerClient {
     return this.#request("groupLayer", { layerId: String(layerId), name });
   }
   ungroup(layerId) { return this.#request("ungroup", { layerId: String(layerId) }); }
-  addPixelLayer({ name, width, height, bounds, rgba }) {
-    const owned = rgba.slice();
+  addPixelLayer({ name, width, height, bounds, rgba }, { transferOwnership = false } = {}) {
+    const owned = transferableInput(rgba, transferOwnership);
     return this.#request("addPixelLayer", {
       name, width, height, bounds, rgba: owned.buffer,
     }, [owned.buffer]);
   }
   layerPixels(layerId) { return this.#request("layerPixels", { layerId: String(layerId) }); }
   layerMaskPixels(layerId) { return this.#request("layerMaskPixels", { layerId: String(layerId) }); }
-  replacePixelLayer(layerId, { name, width, height, bounds, rgba }) {
-    const owned = rgba.slice();
+  replacePixelLayer(layerId, { name, width, height, bounds, rgba },
+                    { transferOwnership = false } = {}) {
+    const owned = transferableInput(rgba, transferOwnership);
     return this.#request("replacePixelLayer", {
       layerId: String(layerId), name, width, height, bounds, rgba: owned.buffer,
     }, [owned.buffer]);
   }
-  replacePixelLayerAndMask(layerId, input, mask) {
-    const rgba = input.rgba.slice(); const gray = mask.gray.slice();
+  replacePixelLayerAndMask(layerId, input, mask, { transferOwnership = false } = {}) {
+    const rgba = transferableInput(input.rgba, transferOwnership);
+    const gray = transferableInput(mask.gray, transferOwnership);
     return this.#request("replacePixelLayerAndMask", { layerId: String(layerId),
       input: { ...input, rgba: rgba.buffer }, mask: { ...mask, gray: gray.buffer } },
     [rgba.buffer, gray.buffer]);
   }
-  addTextLayer(input) { return this.#textLayerRequest("addTextLayer", null, input); }
-  updateTextLayer(layerId, input) {
-    return this.#textLayerRequest("updateTextLayer", layerId, input);
+  addTextLayer(input, { transferOwnership = false } = {}) {
+    return this.#textLayerRequest("addTextLayer", null, input, transferOwnership);
+  }
+  updateTextLayer(layerId, input, { transferOwnership = false } = {}) {
+    return this.#textLayerRequest("updateTextLayer", layerId, input, transferOwnership);
   }
   addAdjustment(input) { return this.#request("addAdjustment", { input }); }
   updateAdjustment(layerId, input) {
@@ -168,15 +181,16 @@ export class PatchyWorkerClient {
   setVectorMask(layerId, input) {
     return this.#request("setVectorMask", { layerId: String(layerId), input });
   }
-  addSmartObject(input) {
-    const rgba = input.rgba.slice();
-    const sourceBytes = input.sourceBytes.slice();
+  addSmartObject(input, { transferOwnership = false } = {}) {
+    const rgba = transferableInput(input.rgba, transferOwnership);
+    const sourceBytes = transferableInput(input.sourceBytes, transferOwnership);
     return this.#request("addSmartObject", {
       input: { ...input, rgba: rgba.buffer, sourceBytes: sourceBytes.buffer },
     }, [rgba.buffer, sourceBytes.buffer]);
   }
-  replaceSmartObject(layerId, input) {
-    const rgba = input.rgba.slice(); const sourceBytes = input.sourceBytes.slice();
+  replaceSmartObject(layerId, input, { transferOwnership = false } = {}) {
+    const rgba = transferableInput(input.rgba, transferOwnership);
+    const sourceBytes = transferableInput(input.sourceBytes, transferOwnership);
     return this.#request("replaceSmartObject", { layerId: String(layerId),
       input: { ...input, rgba: rgba.buffer, sourceBytes: sourceBytes.buffer } },
     [rgba.buffer, sourceBytes.buffer]);
@@ -209,8 +223,8 @@ export class PatchyWorkerClient {
   saveDocument(documentId) { return this.#request("saveDocument", { documentId }); }
   close() { return this.#request("close"); }
 
-  #textLayerRequest(method, layerId, input) {
-    const owned = input.rgba.slice();
+  #textLayerRequest(method, layerId, input, transferOwnership = false) {
+    const owned = transferableInput(input.rgba, transferOwnership);
     return this.#request(method, {
       ...(layerId == null ? {} : { layerId: String(layerId) }),
       input: { ...input, rgba: owned.buffer },

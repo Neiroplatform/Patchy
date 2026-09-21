@@ -40,6 +40,7 @@ export interface FilterProgress {
   completed: number; total: number; stage: number; ratio: number;
 }
 export interface CancellableOperation<T> { promise: Promise<T>; cancel(): void }
+export interface TransferOptions { transferOwnership?: boolean }
 export type RenderFrame =
   | { kind: "bitmap"; bitmap: ImageBitmap; width: number; height: number }
   | { kind: "rgba"; bytes: Uint8Array; width: number; height: number };
@@ -50,7 +51,7 @@ export class PatchyWorkerClient {
   readonly capabilities: bigint;
   addStateListener(listener: (state: WorkerState, error: Error | null) => void): () => void;
   initialize(moduleUrl: string, moduleOptions?: object): Promise<void>;
-  open(bytes: Uint8Array, name?: string): Promise<DocumentProjection>;
+  open(bytes: Uint8Array, name?: string, options?: TransferOptions): Promise<DocumentProjection>;
   create(width: number, height: number, name?: string): Promise<DocumentProjection>;
   snapshot(): Promise<DocumentProjection>;
   listDocuments(): Promise<DocumentTabProjection[]>;
@@ -71,7 +72,8 @@ export class PatchyWorkerClient {
   rotateCanvas(clockwiseDegrees: number): Promise<DocumentProjection>;
   cropDocument(crop: Rect): Promise<DocumentProjection>;
   setSelection(rects: Rect[]): Promise<DocumentProjection>;
-  setSelectionMask(bounds: Rect, gray: Uint8Array): Promise<DocumentProjection>;
+  setSelectionMask(bounds: Rect, gray: Uint8Array,
+    options?: TransferOptions): Promise<DocumentProjection>;
   clearSelection(): Promise<DocumentProjection>;
   invertSelection(): Promise<DocumentProjection>;
   expandSelection(pixels: number): Promise<DocumentProjection>;
@@ -104,24 +106,29 @@ export class PatchyWorkerClient {
   groupLayer(layerId: bigint, name?: string): Promise<DocumentProjection>;
   ungroup(layerId: bigint): Promise<DocumentProjection>;
   addPixelLayer(input: { name: string; width: number; height: number;
-    bounds: Rect; rgba: Uint8Array }): Promise<DocumentProjection>;
+    bounds: Rect; rgba: Uint8Array }, options?: TransferOptions): Promise<DocumentProjection>;
   layerPixels(layerId: bigint): Promise<Uint8Array>;
   layerMaskPixels(layerId: bigint): Promise<Uint8Array>;
   replacePixelLayer(layerId: bigint, input: { name: string; width: number;
-    height: number; bounds: Rect; rgba: Uint8Array }): Promise<DocumentProjection>;
+    height: number; bounds: Rect; rgba: Uint8Array },
+    options?: TransferOptions): Promise<DocumentProjection>;
   replacePixelLayerAndMask(layerId: bigint,
     input: { name: string; width: number; height: number; bounds: Rect; rgba: Uint8Array },
     mask: { width: number; height: number; bounds: Rect; gray: Uint8Array;
-      defaultColor: number; disabled: boolean }): Promise<DocumentProjection>;
-  addTextLayer(input: TextLayerInput): Promise<DocumentProjection>;
-  updateTextLayer(layerId: bigint, input: TextLayerInput): Promise<DocumentProjection>;
+      defaultColor: number; disabled: boolean },
+    options?: TransferOptions): Promise<DocumentProjection>;
+  addTextLayer(input: TextLayerInput, options?: TransferOptions): Promise<DocumentProjection>;
+  updateTextLayer(layerId: bigint, input: TextLayerInput,
+    options?: TransferOptions): Promise<DocumentProjection>;
   addAdjustment(input: AdjustmentInput): Promise<DocumentProjection>;
   updateAdjustment(layerId: bigint, input: AdjustmentInput): Promise<DocumentProjection>;
   addVectorShape(input: VectorShapeInput): Promise<DocumentProjection>;
   updateVectorShape(layerId: bigint, input: VectorShapeInput): Promise<DocumentProjection>;
   setVectorMask(layerId: bigint, input: VectorMaskInput | null): Promise<DocumentProjection>;
-  addSmartObject(input: SmartObjectInput): Promise<DocumentProjection>;
-  replaceSmartObject(layerId: bigint, input: SmartObjectInput): Promise<DocumentProjection>;
+  addSmartObject(input: SmartObjectInput,
+    options?: TransferOptions): Promise<DocumentProjection>;
+  replaceSmartObject(layerId: bigint, input: SmartObjectInput,
+    options?: TransferOptions): Promise<DocumentProjection>;
   setSmartFilter(layerId: bigint, input: SmartFilterInput): Promise<DocumentProjection>;
   moveLayer(layerId: bigint, targetLayerId: bigint | null,
             position: number): Promise<DocumentProjection>;

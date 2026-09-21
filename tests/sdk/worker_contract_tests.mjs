@@ -93,6 +93,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(worker, /createRenderFrame\(bytes, payload\.region\)/);
   assert.match(script, /context\.drawImage\(frame\.bitmap/);
   assert.match(script, /frame\.bitmap\.close\(\)/);
+  assert.match(script, /transferOwnership: true/);
   assert.match(script, /loadPreferences/);
   assert.match(script, /cleanupRecoveryWorkspaces/);
   assert.match(script, /new URL\("\.\/patchy-engine\.mjs", location\.href\)/);
@@ -113,6 +114,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
   assert.match(types, /addStateListener\(listener:/);
+  assert.match(types, /interface TransferOptions \{ transferOwnership\?: boolean \}/);
   assert.doesNotMatch(`${html}\n${css}\n${script}`, /https?:\/\//);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 560px\)/);
@@ -809,7 +811,9 @@ test("browser memory policy preflights working sets and selects bounded dirty re
 
 class FakeWorker extends EventTarget {
   sent = [];
-  postMessage(message, transfer) { this.sent.push({ message, transfer }); }
+  postMessage(message, transfer = []) {
+    this.sent.push({ message: structuredClone(message, { transfer }), transfer });
+  }
   terminate() {}
   reply(message) { this.dispatchEvent(new MessageEvent("message", { data: message })); }
   fail(message) {
@@ -818,6 +822,45 @@ class FakeWorker extends EventTarget {
     this.dispatchEvent(event);
   }
 }
+
+test("client byte ingress copies by default and transfers explicit whole-buffer ownership", async () => {
+  const worker = new FakeWorker();
+  const client = new PatchyWorkerClient(worker);
+  const safe = new Uint8Array([1, 2, 3]);
+  const safeOpen = client.open(safe);
+  assert.equal(safe.byteLength, 3);
+  assert.notEqual(worker.sent[0].message.bytes, safe.buffer);
+  worker.reply({ id: 1, ok: true, value: projection(1) }); await safeOpen;
+
+  const owned = new Uint8Array([4, 5, 6]);
+  const ownedOpen = client.open(owned, "Owned.psd", { transferOwnership: true });
+  assert.equal(owned.byteLength, 0);
+  assert.deepEqual([...new Uint8Array(worker.sent[1].message.bytes)], [4, 5, 6]);
+  worker.reply({ id: 2, ok: true, value: projection(1) }); await ownedOpen;
+
+  const backing = new Uint8Array([7, 8, 9, 10]);
+  const subview = backing.subarray(1, 3);
+  const subviewOpen = client.open(subview, "Subview.psd", { transferOwnership: true });
+  assert.equal(backing.byteLength, 4);
+  assert.deepEqual([...new Uint8Array(worker.sent[2].message.bytes)], [8, 9]);
+  worker.reply({ id: 3, ok: true, value: projection(1) }); await subviewOpen;
+
+  const shared = new Uint8Array(new SharedArrayBuffer(2)); shared.set([11, 12]);
+  const sharedOpen = client.open(shared, "Shared.psd", { transferOwnership: true });
+  assert.equal(shared.byteLength, 2);
+  assert.ok(worker.sent[3].message.bytes instanceof ArrayBuffer);
+  worker.reply({ id: 4, ok: true, value: projection(1) }); await sharedOpen;
+
+  const rgba = new Uint8Array([1, 2, 3, 4]);
+  const sourceBytes = new Uint8Array([5, 6]);
+  const smart = client.addSmartObject({ name: "Smart", filename: "smart.png",
+    filetype: "PNG ", width: 1, height: 1,
+    bounds: { x: 0, y: 0, width: 1, height: 1 }, rgba, sourceBytes },
+  { transferOwnership: true });
+  assert.equal(rgba.byteLength, 0); assert.equal(sourceBytes.byteLength, 0);
+  assert.equal(worker.sent[4].transfer.length, 2);
+  worker.reply({ id: 5, ok: true, value: projection(2) }); await smart;
+});
 
 test("client correlates RPC, transfers input and rejects all requests on crash", async () => {
   const worker = new FakeWorker();
