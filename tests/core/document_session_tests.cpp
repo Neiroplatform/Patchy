@@ -3660,6 +3660,35 @@ void engine_host_protocol_authors_text_and_smart_objects() {
   patchy_engine_session_destroy(reopened_psb);
   patchy_engine_buffer_release(&psb);
 
+  const std::string maximum_story(1023, 'x');
+  const std::string maximum_font(255, 'f');
+  const auto before_maximum_text = project();
+  text.expected_state_id = before_maximum_text.state_id;
+  text.expected_revision = before_maximum_text.revision;
+  text.text = maximum_story.c_str();
+  text.text_size = maximum_story.size();
+  text.font = maximum_font.c_str();
+  text.font_size = maximum_font.size();
+  set_style_run(style_runs[0], 0, 1023, maximum_font.c_str(), 16.0,
+                {10, 20, 30}, false, false);
+  text.style_run_count = 1;
+  paragraph.length = 1023;
+  paragraph.justification = PATCHY_ENGINE_TEXT_LEFT;
+  text.paragraph_run_count = 1;
+  CHECK(patchy_engine_session_update_text_layer(
+            session, text_id, &text, &event, &error) == 1);
+  projected_text = {};
+  projected_text.struct_size = sizeof(projected_text);
+  CHECK(patchy_engine_session_text(session, text_id, &projected_text, &error) ==
+        1);
+  CHECK(projected_text.text_size == 1023);
+  CHECK(projected_text.font_size == 255);
+  projected_style = {};
+  projected_style.struct_size = sizeof(projected_style);
+  CHECK(patchy_engine_session_text_style_run_at(
+            session, text_id, 0, &projected_style, &error) == 1);
+  CHECK(projected_style.font_size == 255);
+
   patchy_engine_buffer_release(&after_reopen);
   patchy_engine_buffer_release(&before_save);
   patchy_engine_session_destroy(reopened);

@@ -930,6 +930,9 @@ test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsup
     rgba: new Uint8Array([1, 2, 3, 4]) };
   assert.doesNotThrow(() => engine.addTextLayer(
     99, { stateId: 1n, revision: 1n }, plainText));
+  assert.doesNotThrow(() => engine.addTextLayer(
+    99, { stateId: 1n, revision: 1n }, { ...plainText,
+      text: "x".repeat(1023), font: "f".repeat(255) }));
   assert.throws(() => engine.addTextLayer(
     99, { stateId: 1n, revision: 1n }, { ...plainText,
       styleRuns: [{ start: 0, length: 2, font: "Arial", sizePixels: 12,

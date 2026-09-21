@@ -2211,9 +2211,9 @@ int patchy_engine_session_add_text_layer(
   std::string text_value;
   std::string font;
   if (!copy_command_text(input->name, input->name_size, 256U, name, error) ||
-      !copy_command_text(input->text, input->text_size, 1023U, text_value,
+      !copy_command_text(input->text, input->text_size, 1024U, text_value,
                          error) ||
-      !copy_command_text(input->font, input->font_size, 255U, font, error)) {
+      !copy_command_text(input->font, input->font_size, 256U, font, error)) {
     return 0;
   }
   patchy::psd::PsdTextStyleRun fallback;
@@ -2286,9 +2286,9 @@ int patchy_engine_session_update_text_layer(
   std::string text_value;
   std::string font;
   if (!copy_command_text(input->name, input->name_size, 256U, name, error) ||
-      !copy_command_text(input->text, input->text_size, 1023U, text_value,
+      !copy_command_text(input->text, input->text_size, 1024U, text_value,
                          error) ||
-      !copy_command_text(input->font, input->font_size, 255U, font, error)) {
+      !copy_command_text(input->font, input->font_size, 256U, font, error)) {
     return 0;
   }
   patchy::psd::PsdTextStyleRun fallback;
