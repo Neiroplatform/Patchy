@@ -27,6 +27,34 @@ try {
   const filled = await client.applyRasterFill(fill);
   check(filled.revision === authored.revision + 1n, "fill was not one canonical revision");
 
+  const warp = { layerId, style: 0, bend: 55, horizontalDistortion: 8,
+    verticalDistortion: -4, rotateVertical: false, interpolation: 1,
+    expectedStateId: filled.stateId, expectedRevision: filled.revision };
+  const cancelledWarp = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.store(cancelledWarp, 0, 1); let warpCancelCode = 0;
+  try { await client.previewLayerWarp({ ...warp, cancellation: cancelledWarp }); }
+  catch (error) { warpCancelCode = error.code; }
+  check(warpCancelCode === 7, "warp preview cancellation did not cross wasm32");
+  const warpPreview = await client.previewLayerWarp(warp);
+  check(warpPreview.rgba.length === warpPreview.region.width * warpPreview.region.height * 4,
+    "warp preview returned inconsistent pixels");
+  const warped = await client.warpLayer(warp);
+  check(warped.revision === filled.revision + 1n,
+    "warp was not one canonical revision");
+
+  const smartSource = await client.save();
+  const placed = await client.placePsdSmartObject(
+    new Blob([smartSource], { type: "application/octet-stream" }), "Warp source.psd");
+  const smartId = placed.activeLayerId;
+  check(placed.layers.find((layer) => layer.id === smartId)?.kind === 5,
+    "Smart Object placement did not cross the Worker boundary");
+  const smartWarped = await client.warpLayer({ ...warp, layerId: smartId, style: 3,
+    bend: 35, horizontalDistortion: 0, verticalDistortion: 0,
+    expectedStateId: placed.stateId, expectedRevision: placed.revision });
+  check(smartWarped.revision === placed.revision + 1n &&
+    smartWarped.layers.find((layer) => layer.id === smartId)?.kind === 5,
+  "editable Smart Object warp was not one canonical revision");
+
   const path = { subpaths: [{ anchors: [
     { x: 1, y: 1 }, { x: 6, y: 1 }, { x: 6, y: 3 }, { x: 1, y: 3 },
   ], shapeGroup: 0, combine: 1, closed: true }] };
@@ -51,10 +79,11 @@ try {
   const saved = await client.save();
   const reopened = await client.open(saved, "Reopened drawing.psd");
   check(reopened.paths.length === 1 && reopened.layers.some((layer) => layer.kind === 4) &&
-    reopened.layers.some((layer) => layer.kind === 0),
+    reopened.layers.some((layer) => layer.kind === 0) &&
+    reopened.layers.some((layer) => layer.kind === 5),
   "drawing/path/shape state did not survive PSD reopen");
   body.dataset.result = "PASS";
-  body.textContent = `PASS cancel=${cancelCode} preview=${preview.region.width}x${preview.region.height} paths=${reopened.paths.length} layers=${reopened.layers.length}`;
+  body.textContent = `PASS fillCancel=${cancelCode} warpCancel=${warpCancelCode} warp=${warpPreview.region.width}x${warpPreview.region.height} smart=1 paths=${reopened.paths.length} layers=${reopened.layers.length}`;
 } catch (error) {
   body.dataset.result = "FAIL"; body.textContent = `FAIL ${error?.stack || error}`;
 } finally { client.terminate(); }

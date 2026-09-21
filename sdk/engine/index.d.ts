@@ -86,6 +86,16 @@ export class PatchyWorkerClient {
   applyRasterFill(input: { layerId: bigint; mode: 0 | 1 | 2 | 3 | 4 | 5 | 6;
     color: number[]; start: number[]; end: number[];
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
+  previewLayerWarp(input: { layerId: bigint;
+    style: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+    bend: number; horizontalDistortion: number; verticalDistortion: number;
+    rotateVertical?: boolean; interpolation?: 0 | 1; cancellation?: Int32Array;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<{ region: Rect; rgba: Uint8Array }>;
+  warpLayer(input: { layerId: bigint;
+    style: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+    bend: number; horizontalDistortion: number; verticalDistortion: number;
+    rotateVertical?: boolean; interpolation?: 0 | 1;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   closeDocument(documentId: number): Promise<DocumentProjection | null>;
   setMemoryBudget(documentBytes: number, globalBytes: number): Promise<DocumentProjection>;
   setLayerVisibility(layerId: bigint, visible: boolean): Promise<DocumentProjection>;

@@ -5,6 +5,7 @@
 #include "core/smart_object.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/layer_transform.hpp"
+#include "core/layer_warp.hpp"
 #include "core/raster_stroke.hpp"
 #include "core/vector_raster.hpp"
 #include "core/vector_live_shapes.hpp"
@@ -2147,6 +2148,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_TRANSFORM) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_STROKE) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_FILL) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_WARP) != 0);
 
   auto *unsupported = patchy_engine_runtime_create(
       PATCHY_ENGINE_HOST_PROTOCOL_VERSION + 1U, &error);
@@ -4429,6 +4431,92 @@ void core_raster_fill_respects_soft_selection_locks_and_presets() {
   CHECK(point_gradient.find_layer(gradient_id)->pixels().pixel(1, 0)[3] == 0);
 }
 
+void engine_host_protocol_previews_and_commits_one_layer_warp() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 12, 10, &error);
+  patchy_engine_document_projection before{}; before.struct_size = sizeof(before);
+  CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+  std::array<std::uint8_t, 8 * 4 * 4> rgba{};
+  for (std::size_t index = 0; index < rgba.size(); index += 4) {
+    rgba[index] = 220; rgba[index + 1] = 50; rgba[index + 2] = 20;
+    rgba[index + 3] = 255;
+  }
+  patchy_engine_pixel_layer_input input{}; input.struct_size = sizeof(input);
+  input.expected_state_id = before.state_id; input.expected_revision = before.revision;
+  input.bounds = {2, 3, 8, 4}; input.width = 8; input.height = 4;
+  input.rgba = rgba.data(); input.rgba_size = rgba.size();
+  input.name = "Warp"; input.name_size = 4;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event, &error) == 1);
+  patchy_engine_document_projection ready{}; ready.struct_size = sizeof(ready);
+  CHECK(patchy_engine_session_document(session, &ready, &error) == 1);
+  patchy_engine_layer_warp warp{}; warp.struct_size = sizeof(warp);
+  warp.style = PATCHY_ENGINE_WARP_ARC; warp.layer_id = event.affected_layer_id;
+  warp.bend = 60.0; warp.horizontal_distortion = 10.0;
+  warp.vertical_distortion = -5.0; warp.interpolation = PATCHY_ENGINE_TRANSFORM_BILINEAR;
+  patchy_engine_rect region{}; patchy_engine_buffer preview{};
+  const auto cancel = [](std::int32_t, std::int32_t, void*) { return 0; };
+  CHECK(patchy_engine_session_preview_layer_warp(
+            session, ready.state_id, ready.revision, &warp, cancel, nullptr,
+            &region, &preview, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(patchy_engine_session_preview_layer_warp(
+            session, ready.state_id, ready.revision, &warp, nullptr, nullptr,
+            &region, &preview, &error) == 1);
+  CHECK(region.width > 0 && region.height > 0 && preview.size > 0);
+  patchy_engine_buffer_release(&preview);
+  CHECK(patchy_engine_session_warp_layer(
+            session, ready.state_id, ready.revision, &warp, &event, &error) == 1);
+  CHECK(event.revision == ready.revision + 1U);
+  CHECK(event.affected_layer_id == warp.layer_id);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  patchy_engine_buffer saved{};
+  CHECK(patchy_engine_session_save_psd(session, &saved, &event, &error) == 1);
+  auto *reopened = patchy_engine_session_open_psd(runtime, saved.data, saved.size, &error);
+  CHECK(reopened != nullptr);
+  patchy_engine_buffer reopened_pixels{};
+  CHECK(patchy_engine_session_layer_rgba8_pixels(
+            reopened, warp.layer_id, &reopened_pixels, &error) == 1);
+  CHECK(std::any_of(reopened_pixels.data,
+                    reopened_pixels.data + reopened_pixels.size,
+                    [](std::uint8_t value) { return value != 0; }));
+  patchy_engine_buffer_release(&reopened_pixels);
+  patchy_engine_session_destroy(reopened); patchy_engine_buffer_release(&saved);
+  patchy_engine_session_destroy(session); patchy_engine_runtime_destroy(runtime);
+}
+
+void core_layer_warp_supports_linked_mask_and_fails_closed() {
+  Document document(10, 8, PixelFormat::rgba8());
+  PixelBuffer pixels(6, 4, PixelFormat::rgba8()); pixels.clear(255);
+  const auto id = document.allocate_layer_id();
+  patchy::Layer input(id, "Warp", std::move(pixels)); input.set_bounds({2, 2, 6, 4});
+  document.add_layer(std::move(input));
+  auto *layer = document.find_layer(id);
+  patchy::LayerMask mask; mask.bounds = layer->bounds();
+  mask.pixels = PixelBuffer(6, 4, PixelFormat::gray8()); mask.pixels.clear(255);
+  layer->set_mask(std::move(mask)); patchy::set_layer_mask_linked(*layer, true);
+  patchy::LayerWarpRequest request; request.style = "warpFlag";
+  request.bend = 50.0; request.rotate_vertical = true;
+  patchy::LayerWarpResult result; std::string error;
+  CHECK(patchy::warp_layer(document, id, request, &result, &error));
+  CHECK(document.find_layer(id)->mask()->bounds.x == result.warped_bounds.x);
+  CHECK(document.find_layer(id)->mask()->bounds.width == result.warped_bounds.width);
+
+  auto before = document;
+  request.style = "not-a-style";
+  CHECK(!patchy::warp_layer(document, id, request, nullptr, &error));
+  CHECK(document.find_layer(id)->bounds().x == before.find_layer(id)->bounds().x);
+  request.style = "warpArc"; request.continue_operation = [] { return false; };
+  CHECK(!patchy::warp_layer(document, id, request, nullptr, &error));
+  CHECK(error == "layer warp was cancelled");
+  request.continue_operation = {}; document.find_layer(id)->set_lock_flags(patchy::kLayerLockPosition);
+  CHECK(!patchy::warp_layer(document, id, request, nullptr, &error));
+  CHECK(error == "a locked layer cannot be warped");
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -4525,5 +4613,9 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_previews_and_commits_one_raster_fill},
       {"core_raster_fill_respects_soft_selection_locks_and_presets",
        core_raster_fill_respects_soft_selection_locks_and_presets},
+      {"engine_host_protocol_previews_and_commits_one_layer_warp",
+       engine_host_protocol_previews_and_commits_one_layer_warp},
+      {"core_layer_warp_supports_linked_mask_and_fails_closed",
+       core_layer_warp_supports_linked_mask_and_fails_closed},
   };
 }

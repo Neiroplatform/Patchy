@@ -60,6 +60,8 @@
   "_patchy_engine_session_apply_raster_stroke",
   "_patchy_engine_session_preview_raster_fill",
   "_patchy_engine_session_apply_raster_fill",
+  "_patchy_engine_session_preview_layer_warp",
+  "_patchy_engine_session_warp_layer",
   "_patchy_engine_session_undo",
   "_patchy_engine_session_redo",
   "_patchy_engine_session_memory_usage",

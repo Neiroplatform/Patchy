@@ -116,6 +116,18 @@ export class PatchyWorkerClient {
       layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
       expectedRevision: String(input.expectedRevision) });
   }
+  previewLayerWarp(input) {
+    const cancellation = input.cancellation instanceof Int32Array
+      ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
+    return this.#request("previewLayerWarp", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision), cancellation: cancellation.buffer });
+  }
+  warpLayer(input) {
+    return this.#request("warpLayer", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
   closeDocument(documentId) { return this.#request("closeDocument", { documentId }); }
   setMemoryBudget(documentBytes, globalBytes) {
     return this.#request("setMemoryBudget", { documentBytes, globalBytes });

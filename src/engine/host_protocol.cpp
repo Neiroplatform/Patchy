@@ -4,6 +4,7 @@
 #include "core/adjustment_layer.hpp"
 #include "core/layer_metadata.hpp"
 #include "core/layer_transform.hpp"
+#include "core/layer_warp.hpp"
 #include "core/raster_stroke.hpp"
 #include "core/pattern_resource.hpp"
 #include "core/rect_utils.hpp"
@@ -144,7 +145,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS |
     PATCHY_ENGINE_CAP_LAYER_TRANSFORM |
     PATCHY_ENGINE_CAP_RASTER_STROKE |
-    PATCHY_ENGINE_CAP_RASTER_FILL;
+    PATCHY_ENGINE_CAP_RASTER_FILL |
+    PATCHY_ENGINE_CAP_LAYER_WARP;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -581,6 +583,34 @@ std::optional<patchy::RasterFillRequest> raster_fill_request(
     request.selection_mask_bounds = selection.mask_bounds;
     request.selection_mask = selection.mask_alpha;
   }
+  return request;
+}
+
+std::optional<patchy::LayerWarpRequest> layer_warp_request(
+    const patchy_engine_layer_warp *input, patchy_engine_error *error) {
+  static constexpr std::array<std::string_view, 15> kStyles{
+      "warpArc", "warpArch", "warpBulge", "warpFlag", "warpWave",
+      "warpRise", "warpArcLower", "warpArcUpper", "warpShellLower",
+      "warpShellUpper", "warpFish", "warpFisheye", "warpInflate",
+      "warpSqueeze", "warpTwist"};
+  if (input == nullptr || input->struct_size != sizeof(*input) ||
+      input->layer_id == 0 || input->style >= kStyles.size() ||
+      input->interpolation > PATCHY_ENGINE_TRANSFORM_BILINEAR ||
+      input->rotate_vertical > 1U) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "a bounded versioned layer warp is required");
+    return std::nullopt;
+  }
+  patchy::LayerWarpRequest request;
+  request.style = kStyles[input->style];
+  request.bend = input->bend;
+  request.horizontal_distortion = input->horizontal_distortion;
+  request.vertical_distortion = input->vertical_distortion;
+  request.rotate_vertical = input->rotate_vertical != 0;
+  request.interpolation =
+      input->interpolation == PATCHY_ENGINE_TRANSFORM_NEAREST
+          ? patchy::LayerTransformInterpolation::Nearest
+          : patchy::LayerTransformInterpolation::Bilinear;
   return request;
 }
 
@@ -3752,6 +3782,100 @@ int patchy_engine_session_apply_raster_fill(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown raster-fill failure");
+  }
+}
+
+int patchy_engine_session_preview_layer_warp(
+    const patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, const patchy_engine_layer_warp *warp,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || region == nullptr ||
+      rgba == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, preview region and buffer are required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) return 0;
+  auto request = layer_warp_request(warp, error);
+  if (!request.has_value()) return 0;
+  std::int32_t completed_rows = 0;
+  request->continue_operation = [progress, progress_user_data,
+                                 &completed_rows]() {
+    ++completed_rows;
+    return progress == nullptr ||
+           progress(completed_rows, 0, progress_user_data) != 0;
+  };
+  try {
+    auto preview_document = session->value->document();
+    patchy::LayerWarpResult warped;
+    std::string warp_error;
+    if (!patchy::warp_layer(preview_document, warp->layer_id, *request, &warped,
+                            &warp_error)) {
+      return fail(error, warp_error == "layer warp was cancelled"
+                             ? PATCHY_ENGINE_ERROR_CANCELLED
+                             : PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  warp_error.c_str());
+    }
+    const auto preview_region = patchy::intersect_rect(
+        warped.affected_region,
+        patchy::Rect::from_size(preview_document.width(), preview_document.height()));
+    if (preview_region.empty()) { *region = {}; return 1; }
+    DocumentSession preview(std::move(preview_document));
+    const auto rendered = preview.render(preview_region);
+    if (!rendered) return fail(error, rendered.error);
+    if (!copy_buffer(rendered.pixels.data(), rgba, error)) return 0;
+    *region = {preview_region.x, preview_region.y, preview_region.width,
+               preview_region.height};
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate layer-warp preview");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer-warp preview failure");
+  }
+}
+
+int patchy_engine_session_warp_layer(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, const patchy_engine_layer_warp *warp,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT, "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) return 0;
+  const auto request = layer_warp_request(warp, error);
+  if (!request.has_value()) return 0;
+  try {
+    auto prepared = session->value->document();
+    patchy::LayerWarpResult warped;
+    std::string warp_error;
+    if (!patchy::warp_layer(prepared, warp->layer_id, *request, &warped,
+                            &warp_error)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  warp_error.c_str());
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::LayerWarp,
+            expected_state_id, std::move(prepared), warped.affected_region});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = warp->layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate warped layer");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer-warp failure");
   }
 }
 

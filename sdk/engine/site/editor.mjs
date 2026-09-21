@@ -26,6 +26,7 @@ let panStart = null;
 let moveDraft = null;
 let transformDraft = null;
 let transformDialogDraft = null;
+let warpDialogDraft = null;
 let transformPreviewPending = null;
 let transformPreviewInFlight = false;
 let transformPreviewGeneration = 0;
@@ -147,6 +148,8 @@ function updateControls() {
   $("textLayerButton").textContent = layer?.kind === 3 ? "Edit text" : "Add text";
   $("layerTransformButton").disabled = busy || ![0, 3].includes(layer?.kind) ||
     Boolean(layer?.mask && !(layer.kind === 0 && layer.mask.linked));
+  $("layerWarpButton").disabled = busy || ![0, 5].includes(layer?.kind) ||
+    Boolean(layer?.vectorMask) || Boolean(layer?.mask && !layer.mask.linked);
   $("shapeLayerButton").disabled = busy || !snapshot;
   $("adjustmentLayerButton").disabled = busy || !snapshot;
   $("smartObjectButton").disabled = busy || !snapshot;
@@ -898,9 +901,13 @@ async function drainTransformPreview() {
     while (transformPreviewPending) {
       const pending = transformPreviewPending; transformPreviewPending = null;
       try {
-        const preview = await client.previewLayerTransform({ layerId: pending.layer.id,
-          quad: pending.quad, interpolation: 1, expectedStateId: pending.stateId,
-          expectedRevision: pending.revision, cancellation: pending.cancellation });
+        const preview = pending.warp
+          ? await client.previewLayerWarp({ ...pending.warp,
+            layerId: pending.layer.id, expectedStateId: pending.stateId,
+            expectedRevision: pending.revision, cancellation: pending.cancellation })
+          : await client.previewLayerTransform({ layerId: pending.layer.id,
+            quad: pending.quad, interpolation: 1, expectedStateId: pending.stateId,
+            expectedRevision: pending.revision, cancellation: pending.cancellation });
         if (pending.generation !== transformPreviewGeneration || transformPreviewPending) continue;
         if (transformPreviewRestore) {
           context.putImageData(transformPreviewRestore.pixels,
@@ -931,6 +938,28 @@ function scheduleTransformPreview(layer, quad) {
   transformPreviewPending = { layer, quad: [...quad], stateId: snapshot.stateId,
     revision: snapshot.revision, generation,
     cancellation: transformPreviewCancellation };
+  drainTransformPreview();
+}
+
+function layerWarpPayload() {
+  const values = [Number($("layerWarpBendInput").value),
+    Number($("layerWarpHorizontalInput").value), Number($("layerWarpVerticalInput").value)];
+  const style = Number($("layerWarpStyleInput").value);
+  if (!Number.isInteger(style) || style < 0 || style > 14 ||
+      values.some((value) => !Number.isFinite(value) || value < -100 || value > 100)) return null;
+  return { style, bend: values[0], horizontalDistortion: values[1],
+    verticalDistortion: values[2], rotateVertical: $("layerWarpRotateInput").checked,
+    interpolation: 1 };
+}
+
+function scheduleWarpPreview() {
+  if (!snapshot || !warpDialogDraft) return;
+  const warp = layerWarpPayload(); if (!warp) return;
+  if (transformPreviewCancellation) Atomics.store(transformPreviewCancellation, 0, 1);
+  transformPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
+  transformPreviewPending = { layer: warpDialogDraft.layer, warp,
+    stateId: snapshot.stateId, revision: snapshot.revision,
+    generation: ++transformPreviewGeneration, cancellation: transformPreviewCancellation };
   drainTransformPreview();
 }
 
@@ -1718,6 +1747,25 @@ function openLayerTransformDialog() {
   $("layerTransformDialog").show();
 }
 
+function openLayerWarpDialog() {
+  const layer = selectedLayer();
+  if (busy || ![0, 5].includes(layer?.kind) || layer?.vectorMask ||
+      (layer?.mask && !layer.mask.linked)) return;
+  warpDialogDraft = { layer, stateId: snapshot.stateId, revision: snapshot.revision };
+  $("layerWarpStyleInput").value = "0"; $("layerWarpBendInput").value = "50";
+  $("layerWarpHorizontalInput").value = "0"; $("layerWarpVerticalInput").value = "0";
+  $("layerWarpRotateInput").checked = false;
+  $("layerWarpDialog").showModal(); scheduleWarpPreview();
+}
+
+async function commitLayerWarp() {
+  const draft = warpDialogDraft; const warp = layerWarpPayload();
+  if (!draft || !warp) return;
+  warpDialogDraft = null; $("layerWarpDialog").close(); clearTransformPreview();
+  await mutate("Warping layer", () => client.warpLayer({ ...warp, layerId: draft.layer.id,
+    expectedStateId: draft.stateId, expectedRevision: draft.revision }));
+}
+
 const layerCornerInputIds = ["layerTlXInput", "layerTlYInput", "layerTrXInput", "layerTrYInput",
   "layerBrXInput", "layerBrYInput", "layerBlXInput", "layerBlYInput"];
 
@@ -2002,6 +2050,7 @@ $("smartFilterButton").addEventListener("click", openSmartFilterDialog);
 $("commitShapeButton").addEventListener("click", commitShape);
 $("commitSmartFilterButton").addEventListener("click", commitSmartFilter);
 $("layerTransformButton").addEventListener("click", openLayerTransformDialog);
+$("layerWarpButton").addEventListener("click", openLayerWarpDialog);
 $("commitTextButton").addEventListener("click", commitTextDialog);
 $("commitLayerTransformButton").addEventListener("click", () => {
   const draft = transformDialogDraft;
@@ -2010,6 +2059,12 @@ $("commitLayerTransformButton").addEventListener("click", () => {
   const quad = [...draft.quad]; transformDialogDraft = null;
   $("layerTransformDialog").close();
   commitLayerQuad(draft.layer, quad);
+});
+$("commitLayerWarpButton").addEventListener("click", commitLayerWarp);
+for (const id of ["layerWarpStyleInput", "layerWarpBendInput", "layerWarpHorizontalInput",
+  "layerWarpVerticalInput", "layerWarpRotateInput"]) $(id).addEventListener("input", scheduleWarpPreview);
+$("layerWarpDialog").addEventListener("close", () => {
+  if (warpDialogDraft) { warpDialogDraft = null; clearTransformPreview(); }
 });
 for (const id of ["layerXInput", "layerYInput", "layerWidthInput", "layerHeightInput",
   "layerAngleInput", "layerFlipXInput", "layerFlipYInput", "layerTransformModeInput",

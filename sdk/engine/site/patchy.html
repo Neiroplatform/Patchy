@@ -147,6 +147,7 @@
             <button type="button" id="openSmartObjectButton" disabled>Open contents</button>
             <button type="button" id="smartFilterButton" disabled>Smart Filter</button>
             <button type="button" id="layerTransformButton" disabled>Transform</button>
+            <button type="button" id="layerWarpButton" disabled>Warp</button>
             <button type="button" id="createMaskButton" disabled>Add mask</button>
             <button type="button" id="toggleMaskButton" disabled>Disable mask</button>
             <button type="button" id="invertMaskButton" disabled>Invert mask</button>
@@ -325,6 +326,29 @@
           </div>
           <p class="dialog-note">Corner handles and preview use the same engine homography that is committed to PSD state. Editable text remains affine.</p>
           <div class="dialog-actions"><button class="button button-primary" id="commitLayerTransformButton" type="button">Apply transform</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="layerWarpDialog" aria-labelledby="layerWarpTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">LAYER</p><h2 id="layerWarpTitle">Warp</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section>
+          <label class="dialog-field"><span>Style</span><select id="layerWarpStyleInput">
+            <option value="0">Arc</option><option value="1">Arch</option><option value="2">Bulge</option>
+            <option value="3">Flag</option><option value="4">Wave</option><option value="5">Rise</option>
+            <option value="6">Arc lower</option><option value="7">Arc upper</option>
+            <option value="8">Shell lower</option><option value="9">Shell upper</option>
+            <option value="10">Fish</option><option value="11">Fisheye</option>
+            <option value="12">Inflate</option><option value="13">Squeeze</option><option value="14">Twist</option>
+          </select></label>
+          <div class="field-row field-row-four">
+            <label><span>Bend %</span><input id="layerWarpBendInput" type="number" min="-100" max="100" step="1" value="50"></label>
+            <label><span>Horizontal %</span><input id="layerWarpHorizontalInput" type="number" min="-100" max="100" step="1" value="0"></label>
+            <label><span>Vertical %</span><input id="layerWarpVerticalInput" type="number" min="-100" max="100" step="1" value="0"></label>
+            <label class="check-field"><input id="layerWarpRotateInput" type="checkbox"><span>Vertical</span></label>
+          </div>
+          <p class="dialog-note">Preview and final pixels use the same bounded engine warp. Smart Objects retain editable preset metadata.</p>
+          <div class="dialog-actions"><button class="button button-primary" id="commitLayerWarpButton" type="button">Apply warp</button></div>
         </section>
       </form>
     </dialog>

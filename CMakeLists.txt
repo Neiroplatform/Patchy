@@ -111,6 +111,7 @@ add_library(patchy_core
   src/core/layer_render_utils.cpp
   src/core/layer_tree.cpp
   src/core/layer_transform.cpp
+  src/core/layer_warp.cpp
   src/core/liquify.cpp
   src/core/magnetic_lasso.cpp
   src/core/mask_outline.cpp

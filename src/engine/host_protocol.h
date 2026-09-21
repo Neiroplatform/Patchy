@@ -45,6 +45,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_LAYER_TRANSFORM = UINT64_C(1) << 28,
   PATCHY_ENGINE_CAP_RASTER_STROKE = UINT64_C(1) << 29,
   PATCHY_ENGINE_CAP_RASTER_FILL = UINT64_C(1) << 30,
+  PATCHY_ENGINE_CAP_LAYER_WARP = UINT64_C(1) << 31,
 };
 
 enum patchy_engine_error_code {
@@ -149,6 +150,36 @@ typedef struct patchy_engine_raster_fill {
   double end_x;
   double end_y;
 } patchy_engine_raster_fill;
+
+enum patchy_engine_warp_style {
+  PATCHY_ENGINE_WARP_ARC = 0,
+  PATCHY_ENGINE_WARP_ARCH = 1,
+  PATCHY_ENGINE_WARP_BULGE = 2,
+  PATCHY_ENGINE_WARP_FLAG = 3,
+  PATCHY_ENGINE_WARP_WAVE = 4,
+  PATCHY_ENGINE_WARP_RISE = 5,
+  PATCHY_ENGINE_WARP_ARC_LOWER = 6,
+  PATCHY_ENGINE_WARP_ARC_UPPER = 7,
+  PATCHY_ENGINE_WARP_SHELL_LOWER = 8,
+  PATCHY_ENGINE_WARP_SHELL_UPPER = 9,
+  PATCHY_ENGINE_WARP_FISH = 10,
+  PATCHY_ENGINE_WARP_FISHEYE = 11,
+  PATCHY_ENGINE_WARP_INFLATE = 12,
+  PATCHY_ENGINE_WARP_SQUEEZE = 13,
+  PATCHY_ENGINE_WARP_TWIST = 14,
+};
+
+typedef struct patchy_engine_layer_warp {
+  uint32_t struct_size;
+  uint32_t style;
+  uint64_t layer_id;
+  double bend;
+  double horizontal_distortion;
+  double vertical_distortion;
+  uint32_t interpolation;
+  uint8_t rotate_vertical;
+  uint8_t reserved[3];
+} patchy_engine_layer_warp;
 
 typedef struct patchy_engine_memory_usage {
   uint32_t struct_size;
@@ -1132,6 +1163,16 @@ int patchy_engine_session_preview_raster_fill(
 int patchy_engine_session_apply_raster_fill(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const patchy_engine_raster_fill *fill,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_preview_layer_warp(
+    const patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_layer_warp *warp,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error);
+int patchy_engine_session_warp_layer(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_layer_warp *warp,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,

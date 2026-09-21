@@ -40,8 +40,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "toggleMaskButton", "invertMaskButton", "removeMaskButton",
     "gestureCanvas", "transformOverlay", "moveToolButton", "brushToolButton",
     "lassoToolButton", "polygonToolButton", "magicToolButton", "selectionToleranceInput",
-    "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton",
+    "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton", "layerWarpButton",
     "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "layerTransformDialog", "commitLayerTransformButton",
+    "layerWarpDialog", "layerWarpStyleInput", "layerWarpBendInput", "commitLayerWarpButton",
     "shapeLayerButton", "adjustmentLayerButton", "smartObjectButton", "openSmartObjectButton", "smartFilterButton",
     "filterLayerButton", "filterDialog", "filterKindInput", "filterParameterFields", "commitFilterButton",
     "adjustmentParameterFields",
@@ -75,6 +76,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.previewLayerTransform",
     "client.transformLayer", "client.previewRasterStroke", "client.applyRasterStroke",
     "client.previewRasterFill", "client.applyRasterFill",
+    "client.previewLayerWarp", "client.warpLayer",
     "client.addTextLayer",
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
     "client.updateVectorShape",
@@ -1037,6 +1039,38 @@ test("worker previews and commits one exact-state raster fill", async () => {
   const committed = await host.dispatch({ method: "applyRasterFill", ...message });
   assert.equal(committed.revision, 5n);
   await assert.rejects(host.dispatch({ method: "applyRasterFill", ...message }),
+    (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
+  host.dispose();
+});
+
+test("worker previews and commits one exact-state layer warp", async () => {
+  let revision = 4n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 31n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision }; },
+    previewLayerWarp(session, before, input) {
+      calls.push(["preview", session, before.revision, input]);
+      return { region: { x: 0, y: 0, width: 8, height: 6 }, rgba: new Uint8Array(192) };
+    },
+    warpLayer(session, before, input) {
+      calls.push(["commit", session, before.revision, input]); revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 8, height: 6, name: "Warp.psd" });
+  const message = { layerId: "7", style: 0, bend: 45,
+    horizontalDistortion: 10, verticalDistortion: -5, rotateVertical: false,
+    interpolation: 1, expectedStateId: "4", expectedRevision: "4" };
+  const preview = await host.dispatch({ method: "previewLayerWarp", ...message,
+    cancellation: new SharedArrayBuffer(4) });
+  assert.equal(preview.rgba.byteLength, 192); assert.equal(revision, 4n);
+  const committed = await host.dispatch({ method: "warpLayer", ...message });
+  assert.equal(committed.revision, 5n);
+  await assert.rejects(host.dispatch({ method: "warpLayer", ...message }),
     (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
   host.dispose();
