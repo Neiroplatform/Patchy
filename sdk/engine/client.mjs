@@ -111,6 +111,34 @@ export class PatchyWorkerClient {
       expectedRevision: String(input.expectedRevision),
     });
   }
+  previewLayersTransform(input) {
+    if (!Array.isArray(input.layerIds)) {
+      throw new TypeError("Multi-layer transform requires a layer id array");
+    }
+    const cancellation = input.cancellation instanceof Int32Array
+      ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
+    if (!(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Transform preview cancellation must use shared Int32 storage");
+    }
+    return this.#request("previewLayersTransform", {
+      layerIds: input.layerIds.map(String), quad: [...input.quad],
+      interpolation: input.interpolation ?? 1,
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision),
+      cancellation: cancellation.buffer,
+    });
+  }
+  transformLayers(input) {
+    if (!Array.isArray(input.layerIds)) {
+      throw new TypeError("Multi-layer transform requires a layer id array");
+    }
+    return this.#request("transformLayers", {
+      layerIds: input.layerIds.map(String), quad: [...input.quad],
+      interpolation: input.interpolation ?? 1,
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision),
+    });
+  }
   previewRasterStroke(input) {
     const cancellation = input.cancellation instanceof Int32Array
       ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));

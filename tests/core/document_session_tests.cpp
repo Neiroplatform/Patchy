@@ -4667,6 +4667,114 @@ void engine_host_protocol_transforms_layers_with_engine_preview_and_atomic_commi
   patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_transforms_layer_batches_atomically() {
+  patchy_engine_error error{};
+  auto* runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto* session = patchy_engine_session_create_rgba8(runtime, 20, 10, &error);
+  CHECK(session != nullptr);
+  const std::array<std::uint8_t, 16> rgba{
+      255, 0, 0, 255, 255, 0, 0, 255,
+      255, 0, 0, 255, 255, 0, 0, 255};
+  const auto add_layer = [&](patchy_engine_rect bounds, const char* name) {
+    patchy_engine_document_projection before{};
+    before.struct_size = sizeof(before);
+    CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+    patchy_engine_pixel_layer_input input{};
+    input.struct_size = sizeof(input);
+    input.expected_state_id = before.state_id;
+    input.expected_revision = before.revision;
+    input.bounds = bounds;
+    input.width = 2;
+    input.height = 2;
+    input.rgba = rgba.data();
+    input.rgba_size = rgba.size();
+    input.name = name;
+    input.name_size = std::strlen(name);
+    patchy_engine_event event{};
+    CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event,
+                                                 &error) == 1);
+    return event.affected_layer_id;
+  };
+  const auto first_id = add_layer({1, 1, 2, 2}, "First");
+  const auto second_id = add_layer({5, 1, 2, 2}, "Second");
+  const std::array<std::uint64_t, 2> ids{second_id, first_id};
+  patchy_engine_document_projection ready{};
+  ready.struct_size = sizeof(ready);
+  CHECK(patchy_engine_session_document(session, &ready, &error) == 1);
+  patchy_engine_layer_batch_transform transform{};
+  transform.struct_size = sizeof(transform);
+  transform.interpolation = PATCHY_ENGINE_TRANSFORM_NEAREST;
+  transform.expected_state_id = ready.state_id;
+  transform.expected_revision = ready.revision;
+  transform.layer_ids = ids.data();
+  transform.layer_count = ids.size();
+  const std::array<double, 8> quad{
+      2.0, 2.0, 14.0, 2.0, 14.0, 6.0, 2.0, 6.0};
+  std::copy(quad.begin(), quad.end(), std::begin(transform.quad));
+
+  patchy_engine_rect preview_region{};
+  patchy_engine_buffer preview{};
+  CHECK(patchy_engine_session_preview_layers_transform(
+            session, &transform, nullptr, nullptr, &preview_region, &preview,
+            &error) == 1);
+  CHECK(preview_region.x == 1);
+  CHECK(preview_region.y == 1);
+  CHECK(preview_region.width == 13);
+  CHECK(preview_region.height == 5);
+  patchy_engine_buffer_release(&preview);
+  patchy_engine_document_projection after_preview{};
+  after_preview.struct_size = sizeof(after_preview);
+  CHECK(patchy_engine_session_document(session, &after_preview, &error) == 1);
+  CHECK(after_preview.revision == ready.revision);
+
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_transform_layers(session, &transform, &event,
+                                                &error) == 1);
+  CHECK(event.revision == ready.revision + 1U);
+  CHECK(event.affected_layer_id == second_id);
+  patchy_engine_document_projection committed{};
+  committed.struct_size = sizeof(committed);
+  CHECK(patchy_engine_session_document(session, &committed, &error) == 1);
+  CHECK(committed.revision == ready.revision + 1U);
+  std::array<patchy_engine_rect, 2> transformed_bounds{};
+  for (std::uint32_t index = 0; index < committed.layer_count; ++index) {
+    patchy_engine_layer_projection layer{};
+    CHECK(patchy_engine_session_layer_at(session, index, &layer, &error) == 1);
+    if (layer.id == first_id) transformed_bounds[0] = layer.bounds;
+    if (layer.id == second_id) transformed_bounds[1] = layer.bounds;
+  }
+  CHECK(transformed_bounds[0].x == 2);
+  CHECK(transformed_bounds[0].width == 4);
+  CHECK(transformed_bounds[1].x == 10);
+  CHECK(transformed_bounds[1].width == 4);
+
+  CHECK(patchy_engine_session_transform_layers(session, &transform, &event,
+                                                &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+
+  for (const auto large_document : {std::uint8_t{0}, std::uint8_t{1}}) {
+    patchy_engine_buffer encoded{};
+    CHECK(patchy_engine_session_save_psd_as(
+              session, large_document, &encoded, &event, &error) == 1);
+    auto* reopened = patchy_engine_session_open_psd(
+        runtime, encoded.data, encoded.size, &error);
+    CHECK(reopened != nullptr);
+    patchy_engine_document_projection reopened_projection{};
+    reopened_projection.struct_size = sizeof(reopened_projection);
+    CHECK(patchy_engine_session_document(reopened, &reopened_projection,
+                                         &error) == 1);
+    CHECK(reopened_projection.layer_count == 2U);
+    patchy_engine_session_destroy(reopened);
+    patchy_engine_buffer_release(&encoded);
+  }
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 void core_layer_transform_preserves_editable_text_and_fails_closed() {
   Document document(12, 10, PixelFormat::rgba8());
   PixelBuffer pixels(2, 2, PixelFormat::rgba8());
@@ -4759,6 +4867,114 @@ void core_layer_transform_preserves_smart_object_placement() {
   CHECK(patchy::layer_smart_object_block_dirty(*layer));
   CHECK(layer->metadata().at(patchy::kLayerMetadataSmartObjectRasterStatus) ==
         patchy::kSmartObjectRasterStatusPatchy);
+}
+
+void core_multi_layer_transform_preserves_forest_geometry_and_fails_closed() {
+  Document document(24, 12, PixelFormat::rgba8());
+  const auto group_id = document.allocate_layer_id();
+  const auto first_id = document.allocate_layer_id();
+  const auto second_id = document.allocate_layer_id();
+  patchy::Layer group(group_id, "Transform forest", patchy::LayerKind::Group);
+  PixelBuffer first_pixels(2, 2, PixelFormat::rgba8());
+  first_pixels.clear(255);
+  patchy::Layer first(first_id, "First", std::move(first_pixels));
+  first.set_bounds({1, 1, 2, 2});
+  PixelBuffer second_pixels(2, 2, PixelFormat::rgba8());
+  second_pixels.clear(127);
+  patchy::Layer second(second_id, "Second", std::move(second_pixels));
+  second.set_bounds({5, 1, 2, 2});
+  PixelBuffer group_mask(6, 2, PixelFormat::gray8());
+  group_mask.clear(255);
+  group.set_mask(
+      patchy::LayerMask{{1, 1, 6, 2}, std::move(group_mask), 255, false});
+  patchy::set_layer_mask_linked(group, true);
+  group.add_child(std::move(first));
+  group.add_child(std::move(second));
+  document.add_layer(std::move(group));
+
+  patchy::LayerBatchTransformRequest request;
+  request.layer_ids = {group_id};
+  request.quad = {2.0, 2.0, 14.0, 2.0, 14.0, 6.0, 2.0, 6.0};
+  request.interpolation = patchy::LayerTransformInterpolation::Nearest;
+  patchy::LayerTransformResult result;
+  std::string error;
+  CHECK(patchy::transform_layers(document, request, &result, &error));
+  CHECK(result.previous_bounds.x == 1);
+  CHECK(result.previous_bounds.y == 1);
+  CHECK(result.previous_bounds.width == 6);
+  CHECK(result.previous_bounds.height == 2);
+  const auto* transformed_first = document.find_layer(first_id);
+  const auto* transformed_second = document.find_layer(second_id);
+  CHECK(transformed_first != nullptr);
+  CHECK(transformed_second != nullptr);
+  CHECK(transformed_first->bounds().x == 2);
+  CHECK(transformed_first->bounds().y == 2);
+  CHECK(transformed_first->bounds().width == 4);
+  CHECK(transformed_first->bounds().height == 4);
+  CHECK(transformed_second->bounds().x == 10);
+  CHECK(transformed_second->bounds().y == 2);
+  CHECK(transformed_second->bounds().width == 4);
+  CHECK(transformed_second->bounds().height == 4);
+  const auto* transformed_group = document.find_layer(group_id);
+  CHECK(transformed_group != nullptr);
+  CHECK(transformed_group->bounds().x == 2);
+  CHECK(transformed_group->bounds().width == 12);
+  CHECK(transformed_group->mask().has_value());
+  CHECK(transformed_group->mask()->bounds.x == 2);
+  CHECK(transformed_group->mask()->bounds.y == 2);
+  CHECK(transformed_group->mask()->bounds.width == 12);
+  CHECK(transformed_group->mask()->bounds.height == 4);
+
+  const auto first_before_rejection = transformed_first->bounds();
+  request.layer_ids = {group_id, first_id};
+  CHECK(!patchy::transform_layers(document, request, nullptr, &error));
+  CHECK(error.find("overlap") != std::string::npos);
+  CHECK(document.find_layer(first_id)->bounds().x == first_before_rejection.x);
+  CHECK(document.find_layer(first_id)->bounds().width ==
+        first_before_rejection.width);
+  request.layer_ids = {group_id};
+  request.quad = {0.0, 0.0, 30000.0, 0.0,
+                  30000.0, 8000.0, 0.0, 8000.0};
+  CHECK(!patchy::transform_layers(document, request, nullptr, &error));
+  CHECK(error.find("aggregate output budget") != std::string::npos);
+  CHECK(document.find_layer(first_id)->bounds().x == first_before_rejection.x);
+  CHECK(document.find_layer(first_id)->bounds().width ==
+        first_before_rejection.width);
+
+  Document unsupported(24, 12, PixelFormat::rgba8());
+  const auto unsupported_group_id = unsupported.allocate_layer_id();
+  const auto pixel_id = unsupported.allocate_layer_id();
+  const auto unsupported_id = unsupported.allocate_layer_id();
+  patchy::Layer unsupported_group(unsupported_group_id, "Mixed forest",
+                                 patchy::LayerKind::Group);
+  PixelBuffer pixel_bytes(2, 2, PixelFormat::rgba8());
+  pixel_bytes.clear(91);
+  patchy::Layer pixel(pixel_id, "Pixel", std::move(pixel_bytes));
+  pixel.set_bounds({1, 1, 2, 2});
+  PixelBuffer unsupported_bytes(2, 2, PixelFormat::rgba8());
+  unsupported_bytes.clear(33);
+  patchy::Layer unsupported_layer(unsupported_id, "Unsupported",
+                                  std::move(unsupported_bytes));
+  unsupported_layer.set_bounds({5, 1, 2, 2});
+  PixelBuffer unsupported_mask(2, 2, PixelFormat::gray8());
+  unsupported_mask.clear(255);
+  unsupported_layer.set_mask(
+      patchy::LayerMask{{5, 1, 2, 2}, std::move(unsupported_mask), 255, false});
+  patchy::set_layer_mask_linked(unsupported_layer, false);
+  unsupported_group.add_child(std::move(pixel));
+  unsupported_group.add_child(std::move(unsupported_layer));
+  unsupported.add_layer(std::move(unsupported_group));
+  request.layer_ids = {unsupported_group_id};
+  request.quad = {2.0, 2.0, 14.0, 2.0, 14.0, 6.0, 2.0, 6.0};
+  const auto pixel_source = unsupported.find_layer(pixel_id)->pixels().data();
+  const std::vector<std::uint8_t> pixel_before(pixel_source.begin(),
+                                                pixel_source.end());
+  CHECK(!patchy::transform_layers(unsupported, request, nullptr, &error));
+  CHECK(error.find("unlinked raster mask") != std::string::npos);
+  CHECK(unsupported.find_layer(pixel_id)->bounds().x == 1);
+  CHECK(std::equal(unsupported.find_layer(pixel_id)->pixels().data().begin(),
+                   unsupported.find_layer(pixel_id)->pixels().data().end(),
+                   pixel_before.begin()));
 }
 
 void engine_host_protocol_returns_bounded_layer_thumbnail() {
@@ -5782,10 +5998,14 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_copies_layer_forests_between_sessions_atomically},
       {"engine_host_protocol_transforms_layers_with_engine_preview_and_atomic_commit",
        engine_host_protocol_transforms_layers_with_engine_preview_and_atomic_commit},
+      {"engine_host_protocol_transforms_layer_batches_atomically",
+       engine_host_protocol_transforms_layer_batches_atomically},
       {"core_layer_transform_preserves_editable_text_and_fails_closed",
        core_layer_transform_preserves_editable_text_and_fails_closed},
       {"core_layer_transform_preserves_smart_object_placement",
        core_layer_transform_preserves_smart_object_placement},
+      {"core_multi_layer_transform_preserves_forest_geometry_and_fails_closed",
+       core_multi_layer_transform_preserves_forest_geometry_and_fails_closed},
       {"engine_host_protocol_returns_bounded_layer_thumbnail",
        engine_host_protocol_returns_bounded_layer_thumbnail},
       {"core_raster_stroke_respects_selection_and_immutable_clone_source",

@@ -43,11 +43,13 @@ const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
 const LAYER_BATCH_SIZE = 32;
 const LAYER_BATCH_EDIT_SIZE = 40;
+const LAYER_BATCH_TRANSFORM_SIZE = 96;
 const CAP_PSB_SAVE_AS = 1n << 33n;
 const CAP_LAYER_MASK_STROKE = 1n << 34n;
 const CAP_RICH_TEXT_AUTHORING = 1n << 35n;
 const CAP_MULTI_LAYER_AUTHORING = 1n << 36n;
 const CAP_MULTI_LAYER_TRANSFER = 1n << 37n;
+const CAP_MULTI_LAYER_TRANSFORM = 1n << 38n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -743,6 +745,56 @@ export class EmscriptenPatchyEngine {
         this.#module._patchy_engine_session_transform_layer(
           session, snapshot.stateId, snapshot.revision, transform, event, error));
     } finally { this.#module._free(transform); }
+  }
+
+  previewLayersTransform(session, snapshot, layerIds, quad, interpolation = 1,
+                         cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    const symbol = "_patchy_engine_session_preview_layers_transform";
+    if (!(this.#capabilities & CAP_MULTI_LAYER_TRANSFORM) ||
+        typeof this.#module[symbol] !== "function") {
+      throw new PatchyEngineError(2, "Multi-layer transform is unavailable");
+    }
+    if (!(cancellation instanceof Int32Array) ||
+        !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Transform preview cancellation must use shared Int32 storage");
+    }
+    return this.#withError((error) => this.#layerBatchTransform(
+      snapshot, layerIds, quad, interpolation, (transform) => {
+        let region = 0; let buffer = 0; let callback = 0;
+        try {
+          region = this.#alloc(RECT_SIZE); buffer = this.#alloc(BUFFER_SIZE);
+          callback = this.#module.addFunction(
+            () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
+          this.#check(this.#module[symbol](session, transform, callback, 0,
+            region, buffer, error), error);
+          const regionView = this.#view(region, RECT_SIZE);
+          const bufferView = this.#view(buffer, BUFFER_SIZE);
+          const data = bufferView.getUint32(0, true);
+          const size = bufferView.getUint32(4, true);
+          return { region: { x: regionView.getInt32(0, true),
+            y: regionView.getInt32(4, true), width: regionView.getInt32(8, true),
+            height: regionView.getInt32(12, true) },
+          rgba: this.#module.HEAPU8.slice(data, data + size) };
+        } finally {
+          if (callback) this.#module.removeFunction(callback);
+          if (buffer) {
+            this.#module._patchy_engine_buffer_release(buffer);
+            this.#module._free(buffer);
+          }
+          if (region) this.#module._free(region);
+        }
+      }));
+  }
+
+  transformLayers(session, snapshot, layerIds, quad, interpolation = 1) {
+    const symbol = "_patchy_engine_session_transform_layers";
+    if (!(this.#capabilities & CAP_MULTI_LAYER_TRANSFORM) ||
+        typeof this.#module[symbol] !== "function") {
+      throw new PatchyEngineError(2, "Multi-layer transform is unavailable");
+    }
+    return this.#layerBatchTransform(snapshot, layerIds, quad, interpolation,
+      (transform) => this.#mutation((event, error) =>
+        this.#module[symbol](session, transform, event, error)));
   }
 
   previewRasterStroke(session, snapshot, input,
@@ -2151,6 +2203,38 @@ export class EmscriptenPatchyEngine {
     view.setBigUint64(8, layerId, true);
     quad.forEach((coordinate, index) => view.setFloat64(16 + index * 8, coordinate, true));
     return transform;
+  }
+
+  #layerBatchTransform(snapshot, layerIds, quad, interpolation, call) {
+    if (!Array.isArray(layerIds) || layerIds.length < 1 || layerIds.length > 256 ||
+        !Array.isArray(quad) || quad.length !== 8 || !quad.every(Number.isFinite) ||
+        ![0, 1].includes(interpolation)) {
+      throw new TypeError("A bounded layer-id batch, eight finite quad coordinates and interpolation are required");
+    }
+    const ids = layerIds.map((value) => BigInt(value));
+    if (ids.some((id) => id <= 0n || id > UINT64_MAX) ||
+        new Set(ids.map(String)).size !== ids.length) {
+      throw new TypeError("Layer batch ids must be non-zero and unique");
+    }
+    const idsPointer = this.#alloc(ids.length * 8);
+    const transform = this.#alloc(LAYER_BATCH_TRANSFORM_SIZE);
+    try {
+      const idsView = this.#view(idsPointer, ids.length * 8);
+      ids.forEach((id, index) => idsView.setBigUint64(index * 8, id, true));
+      const view = this.#view(transform, LAYER_BATCH_TRANSFORM_SIZE);
+      view.setUint32(0, LAYER_BATCH_TRANSFORM_SIZE, true);
+      view.setUint32(4, interpolation, true);
+      view.setBigUint64(8, snapshot.stateId, true);
+      view.setBigUint64(16, snapshot.revision, true);
+      view.setUint32(24, idsPointer, true);
+      view.setUint32(28, ids.length, true);
+      quad.forEach((coordinate, index) =>
+        view.setFloat64(32 + index * 8, coordinate, true));
+      return call(transform);
+    } finally {
+      this.#module._free(transform);
+      this.#module._free(idsPointer);
+    }
   }
 
   #rasterStroke(input) {

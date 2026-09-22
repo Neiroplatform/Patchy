@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace patchy {
 
@@ -30,6 +31,16 @@ struct LayerTransformResult {
   Rect affected_region{};
 };
 
+struct LayerBatchTransformRequest {
+  // Unique selected roots. Group roots expand recursively, with at most 256
+  // transformable leaves across the complete forest.
+  std::vector<LayerId> layer_ids;
+  // Collective destination corners for the pre-transform union bounds.
+  std::array<double, 8> quad{};
+  LayerTransformInterpolation interpolation{LayerTransformInterpolation::Bilinear};
+  std::function<bool()> continue_operation{};
+};
+
 // Applies one engine-owned transform to a pixel, editable text or editable
 // Smart Object layer. Smart Object placement/non-affine quads are mapped with
 // the same homography while embedded source, filters and warp state survive. The
@@ -40,5 +51,14 @@ struct LayerTransformResult {
                                    const LayerTransformRequest& request,
                                    LayerTransformResult* result,
                                    std::string* error);
+
+// Applies one collective homography to a bounded selected forest. Relative
+// placement is preserved by mapping every leaf's original bounds through the
+// union-bounds homography. The caller owns publication: failure may alter this
+// prepared Document but never a canonical session state.
+[[nodiscard]] bool transform_layers(Document& document,
+                                    const LayerBatchTransformRequest& request,
+                                    LayerTransformResult* result,
+                                    std::string* error);
 
 }  // namespace patchy

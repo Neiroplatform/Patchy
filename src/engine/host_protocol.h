@@ -52,6 +52,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING = UINT64_C(1) << 35,
   PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING = UINT64_C(1) << 36,
   PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFER = UINT64_C(1) << 37,
+  PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM = UINT64_C(1) << 38,
 };
 
 enum patchy_engine_error_code {
@@ -129,6 +130,17 @@ typedef struct patchy_engine_layer_batch_edit {
   float opacity;
   uint32_t value;
 } patchy_engine_layer_batch_edit;
+
+typedef struct patchy_engine_layer_batch_transform {
+  uint32_t struct_size;
+  uint32_t interpolation;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const uint64_t *layer_ids;
+  size_t layer_count;
+  /* collective top-left, top-right, bottom-right, bottom-left x/y pairs */
+  double quad[8];
+} patchy_engine_layer_batch_transform;
 
 typedef int (*patchy_engine_transform_progress_fn)(int32_t completed_rows,
                                                    int32_t total_rows,
@@ -1457,6 +1469,16 @@ int patchy_engine_session_preview_layer_transform(
 int patchy_engine_session_transform_layer(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const patchy_engine_layer_transform *transform,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_preview_layers_transform(
+    const patchy_engine_session *session,
+    const patchy_engine_layer_batch_transform *transform,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error);
+int patchy_engine_session_transform_layers(
+    patchy_engine_session *session,
+    const patchy_engine_layer_batch_transform *transform,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_preview_raster_stroke(
     const patchy_engine_session *session, uint64_t expected_state_id,

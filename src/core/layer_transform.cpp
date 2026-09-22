@@ -10,7 +10,9 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string_view>
+#include <utility>
 
 namespace patchy {
 namespace {
@@ -187,6 +189,101 @@ Rect unite(Rect first, Rect second) {
               static_cast<std::int32_t>(bottom - top)};
 }
 
+bool collect_transform_leaves(const Layer& layer,
+                              std::vector<std::pair<LayerId, Rect>>& leaves,
+                              std::vector<LayerId>& groups,
+                              std::set<LayerId>& unique,
+                              std::string* error) {
+  if (layer.kind() == LayerKind::Group) {
+    if (layer.children().empty()) {
+      return fail(error, "transform group has no editable leaves");
+    }
+    if (groups.size() >= 256U) {
+      return fail(error, "multi-layer transform supports at most 256 groups");
+    }
+    if (layer.vector_mask() != nullptr) {
+      return fail(error, "vector-mask transforms are not supported");
+    }
+    if (layer.mask().has_value() && !layer_mask_linked(layer)) {
+      return fail(error, "an unlinked raster mask cannot share the layer transform");
+    }
+    groups.push_back(layer.id());
+    for (const auto& child : layer.children()) {
+      if (!collect_transform_leaves(child, leaves, groups, unique, error)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (leaves.size() >= 256U) {
+    return fail(error, "multi-layer transform supports at most 256 editable leaves");
+  }
+  if (!unique.insert(layer.id()).second) {
+    return fail(error,
+                "multi-layer transform roots cannot overlap or contain duplicate leaves");
+  }
+  leaves.emplace_back(layer.id(), layer.bounds());
+  return true;
+}
+
+bool validate_transform_leaf(const Layer& layer,
+                             const std::array<double, 8>& quad,
+                             std::string* error) {
+  const bool editable_text = layer_is_text(layer);
+  const bool editable_smart_object = layer_is_smart_object(layer);
+  if (layer.kind() != LayerKind::Pixel && !editable_text &&
+      !editable_smart_object) {
+    return fail(error,
+                "only pixel, editable text and Smart Object layers can be transformed");
+  }
+  if (layer.bounds().empty() || layer.pixels().empty()) {
+    return fail(error, "transform target has no raster bounds");
+  }
+  if (layer.vector_mask() != nullptr) {
+    return fail(error, "vector-mask transforms are not supported");
+  }
+  if (layer.mask().has_value() && !layer_mask_linked(layer)) {
+    return fail(error, "an unlinked raster mask cannot share the layer transform");
+  }
+  if (editable_text && !affine_quad(quad)) {
+    return fail(error, "editable text supports affine transforms only");
+  }
+  if (editable_smart_object &&
+      (!smart_object_placement_from_layer(layer).has_value() ||
+       !smart_object_lock_reason(layer).empty())) {
+    return fail(error, "Smart Object transform metadata is unavailable or locked");
+  }
+  return true;
+}
+
+std::optional<Rect> bounded_union(const std::vector<std::pair<LayerId, Rect>>& leaves) {
+  if (leaves.empty()) return std::nullopt;
+  std::int64_t left = std::numeric_limits<std::int64_t>::max();
+  std::int64_t top = std::numeric_limits<std::int64_t>::max();
+  std::int64_t right = std::numeric_limits<std::int64_t>::min();
+  std::int64_t bottom = std::numeric_limits<std::int64_t>::min();
+  for (const auto& [id, bounds] : leaves) {
+    (void)id;
+    if (bounds.empty()) return std::nullopt;
+    left = std::min(left, static_cast<std::int64_t>(bounds.x));
+    top = std::min(top, static_cast<std::int64_t>(bounds.y));
+    right = std::max(right, static_cast<std::int64_t>(bounds.x) + bounds.width);
+    bottom = std::max(bottom, static_cast<std::int64_t>(bounds.y) + bounds.height);
+  }
+  const auto width = right - left;
+  const auto height = bottom - top;
+  if (left < std::numeric_limits<std::int32_t>::min() ||
+      top < std::numeric_limits<std::int32_t>::min() ||
+      left > std::numeric_limits<std::int32_t>::max() ||
+      top > std::numeric_limits<std::int32_t>::max() || width < 1 || height < 1 ||
+      width > std::numeric_limits<std::int32_t>::max() ||
+      height > std::numeric_limits<std::int32_t>::max()) {
+    return std::nullopt;
+  }
+  return Rect{static_cast<std::int32_t>(left), static_cast<std::int32_t>(top),
+              static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)};
+}
+
 }  // namespace
 
 bool transform_layer(Document& document, LayerId layer_id,
@@ -324,6 +421,153 @@ bool transform_layer(Document& document, LayerId layer_id,
   if (error != nullptr) {
     error->clear();
   }
+  return true;
+}
+
+bool transform_layers(Document& document,
+                      const LayerBatchTransformRequest& request,
+                      LayerTransformResult* result, std::string* error) {
+  if (request.layer_ids.empty() || request.layer_ids.size() > 256U) {
+    return fail(error, "multi-layer transform requires 1 through 256 roots");
+  }
+  if (!finite_convex_quad(request.quad)) {
+    return fail(error, "transform quad must be finite, convex and non-degenerate");
+  }
+  std::vector<std::pair<LayerId, Rect>> leaves;
+  leaves.reserve(request.layer_ids.size());
+  std::vector<LayerId> groups;
+  std::set<LayerId> unique_leaves;
+  for (const auto id : request.layer_ids) {
+    const auto* root = std::as_const(document).find_layer(id);
+    if (root == nullptr) return fail(error, "transform root layer does not exist");
+    if (!collect_transform_leaves(*root, leaves, groups, unique_leaves, error)) {
+      return false;
+    }
+  }
+  const auto collective = bounded_union(leaves);
+  if (!collective.has_value()) {
+    return fail(error, "multi-layer transform requires finite non-empty union bounds");
+  }
+  const auto matrix = homography_from_rect_to_quad(
+      static_cast<double>(collective->x), static_cast<double>(collective->y),
+      static_cast<double>(collective->x + collective->width),
+      static_cast<double>(collective->y + collective->height), request.quad);
+  const auto transformed_collective = bounds_for_points(request.quad);
+  const auto inverse = matrix.has_value() ? invert_homography(*matrix)
+                                          : std::nullopt;
+  if (!matrix.has_value() || !inverse.has_value() ||
+      !transformed_collective.has_value()) {
+    return fail(error, "multi-layer transform output is singular or exceeds the allocation budget");
+  }
+
+  std::uint64_t aggregate_bytes = 0;
+  std::vector<std::array<double, 8>> leaf_quads;
+  leaf_quads.reserve(leaves.size());
+  for (const auto& [id, bounds] : leaves) {
+    const auto* layer = std::as_const(document).find_layer(id);
+    if (layer == nullptr) return fail(error, "transform leaf layer does not exist");
+    const auto quad = transformed_rect(bounds, *matrix);
+    const auto target_bounds = bounds_for_points(quad);
+    if (!target_bounds.has_value()) {
+      return fail(error, "multi-layer transform leaf exceeds the allocation budget");
+    }
+    if (!validate_transform_leaf(*layer, quad, error)) return false;
+    const auto pixels = static_cast<std::uint64_t>(target_bounds->width) *
+                        static_cast<std::uint64_t>(target_bounds->height);
+    const auto pixel_bytes = pixels * bytes_per_pixel(layer->pixels().format());
+    if (pixel_bytes > kMaximumTransformBytes - aggregate_bytes) {
+      return fail(error, "multi-layer transform exceeds the 512 MiB aggregate output budget");
+    }
+    aggregate_bytes += pixel_bytes;
+    if (layer->mask().has_value()) {
+      const auto mask_bounds = bounds_for_points(
+          transformed_rect(layer->mask()->bounds, *matrix));
+      if (!mask_bounds.has_value()) {
+        return fail(error, "multi-layer transformed mask exceeds the allocation budget");
+      }
+      const auto mask_bytes = static_cast<std::uint64_t>(mask_bounds->width) *
+                              static_cast<std::uint64_t>(mask_bounds->height);
+      if (mask_bytes > kMaximumTransformBytes - aggregate_bytes) {
+        return fail(error, "multi-layer transform exceeds the 512 MiB aggregate output budget");
+      }
+      aggregate_bytes += mask_bytes;
+    }
+    leaf_quads.push_back(quad);
+  }
+  for (const auto id : groups) {
+    const auto* group = std::as_const(document).find_layer(id);
+    if (group == nullptr) return fail(error, "transform group layer does not exist");
+    if (!group->mask().has_value()) continue;
+    const auto mask_bounds = bounds_for_points(
+        transformed_rect(group->mask()->bounds, *matrix));
+    if (!mask_bounds.has_value()) {
+      return fail(error, "multi-layer transformed group mask exceeds the allocation budget");
+    }
+    const auto mask_bytes = static_cast<std::uint64_t>(mask_bounds->width) *
+                            static_cast<std::uint64_t>(mask_bounds->height);
+    if (mask_bytes > kMaximumTransformBytes - aggregate_bytes) {
+      return fail(error, "multi-layer transform exceeds the 512 MiB aggregate output budget");
+    }
+    aggregate_bytes += mask_bytes;
+  }
+
+  Rect affected{};
+  for (std::size_t index = 0; index < leaves.size(); ++index) {
+    LayerTransformRequest leaf_request;
+    leaf_request.quad = leaf_quads[index];
+    leaf_request.interpolation = request.interpolation;
+    leaf_request.continue_operation = request.continue_operation;
+    LayerTransformResult transformed;
+    if (!transform_layer(document, leaves[index].first, leaf_request,
+                         &transformed, error)) {
+      return false;
+    }
+    affected = unite(affected, transformed.affected_region);
+  }
+  // Children are transformed first. Refresh nested group geometry and masks
+  // bottom-up so every parent observes the final child bounds.
+  for (auto iterator = groups.rbegin(); iterator != groups.rend(); ++iterator) {
+    auto* group = document.find_layer(*iterator);
+    if (group == nullptr) return fail(error, "transform group layer does not exist");
+    std::vector<std::pair<LayerId, Rect>> child_bounds;
+    child_bounds.reserve(group->children().size());
+    for (const auto& child : group->children()) {
+      child_bounds.emplace_back(child.id(), child.bounds());
+    }
+    const auto transformed_group_bounds = bounded_union(child_bounds);
+    if (!transformed_group_bounds.has_value()) {
+      return fail(error, "transformed group has invalid child bounds");
+    }
+    const auto previous_group_bounds = group->bounds();
+    group->set_bounds(*transformed_group_bounds);
+    affected = unite(affected, unite(previous_group_bounds,
+                                     *transformed_group_bounds));
+    if (group->mask().has_value()) {
+      const auto source_mask = *group->mask();
+      const auto transformed_mask_bounds = bounds_for_points(
+          transformed_rect(source_mask.bounds, *matrix));
+      if (!transformed_mask_bounds.has_value()) {
+        return fail(error, "multi-layer transformed group mask exceeds the allocation budget");
+      }
+      auto transformed_mask = resample(
+          source_mask.pixels, source_mask.bounds, *transformed_mask_bounds,
+          *inverse, request.interpolation, source_mask.default_color,
+          request.continue_operation);
+      if (!transformed_mask.has_value()) {
+        return fail(error, "layer transform was cancelled");
+      }
+      auto mask = source_mask;
+      mask.bounds = *transformed_mask_bounds;
+      mask.pixels = std::move(*transformed_mask);
+      group->set_mask(std::move(mask));
+      affected = unite(affected, unite(source_mask.bounds,
+                                       *transformed_mask_bounds));
+    }
+  }
+  if (result != nullptr) {
+    *result = LayerTransformResult{*collective, *transformed_collective, affected};
+  }
+  if (error != nullptr) error->clear();
   return true;
 }
 

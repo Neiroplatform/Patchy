@@ -99,6 +99,36 @@ export class PatchyWorkerHost {
           BigInt(message.layerId), message.quad, message.interpolation);
         return this.#snapshot();
       }
+      case "previewLayersTransform": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Multi-layer transform was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6;
+          throw error;
+        }
+        if (!Array.isArray(message.layerIds)) {
+          throw new TypeError("Multi-layer transform requires a layer id array");
+        }
+        return this.#engine.previewLayersTransform(this.#requireSession(), before,
+          message.layerIds.map(BigInt), message.quad, message.interpolation,
+          new Int32Array(message.cancellation));
+      }
+      case "transformLayers": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Multi-layer transform was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6;
+          throw error;
+        }
+        if (!Array.isArray(message.layerIds)) {
+          throw new TypeError("Multi-layer transform requires a layer id array");
+        }
+        this.#engine.transformLayers(this.#requireSession(), before,
+          message.layerIds.map(BigInt), message.quad, message.interpolation);
+        return this.#snapshot();
+      }
       case "previewRasterStroke": {
         const before = this.#snapshot();
         if (before.stateId !== BigInt(message.expectedStateId) ||

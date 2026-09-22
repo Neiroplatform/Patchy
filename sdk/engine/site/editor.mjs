@@ -149,6 +149,43 @@ function selectedLayerIdsTopToBottom({ rootsOnly = false } = {}) {
   }).map((layer) => layer.id);
 }
 
+function transformSelection() {
+  if (!snapshot) return null;
+  const layerIds = selectedLayerIdsTopToBottom({ rootsOnly: true });
+  if (!layerIds.length || layerIds.length > 256) return null;
+  const byId = new Map(snapshot.layers.map((layer) => [layer.id, layer]));
+  const roots = new Set(layerIds);
+  if (layerIds.some((id) => !byId.has(id))) return null;
+  const belongsToForest = (layer) => {
+    let current = layer;
+    while (current) {
+      if (roots.has(current.id)) return true;
+      current = current.parentId && current.parentId !== 0n
+        ? byId.get(current.parentId) : null;
+    }
+    return false;
+  };
+  const forest = snapshot.layers.filter(belongsToForest);
+  if (forest.some((layer) => layer.kind === 1 &&
+      (layer.vectorMask || (layer.mask && !layer.mask.linked)))) return null;
+  const leaves = forest.filter((layer) => layer.kind !== 1);
+  if (!leaves.length || leaves.length > 256 || leaves.some((layer) =>
+    ![0, 3, 5].includes(layer.kind) || layer.bounds.width <= 0 ||
+    layer.bounds.height <= 0 || layer.vectorMask ||
+    (layer.mask && !layer.mask.linked))) return null;
+  const left = Math.min(...leaves.map((layer) => layer.bounds.x));
+  const top = Math.min(...leaves.map((layer) => layer.bounds.y));
+  const right = Math.max(...leaves.map((layer) => layer.bounds.x + layer.bounds.width));
+  const bottom = Math.max(...leaves.map((layer) => layer.bounds.y + layer.bounds.height));
+  const bounds = { x: left, y: top, width: right - left, height: bottom - top };
+  if (Object.values(bounds).some((value) => !Number.isSafeInteger(value)) ||
+      bounds.width <= 0 || bounds.height <= 0) return null;
+  const primary = byId.get(layerIds[0]);
+  return { layerIds, leaves, bounds, primary,
+    batch: layerIds.length > 1 || primary?.kind === 1,
+    hasText: leaves.some((layer) => layer.kind === 3) };
+}
+
 function selectLayerFromEvent(layer, event, displayLayers) {
   if (event.shiftKey && layerSelectionAnchorId != null) {
     const anchor = displayLayers.findIndex((item) => item.id === layerSelectionAnchorId);
@@ -292,8 +329,7 @@ function updateControls() {
   $("filterLayerButton").disabled = busy || !single || layer?.kind !== 0;
   $("textLayerButton").disabled = busy || !snapshot;
   $("textLayerButton").textContent = single && layer?.kind === 3 ? "Edit text" : "Add text";
-  $("layerTransformButton").disabled = busy || !single || ![0, 3, 5].includes(layer?.kind) ||
-    Boolean(layer?.mask && !layer.mask.linked) || Boolean(layer?.vectorMask);
+  $("layerTransformButton").disabled = busy || !transformSelection();
   $("layerWarpButton").disabled = busy || !single || ![0, 3, 5].includes(layer?.kind) ||
     Boolean(layer?.vectorMask) || Boolean(layer?.mask && !layer.mask.linked);
   $("shapeLayerButton").disabled = busy || !snapshot;
@@ -1458,7 +1494,11 @@ async function drainTransformPreview() {
           ? await client.previewLayerWarp({ ...pending.warp,
             layerId: pending.layer.id, expectedStateId: pending.stateId,
             expectedRevision: pending.revision, cancellation: pending.cancellation })
-          : await client.previewLayerTransform({ layerId: pending.layer.id,
+          : pending.batch
+            ? await client.previewLayersTransform({ layerIds: pending.layerIds,
+              quad: pending.quad, interpolation: 1, expectedStateId: pending.stateId,
+              expectedRevision: pending.revision, cancellation: pending.cancellation })
+            : await client.previewLayerTransform({ layerId: pending.layer.id,
             quad: pending.quad, interpolation: 1, expectedStateId: pending.stateId,
             expectedRevision: pending.revision, cancellation: pending.cancellation });
         if (pending.generation !== transformPreviewGeneration || transformPreviewPending) continue;
@@ -1483,12 +1523,14 @@ async function drainTransformPreview() {
   } finally { transformPreviewInFlight = false; }
 }
 
-function scheduleTransformPreview(layer, quad) {
+function scheduleTransformPreview(target, quad) {
+  const layer = target?.primary || target;
   if (!snapshot || !layer || quad.some((value) => !Number.isFinite(value))) return;
   if (transformPreviewCancellation) Atomics.store(transformPreviewCancellation, 0, 1);
   transformPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
   const generation = ++transformPreviewGeneration;
-  transformPreviewPending = { layer, quad: [...quad], stateId: snapshot.stateId,
+  transformPreviewPending = { layer, layerIds: target?.layerIds || [layer.id],
+    batch: Boolean(target?.batch), quad: [...quad], stateId: snapshot.stateId,
     revision: snapshot.revision, generation,
     cancellation: transformPreviewCancellation };
   drainTransformPreview();
@@ -2573,16 +2615,17 @@ async function commitTextDialog() {
 }
 
 function openLayerTransformDialog() {
-  const layer = selectedLayer();
-  if (busy || ![0, 3, 5].includes(layer?.kind) || layer?.vectorMask ||
-      (layer?.mask && !layer.mask.linked)) return;
-  for (const [id, value] of [["layerXInput", layer.bounds.x], ["layerYInput", layer.bounds.y],
-    ["layerWidthInput", layer.bounds.width], ["layerHeightInput", layer.bounds.height]]) $(id).value = String(value);
+  const target = transformSelection();
+  if (busy || !target) return;
+  for (const [id, value] of [["layerXInput", target.bounds.x], ["layerYInput", target.bounds.y],
+    ["layerWidthInput", target.bounds.width], ["layerHeightInput", target.bounds.height]]) $(id).value = String(value);
   $("layerAngleInput").value = "0";
   $("layerFlipXInput").checked = false; $("layerFlipYInput").checked = false;
   $("layerTransformModeInput").value = "affine";
-  $("layerTransformModeInput").querySelector('option[value="perspective"]').disabled = layer.kind === 3;
-  transformDialogDraft = { layer, quad: quadFromBounds(layer.bounds) };
+  $("layerTransformModeInput").querySelector('option[value="perspective"]').disabled = target.hasText;
+  $("layerTransformTitle").textContent = target.leaves.length > 1
+    ? `Free transform · ${target.leaves.length} layers` : "Free transform";
+  transformDialogDraft = { ...target, quad: quadFromBounds(target.bounds) };
   updateTransformDialogPreview();
   $("layerTransformDialog").show();
 }
@@ -2635,15 +2678,19 @@ function updateTransformDialogPreview() {
   if (!perspective) layerCornerInputIds.forEach((id, index) => { $(id).value = quad[index].toFixed(2); });
   layerCornerInputIds.forEach((id) => { $(id).readOnly = !perspective; });
   transformDialogDraft.quad = quad; renderTransformOverlay(quad);
-  scheduleTransformPreview(transformDialogDraft.layer, quad);
+  scheduleTransformPreview(transformDialogDraft, quad);
 }
 
-function commitLayerQuad(layer, quad, title = "Transforming layer") {
+function commitLayerQuad(target, quad, title = "Transforming layer") {
   if (!snapshot) return;
   const expectedStateId = snapshot.stateId; const expectedRevision = snapshot.revision;
   clearTransformPreview(true);
-  return mutate(title, () => client.transformLayer({ layerId: layer.id, quad,
-    interpolation: 1, expectedStateId, expectedRevision }));
+  const layer = target?.primary || target;
+  return mutate(title, () => target?.batch
+    ? client.transformLayers({ layerIds: target.layerIds, quad, interpolation: 1,
+      expectedStateId, expectedRevision })
+    : client.transformLayer({ layerId: layer.id, quad,
+      interpolation: 1, expectedStateId, expectedRevision }));
 }
 
 function drawPaintSegment(draft, from, to) {
@@ -2978,11 +3025,12 @@ $("applyParagraphAllButton").addEventListener("click", () => {
 });
 $("commitLayerTransformButton").addEventListener("click", () => {
   const draft = transformDialogDraft;
-  if (!draft?.layer || !Array.isArray(draft.quad) ||
+  if (!draft?.primary || !Array.isArray(draft.quad) ||
       draft.quad.some((value) => !Number.isFinite(value))) return;
   const quad = [...draft.quad]; transformDialogDraft = null;
   $("layerTransformDialog").close();
-  commitLayerQuad(draft.layer, quad);
+  commitLayerQuad(draft, quad, draft.leaves.length > 1
+    ? "Transforming layers" : "Transforming layer");
 });
 $("commitLayerWarpButton").addEventListener("click", commitLayerWarp);
 for (const id of ["layerWarpStyleInput", "layerWarpBendInput", "layerWarpHorizontalInput",
@@ -3002,13 +3050,13 @@ for (const handle of $("transformOverlay").querySelectorAll("circle")) {
     event.preventDefault(); event.stopPropagation();
     handle.setPointerCapture(event.pointerId);
     transformDraft = { pointerId: event.pointerId,
-      index: Number(handle.dataset.transformHandle), layer: transformDialogDraft.layer,
+      index: Number(handle.dataset.transformHandle), hasText: transformDialogDraft.hasText,
       quad: [...transformDialogDraft.quad] };
   });
   handle.addEventListener("pointermove", (event) => {
     if (transformDraft?.pointerId !== event.pointerId || !transformDialogDraft) return;
     const point = canvasPointUnclamped(event); const index = transformDraft.index;
-    if (transformDraft.layer.kind === 3) {
+    if (transformDraft.hasText) {
       const opposite = (index + 2) % 4;
       const oppositeX = transformDraft.quad[opposite * 2];
       const oppositeY = transformDraft.quad[opposite * 2 + 1];
@@ -3024,7 +3072,7 @@ for (const handle of $("transformOverlay").querySelectorAll("circle")) {
     $("layerTransformModeInput").value = "perspective";
     layerCornerInputIds.forEach((id, coordinate) => { $(id).readOnly = false; $(id).value = quad[coordinate].toFixed(2); });
     transformDialogDraft.quad = quad; renderTransformOverlay(quad);
-    scheduleTransformPreview(transformDialogDraft.layer, quad);
+    scheduleTransformPreview(transformDialogDraft, quad);
   });
   const finishHandle = (event) => {
     if (transformDraft?.pointerId === event.pointerId) transformDraft = null;
@@ -3297,13 +3345,12 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
   if (canvasTool === "move") {
-    const layer = selectedLayer();
-    if (![0, 3].includes(layer?.kind) ||
-        (layer?.mask && !(layer.kind === 0 && layer.mask.linked))) return;
+    const target = transformSelection();
+    if (!target) return;
     const start = canvasPoint(event);
     canvas.setPointerCapture(event.pointerId);
-    moveDraft = { layer, start, quad: quadFromBounds(layer.bounds),
-      originalQuad: quadFromBounds(layer.bounds) };
+    moveDraft = { target, start, quad: quadFromBounds(target.bounds),
+      originalQuad: quadFromBounds(target.bounds) };
     renderTransformOverlay();
     return;
   }
@@ -3363,7 +3410,7 @@ canvas.addEventListener("pointermove", (event) => {
   const dx = Math.round(point.x - moveDraft.start.x); const dy = Math.round(point.y - moveDraft.start.y);
   moveDraft.quad = moveDraft.originalQuad.map((coordinate, index) => coordinate + (index % 2 ? dy : dx));
   renderTransformOverlay();
-  scheduleTransformPreview(moveDraft.layer, moveDraft.quad);
+  scheduleTransformPreview(moveDraft.target, moveDraft.quad);
 });
 canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
@@ -3388,7 +3435,8 @@ canvas.addEventListener("pointerup", (event) => {
   }
   if (!moveDraft) return;
   const draft = moveDraft; moveDraft = null;
-  commitLayerQuad(draft.layer, draft.quad, "Moving layer");
+  commitLayerQuad(draft.target, draft.quad,
+    draft.target.leaves.length > 1 ? "Moving layers" : "Moving layer");
 });
 canvas.addEventListener("pointercancel", (event) => {
   finishPaint(event, true); gradientDraft = null; clearRasterPreview(); moveDraft = null; lassoDraft = null;
