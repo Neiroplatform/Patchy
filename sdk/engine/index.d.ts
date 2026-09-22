@@ -89,6 +89,11 @@ export interface PsdHeader {
 export type RenderFrame =
   | { kind: "bitmap"; bitmap: ImageBitmap; width: number; height: number }
   | { kind: "rgba"; bytes: Uint8Array; width: number; height: number };
+export interface SelectionRefinementInput {
+  smooth: number; feather: number; contrast: number; shiftEdge: number;
+  output?: "selection" | "layerMask"; layerId?: bigint | null;
+  expectedStateId: bigint; expectedRevision: bigint;
+}
 
 export class PatchyWorkerClient {
   constructor(worker: Worker);
@@ -192,6 +197,10 @@ export class PatchyWorkerClient {
   magneticLasso(input: { anchors: Array<[number, number] | { x: number; y: number }>;
     width: number; edgeContrast: number; nodeBudget: number; combine: 0 | 1 | 2 | 3;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
+  previewSelectionRefinement(input: SelectionRefinementInput): Promise<{
+    bounds: Rect; gray: Uint8Array;
+  }>;
+  refineSelection(input: SelectionRefinementInput): Promise<DocumentProjection>;
   clearSelection(): Promise<DocumentProjection>;
   invertSelection(): Promise<DocumentProjection>;
   expandSelection(pixels: number): Promise<DocumentProjection>;

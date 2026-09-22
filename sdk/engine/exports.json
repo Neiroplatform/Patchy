@@ -20,6 +20,8 @@
   "_patchy_engine_session_set_selection_mask",
   "_patchy_engine_session_quick_select",
   "_patchy_engine_session_magnetic_lasso",
+  "_patchy_engine_session_preview_selection_refinement",
+  "_patchy_engine_session_apply_selection_refinement",
   "_patchy_engine_session_execute",
   "_patchy_engine_session_add_rgba8_layer",
   "_patchy_engine_session_replace_rgba8_layer",

@@ -222,7 +222,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .field-row-four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .field-row label { display: grid; gap: 5px; color: var(--text-faint); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
-.field-row input, .field-row select, .dialog-field select { width: 100%; min-height: 36px; padding: 0 9px; color: var(--text); background: var(--surface-1); border: 1px solid var(--line); border-radius: 5px; }
+.field-row input, .field-row select, .dialog-field input, .dialog-field select { width: 100%; min-height: 36px; padding: 0 9px; color: var(--text); background: var(--surface-1); border: 1px solid var(--line); border-radius: 5px; }
 .dialog-field { display: grid; gap: 6px; margin-bottom: 12px; color: var(--text-faint); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .dialog-field textarea { resize: vertical; min-height: 84px; padding: 9px; color: var(--text); background: var(--surface-1); border: 1px solid var(--line); border-radius: 5px; font: inherit; text-transform: none; }
 .text-style-row { grid-template-columns: 1fr auto auto; align-items: end; margin-block: 10px; }
@@ -238,6 +238,8 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .dialog-note { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
 .recovery-dialog { width: min(680px, calc(100vw - 28px)); }
 .layer-style-dialog { width: min(820px, calc(100vw - 28px)); }
+.selection-refinement-dialog { width: min(620px, calc(100vw - 28px)); }
+.refinement-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
 .recovery-list { display: grid; gap: 8px; margin-block: 13px; }
 .recovery-empty { padding: 18px; color: var(--text-faint); text-align: center; border: 1px dashed var(--line); border-radius: 7px; font-size: 11px; }
 .recovery-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-1); }

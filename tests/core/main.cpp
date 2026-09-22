@@ -165,6 +165,7 @@ int main(int argc, char** argv) {
            unicode_path_tests,
            font_zip_tests,
            infra_selection_tests,
+           selection_refinement_tests,
            vector_shape_tests,
            vector_raster_tests,
            image_trace_tests,

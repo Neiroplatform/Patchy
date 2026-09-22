@@ -62,6 +62,8 @@ let penDraft = null;
 let quickSelectDraft = null;
 let magneticDraft = null;
 let quickMaskDraft = null;
+let selectionRefinementDraft = null;
+let selectionRefinementGeneration = 0;
 let clipboardImageBlob = null;
 let layerClipboard = null;
 let draggedLayer = null;
@@ -382,7 +384,7 @@ function updateControls() {
   $("editLayerStyleButton").disabled = busy || !single;
   for (const id of ["invertSelectionButton", "expandSelectionButton", "contractSelectionButton",
     "borderSelectionButton", "growSelectionButton", "similarSelectionButton",
-    "smoothSelectionButton", "featherSelectionButton", "saveChannelButton", "savePathButton"]) {
+    "smoothSelectionButton", "saveChannelButton", "savePathButton"]) {
     $(id).disabled = busy || !snapshot?.selection?.length;
   }
   $("rasterizeLayerButton").disabled = busy || !single || ![3, 4, 5].includes(layer?.kind);
@@ -1411,6 +1413,94 @@ function commitSelectionMask(title, gray) {
     { transferOwnership: true }));
 }
 
+function selectionRefinementInput({ report = false } = {}) {
+  if (!selectionRefinementDraft) return null;
+  const values = {
+    smooth: Number($("selectionSmoothInput").value),
+    feather: Number($("selectionFeatherInput").value),
+    contrast: Number($("selectionContrastInput").value),
+    shiftEdge: Number($("selectionShiftInput").value),
+  };
+  const valid = Number.isInteger(values.smooth) && values.smooth >= 0 && values.smooth <= 250 &&
+    Number.isFinite(values.feather) && values.feather >= 0 && values.feather <= 250 &&
+    Number.isInteger(values.contrast) && values.contrast >= 0 && values.contrast <= 100 &&
+    Number.isInteger(values.shiftEdge) && values.shiftEdge >= -250 && values.shiftEdge <= 250 &&
+    (values.smooth !== 0 || values.feather !== 0 || values.contrast !== 0 || values.shiftEdge !== 0);
+  if (!valid) {
+    if (report) $("selectionRefinementStatus").textContent =
+      "Use bounded values and change at least one refinement setting.";
+    return null;
+  }
+  const output = $("selectionOutputInput").value;
+  const layerId = output === "layerMask" ? BigInt($("selectionLayerInput").value || 0) : null;
+  if (output === "layerMask" && layerId <= 0n) {
+    if (report) $("selectionRefinementStatus").textContent = "Choose a non-group target layer.";
+    return null;
+  }
+  return { ...values, output, layerId,
+    expectedStateId: selectionRefinementDraft.stateId,
+    expectedRevision: selectionRefinementDraft.revision };
+}
+
+function clearSelectionRefinementPreview() {
+  ++selectionRefinementGeneration;
+  const target = $("gestureCanvas").getContext("2d");
+  target.clearRect(0, 0, $("gestureCanvas").width, $("gestureCanvas").height);
+}
+
+async function previewSelectionRefinement() {
+  const input = selectionRefinementInput();
+  const generation = ++selectionRefinementGeneration;
+  $("commitSelectionRefinementButton").disabled = !input;
+  if (!input) {
+    clearSelectionRefinementPreview();
+    $("selectionRefinementStatus").textContent =
+      "Use bounded values and change at least one refinement setting.";
+    return;
+  }
+  $("selectionRefinementStatus").textContent = "Rendering engine preview…";
+  try {
+    const preview = await client.previewSelectionRefinement(input);
+    if (generation !== selectionRefinementGeneration ||
+        !$("selectionRefinementDialog").open) return;
+    const overlay = $("gestureCanvas");
+    const target = overlay.getContext("2d");
+    target.clearRect(0, 0, overlay.width, overlay.height);
+    const image = target.createImageData(preview.bounds.width, preview.bounds.height);
+    for (let index = 0; index < preview.gray.length; ++index) {
+      image.data[index * 4] = 52;
+      image.data[index * 4 + 1] = 168;
+      image.data[index * 4 + 2] = 255;
+      image.data[index * 4 + 3] = Math.round(preview.gray[index] * .55);
+    }
+    target.putImageData(image, preview.bounds.x, preview.bounds.y);
+    $("selectionRefinementStatus").textContent =
+      `Live engine preview · ${preview.bounds.width} × ${preview.bounds.height}px`;
+  } catch (error) {
+    if (generation !== selectionRefinementGeneration) return;
+    clearSelectionRefinementPreview();
+    $("selectionRefinementStatus").textContent = error.message;
+    $("commitSelectionRefinementButton").disabled = true;
+  }
+}
+
+function openSelectionRefinementDialog() {
+  if (busy || !snapshot?.selection?.length) return;
+  selectionRefinementDraft = { stateId: snapshot.stateId, revision: snapshot.revision };
+  const target = $("selectionLayerInput");
+  target.replaceChildren();
+  for (const layer of [...snapshot.layers].reverse().filter((item) => item.kind !== 1)) {
+    const option = document.createElement("option");
+    option.value = String(layer.id); option.textContent = layer.name;
+    option.selected = layer.id === selectedLayerId;
+    target.append(option);
+  }
+  $("selectionOutputInput").value = "selection";
+  $("selectionLayerField").hidden = true;
+  $("selectionRefinementDialog").showModal();
+  previewSelectionRefinement();
+}
+
 function combinedSelectionMask(next, mode = "replace") {
   if (mode === "replace") return next;
   const current = fullSelectionMask();
@@ -1461,29 +1551,6 @@ function previewPolygon(points, closed = false) {
   overlay.beginPath(); overlay.moveTo(points[0].x, points[0].y);
   for (const point of points.slice(1)) overlay.lineTo(point.x, point.y);
   if (closed) overlay.closePath(); overlay.stroke(); overlay.setLineDash([]);
-}
-
-function boxBlurMask(source, width, height, radius) {
-  const horizontal = new Uint32Array(source.length); const result = new Uint8Array(source.length);
-  for (let y = 0; y < height; ++y) {
-    let sum = 0;
-    for (let x = -radius; x <= radius; ++x) sum += source[y * width + Math.max(0, Math.min(width - 1, x))];
-    for (let x = 0; x < width; ++x) {
-      horizontal[y * width + x] = Math.round(sum / (radius * 2 + 1));
-      sum += source[y * width + Math.min(width - 1, x + radius + 1)] -
-        source[y * width + Math.max(0, x - radius)];
-    }
-  }
-  for (let x = 0; x < width; ++x) {
-    let sum = 0;
-    for (let y = -radius; y <= radius; ++y) sum += horizontal[Math.max(0, Math.min(height - 1, y)) * width + x];
-    for (let y = 0; y < height; ++y) {
-      result[y * width + x] = Math.round(sum / (radius * 2 + 1));
-      sum += horizontal[Math.min(height - 1, y + radius + 1) * width + x] -
-        horizontal[Math.max(0, y - radius) * width + x];
-    }
-  }
-  return result;
 }
 
 function magicMask(point) {
@@ -3325,13 +3392,28 @@ $("growSelectionButton").addEventListener("click", () => mutate("Growing selecti
   client.growSelection(Number($("selectionToleranceInput").value))));
 $("similarSelectionButton").addEventListener("click", () => mutate("Selecting similar colors", () =>
   client.selectSimilar(Number($("selectionToleranceInput").value))));
-$("smoothSelectionButton").addEventListener("click", () => {
-  const blurred = boxBlurMask(fullSelectionMask(), snapshot.width, snapshot.height, 4);
-  for (let index = 0; index < blurred.length; ++index) blurred[index] = blurred[index] >= 128 ? 255 : 0;
-  commitSelectionMask("Smoothing selection", blurred);
+$("smoothSelectionButton").addEventListener("click", openSelectionRefinementDialog);
+for (const id of ["selectionSmoothInput", "selectionFeatherInput",
+  "selectionContrastInput", "selectionShiftInput"]) {
+  $(id).addEventListener("input", previewSelectionRefinement);
+}
+$("selectionOutputInput").addEventListener("change", () => {
+  $("selectionLayerField").hidden = $("selectionOutputInput").value !== "layerMask";
+  previewSelectionRefinement();
 });
-$("featherSelectionButton").addEventListener("click", () => commitSelectionMask(
-  "Feathering selection", boxBlurMask(fullSelectionMask(), snapshot.width, snapshot.height, 4)));
+$("selectionLayerInput").addEventListener("change", previewSelectionRefinement);
+$("selectionRefinementDialog").addEventListener("close", () => {
+  selectionRefinementDraft = null;
+  clearSelectionRefinementPreview();
+  renderSelection();
+});
+$("commitSelectionRefinementButton").addEventListener("click", () => {
+  const input = selectionRefinementInput({ report: true });
+  if (!input) return;
+  $("selectionRefinementDialog").close();
+  mutate(input.output === "layerMask" ? "Refining selection to layer mask" : "Refining selection",
+    () => client.refineSelection(input));
+});
 $("selectionToleranceInput").addEventListener("input", () => {
   $("selectionToleranceOutput").textContent = $("selectionToleranceInput").value;
   persistPreferences();

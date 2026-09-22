@@ -15,6 +15,7 @@ const SELECTION_SIZE = 32;
 const SELECTION_INPUT_SIZE = 32;
 const SELECTION_MASK_INPUT_SIZE = 56;
 const ADVANCED_SELECTION_INPUT_SIZE = 48;
+const SELECTION_REFINEMENT_INPUT_SIZE = 56;
 const POINT_SIZE = 8;
 const RECT_SIZE = 16;
 const LAYER_MASK_INPUT_SIZE = 72;
@@ -52,6 +53,7 @@ const CAP_MULTI_LAYER_AUTHORING = 1n << 36n;
 const CAP_MULTI_LAYER_TRANSFER = 1n << 37n;
 const CAP_MULTI_LAYER_TRANSFORM = 1n << 38n;
 const CAP_LAYER_ARRANGE = 1n << 39n;
+const CAP_SELECTION_REFINEMENT = 1n << 40n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -568,6 +570,53 @@ export class EmscriptenPatchyEngine {
       view.setInt32(40, input.nodeBudget, true); view.setUint32(44, input.combine, true);
       return this.#module._patchy_engine_session_magnetic_lasso;
     });
+  }
+
+  previewSelectionRefinement(session, snapshot, input) {
+    const previewSymbol = "_patchy_engine_session_preview_selection_refinement";
+    if (!(this.#capabilities & CAP_SELECTION_REFINEMENT) ||
+        typeof this.#module[previewSymbol] !== "function") {
+      throw new PatchyEngineError(2, "Selection refinement is unavailable");
+    }
+    return this.#withError((error) => {
+      const value = this.#selectionRefinement(snapshot, input);
+      const bounds = this.#alloc(RECT_SIZE);
+      const buffer = this.#alloc(BUFFER_SIZE);
+      try {
+        this.#check(this.#module[previewSymbol](
+          session, value, bounds, buffer, error), error);
+        const region = this.#view(bounds, RECT_SIZE);
+        const output = this.#view(buffer, BUFFER_SIZE);
+        const data = output.getUint32(0, true);
+        const size = output.getUint32(4, true);
+        const result = { bounds: { x: region.getInt32(0, true),
+          y: region.getInt32(4, true), width: region.getInt32(8, true),
+          height: region.getInt32(12, true) },
+        gray: this.#module.HEAPU8.slice(data, data + size) };
+        if (result.gray.byteLength !== result.bounds.width * result.bounds.height) {
+          throw new PatchyEngineError(5, "Selection refinement returned inconsistent pixels");
+        }
+        return result;
+      } finally {
+        this.#module._patchy_engine_buffer_release(buffer);
+        this.#module._free(buffer);
+        this.#module._free(bounds);
+        this.#module._free(value);
+      }
+    });
+  }
+
+  refineSelection(session, snapshot, input) {
+    const applySymbol = "_patchy_engine_session_apply_selection_refinement";
+    if (!(this.#capabilities & CAP_SELECTION_REFINEMENT) ||
+        typeof this.#module[applySymbol] !== "function") {
+      throw new PatchyEngineError(2, "Selection refinement is unavailable");
+    }
+    const value = this.#selectionRefinement(snapshot, input);
+    try {
+      return this.#mutation((event, error) =>
+        this.#module[applySymbol](session, value, event, error));
+    } finally { this.#module._free(value); }
   }
 
   modifySelection(session, snapshot, type, pixels = 0) {
@@ -2208,6 +2257,32 @@ export class EmscriptenPatchyEngine {
       this.#module._free(value);
       this.#module._free(pointValues);
     }
+  }
+
+  #selectionRefinement(snapshot, input) {
+    const output = input?.output ?? "selection";
+    const layerId = output === "layerMask" ? BigInt(input.layerId ?? 0) : 0n;
+    if (!input || !["selection", "layerMask"].includes(output) ||
+        !Number.isInteger(input.smooth) || input.smooth < 0 || input.smooth > 250 ||
+        !Number.isFinite(input.feather) || input.feather < 0 || input.feather > 250 ||
+        !Number.isInteger(input.contrast) || input.contrast < 0 || input.contrast > 100 ||
+        !Number.isInteger(input.shiftEdge) || input.shiftEdge < -250 || input.shiftEdge > 250 ||
+        (input.smooth === 0 && input.feather === 0 && input.contrast === 0 &&
+          input.shiftEdge === 0) || (output === "layerMask" && layerId <= 0n)) {
+      throw new TypeError("Bounded non-empty selection refinement settings are required");
+    }
+    const value = this.#alloc(SELECTION_REFINEMENT_INPUT_SIZE);
+    const view = this.#view(value, SELECTION_REFINEMENT_INPUT_SIZE);
+    view.setUint32(0, SELECTION_REFINEMENT_INPUT_SIZE, true);
+    view.setUint32(4, output === "layerMask" ? 1 : 0, true);
+    view.setBigUint64(8, snapshot.stateId, true);
+    view.setBigUint64(16, snapshot.revision, true);
+    view.setInt32(24, input.smooth, true);
+    view.setInt32(28, input.contrast, true);
+    view.setInt32(32, input.shiftEdge, true);
+    view.setFloat64(40, input.feather, true);
+    view.setBigUint64(48, layerId, true);
+    return value;
   }
 
   #mutation(call) {

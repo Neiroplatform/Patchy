@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -831,6 +832,140 @@ void blur_selection_alpha(PixelBuffer &coverage, double feather) {
   }
 }
 
+void morph_selection_alpha(PixelBuffer &coverage, std::int32_t radius,
+                           bool dilate) {
+  if (radius <= 0 || coverage.empty()) {
+    return;
+  }
+  PixelBuffer scratch(coverage.width(), coverage.height(),
+                      PixelFormat::gray8());
+  const auto filter_line = [radius, dilate](std::int32_t length,
+                                             const auto &read,
+                                             const auto &write) {
+    std::deque<std::pair<std::int32_t, std::uint8_t>> window;
+    for (std::int32_t sample = -radius;
+         sample < length + radius; ++sample) {
+      const auto value = sample >= 0 && sample < length ? read(sample) : 0U;
+      while (!window.empty() &&
+             (dilate ? window.back().second <= value
+                     : window.back().second >= value)) {
+        window.pop_back();
+      }
+      window.emplace_back(sample, value);
+      const auto output = sample - radius;
+      const auto first = output - radius;
+      while (!window.empty() && window.front().first < first) {
+        window.pop_front();
+      }
+      if (output >= 0 && output < length) {
+        write(output, window.front().second);
+      }
+    }
+  };
+  for (std::int32_t y = 0; y < coverage.height(); ++y) {
+    filter_line(coverage.width(),
+                [&coverage, y](std::int32_t x) {
+                  return *coverage.pixel(x, y);
+                },
+                [&scratch, y](std::int32_t x, std::uint8_t value) {
+                  *scratch.pixel(x, y) = value;
+                });
+  }
+  for (std::int32_t x = 0; x < coverage.width(); ++x) {
+    filter_line(coverage.height(),
+                [&scratch, x](std::int32_t y) {
+                  return *scratch.pixel(x, y);
+                },
+                [&coverage, x](std::int32_t y, std::uint8_t value) {
+                  *coverage.pixel(x, y) = value;
+                });
+  }
+}
+
+SelectionRefinementPreview refined_selection_preview(
+    const SelectionSnapshot &selection, const RefineSelection &input,
+    std::int32_t width, std::int32_t height) {
+  constexpr std::uint64_t kMaximumPixels = 16U * 1024U * 1024U;
+  if (selection.empty()) {
+    return {{}, {}, make_error(SessionErrorCode::InvalidArgument,
+                               "selection refinement requires a non-empty selection")};
+  }
+  if (input.smooth < 0 || input.smooth > 250 ||
+      !std::isfinite(input.feather) || input.feather < 0.0 ||
+      input.feather > 250.0 || input.contrast < 0 || input.contrast > 100 ||
+      input.shift_edge < -250 || input.shift_edge > 250) {
+    return {{}, {}, make_error(SessionErrorCode::InvalidArgument,
+                               "selection refinement values are outside supported ranges")};
+  }
+  if (input.smooth == 0 && input.feather == 0.0 && input.contrast == 0 &&
+      input.shift_edge == 0) {
+    return {{}, {}, make_error(SessionErrorCode::InvalidArgument,
+                               "selection refinement must change at least one setting")};
+  }
+  const auto pixel_count = static_cast<std::uint64_t>(width) *
+                           static_cast<std::uint64_t>(height);
+  if (width <= 0 || height <= 0 || pixel_count > kMaximumPixels) {
+    return {{}, {}, make_error(SessionErrorCode::InvalidArgument,
+                               "selection refinement exceeds the browser safety limit")};
+  }
+  try {
+    auto alpha = materialize_selection_alpha(selection, width, height);
+    if (input.smooth > 0) {
+      blur_selection_alpha(alpha, static_cast<double>(input.smooth) * 2.0);
+      for (auto &value : alpha.data()) {
+        value = value >= 128U ? 255U : 0U;
+      }
+    }
+    blur_selection_alpha(alpha, input.feather);
+    if (input.contrast > 0) {
+      const auto gain = 1.0 + static_cast<double>(input.contrast) / 20.0;
+      for (auto &value : alpha.data()) {
+        const auto contrasted =
+            (static_cast<double>(value) - 127.5) * gain + 127.5;
+        value = static_cast<std::uint8_t>(
+            std::lround(std::clamp(contrasted, 0.0, 255.0)));
+      }
+    }
+    if (input.shift_edge != 0) {
+      morph_selection_alpha(alpha, std::abs(input.shift_edge),
+                            input.shift_edge > 0);
+    }
+
+    std::int32_t left = width;
+    std::int32_t top = height;
+    std::int32_t right = 0;
+    std::int32_t bottom = 0;
+    for (std::int32_t y = 0; y < height; ++y) {
+      for (std::int32_t x = 0; x < width; ++x) {
+        if (*alpha.pixel(x, y) == 0U) {
+          continue;
+        }
+        left = std::min(left, x);
+        top = std::min(top, y);
+        right = std::max(right, x + 1);
+        bottom = std::max(bottom, y + 1);
+      }
+    }
+    if (left >= right || top >= bottom) {
+      return {{}, {}, make_error(SessionErrorCode::InvalidArgument,
+                                 "selection refinement produced an empty result")};
+    }
+    const Rect bounds{left, top, right - left, bottom - top};
+    PixelBuffer bounded(bounds.width, bounds.height, PixelFormat::gray8());
+    for (std::int32_t y = 0; y < bounds.height; ++y) {
+      std::copy_n(alpha.pixel(bounds.x, bounds.y + y), bounds.width,
+                  bounded.pixel(0, y));
+    }
+    return {bounds, std::move(bounded), {}};
+  } catch (const std::bad_alloc &) {
+    return {{}, {}, make_error(SessionErrorCode::CommandFailed,
+                               "could not allocate selection refinement working memory")};
+  } catch (const std::exception &exception) {
+    return {{}, {}, make_error(SessionErrorCode::CommandFailed,
+                               exception.what())};
+  }
+}
+
 void restore_pixels_outside_rect_selection(
     PixelBuffer &filtered, const PixelBuffer &original, Rect bounds,
     const std::vector<Rect> &selection) {
@@ -1049,6 +1184,23 @@ SessionMemoryUsage DocumentSession::memory_usage() const {
       usage.history_selection_bytes + usage.preview_selection_bytes +
       usage.render_cache_bytes;
   return usage;
+}
+
+SelectionRefinementPreview DocumentSession::preview_selection_refinement(
+    const RefineSelection &input) const {
+  if (input.output_layer_id.has_value()) {
+    const auto *layer = document_.find_layer(*input.output_layer_id);
+    if (layer == nullptr) {
+      return {{}, {}, make_error(SessionErrorCode::LayerNotFound,
+                                 "selection refinement target layer does not exist")};
+    }
+    if (layer->kind() == LayerKind::Group) {
+      return {{}, {}, make_error(SessionErrorCode::InvalidArgument,
+                                 "selection refinement mask target must be a non-group layer")};
+    }
+  }
+  return refined_selection_preview(selection_, input, document_.width(),
+                                   document_.height());
 }
 
 CommandResult DocumentSession::execute(const DocumentCommand &command,
@@ -2672,6 +2824,47 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             affects_document = false;
             event_kind = SessionEventKind::SelectionChanged;
             layer_id = concrete.layer_id;
+            return;
+          } else if constexpr (std::is_same_v<Command, RefineSelection>) {
+            auto preview = preview_selection_refinement(concrete);
+            if (!preview) {
+              error = std::move(preview.error);
+              return;
+            }
+            if (!concrete.output_layer_id.has_value()) {
+              auto modified = selection_from_gray_mask(
+                  std::move(preview.alpha), preview.bounds);
+              if (selection_snapshots_equal(selection_, modified)) {
+                return;
+              }
+              prepare_mutation(record_history);
+              selection_ = std::move(modified);
+              changed = true;
+              affects_document = false;
+              event_kind = SessionEventKind::SelectionChanged;
+              return;
+            }
+
+            const auto target_id = *concrete.output_layer_id;
+            const auto *current = document_.find_layer(target_id);
+            if (current == nullptr || current->kind() == LayerKind::Group) {
+              error = make_error(SessionErrorCode::InvalidArgument,
+                                 "selection refinement mask target is invalid");
+              return;
+            }
+            const auto linked = current->mask().has_value()
+                                    ? layer_mask_linked(*current)
+                                    : true;
+            LayerMask mask{preview.bounds, std::move(preview.alpha), 0U,
+                           false};
+            const auto before = layer_effect_bounds(*current);
+            prepare_mutation(record_history);
+            auto *updated = document_.find_layer(target_id);
+            updated->set_mask(std::move(mask));
+            set_layer_mask_linked(*updated, linked);
+            changed = true;
+            layer_id = target_id;
+            affected_region = unite_rect(before, layer_effect_bounds(*updated));
             return;
           } else if constexpr (std::is_same_v<Command, ModifySelection>) {
             const bool morphology =

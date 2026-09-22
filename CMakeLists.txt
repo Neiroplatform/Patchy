@@ -1638,6 +1638,7 @@ if(PATCHY_BUILD_TESTS)
     tests/core/gradients_interior_effects_tests.cpp
     tests/core/image_trace_tests.cpp
     tests/core/infra_selection_tests.cpp
+    tests/core/selection_refinement_tests.cpp
     tests/core/layer_metadata_tests.cpp
     tests/core/palette_tests.cpp
     tests/core/pat_asl_abr_tests.cpp

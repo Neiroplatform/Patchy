@@ -273,6 +273,25 @@ struct ModifySelection {
   std::int32_t pixels{0};
 };
 
+// One engine-owned Select and Mask operation. A missing output layer publishes
+// the refined coverage back to the canonical selection; a layer id publishes
+// the same coverage as that non-group layer's raster mask.
+struct RefineSelection {
+  std::int32_t smooth{0};
+  double feather{0.0};
+  std::int32_t contrast{0};
+  std::int32_t shift_edge{0};
+  std::optional<LayerId> output_layer_id{};
+};
+
+struct SelectionRefinementPreview {
+  Rect bounds{};
+  PixelBuffer alpha{};
+  SessionError error{};
+
+  [[nodiscard]] explicit operator bool() const noexcept { return !error; }
+};
+
 struct SelectLayerAlpha {
   LayerId layer_id{0};
 };
@@ -459,7 +478,8 @@ using DocumentCommand =
                  SetLayerMaskState, UngroupLayers, FlipLayers, PlaceLayers,
                  ReplaceLayerPixels, ApplyFilter, SetSelection,
                  CommitPreparedSelection,
-                 ModifySelection, SelectLayerAlpha, SelectLayerMask,
+                 ModifySelection, RefineSelection,
+                 SelectLayerAlpha, SelectLayerMask,
                  SelectLayerVectorMask, SelectSmartFilterMask,
                  SelectByColorSimilarity, SelectVectorPath,
                  TransformVectorLayers, SetVectorMaskState,
@@ -619,6 +639,8 @@ public:
   }
   [[nodiscard]] std::optional<Rect> take_pending_render_region() noexcept;
   [[nodiscard]] SessionMemoryUsage memory_usage() const;
+  [[nodiscard]] SelectionRefinementPreview
+  preview_selection_refinement(const RefineSelection &input) const;
 
   void set_event_sink(EventSink sink) { event_sink_ = std::move(sink); }
   [[nodiscard]] CommandResult

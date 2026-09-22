@@ -274,6 +274,18 @@ export class PatchyWorkerClient {
       expectedStateId: String(input.expectedStateId),
       expectedRevision: String(input.expectedRevision) });
   }
+  previewSelectionRefinement(input) {
+    return this.#request("previewSelectionRefinement", { ...input,
+      layerId: input.layerId == null ? null : String(input.layerId),
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
+  refineSelection(input) {
+    return this.#request("refineSelection", { ...input,
+      layerId: input.layerId == null ? null : String(input.layerId),
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
   clearSelection() { return this.#request("setSelection", { rects: [] }); }
   invertSelection() { return this.#request("modifySelection", { type: 19, pixels: 0 }); }
   expandSelection(pixels) { return this.#request("modifySelection", { type: 20, pixels }); }

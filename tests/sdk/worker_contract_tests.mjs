@@ -87,7 +87,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "styleInnerGlowEnabledInput", "styleSatinEnabledInput",
     "commitLayerStyleButton", "invertSelectionButton",
     "expandSelectionButton", "contractSelectionButton", "borderSelectionButton",
-    "growSelectionButton", "similarSelectionButton", "smoothSelectionButton", "featherSelectionButton",
+    "growSelectionButton", "similarSelectionButton", "smoothSelectionButton",
+    "selectionRefinementDialog", "selectionSmoothInput", "selectionFeatherInput",
+    "selectionContrastInput", "selectionShiftInput", "selectionOutputInput",
+    "selectionLayerInput", "commitSelectionRefinementButton",
     "saveChannelButton", "savePathButton", "channelList", "pathList",
     "rasterizeLayerButton", "mergeVisibleButton", "channelRenameButton",
     "channelInvertButton", "channelUpButton", "channelDownButton", "channelDeleteButton",
@@ -109,6 +112,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
     "client.cropDocument", "client.invertLayer",
     "client.setSelection", "client.setSelectionMask", "client.quickSelect", "client.magneticLasso",
+    "client.previewSelectionRefinement", "client.refineSelection",
     "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
     "client.setLayerMaskLinked",
@@ -206,7 +210,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /value === textDialogOriginalValue[\s\S]*textDialogOriginalRuns\.map/);
   assert.match(script, /client\.updateTextLayer/);
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
-    "quickSelect(", "magneticLasso(",
+    "quickSelect(", "magneticLasso(", "previewSelectionRefinement(", "refineSelection(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel(",
     "editLayers(", "moveLayers(", "groupLayers(", "removeLayers(", "copyLayersToDocument(",
@@ -373,7 +377,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 40n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 41n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -543,6 +547,23 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.deepEqual([view.getInt32(input + 40, true), view.getInt32(input + 44, true)], [3, 2]);
       assert.equal(view.getUint32(input + 52, true), 6);
       return 1;
+    },
+    _patchy_engine_session_preview_selection_refinement(session, input, bounds, output) {
+      assert.equal(session, 22); assert.equal(view.getUint32(input, true), 56);
+      assert.equal(view.getBigUint64(input + 8, true), 9n);
+      assert.equal(view.getBigUint64(input + 16, true), 4n);
+      assert.deepEqual([view.getInt32(input + 24, true), view.getInt32(input + 28, true),
+        view.getInt32(input + 32, true)], [3, 40, -2]);
+      assert.equal(view.getFloat64(input + 40, true), 1.5);
+      assert.equal(view.getBigUint64(input + 48, true), 7n);
+      [1, 0, 2, 2].forEach((value, index) => view.setInt32(bounds + index * 4, value, true));
+      const data = alloc(4); heap.set([0, 64, 192, 255], data);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 4, true);
+      return 1;
+    },
+    _patchy_engine_session_apply_selection_refinement(session, input) {
+      assert.equal(session, 22); assert.equal(view.getUint32(input + 4, true), 1);
+      assert.equal(view.getBigUint64(input + 48, true), 7n); return 1;
     },
     _patchy_engine_session_group_layer(session, state, revision, layer, name, nameSize) {
       assert.deepEqual([session, state, revision, layer], [22, 9n, 4n, 7n]);
@@ -820,7 +841,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 40n) - 1n);
+  assert.equal(engine.capabilities, (1n << 41n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -911,6 +932,13 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.setSelection(session, snapshot, [{ x: 0, y: 0, width: 2, height: 1 }]);
   engine.setSelectionMask(session, snapshot, { bounds: { x: 0, y: 0, width: 3, height: 2 },
     gray: new Uint8Array([0, 64, 255, 255, 64, 0]) });
+  const refinement = { smooth: 3, feather: 1.5, contrast: 40, shiftEdge: -2,
+    output: "layerMask", layerId: 7n };
+  assert.deepEqual(engine.previewSelectionRefinement(session, snapshot, refinement), {
+    bounds: { x: 1, y: 0, width: 2, height: 2 },
+    gray: new Uint8Array([0, 64, 192, 255]),
+  });
+  engine.refineSelection(session, snapshot, refinement);
   engine.modifySelection(session, snapshot, 20, 4);
   engine.modifySelection(session, snapshot, 33, 32);
   engine.modifySelection(session, snapshot, 34, 32);
@@ -1026,7 +1054,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
   assert.deepEqual(Array.from(engine.save(session, { largeDocument: true })), [56, 66, 80, 83]);
   assert.deepEqual(saveFormats, [0, 1]);
-  assert.equal(released, 11);
+  assert.equal(released, 12);
   engine.dispose();
   assert.equal(destroyed, 2);
 });
@@ -1719,6 +1747,39 @@ test("worker previews and commits one exact-state layer warp", async () => {
   const committed = await host.dispatch({ method: "warpLayer", ...message });
   assert.equal(committed.revision, 5n);
   await assert.rejects(host.dispatch({ method: "warpLayer", ...message }),
+    (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
+  host.dispose();
+});
+
+test("worker previews and commits one exact-state selection refinement", async () => {
+  let revision = 4n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 40n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision,
+      selection: [{ x: 1, y: 1, width: 4, height: 3 }] }; },
+    previewSelectionRefinement(session, before, input) {
+      calls.push(["preview", session, before.revision, input]);
+      return { bounds: { x: 0, y: 0, width: 6, height: 5 },
+        gray: new Uint8Array(30).fill(127) };
+    },
+    refineSelection(session, before, input) {
+      calls.push(["commit", session, before.revision, input]); revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 8, height: 6, name: "Refine.psd" });
+  const message = { smooth: 4, feather: 2.5, contrast: 35, shiftEdge: -2,
+    output: "layerMask", layerId: "7", expectedStateId: "4", expectedRevision: "4" };
+  const preview = await host.dispatch({ method: "previewSelectionRefinement", ...message });
+  assert.equal(preview.gray.byteLength, 30); assert.equal(revision, 4n);
+  assert.equal(calls[0][3].layerId, 7n);
+  const committed = await host.dispatch({ method: "refineSelection", ...message });
+  assert.equal(committed.revision, 5n);
+  await assert.rejects(host.dispatch({ method: "refineSelection", ...message }),
     (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
   host.dispose();

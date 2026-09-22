@@ -141,6 +141,11 @@ static_assert(offsetof(patchy_engine_command,
               140U);
 static_assert(offsetof(patchy_engine_command,
                        payload.set_essential_layer_style.satin_invert) == 284U);
+static_assert(sizeof(patchy_engine_selection_refinement_input) == 56U);
+static_assert(offsetof(patchy_engine_selection_refinement_input, feather) ==
+              40U);
+static_assert(offsetof(patchy_engine_selection_refinement_input, layer_id) ==
+              48U);
 
 constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_LAYER_PROJECTION |
@@ -180,7 +185,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING |
     PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFER |
     PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM |
-    PATCHY_ENGINE_CAP_LAYER_ARRANGE;
+    PATCHY_ENGINE_CAP_LAYER_ARRANGE |
+    PATCHY_ENGINE_CAP_SELECTION_REFINEMENT;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -1511,6 +1517,78 @@ int patchy_engine_session_magnetic_lasso(
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown Magnetic Lasso failure");
   }
+}
+
+int patchy_engine_session_preview_selection_refinement(
+    const patchy_engine_session *session,
+    const patchy_engine_selection_refinement_input *input,
+    patchy_engine_rect *bounds, patchy_engine_buffer *gray,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (bounds != nullptr) {
+    *bounds = {};
+  }
+  if (gray != nullptr) {
+    *gray = {};
+  }
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || bounds == nullptr ||
+      gray == nullptr || input->reserved != 0U ||
+      input->output > PATCHY_ENGINE_SELECTION_REFINEMENT_LAYER_MASK ||
+      (input->output == PATCHY_ENGINE_SELECTION_REFINEMENT_SELECTION &&
+       input->layer_id != 0U) ||
+      (input->output == PATCHY_ENGINE_SELECTION_REFINEMENT_LAYER_MASK &&
+       input->layer_id == 0U)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete selection refinement preview input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  const patchy::engine::RefineSelection command{
+      input->smooth, input->feather, input->contrast, input->shift_edge,
+      input->output == PATCHY_ENGINE_SELECTION_REFINEMENT_LAYER_MASK
+          ? std::optional<patchy::LayerId>{input->layer_id}
+          : std::nullopt};
+  const auto preview = session->value->preview_selection_refinement(command);
+  if (!preview) {
+    return fail(error, preview.error);
+  }
+  *bounds = {preview.bounds.x, preview.bounds.y, preview.bounds.width,
+             preview.bounds.height};
+  return copy_buffer(preview.alpha.data(), gray, error);
+}
+
+int patchy_engine_session_apply_selection_refinement(
+    patchy_engine_session *session,
+    const patchy_engine_selection_refinement_input *input,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->reserved != 0U ||
+      input->output > PATCHY_ENGINE_SELECTION_REFINEMENT_LAYER_MASK ||
+      (input->output == PATCHY_ENGINE_SELECTION_REFINEMENT_SELECTION &&
+       input->layer_id != 0U) ||
+      (input->output == PATCHY_ENGINE_SELECTION_REFINEMENT_LAYER_MASK &&
+       input->layer_id == 0U)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "complete selection refinement commit input is required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  const auto result = session->value->execute(patchy::engine::RefineSelection{
+      input->smooth, input->feather, input->contrast, input->shift_edge,
+      input->output == PATCHY_ENGINE_SELECTION_REFINEMENT_LAYER_MASK
+          ? std::optional<patchy::LayerId>{input->layer_id}
+          : std::nullopt});
+  if (!result) {
+    return fail(error, result.error);
+  }
+  publish_event(*session->value, result, event);
+  return 1;
 }
 
 int patchy_engine_session_layer_count(const patchy_engine_session *session,

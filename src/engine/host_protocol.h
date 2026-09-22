@@ -54,6 +54,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFER = UINT64_C(1) << 37,
   PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM = UINT64_C(1) << 38,
   PATCHY_ENGINE_CAP_LAYER_ARRANGE = UINT64_C(1) << 39,
+  PATCHY_ENGINE_CAP_SELECTION_REFINEMENT = UINT64_C(1) << 40,
 };
 
 enum patchy_engine_error_code {
@@ -566,6 +567,24 @@ typedef struct patchy_engine_magnetic_lasso_input {
   int32_t node_budget;
   uint32_t combine;
 } patchy_engine_magnetic_lasso_input;
+
+enum patchy_engine_selection_refinement_output {
+  PATCHY_ENGINE_SELECTION_REFINEMENT_SELECTION = 0,
+  PATCHY_ENGINE_SELECTION_REFINEMENT_LAYER_MASK = 1,
+};
+
+typedef struct patchy_engine_selection_refinement_input {
+  uint32_t struct_size;
+  uint32_t output;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  int32_t smooth;
+  int32_t contrast;
+  int32_t shift_edge;
+  uint32_t reserved;
+  double feather;
+  uint64_t layer_id;
+} patchy_engine_selection_refinement_input;
 
 typedef struct patchy_engine_layer_mask_projection {
   uint32_t struct_size;
@@ -1282,6 +1301,15 @@ int patchy_engine_session_magnetic_lasso(
     patchy_engine_session *session,
     const patchy_engine_magnetic_lasso_input *input,
     patchy_engine_cancellation *cancellation,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_preview_selection_refinement(
+    const patchy_engine_session *session,
+    const patchy_engine_selection_refinement_input *input,
+    patchy_engine_rect *bounds, patchy_engine_buffer *gray,
+    patchy_engine_error *error);
+int patchy_engine_session_apply_selection_refinement(
+    patchy_engine_session *session,
+    const patchy_engine_selection_refinement_input *input,
     patchy_engine_event *event, patchy_engine_error *error);
 
 int patchy_engine_session_layer_count(const patchy_engine_session *session,

@@ -226,8 +226,7 @@
             <button id="borderSelectionButton" type="button" disabled>Border 4 px</button>
             <button id="growSelectionButton" type="button" disabled>Grow by color</button>
             <button id="similarSelectionButton" type="button" disabled>Select similar</button>
-            <button id="smoothSelectionButton" type="button" disabled>Smooth 4 px</button>
-            <button id="featherSelectionButton" type="button" disabled>Feather 4 px</button>
+            <button id="smoothSelectionButton" type="button" disabled>Select and Mask…</button>
             <button id="saveChannelButton" type="button" disabled>Save channel</button>
             <button id="savePathButton" type="button" disabled>Save path</button>
             <button id="rasterizeLayerButton" type="button" disabled>Rasterize layer</button>
@@ -333,6 +332,23 @@
             <label class="check-field"><input id="cropExpandInput" type="checkbox"><span>Allow expansion outside canvas</span></label>
           </div>
           <div class="dialog-actions"><button class="button" id="cropFromSelectionButton" type="button">Use selection</button><button class="button button-primary" id="cropButton" type="button">Crop document</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog selection-refinement-dialog" id="selectionRefinementDialog" aria-labelledby="selectionRefinementDialogTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">SELECTION</p><h2 id="selectionRefinementDialogTitle">Select and Mask</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section class="refinement-controls">
+          <label class="dialog-field"><span>Smooth</span><input id="selectionSmoothInput" type="number" min="0" max="250" step="1" value="4"></label>
+          <label class="dialog-field"><span>Feather</span><input id="selectionFeatherInput" type="number" min="0" max="250" step="0.1" value="0"></label>
+          <label class="dialog-field"><span>Contrast</span><input id="selectionContrastInput" type="number" min="0" max="100" step="1" value="0"></label>
+          <label class="dialog-field"><span>Shift Edge</span><input id="selectionShiftInput" type="number" min="-250" max="250" step="1" value="0"></label>
+        </section>
+        <section>
+          <label class="dialog-field"><span>Output to</span><select id="selectionOutputInput"><option value="selection">Selection</option><option value="layerMask">Layer mask</option></select></label>
+          <label class="dialog-field" id="selectionLayerField" hidden><span>Target layer</span><select id="selectionLayerInput"></select></label>
+          <p class="dialog-note" id="selectionRefinementStatus">Engine preview is live. Cancel leaves the document and history unchanged.</p>
+          <div class="dialog-actions"><button class="button button-primary" id="commitSelectionRefinementButton" type="button">Apply</button></div>
         </section>
       </form>
     </dialog>
