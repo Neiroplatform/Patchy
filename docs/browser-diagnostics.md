@@ -37,6 +37,20 @@ ordering or size is invalid; no partial summary is emitted. Exit `2` means the
 command was invoked incorrectly. Treat the file as user-provided diagnostic
 data even though the format excludes editor content.
 
+The actual-browser recovery gate uses an installed Playwright package without
+making it a product dependency:
+
+```sh
+PATCHY_PLAYWRIGHT_ROOT=/path/to/node_modules/playwright \
+  node tests/sdk/wasm_diagnostics_recovery_smoke.mjs http://127.0.0.1:8974
+```
+
+It drives the production pthread-WASM shell through create/edit/failure,
+forces the exact engine Worker to crash, waits for confirmed OPFS recovery,
+downloads the consent-gated bundle and accepts it only through the offline
+validator. Private filename, text, pixel and crash-message sentinels must be
+absent from the downloaded bytes.
+
 ## Compatibility and rollback
 
 Readers reject unknown schema versions and fields. A future additive format

@@ -8,7 +8,11 @@ const RECOVERY_PHASES = new Set(["started", "succeeded", "partial", "failed"]);
 const ERROR_CATEGORIES = new Set(["engine", "input", "memory", "storage", "worker", "unknown"]);
 const BROWSER_FAMILIES = new Set(["chromium", "edge", "firefox", "safari", "other"]);
 const PLATFORM_FAMILIES = new Set(["windows", "macos", "linux", "ios", "android", "other"]);
+const HARDWARE_BUCKETS = new Set([0, 1, 2, 4, 8, 16, 32]);
+const MEMORY_BUCKETS = new Set([0, 1, 2, 4, 8, 16]);
+const UINT64_MAX = 0xffffffffffffffffn;
 const OPERATION = /^[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*){0,4}$/;
+export const DIAGNOSTIC_COMMAND_FAILED = Symbol("diagnostic-command-failed");
 
 function finiteInteger(value, minimum, maximum, label) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
@@ -31,6 +35,14 @@ function exactKeys(value, keys, label) {
 function operation(value) {
   if (typeof value !== "string" || value.length > 64 || !OPERATION.test(value)) {
     throw new TypeError("Diagnostic operation id is invalid");
+  }
+  return value;
+}
+
+function uint64Decimal(value, label) {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d{0,19})$/.test(value) ||
+      BigInt(value) > UINT64_MAX) {
+    throw new TypeError(`${label} is not an unsigned 64-bit decimal`);
   }
   return value;
 }
@@ -88,8 +100,10 @@ function normalizeRuntime(value) {
   return { browserFamily: value.browserFamily, platformFamily: value.platformFamily,
     crossOriginIsolated: value.crossOriginIsolated, sharedArrayBuffer: value.sharedArrayBuffer,
     offscreenCanvas: value.offscreenCanvas, imageBitmap: value.imageBitmap, opfs: value.opfs,
-    hardwareConcurrency: finiteInteger(value.hardwareConcurrency, 0, 32, "Hardware concurrency bucket"),
-    deviceMemoryGiB: finiteInteger(value.deviceMemoryGiB, 0, 16, "Device memory bucket") };
+    hardwareConcurrency: HARDWARE_BUCKETS.has(value.hardwareConcurrency)
+      ? value.hardwareConcurrency : (() => { throw new TypeError("Hardware concurrency bucket is invalid"); })(),
+    deviceMemoryGiB: MEMORY_BUCKETS.has(value.deviceMemoryGiB)
+      ? value.deviceMemoryGiB : (() => { throw new TypeError("Device memory bucket is invalid"); })() };
 }
 
 function normalizeDocument(value) {
@@ -97,7 +111,7 @@ function normalizeDocument(value) {
   exactKeys(value, ["width", "height", "layers", "openDocuments", "selectionRegions",
     "revision", "dirty", "retainedBytes", "historyBytes", "format"], "Diagnostic document");
   if (typeof value.dirty !== "boolean" || !["psd", "psb", "unknown"].includes(value.format) ||
-      typeof value.revision !== "string" || !/^\d{1,20}$/.test(value.revision)) {
+      typeof value.revision !== "string") {
     throw new TypeError("Diagnostic document state is invalid");
   }
   return {
@@ -106,7 +120,7 @@ function normalizeDocument(value) {
     layers: finiteInteger(value.layers, 0, 100000, "Layer count"),
     openDocuments: finiteInteger(value.openDocuments, 0, 16, "Open document count"),
     selectionRegions: finiteInteger(value.selectionRegions, 0, 100000, "Selection region count"),
-    revision: value.revision, dirty: value.dirty,
+    revision: uint64Decimal(value.revision, "Document revision"), dirty: value.dirty,
     retainedBytes: finiteInteger(value.retainedBytes, 0, 0x400000000, "Retained bytes"),
     historyBytes: finiteInteger(value.historyBytes, 0, 0x400000000, "History bytes"),
     format: value.format,
@@ -240,6 +254,25 @@ export class BrowserDiagnosticRecorder {
   }
 }
 
+export async function recordDiagnosticCommand(recorder, operationId, run,
+  now = () => performance.now()) {
+  if (!(recorder instanceof BrowserDiagnosticRecorder) || typeof run !== "function") {
+    throw new TypeError("Diagnostic command requires a recorder and operation");
+  }
+  const started = Number(now());
+  recorder.recordCommand(operationId, "started");
+  try {
+    const result = await run();
+    recorder.recordCommand(operationId,
+      result === DIAGNOSTIC_COMMAND_FAILED ? "failed" : "succeeded", Number(now()) - started);
+    return result;
+  } catch (error) {
+    recorder.recordCommand(operationId, "failed", Number(now()) - started);
+    recorder.recordError(operationId, error);
+    return DIAGNOSTIC_COMMAND_FAILED;
+  }
+}
+
 export function validateDiagnosticBundle(input) {
   const value = typeof input === "string" ? JSON.parse(input) : input;
   exactKeys(value, ["schema", "version", "sessionId", "elapsedMs", "locale", "capabilities",
@@ -247,7 +280,7 @@ export function validateDiagnosticBundle(input) {
   if (value.schema !== SCHEMA || value.version !== VERSION ||
       typeof value.sessionId !== "string" || value.sessionId.length < 8 || value.sessionId.length > 64 ||
       !/^[a-zA-Z0-9-]+$/.test(value.sessionId) || !["en", "ru"].includes(value.locale) ||
-      typeof value.capabilities !== "string" || !/^\d{1,20}$/.test(value.capabilities) ||
+      typeof value.capabilities !== "string" ||
       !Array.isArray(value.events) || value.events.length > MAX_EVENTS) {
     throw new TypeError("Diagnostic bundle header is invalid");
   }
@@ -259,7 +292,7 @@ export function validateDiagnosticBundle(input) {
   }
   const normalized = { schema: SCHEMA, version: VERSION, sessionId: value.sessionId,
     elapsedMs: finiteInteger(value.elapsedMs, 0, 86400000, "Diagnostic elapsed time"),
-    locale: value.locale, capabilities: value.capabilities,
+    locale: value.locale, capabilities: uint64Decimal(value.capabilities, "Diagnostic capabilities"),
     runtime: normalizeRuntime(value.runtime), document: normalizeDocument(value.document), events };
   if (new TextEncoder().encode(JSON.stringify(stable(normalized))).byteLength > MAX_BYTES) {
     throw new RangeError("Diagnostic bundle exceeds the size limit");

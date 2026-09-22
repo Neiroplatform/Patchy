@@ -2,8 +2,8 @@ import { PatchyWorkerClient } from "./engine/client.mjs";
 import { applyRecoveredSelection, checkpointSelection,
   recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
-import { BrowserDiagnosticRecorder, collectRuntimeProfile,
-  serializeDiagnosticBundle } from "./engine/support-diagnostics.mjs";
+import { BrowserDiagnosticRecorder, collectRuntimeProfile, DIAGNOSTIC_COMMAND_FAILED,
+  recordDiagnosticCommand, serializeDiagnosticBundle } from "./engine/support-diagnostics.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   documentPreflight, geometryMutationPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
@@ -128,22 +128,7 @@ function registerCommand(id, buttonId, run, enabled = () => true) {
 function executeCommand(id) {
   const command = commandRegistry.get(id);
   if (!command || !command.enabled()) return;
-  const started = performance.now();
-  diagnostics.recordCommand(id, "started");
-  try {
-    const result = command.run();
-    Promise.resolve(result).then(
-      () => diagnostics.recordCommand(id, "succeeded", performance.now() - started),
-      (error) => {
-        diagnostics.recordCommand(id, "failed", performance.now() - started);
-        diagnostics.recordError(id, error);
-      });
-    return result;
-  } catch (error) {
-    diagnostics.recordCommand(id, "failed", performance.now() - started);
-    diagnostics.recordError(id, error);
-    throw error;
-  }
+  return recordDiagnosticCommand(diagnostics, id, command.run);
 }
 
 function syncCommands() {
@@ -1904,20 +1889,16 @@ async function mutate(title, operation) {
   if (busy || !snapshot) return;
   clearError();
   setBusy(true, title, "Committing one canonical engine revision");
-  const started = performance.now();
-  diagnostics.recordCommand("document.mutate", "started");
   try {
     const before = snapshot;
     const next = await operation();
     recordHistoryMutation(before, next, title);
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
-    diagnostics.recordCommand("document.mutate", "succeeded", performance.now() - started);
   }
   catch (error) {
-    diagnostics.recordCommand("document.mutate", error?.code === 7 ? "cancelled" : "failed",
-      performance.now() - started);
     showError(`${title} failed`, error);
+    return DIAGNOSTIC_COMMAND_FAILED;
   }
   finally { setBusy(false); }
 }
@@ -1931,7 +1912,7 @@ async function navigateHistory(steps) {
     const next = await client.historyTravel(steps, before.stateId, before.revision);
     recordHistoryTravel(before, next, steps);
     await acceptSnapshot(next); scheduleCheckpoint(next);
-  } catch (error) { showError("History navigation failed", error); }
+  } catch (error) { showError("History navigation failed", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally {
     setBusy(false);
     if (restoreHistoryFocus) {
@@ -1966,7 +1947,7 @@ async function newDocument() {
     clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
-  } catch (error) { showError("Could not create document", error); }
+  } catch (error) { showError("Could not create document", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally { setBusy(false); }
 }
 
@@ -1990,7 +1971,7 @@ async function saveDocument() {
     }
     const blob = await client.saveBlob(format);
     downloadBlob(blob, `${exportBaseName()}.${format}`);
-  } catch (error) { showError("Could not encode layered document", error); }
+  } catch (error) { showError("Could not encode layered document", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally { setBusy(false); }
 }
 
@@ -2003,7 +1984,7 @@ async function openSmartObjectContents() {
     const next = await client.openSmartObjectContents(layer.id);
     clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
-  } catch (error) { showError("Could not open Smart Object contents", error); }
+  } catch (error) { showError("Could not open Smart Object contents", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally { setBusy(false); }
 }
 
@@ -2018,9 +1999,9 @@ function openDiagnosticsDialog() {
   const consent = $("diagnosticsConsentInput");
   consent.checked = false;
   $("downloadDiagnosticsButton").disabled = true;
-  $("diagnosticsSummary").textContent = snapshot
-    ? `${snapshot.width} × ${snapshot.height} · ${localizer.text(`${snapshot.layers.length} layers`)} · ${localizer.text(`Revision ${snapshot.revision}`)}`
-    : "No document is open";
+  localizer.setText($("diagnosticsSummary"), snapshot
+    ? `${snapshot.width} × ${snapshot.height} · ${snapshot.layers.length} layers · Revision ${snapshot.revision}`
+    : "No document is open");
   $("diagnosticsDialog").showModal();
 }
 
@@ -2057,7 +2038,7 @@ async function exportDocument() {
     const blob = await encodeFlatDocument({ rgba, width: snapshot.width, height: snapshot.height,
       format, title: exportBaseName() });
     downloadBlob(blob, `${exportBaseName()}.${format === "jpeg" ? "jpg" : format}`);
-  } catch (error) { showError("Could not export document", error); }
+  } catch (error) { showError("Could not export document", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally { setBusy(false); }
 }
 
@@ -2098,7 +2079,7 @@ async function copyRenderedPixels() {
       catch { /* The in-memory clipboard remains available across opened documents. */ }
     }
     updateControls(); setSessionState("document", "Pixels copied locally");
-  } catch (error) { showError("Could not copy pixels", error); }
+  } catch (error) { showError("Could not copy pixels", error); return DIAGNOSTIC_COMMAND_FAILED; }
 }
 
 async function pastePixels() {
@@ -2121,7 +2102,7 @@ async function pastePixels() {
     if (!blob) throw new Error("Clipboard does not contain an image");
     const file = new File([blob], "Clipboard pixels.png", { type: blob.type || "image/png" });
     await importPixelLayer(file);
-  } catch (error) { showError("Could not paste pixels", error); }
+  } catch (error) { showError("Could not paste pixels", error); return DIAGNOSTIC_COMMAND_FAILED; }
 }
 
 function captureLayerReference() {
@@ -3132,7 +3113,7 @@ async function fillSelectedPixels() {
     start: { x: layer.bounds.x, y: layer.bounds.y },
     end: { x: layer.bounds.x + layer.bounds.width, y: layer.bounds.y },
     stateId: snapshot.stateId, revision: snapshot.revision };
-  await mutate("Filling pixels", () => client.applyRasterFill(rasterFillPayload(draft)));
+  return mutate("Filling pixels", () => client.applyRasterFill(rasterFillPayload(draft)));
 }
 
 async function beginGradient(event) {
@@ -3223,7 +3204,7 @@ registerCommand("tool.fill", "fillToolButton", fillSelectedPixels, () => !busy &
 registerCommand("tool.pen", "penToolButton", () => setCanvasTool("pen"));
 registerCommand("tool.text", "textToolButton", () => { setCanvasTool("text"); openTextDialog(); });
 registerCommand("selection.all", "selectAllButton", () => {
-  mutate("Selecting all", () => client.setSelection([{ x: 0, y: 0, width: snapshot.width, height: snapshot.height }]));
+  return mutate("Selecting all", () => client.setSelection([{ x: 0, y: 0, width: snapshot.width, height: snapshot.height }]));
 }, () => !busy && Boolean(snapshot));
 registerCommand("selection.clear", "clearSelectionButton", () => mutate("Clearing selection", () => client.clearSelection()),
   () => !busy && Boolean(snapshot?.selection?.length));
