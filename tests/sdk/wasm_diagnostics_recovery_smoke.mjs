@@ -88,10 +88,12 @@ try {
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
   const pixelText = Buffer.from("PRIVATE_PIXEL_SENTINEL", "ascii");
-  const pixelWidth = Math.ceil(pixelText.length / 4);
+  const pixelWidth = Math.ceil(pixelText.length / 3);
   const pixelBytes = Buffer.alloc(pixelWidth * 4, 0);
-  pixelText.copy(pixelBytes);
-  assert.equal(pixelBytes.subarray(0, pixelText.length).toString("ascii"), "PRIVATE_PIXEL_SENTINEL");
+  for (let pixel = 0; pixel < pixelWidth; ++pixel) pixelBytes[pixel * 4 + 3] = 255;
+  for (let index = 0; index < pixelText.length; ++index) {
+    pixelBytes[Math.floor(index / 3) * 4 + index % 3] = pixelText[index];
+  }
   await page.setInputFiles("#imageInput", {
     name: "PRIVATE_FILENAME_SENTINEL.png",
     mimeType: "image/png",
@@ -99,6 +101,10 @@ try {
   });
   await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) >= 1 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  const canonicalPixelBytes = Buffer.from(await page.$eval("#documentCanvas", (canvas, width) =>
+    [...canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, width, 1).data], pixelWidth));
+  assert.deepEqual(canonicalPixelBytes, pixelBytes,
+    "production PNG decode/canonical render changed the opaque raster marker");
   await page.click("#textToolButton");
   await page.waitForSelector("#textDialog[open]");
   await page.fill("#textValueInput", "PRIVATE_TEXT_STORY_SENTINEL");
@@ -149,8 +155,8 @@ try {
   assert.ok(bundle.events.some((event) => event.kind === "recovery" &&
     ["succeeded", "partial"].includes(event.phase)));
   assert.doesNotMatch(bytes, /PRIVATE_|PRIVATE_FILENAME_SENTINEL|PRIVATE_TEXT_STORY_SENTINEL|PRIVATE_CRASH_ERROR_SENTINEL/);
-  for (const encodedPixelMarker of [pixelBytes.toString("latin1"), pixelBytes.toString("base64"),
-    pixelText.toString("base64"), pixelText.toString("hex")]) {
+  for (const encodedPixelMarker of [canonicalPixelBytes.toString("latin1"),
+    canonicalPixelBytes.toString("base64"), canonicalPixelBytes.toString("hex")]) {
     assert.equal(bytes.includes(encodedPixelMarker), false, "diagnostics leaked real raster pixel bytes");
   }
   const numericValues = [];
@@ -160,7 +166,7 @@ try {
     else if (value && typeof value === "object") Object.values(value).forEach(collectNumbers);
   };
   collectNumbers(bundle);
-  const numericNeedle = [...pixelText];
+  const numericNeedle = [...canonicalPixelBytes];
   const hasNumericPixelLeak = numericValues.some((_, offset) => numericNeedle.every(
     (value, index) => numericValues[offset + index] === value));
   assert.equal(hasNumericPixelLeak, false, "diagnostics leaked raster pixels as a formatted numeric array");
