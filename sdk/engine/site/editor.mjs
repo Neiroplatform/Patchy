@@ -7,13 +7,12 @@ import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
 import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
-import { createLocalizer, installDialogFocusReturn, installRovingToolbar,
+import { chooseRovingLayerId, createLocalizer, installDialogFocusReturn, installRovingToolbar,
   isEditableTarget } from "./shell-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
 const localizer = createLocalizer(document, document.documentElement.lang);
-const t = (value) => localizer.text(value);
 localizer.localize(document);
 installDialogFocusReturn(document);
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"));
@@ -264,7 +263,9 @@ function recordHistoryTravel(before, after, steps) {
 }
 
 function renderHistory() {
-  const list = $("historyList"); list.replaceChildren();
+  const list = $("historyList");
+  const restoreFocus = list.contains(document.activeElement);
+  list.replaceChildren();
   const undoCount = snapshot?.memory?.undoStates || 0;
   const redoCount = snapshot?.memory?.redoStates || 0;
   $("historyCount").textContent = String(undoCount + redoCount + (snapshot ? 1 : 0));
@@ -285,7 +286,8 @@ function renderHistory() {
     button.setAttribute("aria-disabled", String(busy || row.steps === 0));
     const marker = document.createElement("span"); marker.className = "history-marker";
     marker.textContent = row.steps === 0 ? "●" : row.direction === "undo" ? "↶" : "↷";
-    const label = document.createElement("span"); label.className = "history-label"; label.textContent = t(row.label);
+    const label = document.createElement("span"); label.className = "history-label";
+    localizer.setText(label, row.label);
     button.append(marker, label);
     if (row.steps) button.addEventListener("click", () => navigateHistory(row.steps));
     list.append(button);
@@ -295,19 +297,20 @@ function renderHistory() {
     button.tabIndex = button === current ? 0 : -1;
   }
   current?.scrollIntoView({ block: "nearest" });
+  if (restoreFocus) current?.focus({ preventScroll: true });
 }
 
 function setSessionState(state, label) {
   shell.dataset.state = state;
-  $("sessionIndicator").lastElementChild.textContent = t(label);
+  localizer.setText($("sessionIndicator").lastElementChild, label);
 }
 
 function setBusy(active, title = "Working", detail = "The engine is updating the document") {
   busy = active;
   shell.setAttribute("aria-busy", String(active));
   $("busyState").hidden = !active;
-  $("busyTitle").textContent = t(title);
-  $("busyDetail").textContent = t(detail);
+  localizer.setText($("busyTitle"), title);
+  localizer.setText($("busyDetail"), detail);
   if (!active) {
     cancelActiveOperation = null;
     $("busyProgress").hidden = true;
@@ -330,7 +333,7 @@ function updateControls() {
   if (snapshot) {
     const format = documentSaveFormats.get(snapshot.documentId) || "psd";
     $("saveFormatSelect").value = format;
-    $("saveButton").querySelector(".download-label").textContent = t(`Download ${format.toUpperCase()}`);
+    localizer.setText($("saveButton").querySelector(".download-label"), `Download ${format.toUpperCase()}`);
   }
   $("exportFormatSelect").disabled = busy || !snapshot;
   $("exportButton").disabled = busy || !snapshot;
@@ -350,7 +353,7 @@ function updateControls() {
   $("invertLayerButton").disabled = busy || !single || layer?.kind !== 0;
   $("filterLayerButton").disabled = busy || !single || layer?.kind !== 0;
   $("textLayerButton").disabled = busy || !snapshot;
-  $("textLayerButton").textContent = t(single && layer?.kind === 3 ? "Edit text" : "Add text");
+  localizer.setText($("textLayerButton"), single && layer?.kind === 3 ? "Edit text" : "Add text");
   $("layerTransformButton").disabled = busy || !transformSelection();
   const arrangement = transformSelection();
   const arrangementMode = Number($("layerArrangeModeInput").value);
@@ -365,7 +368,7 @@ function updateControls() {
   $("shapeLayerButton").disabled = busy || !snapshot;
   $("adjustmentLayerButton").disabled = busy || !snapshot;
   $("smartObjectButton").disabled = busy || !snapshot;
-  $("smartObjectButton").textContent = t(layer?.kind === 5 ? "Replace Smart Object" : "Place Smart Object");
+  localizer.setText($("smartObjectButton"), layer?.kind === 5 ? "Replace Smart Object" : "Place Smart Object");
   $("openSmartObjectButton").disabled = busy || !single || layer?.kind !== 5 ||
     !layer?.smartObject?.contentsEditable;
   $("smartFilterButton").disabled = busy || !single || layer?.kind !== 5 || !layer?.smartObject?.editable;
@@ -374,9 +377,9 @@ function updateControls() {
     layer.kind === 4 || !hasVectorMaskSource;
   $("createMaskButton").disabled = busy || !single || layer?.kind !== 0 || Boolean(layer?.mask);
   $("toggleMaskButton").disabled = busy || !single || !layer?.mask;
-  $("toggleMaskButton").textContent = t(layer?.mask?.disabled ? "Enable mask" : "Disable mask");
+  localizer.setText($("toggleMaskButton"), layer?.mask?.disabled ? "Enable mask" : "Disable mask");
   $("linkMaskButton").disabled = busy || !single || !layer?.mask;
-  $("linkMaskButton").textContent = t(layer?.mask?.linked === false ? "Link mask" : "Unlink mask");
+  localizer.setText($("linkMaskButton"), layer?.mask?.linked === false ? "Link mask" : "Unlink mask");
   $("invertMaskButton").disabled = busy || !single || !layer?.mask;
   $("removeMaskButton").disabled = busy || !single || !layer?.mask;
   const canPaintMask = Boolean(layer?.mask && !layer.mask.disabled &&
@@ -515,9 +518,10 @@ async function applyPixelFilter(layer, filterId, parameters) {
 }
 
 function showError(title, error) {
-  $("errorTitle").textContent = t(title);
+  localizer.setText($("errorTitle"), title);
   $("errorMessage").textContent = error?.message || String(error);
   $("errorBanner").hidden = false;
+  queueMicrotask(() => $("dismissErrorButton").focus({ preventScroll: true }));
   if (client.state === "crashed") setSessionState("crashed", "Worker crashed");
   else setSessionState(snapshot ? "document" : "error", snapshot ? "Document ready" : "Engine error");
 }
@@ -533,7 +537,7 @@ function newWorkspaceId() {
 function setRecoveryLabel(state, label) {
   const output = $("recoveryLabel");
   output.dataset.state = state;
-  output.textContent = t(label);
+  localizer.setText(output, label);
 }
 
 function renderRecoveryStatus(documentId = snapshot?.documentId) {
@@ -967,8 +971,11 @@ function renderLayers() {
   const viewportRows = Math.max(1, Math.ceil((list.clientHeight || 480) / LAYER_ROW_HEIGHT));
   const first = Math.max(0, Math.floor(scrollTop / LAYER_ROW_HEIGHT) - LAYER_OVERSCAN);
   const last = Math.min(layers.length, first + viewportRows + LAYER_OVERSCAN * 2);
+  const visibleLayers = layers.slice(first, last);
+  const rovingLayerId = chooseRovingLayerId(visibleLayers, selectedLayerId);
   const topSpacer = document.createElement("div");
-  topSpacer.className = "layer-spacer"; topSpacer.style.height = `${first * LAYER_ROW_HEIGHT}px`;
+  topSpacer.className = "layer-spacer"; topSpacer.setAttribute("aria-hidden", "true");
+  topSpacer.style.height = `${first * LAYER_ROW_HEIGHT}px`;
   list.append(topSpacer);
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
   for (let index = first; index < last; ++index) {
@@ -976,12 +983,12 @@ function renderLayers() {
     const row = document.createElement("div");
     row.className = "layer-row";
     row.draggable = true;
-    row.setAttribute("role", "option");
+    row.setAttribute("role", "listitem");
     row.setAttribute("aria-setsize", String(layers.length));
     row.setAttribute("aria-posinset", String(index + 1));
     row.dataset.active = String(selectedLayerIds.has(layer.id));
     row.dataset.layerId = String(layer.id);
-    row.setAttribute("aria-selected", String(selectedLayerIds.has(layer.id)));
+    if (selectedLayerId === layer.id) row.setAttribute("aria-current", "true");
     row.style.paddingLeft = `${5 + layerDepth(layer, byId) * 12}px`;
     row.innerHTML = `
       <button class="visibility-button" type="button" aria-label="${layer.visible ? "Hide" : "Show"} ${escapeHtml(layer.name)}">${layer.visible ? "◉" : "○"}</button>
@@ -989,11 +996,13 @@ function renderLayers() {
       <button class="layer-copy layer-select-button" type="button"><span class="layer-name"></span><span class="layer-kind"></span></button>
       <button class="reorder-button" type="button" aria-label="Move layer up" ${index === 0 ? "disabled" : ""}>↑</button>
       <button class="reorder-button" type="button" aria-label="Move layer down" ${index === layers.length - 1 ? "disabled" : ""}>↓</button>`;
-    row.querySelector(".layer-name").textContent = layer.name || t("Unnamed layer");
+    if (layer.name) row.querySelector(".layer-name").textContent = layer.name;
+    else localizer.setText(row.querySelector(".layer-name"), "Unnamed layer");
     row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}${layer.adjustment ? ` · ${adjustmentName(layer.adjustment.kind)}` : ""}${layer.smartObject ? ` · ${layer.smartObject.filename}` : ""}`;
     const selectButton = row.querySelector(".layer-select-button");
-    selectButton.tabIndex = selectedLayerId === layer.id ? 0 : -1;
-    selectButton.setAttribute("aria-label", t(`Select ${layer.name || "unnamed layer"}`));
+    selectButton.tabIndex = rovingLayerId === layer.id ? 0 : -1;
+    selectButton.setAttribute("aria-pressed", String(selectedLayerIds.has(layer.id)));
+    localizer.setAttribute(selectButton, "aria-label", `Select ${layer.name || "unnamed layer"}`);
     row.querySelector(".layer-select-button").addEventListener("click", (event) => {
       selectLayerFromEvent(layer, event, layers);
       renderLayers();
@@ -1048,11 +1057,11 @@ function renderLayers() {
     loadLayerThumbnail(thumbnail, layer, key, snapshot.stateId, snapshot.revision);
   }
   const bottomSpacer = document.createElement("div");
-  bottomSpacer.className = "layer-spacer";
+  bottomSpacer.className = "layer-spacer"; bottomSpacer.setAttribute("aria-hidden", "true");
   bottomSpacer.style.height = `${Math.max(0, layers.length - last) * LAYER_ROW_HEIGHT}px`;
   list.append(bottomSpacer);
   localizer.localize(list);
-  if (restoreFocus) list.querySelector('.layer-row[aria-selected="true"] .layer-select-button')?.focus({ preventScroll: true });
+  if (restoreFocus) list.querySelector('.layer-select-button[tabindex="0"]')?.focus({ preventScroll: true });
 }
 
 function renderLayerProperties() {
@@ -1283,11 +1292,14 @@ function renderMetadata() {
 }
 
 function renderDocumentTabs() {
-  const tabs = $("documentTabs"); tabs.replaceChildren();
+  const tabs = $("documentTabs");
+  const restoreFocus = tabs.contains(document.activeElement);
+  tabs.replaceChildren();
   const documents = snapshot?.documents || [];
   tabs.hidden = documents.length === 0;
   for (const documentTab of documents) {
     const item = document.createElement("span"); item.className = "document-tab";
+    item.setAttribute("role", "presentation");
     item.dataset.active = String(documentTab.active);
     item.addEventListener("dragover", (event) => {
       if (!draggedLayer) return;
@@ -1304,16 +1316,19 @@ function renderDocumentTabs() {
     });
     const activate = document.createElement("button"); activate.type = "button";
     activate.setAttribute("role", "tab"); activate.setAttribute("aria-selected", String(documentTab.active));
+    activate.setAttribute("aria-keyshortcuts", "Delete");
     activate.tabIndex = documentTab.active ? 0 : -1;
     activate.title = documentTab.name;
     activate.textContent = `${documentTab.dirty ? "• " : ""}${documentTab.name}`;
     activate.addEventListener("click", () => activateDocumentTab(documentTab.id));
     const close = document.createElement("button"); close.type = "button";
-    close.setAttribute("aria-label", t(`Close ${documentTab.name}`)); close.textContent = "×";
+    close.tabIndex = -1; close.setAttribute("aria-hidden", "true");
+    localizer.setAttribute(close, "aria-label", `Close ${documentTab.name}`); close.textContent = "×";
     close.addEventListener("click", () => closeDocumentTab(documentTab));
     item.append(activate, close); tabs.append(item);
   }
   localizer.localize(tabs);
+  if (restoreFocus) tabs.querySelector('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
 }
 
 async function renderDocument() {
@@ -1862,13 +1877,19 @@ async function mutate(title, operation) {
 async function navigateHistory(steps) {
   if (busy || !snapshot || !Number.isSafeInteger(steps) || steps === 0) return;
   const before = snapshot;
+  const restoreHistoryFocus = $("historyList").contains(document.activeElement);
   clearError(); setBusy(true, "Navigating history", `Moving ${Math.abs(steps)} state${Math.abs(steps) === 1 ? "" : "s"}`);
   try {
     const next = await client.historyTravel(steps, before.stateId, before.revision);
     recordHistoryTravel(before, next, steps);
     await acceptSnapshot(next); scheduleCheckpoint(next);
   } catch (error) { showError("History navigation failed", error); }
-  finally { setBusy(false); }
+  finally {
+    setBusy(false);
+    if (restoreHistoryFocus) {
+      $("historyList").querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+    }
+  }
 }
 
 async function openFile(file) {
@@ -3824,8 +3845,13 @@ $("historyList").addEventListener("keydown", (event) => {
 });
 
 $("documentTabs").addEventListener("keydown", (event) => {
-  if (!event.target.matches?.('[role="tab"]') ||
-      !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  if (!event.target.matches?.('[role="tab"]')) return;
+  if (event.key === "Delete") {
+    event.preventDefault();
+    event.target.closest(".document-tab")?.querySelector('button[aria-hidden="true"]')?.click();
+    return;
+  }
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   const tabs = [...$("documentTabs").querySelectorAll('[role="tab"]')];
   const current = tabs.indexOf(event.target);
   if (current < 0 || !tabs.length) return;

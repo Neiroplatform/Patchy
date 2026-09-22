@@ -222,6 +222,294 @@ const RU = new Map(Object.entries({
   "Shape": "Фигура",
   "Smart object": "Смарт-объект",
   "Importing pixels": "Импорт пикселей",
+  "90° left": "90° влево",
+  "90° right": "90° вправо",
+  "ADJUSTMENT": "КОРРЕКЦИЯ",
+  "Add Noise": "Добавить шум",
+  "Adjustment layer": "Корректирующий слой",
+  "Adjustment layers remain editable and are preserved through PSD save/reopen.": "Корректирующие слои остаются редактируемыми и сохраняются при записи и повторном открытии PSD.",
+  "Align": "Выравнивание",
+  "Allow expansion outside canvas": "Разрешить расширение за границы холста",
+  "Amount": "Величина",
+  "Anchor": "Опора",
+  "Angle": "Угол",
+  "Angle°": "Угол°",
+  "Apply adjustment": "Применить коррекцию",
+  "Apply commits all seven editable families as one undo step. Additional imported instances and Bevel, Gradient and Pattern effects remain intact.": "Все семь семейств эффектов применяются за один шаг отмены. Дополнительные эффекты тиснения, градиента и узора сохраняются.",
+  "Apply effects": "Применить эффекты",
+  "Apply filter": "Применить фильтр",
+  "Apply paragraph to all": "Абзац ко всему тексту",
+  "Apply paragraph to selection": "Абзац к выделению",
+  "Apply style to all": "Стиль ко всему тексту",
+  "Apply style to selection": "Стиль к выделению",
+  "Apply transform": "Применить трансформацию",
+  "Apply warp": "Применить деформацию",
+  "Arc": "Дуга",
+  "Arc lower": "Нижняя дуга",
+  "Arc upper": "Верхняя дуга",
+  "Arch": "Арка",
+  "Auto leading %": "Автоинтерлиньяж %",
+  "BL X": "Лев. ниж. X",
+  "BL Y": "Лев. ниж. Y",
+  "BR X": "Прав. ниж. X",
+  "BR Y": "Прав. ниж. Y",
+  "Background": "Фон",
+  "Bend %": "Изгиб %",
+  "Blend": "Наложение",
+  "Bold": "Жирный",
+  "Bottom": "Снизу",
+  "Bottom left": "Снизу слева",
+  "Bottom right": "Снизу справа",
+  "Box Blur": "Блочное размытие",
+  "Brightness / Contrast": "Яркость / Контраст",
+  "Bulge": "Выпуклость",
+  "Canvas operations": "Операции с холстом",
+  "Canvas size": "Размер холста",
+  "Center": "Центр",
+  "Checker": "Шахматный",
+  "Checking origin-private storage…": "Проверка локального хранилища…",
+  "Choke %": "Сжатие %",
+  "Clean older workspaces": "Очистить старые рабочие области",
+  "Clockwise degrees": "Градусы по часовой стрелке",
+  "Color Balance": "Цветовой баланс",
+  "Color Overlay": "Наложение цвета",
+  "Common effects": "Общие эффекты",
+  "Constrain proportions": "Сохранять пропорции",
+  "Content": "Содержимое",
+  "Contrast": "Контраст",
+  "Corner handles and preview use the same engine homography that is committed to PSD state. Editable text remains affine.": "Угловые маркеры и предпросмотр используют ту же гомографию движка, которая записывается в PSD. Текст остаётся аффинным.",
+  "Could not open document": "Не удалось открыть документ",
+  "Create shape": "Создать фигуру",
+  "Create text": "Создать текст",
+  "Create text layer": "Создать текстовый слой",
+  "Create vector shape": "Создать векторную фигуру",
+  "Crop": "Кадрировать",
+  "Curves": "Кривые",
+  "Custom gradient": "Свой градиент",
+  "Custom pattern": "Свой узор",
+  "Distance": "Расстояние",
+  "Dots": "Точки",
+  "Drop Shadow": "Тень",
+  "Edit Smart Filter": "Изменить смарт-фильтр",
+  "Effects visible": "Эффекты видимы",
+  "Ellipse": "Эллипс",
+  "Enable Color Overlay": "Включить наложение цвета",
+  "Enable Drop Shadow": "Включить тень",
+  "Enable Inner Glow": "Включить внутреннее свечение",
+  "Enable Inner Shadow": "Включить внутреннюю тень",
+  "Enable Outer Glow": "Включить внешнее свечение",
+  "Enable Satin": "Включить глянец",
+  "Enable Stroke": "Включить обводку",
+  "End": "Конец",
+  "End indent": "Конечный отступ",
+  "Engine preview is live. Cancel leaves the document and history unchanged.": "Предпросмотр движка активен. Отмена не изменит документ и историю.",
+  "Extension color": "Цвет расширения",
+  "Family name": "Имя семейства",
+  "Feather": "Растушёвка",
+  "Filter": "Фильтр",
+  "First indent": "Отступ первой строки",
+  "Fish": "Рыба",
+  "Fisheye": "Рыбий глаз",
+  "Flag": "Флаг",
+  "Flip horizontal": "Отразить по горизонтали",
+  "Flip vertical": "Отразить по вертикали",
+  "Font": "Шрифт",
+  "Font file": "Файл шрифта",
+  "Font files are capped at 16 MiB, validated by the browser font parser and kept only in origin-private storage.": "Файлы шрифтов ограничены 16 MiB, проверяются парсером браузера и хранятся только в локальном хранилище.",
+  "Foreground": "Передний план",
+  "Four-corner perspective": "Перспектива по четырём углам",
+  "Free transform": "Свободная трансформация",
+  "Gaussian Blur": "Размытие по Гауссу",
+  "Grayscale": "Градации серого",
+  "H scale %": "Масштаб по горизонтали %",
+  "Height": "Высота",
+  "Hexagon": "Шестиугольник",
+  "High Pass": "Цветовой контраст",
+  "Horizontal %": "По горизонтали %",
+  "Hue / Saturation": "Цветовой тон / Насыщенность",
+  "Image size": "Размер изображения",
+  "Import image pixels": "Имортировать пиксели изображения",
+  "Inflate": "Надуть",
+  "Inner Glow": "Внутреннее свечение",
+  "Inner Shadow": "Внутренняя тень",
+  "Inside": "Внутри",
+  "Install font": "Установить шрифт",
+  "Installed assets": "Установленные ассеты",
+  "Invert": "Инверсия",
+  "Italic": "Курсив",
+  "Justify": "По ширине",
+  "Kind": "Тип",
+  "LAYER": "СЛОЙ",
+  "LAYER STYLE": "СТИЛЬ СЛОЯ",
+  "LOCAL ASSETS": "ЛОКАЛЬНЫЕ АССЕТЫ",
+  "LOCAL RECOVERY": "ЛОКАЛЬНОЕ ВОССТАНОВЛЕНИЕ",
+  "Layer knocks out": "Слой выбивает",
+  "Layer mask hides effects": "Маска слоя скрывает эффекты",
+  "Leading": "Интерлиньяж",
+  "Left": "Слева",
+  "Levels": "Уровни",
+  "Local font": "Локальный шрифт",
+  "Median": "Медиана",
+  "Mode": "Режим",
+  "Mosaic": "Мозаика",
+  "Opacity %": "Непрозрачность %",
+  "Open PSD or PSB": "Открыть PSD или PSB",
+  "Outer Glow": "Внешнее свечение",
+  "Outside": "Снаружи",
+  "Overprint": "Наложение краски",
+  "PIXEL FILTER": "ПИКСЕЛЬНЫЙ ФИЛЬТР",
+  "Paragraph": "Абзац",
+  "Patchy Local Editor": "Локальный редактор Patchy",
+  "Pixel Mosaic": "Пиксельная мозаика",
+  "Position": "Положение",
+  "Posterize": "Постеризация",
+  "Precise": "Точная",
+  "Presets, patterns & fonts": "Пресеты, узоры и шрифты",
+  "Preview and final pixels use the same bounded engine warp. Smart Objects retain editable preset metadata.": "Предпросмотр и итоговые пиксели используют одну ограниченную деформацию движка. Смарт-объекты сохраняют редактируемые метаданные пресета.",
+  "Range %": "Диапазон %",
+  "Recover workspaces": "Восстановить рабочие области",
+  "Rectangle": "Прямоугольник",
+  "Reset ranges": "Сбросить диапазоны",
+  "Resize canvas": "Изменить холст",
+  "Right": "Справа",
+  "Rise": "Подъём",
+  "Rotate": "Поворот",
+  "SELECTION": "ВЫДЕЛЕНИЕ",
+  "SHAPE": "ФИГУРА",
+  "SMART FILTER": "СМАРТ-ФИЛЬТР",
+  "SVG (flattened)": "SVG (сведённый)",
+  "Satin": "Глянец",
+  "Save gradient": "Сохранить градиент",
+  "Save pattern": "Сохранить узор",
+  "Scale / rotate / flip": "Масштаб / поворот / отражение",
+  "Scale image": "Масштабировать изображение",
+  "Sepia": "Сепия",
+  "Sharpen": "Резкость",
+  "Shell lower": "Нижняя ракушка",
+  "Shell upper": "Верхняя ракушка",
+  "Shift Edge": "Сместить край",
+  "Smooth": "Сглаживание",
+  "Softer": "Мягкая",
+  "Source": "Источник",
+  "Space after": "Интервал после",
+  "Space before": "Интервал перед",
+  "Spread %": "Размах %",
+  "Squeeze": "Сжатие",
+  "Start": "Начало",
+  "Start indent": "Начальный отступ",
+  "Storage estimate unavailable": "Оценка хранилища недоступна",
+  "Straighten angle": "Угол выравнивания",
+  "Stroke": "Обводка",
+  "Stroke width": "Ширина обводки",
+  "Style": "Стиль",
+  "TEXT": "ТЕКСТ",
+  "TL X": "Лев. верх. X",
+  "TL Y": "Лев. верх. Y",
+  "TR X": "Прав. верх. X",
+  "TR Y": "Прав. верх. Y",
+  "Technique": "Метод",
+  "The current selection limits the filter. Apply is one cancellable undo step.": "Текущее выделение ограничивает фильтр. Применение создаёт один отменяемый шаг.",
+  "Threshold": "Порог",
+  "Top": "Сверху",
+  "Top left": "Сверху слева",
+  "Top right": "Сверху справа",
+  "Tracking": "Трекинг",
+  "Transparent extension": "Прозрачное расширение",
+  "Twist": "Скручивание",
+  "Unsharp Mask": "Контурная резкость",
+  "Untitled": "Без названия",
+  "Use selection": "Из выделения",
+  "V scale %": "Масштаб по вертикали %",
+  "Vertical": "Вертикально",
+  "Vertical %": "По вертикали %",
+  "Wave": "Волна",
+  "Width": "Ширина",
+  "Remove": "Удалить",
+  "No local assets yet.": "Локальных ассетов пока нет.",
+  "Filtering selected layer locally": "Локальная фильтрация выбранного слоя",
+  "Filter cancelled": "Фильтр отменён",
+  "Could not apply filter": "Не удалось применить фильтр",
+  "Origin-private storage is unavailable in this browser context.": "Локальное хранилище недоступно в этом контексте браузера.",
+  "Recovery snapshots cannot be stored here.": "Здесь нельзя хранить снимки восстановления.",
+  "Use a secure origin with persistent browser storage enabled.": "Используйте защищённый origin с включённым постоянным хранилищем браузера.",
+  "No recoverable workspaces are stored on this device yet.": "На этом устройстве пока нет рабочих областей для восстановления.",
+  "Completed checkpoints will appear here.": "Здесь появятся завершённые контрольные снимки.",
+  "Recover": "Восстановить",
+  "The browser did not report a storage quota.": "Браузер не сообщил квоту хранилища.",
+  "Recovery storage could not be read.": "Не удалось прочитать хранилище восстановления.",
+  "No older recovery workspaces are outside the keep-newest boundary.": "Нет старых рабочих областей за пределами сохраняемых новейших.",
+  "Use bounded values and change at least one refinement setting.": "Используйте допустимые значения и измените хотя бы один параметр уточнения.",
+  "Choose a non-group target layer.": "Выберите целевой слой, не являющийся группой.",
+  "Rendering engine preview…": "Отрисовка предпросмотра движка…",
+  "Cancelling at the next safe filter checkpoint…": "Отмена на ближайшей безопасной контрольной точке фильтра…",
+  "Group": "Группа",
+  "Text": "Текст",
+  "Mask": "Маска",
+  "Mask off": "Маска выключена",
+  "Working": "Выполнение",
+  "Closing document": "Закрытие документа",
+  "Committing one canonical engine revision": "Запись одной канонической ревизии движка",
+  "Copying editable layer": "Копирование редактируемого слоя",
+  "Creating document": "Создание документа",
+  "Exporting document": "Экспорт документа",
+  "Navigating history": "Переход по истории",
+  "Opening Smart Object contents": "Открытие содержимого Smart Object",
+  "Placing Smart Object": "Помещение Smart Object",
+  "Recovering document": "Восстановление документа",
+  "Restarting editor engine": "Перезапуск движка редактора",
+  "Switching document": "Переключение документа",
+  "Could not apply adjustment": "Не удалось применить коррекцию",
+  "Could not apply memory budget": "Не удалось применить лимит памяти",
+  "Could not apply paragraph range": "Не удалось применить абзац к диапазону",
+  "Could not apply paragraph style": "Не удалось применить стиль абзаца",
+  "Could not apply text range": "Не удалось применить диапазон текста",
+  "Could not apply text style": "Не удалось применить стиль текста",
+  "Could not clean recovery workspaces": "Не удалось очистить рабочие области восстановления",
+  "Could not close document": "Не удалось закрыть документ",
+  "Could not copy editable layers": "Не удалось скопировать редактируемые слои",
+  "Could not copy pixels": "Не удалось скопировать пиксели",
+  "Could not create document": "Не удалось создать документ",
+  "Could not delete local recovery": "Не удалось удалить локальное восстановление",
+  "Could not encode layered document": "Не удалось записать слоёный документ",
+  "Could not export document": "Не удалось экспортировать документ",
+  "Could not import pixels": "Не удалось импортировать пиксели",
+  "Could not install font": "Не удалось установить шрифт",
+  "Could not open Smart Object contents": "Не удалось открыть содержимое Smart Object",
+  "Could not paste pixels": "Не удалось вставить пиксели",
+  "Could not place Smart Object": "Не удалось поместить Smart Object",
+  "Could not prepare text": "Не удалось подготовить текст",
+  "Could not recover workspace": "Не удалось восстановить рабочую область",
+  "Could not remove local asset": "Не удалось удалить локальный ассет",
+  "Could not reset text ranges": "Не удалось сбросить диапазоны текста",
+  "Could not restart editor engine": "Не удалось перезапустить движок редактора",
+  "Could not save gradient": "Не удалось сохранить градиент",
+  "Could not save local preferences": "Не удалось сохранить локальные настройки",
+  "Could not save pattern": "Не удалось сохранить узор",
+  "Could not start engine": "Не удалось запустить движок",
+  "Could not switch document": "Не удалось переключить документ",
+  "Editor restarted with partial recovery": "Редактор перезапущен с частичным восстановлением",
+  "History navigation failed": "Не удалось перейти по истории",
+  "Local recovery checkpoint failed": "Ошибка локального снимка восстановления",
+  "Raster preview failed": "Ошибка растрового предпросмотра",
+  "Raster stroke cancelled": "Растровый штрих отменён",
+  "Set a source first": "Сначала задайте источник",
+  "Transform preview failed": "Ошибка предпросмотра трансформации",
+  "Unsupported drop": "Неподдерживаемый файл",
+  "Activating its canonical Worker session": "Активация канонической Worker-сессии",
+  "Clone source set": "Источник клонирования задан",
+  "Creating a linked canonical Worker session": "Создание связанной канонической Worker-сессии",
+  "Decoding the image outside canonical document state": "Декодирование изображения вне канонического состояния",
+  "Embedding source bytes and raster preview": "Встраивание исходных байтов и растрового предпросмотра",
+  "Encoding the rendered composite locally": "Локальное кодирование отрисованного композита",
+  "Pixels copied locally": "Пиксели скопированы локально",
+  "Preparing a 1600 × 1000 RGBA workspace": "Подготовка рабочей области RGBA 1600 × 1000",
+  "Releasing its canonical Worker session": "Освобождение канонической Worker-сессии",
+  "Restoring confirmed local workspaces": "Восстановление подтверждённых локальных рабочих областей",
+  "Transferring bytes to the isolated Worker": "Передача байтов изолированному Worker",
+  "Trimming retained history if necessary": "Сокращение сохранённой истории при необходимости",
+  "Validating and opening its latest complete local snapshot": "Проверка и открытие последнего полного локального снимка",
+  "Worker crashed": "Worker аварийно завершился",
+  "Worker crashed · recovering": "Worker аварийно завершился · восстановление",
 }));
 
 const excluded = ".layer-name, #documentName, .document-tab, .recovery-copy strong, .text-run-list code";
@@ -241,6 +529,11 @@ export function translateMessage(value, locale = "en") {
     [/^Show (.+)$/, "Показать $1"],
     [/^Revision (\d+)$/, "Ревизия $1"],
     [/^Live engine preview · (.+)$/, "Живое превью движка · $1"],
+    [/^Filtering selected layer · (\d+)%$/, "Фильтрация выбранного слоя · $1%"],
+    [/^Applying (.+)$/, "Применение: $1"],
+    [/^gradient · (.+)$/, "градиент · $1"],
+    [/^pattern · (.+)$/, "узор · $1"],
+    [/^font · (.+)$/, "шрифт · $1"],
     [/^Recovered (\d+) workspace(s?)$/, "Восстановлено рабочих областей: $1"],
     [/^(\d+) recoverable workspaces on this device\.$/, "Рабочих областей для восстановления: $1."],
     [/^(.+) used of approximately (.+) browser storage\.$/, "Использовано $1 из примерно $2 хранилища браузера."],
@@ -248,7 +541,15 @@ export function translateMessage(value, locale = "en") {
   for (const [pattern, replacement] of rules) {
     if (pattern.test(source)) return source.replace(pattern, replacement);
   }
+  if (source.includes(" · ")) {
+    return source.split(" · ").map((part) => translateMessage(part, locale)).join(" · ");
+  }
   return source;
+}
+
+export function chooseRovingLayerId(visibleLayers, selectedId) {
+  if (!visibleLayers.length) return null;
+  return visibleLayers.some((layer) => layer.id === selectedId) ? selectedId : visibleLayers[0].id;
 }
 
 export function createLocalizer(document, initialLocale = "en") {
@@ -270,6 +571,13 @@ export function createLocalizer(document, initialLocale = "en") {
     textState.set(node, { source, rendered });
     if (current !== rendered) node.nodeValue = rendered;
   };
+  const setText = (element, value) => {
+    const source = String(value ?? "");
+    const rendered = translateMessage(source, locale);
+    element.textContent = rendered;
+    const node = element.firstChild;
+    if (node) textState.set(node, { source, rendered });
+  };
   const localizeAttributes = (element) => {
     if (element.closest?.(excluded)) return;
     let states = attributeState.get(element);
@@ -283,6 +591,14 @@ export function createLocalizer(document, initialLocale = "en") {
       states.set(name, { source, rendered });
       if (current !== rendered) element.setAttribute(name, rendered);
     }
+  };
+  const setAttribute = (element, name, value) => {
+    const source = String(value ?? "");
+    const rendered = translateMessage(source, locale);
+    let states = attributeState.get(element);
+    if (!states) { states = new Map(); attributeState.set(element, states); }
+    states.set(name, { source, rendered });
+    element.setAttribute(name, rendered);
   };
   const localize = (root = document) => {
     if (root.nodeType === NodeType.TEXT_NODE) localizeText(root);
@@ -312,7 +628,8 @@ export function createLocalizer(document, initialLocale = "en") {
   }) : null;
   observer?.observe(document.documentElement, { subtree: true, childList: true, characterData: true,
     attributes: true, attributeFilter: ["aria-label", "title", "placeholder"] });
-  return { localize, setLocale, disconnect: () => observer?.disconnect(), get locale() { return locale; },
+  return { localize, setLocale, setText, setAttribute,
+    disconnect: () => observer?.disconnect(), get locale() { return locale; },
     text: (value) => translateMessage(value, locale) };
 }
 
@@ -351,6 +668,24 @@ export function installDialogFocusReturn(document) {
     if (!event.target.closest?.("dialog")) lastExternalFocus = event.target;
   });
   for (const dialog of document.querySelectorAll("dialog")) {
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dialog.close("cancel");
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = [...dialog.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+        .filter((item) => !item.hidden && item.getClientRects().length);
+      if (!focusable.length) { event.preventDefault(); dialog.focus(); return; }
+      const first = focusable[0]; const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus();
+      }
+    });
     dialog.addEventListener("close", () => {
       if (lastExternalFocus?.isConnected && !lastExternalFocus.disabled) {
         queueMicrotask(() => lastExternalFocus.focus({ preventScroll: true }));

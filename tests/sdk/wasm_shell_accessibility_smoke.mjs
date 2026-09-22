@@ -69,7 +69,7 @@ try {
   await importSvg("one.svg", "#4b91e2");
   await importSvg("two.svg", "#df6e46");
 
-  const selected = byId("layerList").querySelector('.layer-row[aria-selected="true"] .layer-select-button');
+  const selected = byId("layerList").querySelector('.layer-row[data-active="true"] .layer-select-button');
   selected.focus(); const beforeLayer = selected.closest(".layer-row").dataset.layerId;
   const layerRows = [...byId("layerList").querySelectorAll(".layer-row")];
   const layerKey = selected.closest(".layer-row") === layerRows.at(-1) ? "ArrowUp" : "ArrowDown";
@@ -77,7 +77,7 @@ try {
     key: layerKey, bubbles: true, cancelable: true,
   }));
   await delay();
-  const afterLayer = byId("layerList").querySelector('.layer-row[aria-selected="true"]')?.dataset.layerId;
+  const afterLayer = byId("layerList").querySelector('.layer-row[data-active="true"]')?.dataset.layerId;
   const focusedLayer = doc.activeElement?.closest?.(".layer-row")?.dataset.layerId;
   check(afterLayer && afterLayer !== beforeLayer && focusedLayer === afterLayer,
     `virtualized Layers ArrowDown did not retain focus on the new selection (${beforeLayer} -> ${afterLayer || "none"}, focus=${focusedLayer || "none"})`);
@@ -89,6 +89,10 @@ try {
   }));
   check(doc.activeElement?.classList.contains("history-row") && doc.activeElement !== historyCurrent,
     "History ArrowUp did not move its roving focus");
+  doc.activeElement.click();
+  await waitFor(() => doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
+    doc.activeElement === byId("historyList").querySelector('[aria-selected="true"]'),
+  "History activation did not retain focus on the resulting current state");
 
   const revision = byId("detailRevision").textContent;
   byId("layerNameInput").focus();
@@ -112,16 +116,77 @@ try {
   await delay();
   check(doc.activeElement === byId("assetsButton"), "dialog close did not return focus to its invoker");
 
+  const transformRevision = byId("detailRevision").textContent;
+  byId("layerTransformButton").focus(); byId("layerTransformButton").click();
+  await waitFor(() => byId("layerTransformDialog").open, "Transform dialog did not open");
+  const dialogControls = [...byId("layerTransformDialog").querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled)")]
+    .filter((item) => item.getClientRects().length);
+  dialogControls[0].focus();
+  dialogControls[0].dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "Tab", shiftKey: true, bubbles: true, cancelable: true,
+  }));
+  check(doc.activeElement === dialogControls.at(-1), "dialog focus did not wrap from first to last control");
+  doc.activeElement.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "Escape", bubbles: true, cancelable: true,
+  }));
+  await waitFor(() => !byId("layerTransformDialog").open && doc.activeElement === byId("layerTransformButton"),
+    "Escape did not close dialog and return focus");
+  check(byId("detailRevision").textContent === transformRevision, "dialog Escape committed document state");
+
+  byId("newButton").click();
+  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length === 2 &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "second document tab was not created");
+  check(byId("documentTabs").querySelectorAll('[role="tab"][tabindex="0"]').length === 1,
+    "document tablist exposed more than one sequential tab stop");
+  check([...byId("documentTabs").querySelectorAll('.document-tab > button[aria-hidden="true"]')]
+    .every((button) => button.tabIndex === -1), "document close actions polluted tablist navigation");
+  const activeTab = byId("documentTabs").querySelector('[role="tab"][aria-selected="true"]');
+  activeTab.focus();
+  const priorTabIndex = [...byId("documentTabs").querySelectorAll('[role="tab"]')].indexOf(activeTab);
+  activeTab.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "ArrowLeft", bubbles: true, cancelable: true,
+  }));
+  await waitFor(() => {
+    const selectedTab = byId("documentTabs").querySelector('[role="tab"][aria-selected="true"]');
+    return doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
+      [...byId("documentTabs").querySelectorAll('[role="tab"]')].indexOf(selectedTab) !== priorTabIndex &&
+      doc.activeElement === selectedTab;
+  }, "document-tab activation did not retain focus on the newly active tab");
+
+  const unsupported = new frame.contentWindow.File(["x"], "unsupported.txt", { type: "text/plain" });
+  const unsupportedTransfer = new frame.contentWindow.DataTransfer(); unsupportedTransfer.items.add(unsupported);
+  frame.contentWindow.dispatchEvent(new frame.contentWindow.DragEvent("drop", {
+    dataTransfer: unsupportedTransfer, bubbles: true, cancelable: true,
+  }));
+  await waitFor(() => !byId("errorBanner").hidden && doc.activeElement === byId("dismissErrorButton"),
+    "error banner did not move focus to its dismiss action");
+  const dismissRect = byId("dismissErrorButton").getBoundingClientRect();
+  check(dismissRect.top >= 0 && dismissRect.bottom <= frame.contentWindow.innerHeight,
+    "focused error dismissal action was outside the viewport");
+  byId("dismissErrorButton").click();
+
   frame.style.width = "520px"; await delay(80);
   check(doc.documentElement.scrollWidth <= doc.documentElement.clientWidth,
     "narrow shell introduced document-level horizontal overflow");
   check(doc.querySelector(".inspector").getBoundingClientRect().width > 0,
     "narrow-width policy made document panels unreachable");
+  for (const id of ["brushSizeInput", "brushColorInput", "paintTargetSelect", "paintPresetSelect",
+    "selectionToleranceInput", "edgeContrastInput"]) {
+    check(byId(id).getClientRects().length, `narrow-width policy hid P0 tool control ${id}`);
+  }
   const hasReducedMotionRule = [...doc.styleSheets].some((sheet) => {
     try { return [...sheet.cssRules].some((rule) => rule.conditionText?.includes("prefers-reduced-motion")); }
     catch { return false; }
   });
   check(hasReducedMotionRule, "staged browser CSS omitted reduced-motion policy");
+  doc.documentElement.dataset.motion = "reduced";
+  check(frame.contentWindow.getComputedStyle(doc.querySelector(".spinner")).animationName === "none",
+    "reduced-motion activation left the progress animation running");
+  doc.documentElement.style.zoom = "2"; frame.style.width = "1040px"; await delay(80);
+  check(doc.documentElement.scrollWidth <= doc.documentElement.clientWidth,
+    "200% zoom introduced document-level horizontal overflow");
+  doc.documentElement.style.zoom = ""; frame.style.width = "520px";
 
   const unlabeled = [...doc.querySelectorAll("input, select, textarea")].filter((control) => {
     if (control.hidden || control.type === "hidden") return false;
@@ -153,7 +218,9 @@ try {
 
   byId("localeSelect").value = "en";
   byId("localeSelect").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
-  await delay(300);
+  await waitFor(() => doc.documentElement.lang === "en" && byId("newButton").textContent.trim() === "New" &&
+    !/[\u0400-\u04ff]/.test(byId("sessionIndicator").textContent),
+  "switching back to English did not restore canonical static and dynamic strings");
   body.dataset.result = "PASS"; body.dataset.p95 = p95.toFixed(2);
   body.textContent = `PASS locale=ru-persisted keyboard=toolbar,layers,history,dialog narrow=520 p95=${p95.toFixed(2)}ms`;
 } catch (error) {

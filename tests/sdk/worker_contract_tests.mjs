@@ -186,7 +186,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /navigator\.clipboard/);
   assert.match(script, /application\/x-patchy-layer/);
   assert.match(script, /draggable = true/);
-  assert.match(html, /aria-multiselectable="true"/);
+  assert.match(html, /id="layerList" role="list"/);
+  assert.match(script, /row\.setAttribute\("role", "listitem"\)/);
+  assert.match(script, /selectButton\.setAttribute\("aria-pressed"/);
   assert.match(script, /event\.shiftKey && layerSelectionAnchorId != null/);
   assert.match(script, /event\.metaKey \|\| event\.ctrlKey/);
   assert.match(script, /selectedLayerIdsTopToBottom\(\{ rootsOnly: true \}\)/);
