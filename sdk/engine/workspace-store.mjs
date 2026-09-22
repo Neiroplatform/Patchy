@@ -105,14 +105,15 @@ export class PatchyWorkspaceStore {
       throw new Error("Workspace snapshot size verification failed");
     }
     const digest = await sha256(storedBytes);
-    let storedSelection = null;
-    if (selectionState) {
+    let storedSelection = selectionState?.kind === "rects"
+      ? { kind: "rects", rects: selectionState.rects } : null;
+    if (selectionState?.kind === "mask") {
       await writeFile(workspace, selectionName, selectionState.gray);
       const gray = await readBytes(workspace, selectionName);
       if (gray.byteLength !== selectionState.gray.byteLength) {
         throw new Error("Workspace selection size verification failed");
       }
-      storedSelection = { bounds: selectionState.bounds, size: gray.byteLength,
+      storedSelection = { kind: "mask", bounds: selectionState.bounds, size: gray.byteLength,
         sha256: await sha256(gray) };
     }
     const manifest = {
@@ -284,7 +285,9 @@ export class PatchyWorkspaceStore {
         if (bytes.byteLength !== manifest.snapshotSize) continue;
         if (await sha256(bytes) !== manifest.snapshotSha256) continue;
         let selection = null;
-        if (manifest.selection) {
+        if (manifest.selection?.kind === "rects") {
+          selection = { rects: manifest.selection.rects.map((rect) => ({ ...rect })) };
+        } else if (manifest.selection) {
           const gray = await readBytes(workspace, SELECTION_FILES[slotIndex]);
           if (gray.byteLength !== manifest.selection.size) continue;
           if (await sha256(gray) !== manifest.selection.sha256) continue;
@@ -376,6 +379,11 @@ function validManifest(value, id) {
 }
 
 function validSelectionManifest(value) {
+  if (value?.kind === "rects") {
+    return Array.isArray(value.rects) && value.rects.length > 0 &&
+      value.rects.length <= 4096 && value.rects.every(validSelectionRect);
+  }
+  if (value?.kind !== undefined && value.kind !== "mask") return false;
   const bounds = value?.bounds;
   const area = bounds && bounds.width * bounds.height;
   return bounds && isInt32(bounds.x) && isInt32(bounds.y) &&
@@ -388,6 +396,15 @@ function validSelectionManifest(value) {
 
 function normalizeSelection(value) {
   if (value == null) return null;
+  if (Array.isArray(value.rects)) {
+    if (value.rects.length === 0) return null;
+    if (value.rects.length > 4096 || !value.rects.every(validSelectionRect)) {
+      throw new TypeError("Workspace selection rectangles are invalid");
+    }
+    return { kind: "rects", rects: value.rects.map((rect) => ({
+      x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+    })) };
+  }
   const bounds = value.bounds;
   const gray = value.gray;
   const area = bounds && bounds.width * bounds.height;
@@ -399,8 +416,19 @@ function normalizeSelection(value) {
       area !== gray.byteLength) {
     throw new TypeError("Workspace selection sidecar is invalid");
   }
-  return { bounds: { x: bounds.x, y: bounds.y,
+  return { kind: "mask", bounds: { x: bounds.x, y: bounds.y,
     width: bounds.width, height: bounds.height }, gray: gray.slice() };
+}
+
+function validSelectionRect(rect) {
+  if (!rect || !isInt32(rect.x) || !isInt32(rect.y) ||
+      !isInt32(rect.width) || rect.width <= 0 ||
+      !isInt32(rect.height) || rect.height <= 0) return false;
+  const right = rect.x + rect.width;
+  const bottom = rect.y + rect.height;
+  return Number.isSafeInteger(right) && Number.isSafeInteger(bottom) &&
+    right >= -0x80000000 && right <= 0x7fffffff &&
+    bottom >= -0x80000000 && bottom <= 0x7fffffff;
 }
 
 function isInt32(value) {

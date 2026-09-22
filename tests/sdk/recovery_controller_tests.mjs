@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { recoverWorkerSession } from "../../sdk/engine/recovery-controller.mjs";
+import { applyRecoveredSelection, recoverWorkerSession } from "../../sdk/engine/recovery-controller.mjs";
 
 function projection(documentId, name) {
   return { documentId, documentName: name, documents: [], layers: [], channels: [], paths: [] };
@@ -19,6 +19,10 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
       return { ...projection(nextId - 1, "active.psb"),
         selectionMask: { bounds, gray: gray.slice() } };
     },
+    async setSelection(rects) {
+      calls.push(["rect-selection", rects]);
+      return { ...projection(nextId - 1, "first.psd"), selection: rects };
+    },
     async activateDocument(id) { calls.push(["activate", id]); return projection(id, `active-${id}.psd`); },
   };
   const store = { async restore(id) {
@@ -27,7 +31,8 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
     return { manifest: { id, name: `${id}.psd`, revision: "9", format },
       bytes: new Uint8Array([56, 66, 80, 83, 0, format === "psb" ? 2 : 1, id.length]),
       selection: id === "active" ? { bounds: { x: 1, y: 2, width: 2, height: 1 },
-        gray: new Uint8Array([64, 255]) } : null };
+        gray: new Uint8Array([64, 255]) } : id === "first"
+        ? { rects: [{ x: 2, y: 3, width: 4, height: 5 }] } : null };
   } };
   const result = await recoverWorkerSession({ createClient: () => client,
     moduleUrl: "engine.mjs", workspaceStore: store, documents: [
@@ -45,12 +50,14 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
   assert.equal(result.restored[1].confirmedAtCrash, false);
   assert.equal(result.restored[1].format, "psb");
   assert.deepEqual(calls.map((item) => item[0]),
-    ["initialize", "open", "open", "selection", "open", "activate"]);
+    ["initialize", "open", "rect-selection", "open", "selection", "open", "activate"]);
   assert.ok(calls.filter((item) => item[0] === "open").every((item) => item[3] === true));
   assert.deepEqual(calls.find((item) => item[0] === "selection")?.slice(1),
     [{ x: 1, y: 2, width: 2, height: 1 }, [64, 255], true]);
   assert.deepEqual(result.restored[1].snapshot.selectionMask?.gray,
     new Uint8Array([64, 255]));
+  assert.deepEqual(result.restored[0].snapshot.selection,
+    [{ x: 2, y: 3, width: 4, height: 5 }]);
 });
 
 test("worker recovery terminates a replacement that cannot initialize", async () => {
@@ -60,4 +67,18 @@ test("worker recovery terminates a replacement that cannot initialize", async ()
   await assert.rejects(recoverWorkerSession({ createClient: () => client,
     moduleUrl: "engine.mjs", workspaceStore: {}, documents: [] }), /wasm failed/);
   assert.equal(terminated, 1);
+});
+
+test("hard multi-rectangle recovery materializes exact bounded binary coverage", async () => {
+  const calls = [];
+  const client = { async setSelectionMask(bounds, gray, options) {
+    calls.push([bounds, [...gray], options]); return { selection: true };
+  } };
+  const result = await applyRecoveredSelection(client, { rects: [
+    { x: 2, y: 3, width: 2, height: 2 },
+    { x: 5, y: 3, width: 1, height: 2 },
+  ] });
+  assert.deepEqual(result, { selection: true });
+  assert.deepEqual(calls, [[{ x: 2, y: 3, width: 4, height: 2 },
+    [255, 255, 0, 255, 255, 255, 0, 255], { transferOwnership: true }]]);
 });

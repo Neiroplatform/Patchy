@@ -25,10 +25,7 @@ export async function recoverWorkerSession({
       const recovery = await workspaceStore.restore(document.workspaceId);
       let next = await client.open(recovery.bytes, recovery.manifest.name,
         { transferOwnership: true });
-      if (recovery.selection) {
-        next = await client.setSelectionMask(recovery.selection.bounds,
-          recovery.selection.gray, { transferOwnership: true });
-      }
+      if (recovery.selection) next = await applyRecoveredSelection(client, recovery.selection);
       const item = {
         previousDocumentId: document.documentId,
         documentId: next.documentId,
@@ -56,4 +53,33 @@ export async function recoverWorkerSession({
     activeSnapshot = await client.activateDocument(activeDocumentId);
   }
   return { client, restored, failed, activeSnapshot };
+}
+
+export async function applyRecoveredSelection(client, selection) {
+  if (selection?.gray) {
+    return client.setSelectionMask(selection.bounds, selection.gray,
+      { transferOwnership: true });
+  }
+  const rects = selection?.rects;
+  if (!Array.isArray(rects) || rects.length === 0) return client.setSelection([]);
+  if (rects.length === 1) return client.setSelection(rects);
+  const left = Math.min(...rects.map((rect) => rect.x));
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
+  const width = right - left;
+  const height = bottom - top;
+  const area = width * height;
+  if (!Number.isSafeInteger(area) || area <= 0 || area > 16 * 1024 * 1024) {
+    throw new RangeError("Recovered hard selection exceeds the 16 MiB safety limit");
+  }
+  const gray = new Uint8Array(area);
+  for (const rect of rects) {
+    const startX = rect.x - left;
+    for (let y = rect.y - top; y < rect.y - top + rect.height; ++y) {
+      gray.fill(255, y * width + startX, y * width + startX + rect.width);
+    }
+  }
+  return client.setSelectionMask({ x: left, y: top, width, height }, gray,
+    { transferOwnership: true });
 }

@@ -187,6 +187,25 @@ void selection_refinement_outputs_one_roundtripping_layer_mask() {
   CHECK(mask.has_mask == 0);
   CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
 
+  const auto linked_mask = project_document(session, &error);
+  CHECK(patchy_engine_session_set_layer_mask_linked(
+            session, linked_mask.state_id, linked_mask.revision,
+            target_layer_id, 0, &event, &error) == 1);
+  const auto unlinked_mask = project_document(session, &error);
+  auto updated = input;
+  updated.expected_state_id = unlinked_mask.state_id;
+  updated.expected_revision = unlinked_mask.revision;
+  updated.shift_edge = 4;
+  CHECK(patchy_engine_session_apply_selection_refinement(
+            session, &updated, &event, &error) == 1);
+  mask = {};
+  mask.struct_size = sizeof(mask);
+  CHECK(patchy_engine_session_layer_mask(
+            session, target_layer_id, &mask, &error) == 1);
+  CHECK(mask.has_mask == 1);
+  CHECK(mask.linked == 0);
+  bounds = mask.bounds;
+
   for (const auto large_document : {false, true}) {
     patchy_engine_buffer saved{};
     CHECK(patchy_engine_session_save_psd_as(

@@ -1,5 +1,5 @@
 import { PatchyWorkerClient } from "./engine/client.mjs";
-import { recoverWorkerSession } from "./engine/recovery-controller.mjs";
+import { applyRecoveredSelection, recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   documentPreflight, geometryMutationPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
@@ -722,7 +722,8 @@ function scheduleCheckpoint(next) {
       write: (checkpoint, bytes) => workspaceStore.checkpoint({ id: workspaceId,
         name: checkpoint.documentName, revision: checkpoint.revision,
         dirty: checkpoint.dirty, format: checkpoint.format, bytes,
-        selection: checkpoint.selectionMask }),
+        selection: checkpoint.selectionMask ||
+          (checkpoint.selection?.length ? { rects: checkpoint.selection } : null) }),
       onState: (state, checkpoint, value) => {
         checkpointStates.set(next.documentId, state);
         if (state === "confirmed") {
@@ -776,10 +777,7 @@ async function restoreWorkspace(id) {
     const recovered = await workspaceStore.restore(id);
     let next = await client.open(recovered.bytes, recovered.manifest.name,
       { transferOwnership: true });
-    if (recovered.selection) {
-      next = await client.setSelectionMask(recovered.selection.bounds,
-        recovered.selection.gray, { transferOwnership: true });
-    }
+    if (recovered.selection) next = await applyRecoveredSelection(client, recovered.selection);
     workspaceIds.set(next.documentId, id);
     checkpointStates.set(next.documentId, "confirmed");
     documentSaveFormats.set(next.documentId, recovered.manifest.format || "psd");

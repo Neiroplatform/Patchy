@@ -142,6 +142,17 @@ test("workspace generations preserve a digest-bound canonical selection sidecar"
   await assert.rejects(store.checkpoint({ id: "bad-selection", name: "Bad.psd", revision: 1n,
     bytes: layeredBytes(1), selection: { bounds: { x: 0, y: 0, width: 2, height: 2 },
       gray: new Uint8Array(3) } }), /selection sidecar/);
+
+  const rects = [{ x: 4, y: 5, width: 8, height: 7 },
+    { x: 12, y: 10, width: 3, height: 2 }];
+  await store.checkpoint({ id: "hard-selected", name: "Hard.psd", revision: 5n,
+    bytes: layeredBytes(5), selection: { rects } });
+  const hard = await store.restore("hard-selected");
+  assert.deepEqual(hard.selection, { rects });
+  assert.equal(hard.manifest.selection.kind, "rects");
+  await assert.rejects(store.checkpoint({ id: "bad-rects", name: "Bad.psd", revision: 1n,
+    bytes: layeredBytes(1), selection: { rects: [{ x: 0x7fffffff, y: 0,
+      width: 2, height: 1 }] } }), /rectangles/);
 });
 
 test("PSB recovery format is bound to encoded bytes rather than the document suffix", async () => {
