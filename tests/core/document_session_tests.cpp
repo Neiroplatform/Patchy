@@ -4948,6 +4948,20 @@ void core_multi_layer_transform_preserves_forest_geometry_and_fails_closed() {
   CHECK(document.find_layer(first_id)->bounds().width ==
         first_before_rejection.width);
 
+  Document hostile_source(24, 12, PixelFormat::rgba8());
+  const auto hostile_source_id = hostile_source.allocate_layer_id();
+  PixelBuffer hostile_source_pixels(2, 2, PixelFormat::rgba8());
+  hostile_source_pixels.clear(71);
+  patchy::Layer hostile_source_layer(hostile_source_id, "Hostile source",
+                                     std::move(hostile_source_pixels));
+  hostile_source_layer.set_bounds({2147483646, 1, 2, 2});
+  hostile_source.add_layer(std::move(hostile_source_layer));
+  request.layer_ids = {hostile_source_id};
+  request.quad = {1.0, 1.0, 3.0, 1.0, 3.0, 3.0, 1.0, 3.0};
+  CHECK(!patchy::transform_layers(hostile_source, request, nullptr, &error));
+  CHECK(error.find("finite non-empty union bounds") != std::string::npos);
+  CHECK(hostile_source.find_layer(hostile_source_id)->bounds().x == 2147483646);
+
   Document unsupported(24, 12, PixelFormat::rgba8());
   const auto unsupported_group_id = unsupported.allocate_layer_id();
   const auto pixel_id = unsupported.allocate_layer_id();

@@ -300,6 +300,8 @@ std::optional<Rect> bounded_union(const std::vector<std::pair<LayerId, Rect>>& l
   const auto height = bottom - top;
   if (left < std::numeric_limits<std::int32_t>::min() ||
       top < std::numeric_limits<std::int32_t>::min() ||
+      right > std::numeric_limits<std::int32_t>::max() ||
+      bottom > std::numeric_limits<std::int32_t>::max() ||
       left > std::numeric_limits<std::int32_t>::max() ||
       top > std::numeric_limits<std::int32_t>::max() || width < 1 || height < 1 ||
       width > std::numeric_limits<std::int32_t>::max() ||
