@@ -4933,6 +4933,13 @@ void core_multi_layer_transform_preserves_forest_geometry_and_fails_closed() {
   CHECK(document.find_layer(first_id)->bounds().width ==
         first_before_rejection.width);
   request.layer_ids = {group_id};
+  request.quad = {-2147483640.0, 2.0, -2147483628.0, 2.0,
+                  -2147483628.0, 6.0, -2147483640.0, 6.0};
+  CHECK(!patchy::transform_layers(document, request, nullptr, &error));
+  CHECK(error.find("affected region") != std::string::npos);
+  CHECK(document.find_layer(first_id)->bounds().x == first_before_rejection.x);
+  CHECK(document.find_layer(first_id)->bounds().width ==
+        first_before_rejection.width);
   request.quad = {0.0, 0.0, 30000.0, 0.0,
                   30000.0, 8000.0, 0.0, 8000.0};
   CHECK(!patchy::transform_layers(document, request, nullptr, &error));

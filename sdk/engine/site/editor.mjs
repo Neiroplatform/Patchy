@@ -182,6 +182,7 @@ function transformSelection() {
       bounds.width <= 0 || bounds.height <= 0) return null;
   const primary = byId.get(layerIds[0]);
   return { layerIds, leaves, bounds, primary,
+    stateId: snapshot.stateId, revision: snapshot.revision,
     batch: layerIds.length > 1 || primary?.kind === 1,
     hasText: leaves.some((layer) => layer.kind === 3) };
 }
@@ -1530,8 +1531,9 @@ function scheduleTransformPreview(target, quad) {
   transformPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
   const generation = ++transformPreviewGeneration;
   transformPreviewPending = { layer, layerIds: target?.layerIds || [layer.id],
-    batch: Boolean(target?.batch), quad: [...quad], stateId: snapshot.stateId,
-    revision: snapshot.revision, generation,
+    batch: Boolean(target?.batch), quad: [...quad],
+    stateId: target?.stateId ?? snapshot.stateId,
+    revision: target?.revision ?? snapshot.revision, generation,
     cancellation: transformPreviewCancellation };
   drainTransformPreview();
 }
@@ -2683,7 +2685,8 @@ function updateTransformDialogPreview() {
 
 function commitLayerQuad(target, quad, title = "Transforming layer") {
   if (!snapshot) return;
-  const expectedStateId = snapshot.stateId; const expectedRevision = snapshot.revision;
+  const expectedStateId = target?.stateId ?? snapshot.stateId;
+  const expectedRevision = target?.revision ?? snapshot.revision;
   clearTransformPreview(true);
   const layer = target?.primary || target;
   return mutate(title, () => target?.batch

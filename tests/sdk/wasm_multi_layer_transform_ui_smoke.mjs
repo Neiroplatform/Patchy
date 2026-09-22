@@ -82,6 +82,27 @@ try {
     Number(byId("layerXInput").value) === 1 &&
     Number(byId("layerWidthInput").value) === 6,
   "Free Transform did not expose selected-set union bounds");
+  await delay(150);
+  failOnEditorError();
+  const staleDraftRevision = revision();
+  rowByName("Alpha").querySelector(".visibility-button").click();
+  await waitFor(() => idle() && revision() === staleDraftRevision + 1n,
+    "parallel layer edit did not advance the transform draft baseline");
+  check(byId("layerTransformDialog").open,
+    "non-modal Free Transform dialog closed during the parallel edit fixture");
+  byId("commitLayerTransformButton").click();
+  await waitFor(() => idle() && !byId("errorBanner").hidden,
+    "stale Free Transform draft did not fail closed");
+  check(revision() === staleDraftRevision + 1n &&
+    byId("errorMessage").textContent.toLowerCase().includes("stale"),
+  "stale Free Transform draft mutated the newer document state");
+  byId("dismissErrorButton").click();
+
+  clickLayer("Alpha");
+  clickLayer("Beta", { metaKey: true, ctrlKey: true });
+  byId("layerTransformButton").click();
+  await waitFor(() => byId("layerTransformDialog").open,
+    "fresh multi-layer Free Transform dialog did not reopen");
   byId("layerXInput").value = "2";
   byId("layerYInput").value = "2";
   byId("layerWidthInput").value = "12";

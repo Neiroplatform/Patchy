@@ -189,6 +189,32 @@ Rect unite(Rect first, Rect second) {
               static_cast<std::int32_t>(bottom - top)};
 }
 
+std::optional<Rect> bounded_unite(Rect first, Rect second) {
+  if (first.empty()) return second;
+  if (second.empty()) return first;
+  const auto left = std::min<std::int64_t>(first.x, second.x);
+  const auto top = std::min<std::int64_t>(first.y, second.y);
+  const auto right = std::max<std::int64_t>(
+      static_cast<std::int64_t>(first.x) + first.width,
+      static_cast<std::int64_t>(second.x) + second.width);
+  const auto bottom = std::max<std::int64_t>(
+      static_cast<std::int64_t>(first.y) + first.height,
+      static_cast<std::int64_t>(second.y) + second.height);
+  const auto width = right - left;
+  const auto height = bottom - top;
+  if (left < std::numeric_limits<std::int32_t>::min() ||
+      top < std::numeric_limits<std::int32_t>::min() ||
+      right > std::numeric_limits<std::int32_t>::max() ||
+      bottom > std::numeric_limits<std::int32_t>::max() || width < 1 ||
+      height < 1 || width > std::numeric_limits<std::int32_t>::max() ||
+      height > std::numeric_limits<std::int32_t>::max()) {
+    return std::nullopt;
+  }
+  return Rect{static_cast<std::int32_t>(left), static_cast<std::int32_t>(top),
+              static_cast<std::int32_t>(width),
+              static_cast<std::int32_t>(height)};
+}
+
 bool collect_transform_leaves(const Layer& layer,
                               std::vector<std::pair<LayerId, Rect>>& leaves,
                               std::vector<LayerId>& groups,
@@ -461,6 +487,13 @@ bool transform_layers(Document& document,
   }
 
   std::uint64_t aggregate_bytes = 0;
+  Rect affected{};
+  const auto include_affected = [&affected](Rect bounds) {
+    const auto combined = bounded_unite(affected, bounds);
+    if (!combined.has_value()) return false;
+    affected = *combined;
+    return true;
+  };
   std::vector<std::array<double, 8>> leaf_quads;
   leaf_quads.reserve(leaves.size());
   for (const auto& [id, bounds] : leaves) {
@@ -470,6 +503,9 @@ bool transform_layers(Document& document,
     const auto target_bounds = bounds_for_points(quad);
     if (!target_bounds.has_value()) {
       return fail(error, "multi-layer transform leaf exceeds the allocation budget");
+    }
+    if (!include_affected(bounds) || !include_affected(*target_bounds)) {
+      return fail(error, "multi-layer transform affected region exceeds int32 bounds");
     }
     if (!validate_transform_leaf(*layer, quad, error)) return false;
     const auto pixels = static_cast<std::uint64_t>(target_bounds->width) *
@@ -485,6 +521,10 @@ bool transform_layers(Document& document,
       if (!mask_bounds.has_value()) {
         return fail(error, "multi-layer transformed mask exceeds the allocation budget");
       }
+      if (!include_affected(layer->mask()->bounds) ||
+          !include_affected(*mask_bounds)) {
+        return fail(error, "multi-layer transform affected region exceeds int32 bounds");
+      }
       const auto mask_bytes = static_cast<std::uint64_t>(mask_bounds->width) *
                               static_cast<std::uint64_t>(mask_bounds->height);
       if (mask_bytes > kMaximumTransformBytes - aggregate_bytes) {
@@ -497,11 +537,18 @@ bool transform_layers(Document& document,
   for (const auto id : groups) {
     const auto* group = std::as_const(document).find_layer(id);
     if (group == nullptr) return fail(error, "transform group layer does not exist");
+    if (!group->bounds().empty() && !include_affected(group->bounds())) {
+      return fail(error, "multi-layer transform affected region exceeds int32 bounds");
+    }
     if (!group->mask().has_value()) continue;
     const auto mask_bounds = bounds_for_points(
         transformed_rect(group->mask()->bounds, *matrix));
     if (!mask_bounds.has_value()) {
       return fail(error, "multi-layer transformed group mask exceeds the allocation budget");
+    }
+    if (!include_affected(group->mask()->bounds) ||
+        !include_affected(*mask_bounds)) {
+      return fail(error, "multi-layer transform affected region exceeds int32 bounds");
     }
     const auto mask_bytes = static_cast<std::uint64_t>(mask_bounds->width) *
                             static_cast<std::uint64_t>(mask_bounds->height);
@@ -511,18 +558,15 @@ bool transform_layers(Document& document,
     aggregate_bytes += mask_bytes;
   }
 
-  Rect affected{};
   for (std::size_t index = 0; index < leaves.size(); ++index) {
     LayerTransformRequest leaf_request;
     leaf_request.quad = leaf_quads[index];
     leaf_request.interpolation = request.interpolation;
     leaf_request.continue_operation = request.continue_operation;
-    LayerTransformResult transformed;
     if (!transform_layer(document, leaves[index].first, leaf_request,
-                         &transformed, error)) {
+                         nullptr, error)) {
       return false;
     }
-    affected = unite(affected, transformed.affected_region);
   }
   // Children are transformed first. Refresh nested group geometry and masks
   // bottom-up so every parent observes the final child bounds.
@@ -538,10 +582,7 @@ bool transform_layers(Document& document,
     if (!transformed_group_bounds.has_value()) {
       return fail(error, "transformed group has invalid child bounds");
     }
-    const auto previous_group_bounds = group->bounds();
     group->set_bounds(*transformed_group_bounds);
-    affected = unite(affected, unite(previous_group_bounds,
-                                     *transformed_group_bounds));
     if (group->mask().has_value()) {
       const auto source_mask = *group->mask();
       const auto transformed_mask_bounds = bounds_for_points(
@@ -560,8 +601,6 @@ bool transform_layers(Document& document,
       mask.bounds = *transformed_mask_bounds;
       mask.pixels = std::move(*transformed_mask);
       group->set_mask(std::move(mask));
-      affected = unite(affected, unite(source_mask.bounds,
-                                       *transformed_mask_bounds));
     }
   }
   if (result != nullptr) {
