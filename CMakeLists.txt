@@ -581,6 +581,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/module-adapter.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/memory-policy.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/recovery-controller.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/support-diagnostics.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/workspace-store.mjs"
             "${PATCHY_WASM_SDK_SITE_DIR}/engine"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -599,6 +600,7 @@ if(PATCHY_BUILD_TESTS)
               "${PROJECT_SOURCE_DIR}/tests/sdk/worker_contract_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/recovery_controller_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/workspace_store_tests.mjs"
+              "${PROJECT_SOURCE_DIR}/tests/sdk/support_diagnostics_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/shell_ui_tests.mjs")
   endif()
 endif()

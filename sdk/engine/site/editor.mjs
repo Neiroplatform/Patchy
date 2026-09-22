@@ -2,6 +2,8 @@ import { PatchyWorkerClient } from "./engine/client.mjs";
 import { applyRecoveredSelection, checkpointSelection,
   recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
+import { BrowserDiagnosticRecorder, collectRuntimeProfile,
+  serializeDiagnosticBundle } from "./engine/support-diagnostics.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   documentPreflight, geometryMutationPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
@@ -13,6 +15,7 @@ import { chooseRovingLayerId, createLocalizer, installDialogFocusReturn, install
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
 const localizer = createLocalizer(document, document.documentElement.lang);
+const diagnostics = new BrowserDiagnosticRecorder({ runtime: collectRuntimeProfile(globalThis) });
 localizer.localize(document);
 installDialogFocusReturn(document);
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"));
@@ -106,9 +109,11 @@ const blendModes = new Set([0, 1, 2, 3, 4, 5, 6, 11, 27]);
 const commandRegistry = new Map();
 
 function createEngineClient() {
+  diagnostics.recordWorkerState("starting");
   const next = new PatchyWorkerClient(new Worker(
     new URL("./engine/worker.mjs", import.meta.url), { type: "module", name: "patchy-engine" }));
   next.addStateListener((state) => {
+    diagnostics.recordWorkerState(state);
     if (state === "crashed" && automaticRecoveryEnabled && client === next) {
       queueMicrotask(() => recoverEngineAfterCrash());
     }
@@ -123,7 +128,22 @@ function registerCommand(id, buttonId, run, enabled = () => true) {
 function executeCommand(id) {
   const command = commandRegistry.get(id);
   if (!command || !command.enabled()) return;
-  command.run();
+  const started = performance.now();
+  diagnostics.recordCommand(id, "started");
+  try {
+    const result = command.run();
+    Promise.resolve(result).then(
+      () => diagnostics.recordCommand(id, "succeeded", performance.now() - started),
+      (error) => {
+        diagnostics.recordCommand(id, "failed", performance.now() - started);
+        diagnostics.recordError(id, error);
+      });
+    return result;
+  } catch (error) {
+    diagnostics.recordCommand(id, "failed", performance.now() - started);
+    diagnostics.recordError(id, error);
+    throw error;
+  }
 }
 
 function syncCommands() {
@@ -519,6 +539,7 @@ async function applyPixelFilter(layer, filterId, parameters) {
 }
 
 function showError(title, error) {
+  diagnostics.recordError(client?.state === "crashed" ? "worker.crash" : "ui.error", error);
   const banner = $("errorBanner");
   if (!banner.contains(document.activeElement)) errorReturnFocus = document.activeElement;
   localizer.setText($("errorTitle"), title);
@@ -715,6 +736,7 @@ async function recoverEngineAfterCrash() {
     confirmed: checkpointStates.get(documentTab.id) === "confirmed",
   })).filter((documentTab) => documentTab.workspaceId);
   automaticRecoveryEnabled = false;
+  diagnostics.recordRecovery("started");
   recoveryPromise = (async () => {
     setBusy(true, "Restarting editor engine", "Restoring confirmed local workspaces");
     setSessionState("crashed", "Worker crashed · recovering");
@@ -736,6 +758,8 @@ async function recoverEngineAfterCrash() {
       await acceptSnapshot(result.activeSnapshot);
       automaticRecoveryEnabled = true;
       const reverted = result.restored.filter((item) => !item.confirmedAtCrash);
+      diagnostics.recordRecovery(result.failed.length || reverted.length ? "partial" : "succeeded", {
+        restored: result.restored.length, failed: result.failed.length, rolledBack: reverted.length });
       if (result.failed.length || reverted.length) {
         const names = result.failed.map((item) => item.workspaceId).join(", ");
         showError("Editor restarted with partial recovery",
@@ -745,6 +769,7 @@ async function recoverEngineAfterCrash() {
           result.restored.length ? `Recovered ${result.restored.length} workspace${result.restored.length === 1 ? "" : "s"}` : "Engine restarted");
       }
     } catch (error) {
+      diagnostics.recordRecovery("failed", { failed: Math.min(16, documents.length) });
       showError("Could not restart editor engine", error);
     } finally {
       setBusy(false);
@@ -1803,6 +1828,7 @@ function canvasPointUnclamped(event) {
 
 async function acceptSnapshot(next, rerender = true) {
   if (!next) {
+    diagnostics.setDocument(null);
     snapshot = null; clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     renderedDocument = null;
     $("emptyState").hidden = false; setSessionState("ready", "Engine ready");
@@ -1816,6 +1842,7 @@ async function acceptSnapshot(next, rerender = true) {
     documentSaveFormats.set(snapshot.documentId,
       documentName.toLowerCase().endsWith(".psb") ? "psb" : "psd");
   }
+  diagnostics.setDocument(snapshot, documentSaveFormats.get(snapshot.documentId) || "unknown");
   const liveLayerIds = new Set(snapshot.layers.map((layer) => layer.id));
   selectedLayerIds = new Set([...selectedLayerIds].filter((id) => liveLayerIds.has(id)));
   if (!selectedLayerIds.size) {
@@ -1877,14 +1904,21 @@ async function mutate(title, operation) {
   if (busy || !snapshot) return;
   clearError();
   setBusy(true, title, "Committing one canonical engine revision");
+  const started = performance.now();
+  diagnostics.recordCommand("document.mutate", "started");
   try {
     const before = snapshot;
     const next = await operation();
     recordHistoryMutation(before, next, title);
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
+    diagnostics.recordCommand("document.mutate", "succeeded", performance.now() - started);
   }
-  catch (error) { showError(`${title} failed`, error); }
+  catch (error) {
+    diagnostics.recordCommand("document.mutate", error?.code === 7 ? "cancelled" : "failed",
+      performance.now() - started);
+    showError(`${title} failed`, error);
+  }
   finally { setBusy(false); }
 }
 
@@ -1978,6 +2012,26 @@ function downloadBlob(blob, filename) {
   const anchor = document.createElement("a");
   anchor.href = url; anchor.download = filename; anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function openDiagnosticsDialog() {
+  const consent = $("diagnosticsConsentInput");
+  consent.checked = false;
+  $("downloadDiagnosticsButton").disabled = true;
+  $("diagnosticsSummary").textContent = snapshot
+    ? `${snapshot.width} × ${snapshot.height} · ${localizer.text(`${snapshot.layers.length} layers`)} · ${localizer.text(`Revision ${snapshot.revision}`)}`
+    : "No document is open";
+  $("diagnosticsDialog").showModal();
+}
+
+function downloadDiagnostics() {
+  if (!$("diagnosticsConsentInput").checked) return;
+  diagnostics.setDocument(snapshot, snapshot
+    ? documentSaveFormats.get(snapshot.documentId) || "unknown" : "unknown");
+  const text = serializeDiagnosticBundle(diagnostics.createBundle({
+    locale: localizer.locale, capabilities: client?.capabilities || 0n }));
+  downloadBlob(new Blob([text], { type: "application/json" }), "patchy-diagnostics.json");
+  $("diagnosticsDialog").close("exported");
 }
 
 function canvasBlob(source, type, quality) {
@@ -3136,6 +3190,7 @@ registerCommand("document.new", "newButton", newDocument, () => !busy);
 registerCommand("document.recovery", "recoveryButton", openRecoveryDialog, () => !busy);
 registerCommand("document.assets", "assetsButton", () => $("assetsDialog").showModal(),
   () => !busy && workspaceAvailable);
+registerCommand("support.diagnostics", "diagnosticsButton", openDiagnosticsDialog, () => !busy);
 registerCommand("document.save", "saveButton", saveDocument, () => !busy && Boolean(snapshot));
 registerCommand("layer.openSmartObject", "openSmartObjectButton", openSmartObjectContents,
   () => !busy && Boolean(selectedLayer()?.smartObject?.contentsEditable));
@@ -3594,6 +3649,10 @@ $("togglePanelsButton").addEventListener("click", () => {
   persistPreferences();
 });
 $("cleanupRecoveryButton").addEventListener("click", cleanupRecoveryWorkspaces);
+$("diagnosticsConsentInput").addEventListener("change", () => {
+  $("downloadDiagnosticsButton").disabled = !$("diagnosticsConsentInput").checked;
+});
+$("downloadDiagnosticsButton").addEventListener("click", downloadDiagnostics);
 $("saveGradientAssetButton").addEventListener("click", () => saveFillAsset("gradient")
   .catch((error) => showError("Could not save gradient", error)));
 $("savePatternAssetButton").addEventListener("click", () => saveFillAsset("pattern")

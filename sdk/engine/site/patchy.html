@@ -21,6 +21,7 @@
         <button class="button" id="newButton" type="button">New</button>
         <button class="button" id="recoveryButton" type="button">Recovery <span id="recoveryCount">0</span></button>
         <button class="button" id="assetsButton" type="button">Assets</button>
+        <button class="button" id="diagnosticsButton" type="button">Diagnostics</button>
         <span class="action-divider" aria-hidden="true"></span>
         <button class="icon-button" id="undoButton" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>↶</button>
         <button class="icon-button" id="redoButton" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
@@ -289,6 +290,18 @@
           <div class="recovery-list" id="recoveryList"></div>
           <p class="dialog-note" id="recoveryQuota">Storage estimate unavailable</p>
           <div class="dialog-actions"><button class="button" id="cleanupRecoveryButton" type="button">Clean older workspaces</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog" id="diagnosticsDialog" aria-labelledby="diagnosticsDialogTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">LOCAL SUPPORT</p><h2 id="diagnosticsDialogTitle">Export diagnostics</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section>
+          <p id="diagnosticsSummary">No document is open</p>
+          <p class="dialog-note">The local JSON includes coarse browser capabilities, anonymous document dimensions and counts, Worker lifecycle, recovery outcomes and command identifiers.</p>
+          <p class="dialog-note"><strong>Excluded:</strong> document and layer names, text, pixels, previews, source bytes, paths, URLs, stack traces and error messages. Nothing is uploaded.</p>
+          <label class="check-field"><input id="diagnosticsConsentInput" type="checkbox"><span>I understand and want to create this local file.</span></label>
+          <div class="dialog-actions"><button class="button button-primary" id="downloadDiagnosticsButton" type="button" disabled>Download diagnostic JSON</button></div>
         </section>
       </form>
     </dialog>

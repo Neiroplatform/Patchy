@@ -169,6 +169,42 @@ try {
   await waitFor(() => byId("errorBanner").hidden && doc.activeElement === errorReturn,
     "dismissing an error did not return focus to the prior control");
 
+  let diagnosticBlob = null; let diagnosticFilename = null;
+  const originalCreateObjectUrl = frame.contentWindow.URL.createObjectURL;
+  const originalRevokeObjectUrl = frame.contentWindow.URL.revokeObjectURL;
+  const originalAnchorClick = frame.contentWindow.HTMLAnchorElement.prototype.click;
+  frame.contentWindow.URL.createObjectURL = (blob) => { diagnosticBlob = blob; return "blob:diagnostic-smoke"; };
+  frame.contentWindow.URL.revokeObjectURL = () => {};
+  frame.contentWindow.HTMLAnchorElement.prototype.click = function () { diagnosticFilename = this.download; };
+  byId("diagnosticsButton").focus(); byId("diagnosticsButton").click();
+  await waitFor(() => byId("diagnosticsDialog").open, "Diagnostics dialog did not open");
+  check(byId("diagnosticsDialogTitle").textContent === "Экспорт диагностики",
+    "Diagnostics dialog bypassed Russian localization");
+  check(byId("downloadDiagnosticsButton").disabled,
+    "Diagnostics export was enabled without explicit consent");
+  byId("diagnosticsConsentInput").click();
+  check(!byId("downloadDiagnosticsButton").disabled,
+    "Diagnostics consent did not enable local export");
+  byId("downloadDiagnosticsButton").click();
+  await waitFor(() => diagnosticBlob && !byId("diagnosticsDialog").open,
+    "Diagnostics export did not create and close its local dialog");
+  const diagnosticText = await diagnosticBlob.text();
+  const diagnostic = JSON.parse(diagnosticText);
+  check(diagnosticFilename === "patchy-diagnostics.json", "Diagnostics download name drifted");
+  check(diagnostic.schema === "patchy.browser-diagnostics" && diagnostic.version === 1,
+    "Diagnostics bundle schema drifted");
+  check(Array.isArray(diagnostic.events) && diagnostic.events.length > 0 &&
+    diagnostic.events.length <= 256, "Diagnostics timeline is empty or unbounded");
+  check(diagnostic.document?.width === 1600 && diagnostic.document?.layers >= 1,
+    "Diagnostics omitted anonymous document shape");
+  check(!/one\.svg|two\.svg|unsupported\.txt|Drop a PSD|https?:|\/Users\//i.test(diagnosticText),
+    "Diagnostics leaked a filename, error message, URL or path");
+  check(doc.activeElement === byId("diagnosticsButton"),
+    "Diagnostics close did not return focus to its invoker");
+  frame.contentWindow.URL.createObjectURL = originalCreateObjectUrl;
+  frame.contentWindow.URL.revokeObjectURL = originalRevokeObjectUrl;
+  frame.contentWindow.HTMLAnchorElement.prototype.click = originalAnchorClick;
+
   frame.style.width = "520px"; await delay(80);
   check(doc.documentElement.scrollWidth <= doc.documentElement.clientWidth,
     "narrow shell introduced document-level horizontal overflow");
@@ -225,7 +261,7 @@ try {
     !/[\u0400-\u04ff]/.test(byId("sessionIndicator").textContent),
   "switching back to English did not restore canonical static and dynamic strings");
   body.dataset.result = "PASS"; body.dataset.p95 = p95.toFixed(2);
-  body.textContent = `PASS locale=ru-persisted keyboard=toolbar,layers,history,dialog narrow=520 p95=${p95.toFixed(2)}ms`;
+  body.textContent = `PASS locale=ru-persisted keyboard=toolbar,layers,history,dialog diagnostics=private narrow=520 p95=${p95.toFixed(2)}ms`;
 } catch (error) {
   body.dataset.result = "FAIL"; body.dataset.error = String(error?.stack || error);
   const failure = document.createElement("pre"); failure.textContent = body.dataset.error;
