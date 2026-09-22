@@ -5684,6 +5684,17 @@ int patchy_engine_session_render_region(
                                       event, error);
 }
 
+int patchy_engine_session_render_region_with_progress(
+    patchy_engine_session *session, std::int32_t x, std::int32_t y,
+    std::int32_t width, std::int32_t height,
+    patchy_engine_render_progress_fn progress, void *progress_user_data,
+    patchy_engine_cancellation *cancellation, patchy_engine_buffer *rgba,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  return patchy_engine_session_render_with_progress(
+      session, {x, y, width, height}, progress, progress_user_data,
+      cancellation, rgba, event, error);
+}
+
 int patchy_engine_session_save_psd(patchy_engine_session *session,
                                    patchy_engine_buffer *psd,
                                    patchy_engine_event *event,
@@ -5729,10 +5740,24 @@ int patchy_engine_session_save_psd_with_progress(
     void *progress_user_data, patchy_engine_cancellation *cancellation,
     patchy_engine_buffer *psd, patchy_engine_event *event,
     patchy_engine_error *error) {
+  return patchy_engine_session_save_psd_as_with_progress(
+      session, 0, progress, progress_user_data, cancellation, psd, event,
+      error);
+}
+
+int patchy_engine_session_save_psd_as_with_progress(
+    patchy_engine_session *session, std::uint8_t large_document,
+    patchy_engine_save_progress_fn progress, void *progress_user_data,
+    patchy_engine_cancellation *cancellation, patchy_engine_buffer *psd,
+    patchy_engine_event *event, patchy_engine_error *error) {
   clear_error(error);
   if (session == nullptr || session->value == nullptr || psd == nullptr) {
     return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
                 "session and save output are required");
+  }
+  if (large_document > 1) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "large-document flag must be zero or one");
   }
   if (cancellation != nullptr && cancellation->value.cancelled()) {
     return fail(error, PATCHY_ENGINE_ERROR_CANCELLED,
@@ -5751,7 +5776,8 @@ int patchy_engine_session_save_psd_with_progress(
                           logical_output_bytes, progress_user_data) != 0;
         }};
     const auto saved = session->value->encode_psd(
-        false, cancellation == nullptr ? nullptr : &cancellation->value,
+        large_document != 0,
+        cancellation == nullptr ? nullptr : &cancellation->value,
         &save_progress);
     if (!saved) {
       return fail(error, saved.error);

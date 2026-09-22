@@ -16,6 +16,7 @@ export class PatchyWorkerHost {
   constructor(engine) { this.#engine = engine; }
 
   get capabilities() { return this.#engine.capabilities; }
+  get protocolVersion() { return this.#engine.protocolVersion; }
 
   async dispatch(message) {
     switch (message.method) {
@@ -734,8 +735,14 @@ export class PatchyWorkerHost {
         return this.#snapshot();
       case "render":
         return this.#engine.render(this.#requireSession(), message.region);
+      case "renderProgress":
+        return this.#engine.renderWithProgress(this.#requireSession(), message.region,
+          new Int32Array(message.cancellation), message.progress);
       case "save": return this.#engine.save(
         this.#requireSession(), layeredSaveOptions(message.format));
+      case "saveProgress": return this.#engine.saveWithProgress(
+        this.#requireSession(), layeredSaveOptions(message.format),
+        new Int32Array(message.cancellation), message.progress);
       case "saveDocument": {
         const record = this.#sessions.get(Number(message.documentId));
         if (!record) throw new Error("Patchy document does not exist");

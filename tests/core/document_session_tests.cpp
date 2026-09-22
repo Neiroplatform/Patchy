@@ -3442,6 +3442,15 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
   CHECK(psb.size > 6);
   CHECK(psb.data[4] == 0);
   CHECK(psb.data[5] == 2);
+  SaveProgressState psb_save_state{};
+  patchy_engine_buffer progressive_psb{};
+  CHECK(patchy_engine_session_save_psd_as_with_progress(
+            session, 1, save_callback, &psb_save_state, nullptr,
+            &progressive_psb, &event, &error) == 1);
+  CHECK(psb_save_state.calls > 0);
+  CHECK(progressive_psb.size == psb.size);
+  CHECK(std::equal(progressive_psb.data,
+                   progressive_psb.data + progressive_psb.size, psb.data));
   auto *reopened_psb = patchy_engine_session_open_psd(
       runtime, psb.data, psb.size, &error);
   CHECK(reopened_psb != nullptr);
@@ -3449,6 +3458,11 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
   patchy_engine_buffer invalid_format{};
   CHECK(patchy_engine_session_save_psd_as(session, 2, &invalid_format,
                                           &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  CHECK(invalid_format.data == nullptr);
+  CHECK(patchy_engine_session_save_psd_as_with_progress(
+            session, 2, save_callback, &psb_save_state, nullptr,
+            &invalid_format, &event, &error) == 0);
   CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
   CHECK(invalid_format.data == nullptr);
   auto *reopened = patchy_engine_session_open_psd(runtime, psd.data, psd.size,
@@ -3472,6 +3486,7 @@ void engine_host_protocol_runs_mask_filter_async_lifecycle() {
 
   patchy_engine_buffer_release(&reopened_render);
   patchy_engine_session_destroy(reopened);
+  patchy_engine_buffer_release(&progressive_psb);
   patchy_engine_buffer_release(&psb);
   patchy_engine_buffer_release(&psd_as);
   patchy_engine_buffer_release(&psd);

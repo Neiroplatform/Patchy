@@ -1,3 +1,10 @@
+import {
+  PATCHY_ENGINE_PROTOCOL_VERSION,
+  PATCHY_ENGINE_REQUIRED_CAPABILITIES,
+  PATCHY_ENGINE_SDK_VERSION,
+  PATCHY_WORKER_RPC_VERSION,
+} from "./protocol.mjs";
+
 function transferableInput(bytes, transferOwnership) {
   if (!(bytes instanceof Uint8Array)) throw new TypeError("Worker byte input must be a Uint8Array");
   if (transferOwnership && bytes.buffer instanceof ArrayBuffer &&
@@ -20,6 +27,8 @@ export class PatchyWorkerClient {
   #pending = new Map();
   #state = "starting";
   #capabilities = 0n;
+  #engineProtocolVersion = 0;
+  #rpcVersion = 0;
   #stateListeners = new Set();
 
   constructor(worker) {
@@ -31,6 +40,9 @@ export class PatchyWorkerClient {
 
   get state() { return this.#state; }
   get capabilities() { return this.#capabilities; }
+  get engineProtocolVersion() { return this.#engineProtocolVersion; }
+  get rpcVersion() { return this.#rpcVersion; }
+  get sdkVersion() { return PATCHY_ENGINE_SDK_VERSION; }
 
   addStateListener(listener) {
     if (typeof listener !== "function") throw new TypeError("Worker state listener must be a function");
@@ -42,9 +54,30 @@ export class PatchyWorkerClient {
     if (typeof window !== "undefined" && !globalThis.crossOriginIsolated) {
       throw new Error("Patchy Worker requires COOP/COEP cross-origin isolation");
     }
-    const info = await this.#request("initialize", { moduleUrl, moduleOptions });
-    this.#capabilities = info.capabilities;
-    this.#setState("ready");
+    try {
+      const info = await this.#request("initialize", { moduleUrl, moduleOptions,
+        sdkVersion: PATCHY_ENGINE_SDK_VERSION,
+        rpcVersion: PATCHY_WORKER_RPC_VERSION,
+        engineProtocolVersion: PATCHY_ENGINE_PROTOCOL_VERSION });
+      if (info.sdkVersion !== PATCHY_ENGINE_SDK_VERSION ||
+          info.rpcVersion !== PATCHY_WORKER_RPC_VERSION ||
+          info.engineProtocolVersion !== PATCHY_ENGINE_PROTOCOL_VERSION) {
+        throw new Error("Patchy SDK/Worker/engine protocol version mismatch");
+      }
+      if (typeof info.capabilities !== "bigint" ||
+          (info.capabilities & PATCHY_ENGINE_REQUIRED_CAPABILITIES) !==
+            PATCHY_ENGINE_REQUIRED_CAPABILITIES) {
+        throw new Error("Patchy engine is missing mandatory SDK capabilities");
+      }
+      this.#capabilities = info.capabilities;
+      this.#engineProtocolVersion = info.engineProtocolVersion;
+      this.#rpcVersion = info.rpcVersion;
+      this.#setState("ready");
+    } catch (error) {
+      this.#worker.terminate();
+      this.#crash(error);
+      throw error;
+    }
   }
 
   open(bytes, name = "Document.psd", { transferOwnership = false } = {}) {
@@ -444,9 +477,15 @@ export class PatchyWorkerClient {
   invertLayer(layerId, onProgress) {
     return this.applyFilter(layerId, "patchy.filters.invert", [], onProgress);
   }
+  renderCancellable(region, onProgress) {
+    return this.#cancellableRequest("renderProgress", { region }, onProgress);
+  }
   render(region) { return this.#request("render", { region }); }
   renderFrame(region) { return this.#request("renderFrame", { region }); }
   save(format = "psd") { return this.#request("save", { format: saveFormat(format) }); }
+  saveCancellable(format = "psd", onProgress) {
+    return this.#cancellableRequest("saveProgress", { format: saveFormat(format) }, onProgress);
+  }
   saveDocument(documentId, format = "psd") {
     return this.#request("saveDocument", { documentId, format: saveFormat(format) });
   }
@@ -462,6 +501,13 @@ export class PatchyWorkerClient {
       ...(layerId == null ? {} : { layerId: String(layerId) }),
       input: { ...input, rgba: owned.buffer },
     }, [owned.buffer]);
+  }
+
+  #cancellableRequest(method, payload, onProgress) {
+    const cancellation = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    const promise = this.#request(method, { ...payload, cancellation: cancellation.buffer },
+      [], onProgress);
+    return { promise, cancel() { Atomics.store(cancellation, 0, 1); } };
   }
 
   terminate() {

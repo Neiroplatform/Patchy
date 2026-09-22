@@ -137,6 +137,14 @@ try {
       "partial render cleared an uncovered dirty region");
     const rendered = await client.render({ x: 0, y: 0, width: 4, height: 3 });
     check(rendered.length === rgbaLength, "bounded render byte count mismatch");
+    const renderProgress = [];
+    const progressiveRender = client.renderCancellable(
+      { x: 0, y: 0, width: 4, height: 3 }, (value) => renderProgress.push(value.ratio));
+    const progressivelyRendered = await progressiveRender.promise;
+    check(renderProgress.length > 0 && renderProgress.at(-1) === 1 &&
+      progressivelyRendered.length === rendered.length &&
+      progressivelyRendered.every((value, index) => value === rendered[index]),
+    "progressive bounded render did not preserve byte parity");
     const frame = await client.renderFrame({ x: 0, y: 0, width: 4, height: 3 });
     check(frame.width === 4 && frame.height === 3, "render frame dimensions mismatch");
     check(frame.kind === "bitmap", `Worker ImageBitmap transport unavailable: ${frame.kind}`);
@@ -180,6 +188,17 @@ try {
     const saved = await client.saveDocument(first.documentId);
     check(saved.length > 26 && String.fromCharCode(...saved.subarray(0, 4)) === "8BPS",
       "layered PSD encoding mismatch");
+    const saveProgress = [];
+    const progressivePsd = client.saveCancellable("psd",
+      (value) => saveProgress.push([value.phase, value.logicalOutputBytes]));
+    const progressivelySaved = await progressivePsd.promise;
+    check(saveProgress.length > 0 && progressivelySaved.length === saved.length &&
+      progressivelySaved.every((value, index) => value === saved[index]),
+    "progressive PSD save did not preserve byte parity");
+    const progressivePsb = client.saveCancellable("psb");
+    const psb = await progressivePsb.promise;
+    check(psb.length > 26 && psb[4] === 0 && psb[5] === 2,
+      "progressive PSB save did not produce a version-2 document");
     const blobOpened = await client.openBlob(
       new Blob([saved], { type: "image/vnd.adobe.photoshop" }), "Worker Blob.psd");
     check(blobOpened.layers.length === 2 && blobOpened.width === 4 && blobOpened.height === 3,

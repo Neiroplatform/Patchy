@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PatchyWorkerHost } from "../../sdk/engine/worker-host.mjs";
 import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
+import { createPatchyWorkerClient, PATCHY_ENGINE_PROTOCOL_VERSION,
+  PATCHY_ENGINE_REQUIRED_CAPABILITIES, PATCHY_ENGINE_SDK_VERSION,
+  PATCHY_WORKER_RPC_VERSION } from "../../sdk/engine/index.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   documentPreflight, geometryMutationPreflight, layeredGeometrySize, MIB, rotatedGeometrySize,
@@ -384,7 +387,9 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     },
     _patchy_engine_runtime_create() { return 11; },
     _patchy_engine_runtime_destroy() { destroyed++; },
-    addFunction(value, signature) { assert.ok(["iiii", "iiiii"].includes(signature)); callback = value; return 71; },
+    addFunction(value, signature) {
+      assert.ok(["iiii", "iiiii", "iiji"].includes(signature)); callback = value; return 71;
+    },
     removeFunction(pointer) { assert.equal(pointer, 71); callback = null; },
     _patchy_engine_session_create_rgba8() { return 22; },
     _patchy_engine_session_destroy() { destroyed++; },
@@ -801,10 +806,26 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       const data = alloc(24); heap.fill(17, data, data + 24);
       view.setUint32(output, data, true); view.setUint32(output + 4, 24, true); return 1;
     },
+    _patchy_engine_session_render_region_with_progress(
+        session, x, y, width, height, progress, progressUserData, cancellation, output) {
+      assert.deepEqual([session, x, y, width, height, progress, progressUserData, cancellation],
+        [22, 0, 0, 3, 2, 71, 0, 0]);
+      callbackReturns.push(callback(1, 2, 0), callback(2, 2, 0));
+      const data = alloc(24); heap.fill(19, data, data + 24);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 24, true); return 1;
+    },
     _patchy_engine_session_save_psd_as(session, largeDocument, output) {
       saveFormats.push(largeDocument);
       const data = alloc(4); heap.set([56, 66, 80, 83], data);
       view.setUint32(output, data, true); view.setUint32(output + 4, 4, true); return 1;
+    },
+    _patchy_engine_session_save_psd_as_with_progress(
+        session, largeDocument, progress, progressUserData, cancellation, output) {
+      assert.deepEqual([session, largeDocument, progress, progressUserData, cancellation],
+        [22, 1, 71, 0, 0]);
+      callbackReturns.push(callback(1, 512n, 0), callback(4, 1024n, 0));
+      const data = alloc(6); heap.set([56, 66, 80, 83, 0, 2], data);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 6, true); return 1;
     },
     _patchy_engine_session_memory_usage(session, output) {
       assert.equal(view.getUint32(output, true), 128);
@@ -1058,10 +1079,21 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(commandTypes, [2, 3, 6, 7, 35, 36, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
+  const renderProgress = [];
+  const renderCancellation = new Int32Array(new SharedArrayBuffer(4));
+  assert.equal(engine.renderWithProgress(session, { x: 0, y: 0, width: 3, height: 2 },
+    renderCancellation, (value) => renderProgress.push(value.ratio)).byteLength, 24);
+  assert.deepEqual(renderProgress, [0.5, 1]);
   assert.deepEqual(Array.from(engine.save(session)), [56, 66, 80, 83]);
   assert.deepEqual(Array.from(engine.save(session, { largeDocument: true })), [56, 66, 80, 83]);
+  const saveProgress = [];
+  assert.deepEqual(Array.from(engine.saveWithProgress(session, { largeDocument: true },
+    new Int32Array(new SharedArrayBuffer(4)),
+    (value) => saveProgress.push([value.phase, value.logicalOutputBytes]))),
+  [56, 66, 80, 83, 0, 2]);
+  assert.deepEqual(saveProgress, [[1, 512n], [4, 1024n]]);
   assert.deepEqual(saveFormats, [0, 1]);
-  assert.equal(released, 12);
+  assert.equal(released, 14);
   engine.dispose();
   assert.equal(destroyed, 2);
 });
@@ -1961,10 +1993,11 @@ test("browser geometry policy rejects ABI truncation and unsaveable layered dime
 
 class FakeWorker extends EventTarget {
   sent = [];
+  terminated = false;
   postMessage(message, transfer = []) {
     this.sent.push({ message: structuredClone(message, { transfer }), transfer });
   }
-  terminate() {}
+  terminate() { this.terminated = true; }
   reply(message) { this.dispatchEvent(new MessageEvent("message", { data: message })); }
   fail(message) {
     const event = new Event("error");
@@ -1972,6 +2005,89 @@ class FakeWorker extends EventTarget {
     this.dispatchEvent(event);
   }
 }
+
+test("public SDK entrypoint creates a module Worker and exposes stable versions", () => {
+  const created = [];
+  class ConstructedWorker extends FakeWorker {
+    constructor(url, options) { super(); created.push([url, options]); }
+  }
+  const client = createPatchyWorkerClient("./worker.mjs", {
+    WorkerConstructor: ConstructedWorker, workerOptions: { name: "patchy" },
+  });
+  assert.ok(client instanceof PatchyWorkerClient);
+  assert.equal(client.sdkVersion, "0.1.0");
+  assert.deepEqual(created, [["./worker.mjs", { type: "module", name: "patchy" }]]);
+  assert.equal(PATCHY_ENGINE_SDK_VERSION, "0.1.0");
+  assert.equal(PATCHY_WORKER_RPC_VERSION, 1);
+  assert.equal(PATCHY_ENGINE_PROTOCOL_VERSION, 1);
+  assert.ok(PATCHY_ENGINE_REQUIRED_CAPABILITIES > 0n);
+});
+
+test("client fails closed on version drift and missing mandatory capabilities", async () => {
+  const versionWorker = new FakeWorker();
+  const versionClient = new PatchyWorkerClient(versionWorker);
+  const versionInit = versionClient.initialize("./patchy-engine.mjs");
+  versionWorker.reply({ id: 1, ok: true, value: {
+    capabilities: PATCHY_ENGINE_REQUIRED_CAPABILITIES,
+    sdkVersion: PATCHY_ENGINE_SDK_VERSION,
+    rpcVersion: PATCHY_WORKER_RPC_VERSION + 1,
+    engineProtocolVersion: PATCHY_ENGINE_PROTOCOL_VERSION,
+  }});
+  await assert.rejects(versionInit, /protocol version mismatch/);
+  assert.equal(versionWorker.terminated, true);
+  assert.equal(versionClient.state, "crashed");
+
+  const capabilityWorker = new FakeWorker();
+  const capabilityClient = new PatchyWorkerClient(capabilityWorker);
+  const capabilityInit = capabilityClient.initialize("./patchy-engine.mjs");
+  capabilityWorker.reply({ id: 1, ok: true, value: {
+    capabilities: 0n, sdkVersion: PATCHY_ENGINE_SDK_VERSION,
+    rpcVersion: PATCHY_WORKER_RPC_VERSION,
+    engineProtocolVersion: PATCHY_ENGINE_PROTOCOL_VERSION,
+  }});
+  await assert.rejects(capabilityInit, /missing mandatory SDK capabilities/);
+  assert.equal(capabilityWorker.terminated, true);
+  assert.equal(capabilityClient.state, "crashed");
+});
+
+test("worker host preserves progress and cancellation storage for render and PSB save", async () => {
+  const calls = [];
+  const engine = {
+    capabilities: PATCHY_ENGINE_REQUIRED_CAPABILITIES,
+    protocolVersion: PATCHY_ENGINE_PROTOCOL_VERSION,
+    create() { return 9; },
+    snapshot() { return projection(1); },
+    memoryUsage() { return {}; },
+    pendingRenderRegion() { return null; },
+    renderWithProgress(session, region, cancellation, progress) {
+      calls.push(["render", session, region, cancellation]);
+      progress({ completed: 1, total: 1, stage: 0, ratio: 1 });
+      return new Uint8Array([1, 2, 3, 4]);
+    },
+    saveWithProgress(session, options, cancellation, progress) {
+      calls.push(["save", session, options, cancellation]);
+      progress({ phase: 4, logicalOutputBytes: 6n, stage: 4,
+        completed: 6n, total: 0n, ratio: null });
+      return new Uint8Array([56, 66, 80, 83, 0, 2]);
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 1, height: 1, name: "SDK.psd" });
+  const cancellation = new SharedArrayBuffer(4);
+  const progress = [];
+  assert.deepEqual(await host.dispatch({ method: "renderProgress",
+    region: { x: 0, y: 0, width: 1, height: 1 }, cancellation,
+    progress: (value) => progress.push(value) }), new Uint8Array([1, 2, 3, 4]));
+  assert.deepEqual(await host.dispatch({ method: "saveProgress", format: "psb",
+    cancellation, progress: (value) => progress.push(value) }),
+  new Uint8Array([56, 66, 80, 83, 0, 2]));
+  assert.equal(calls[0][3].buffer, cancellation);
+  assert.deepEqual(calls[1][2], { largeDocument: true });
+  assert.equal(calls[1][3].buffer, cancellation);
+  assert.equal(progress.length, 2);
+  host.dispose();
+});
 
 test("client byte ingress copies by default and transfers explicit whole-buffer ownership", async () => {
   const worker = new FakeWorker();
@@ -2081,10 +2197,16 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   const removeStateListener = client.addStateListener((state, error) =>
     states.push([state, error?.message]));
   const init = client.initialize("./patchy-engine.mjs");
-  worker.reply({ id: 1, ok: true, value: { capabilities: (1n << 26n) - 1n } });
+  assert.deepEqual(worker.sent[0].message, { id: 1, method: "initialize",
+    moduleUrl: "./patchy-engine.mjs", moduleOptions: {}, sdkVersion: "0.1.0",
+    rpcVersion: 1, engineProtocolVersion: 1 });
+  worker.reply({ id: 1, ok: true, value: { capabilities: (1n << 26n) - 1n,
+    sdkVersion: "0.1.0", rpcVersion: 1, engineProtocolVersion: 1 } });
   await init;
   assert.equal(client.state, "ready");
   assert.equal(client.capabilities, (1n << 26n) - 1n);
+  assert.equal(client.rpcVersion, 1);
+  assert.equal(client.engineProtocolVersion, 1);
   const source = new Uint8Array([1, 2, 3]);
   const opened = client.open(source);
   assert.equal(worker.sent[1].transfer.length, 1);
@@ -2117,11 +2239,33 @@ test("client correlates RPC, transfers input and rejects all requests on crash",
   assert.equal(Atomics.load(new Int32Array(filterMessage.cancellation), 0), 1);
   worker.reply({ id: 5, ok: true, value: projection(3) });
   await filter.promise;
+  const renderProgress = [];
+  const render = client.renderCancellable({ x: 0, y: 0, width: 1, height: 1 },
+    (value) => renderProgress.push(value.ratio));
+  const renderMessage = worker.sent[5].message;
+  assert.equal(renderMessage.method, "renderProgress");
+  worker.reply({ id: 6, progress: { completed: 1, total: 1, stage: 0, ratio: 1 } });
+  render.cancel();
+  assert.equal(Atomics.load(new Int32Array(renderMessage.cancellation), 0), 1);
+  worker.reply({ id: 6, ok: true, value: new Uint8Array(4) });
+  await render.promise;
+  assert.deepEqual(renderProgress, [1]);
+  const saveProgress = [];
+  const progressiveSave = client.saveCancellable("psb",
+    (value) => saveProgress.push(value.logicalOutputBytes));
+  const saveMessage = worker.sent[6].message;
+  assert.equal(saveMessage.method, "saveProgress");
+  assert.equal(saveMessage.format, "psb");
+  worker.reply({ id: 7, progress: { phase: 4, logicalOutputBytes: 1024n,
+    stage: 4, completed: 1024n, total: 0n, ratio: null } });
+  worker.reply({ id: 7, ok: true, value: new Uint8Array([56, 66, 80, 83, 0, 2]) });
+  assert.equal((await progressiveSave.promise).byteLength, 6);
+  assert.deepEqual(saveProgress, [1024n]);
   const savedDocument = client.saveDocument(23, "psb");
-  assert.equal(worker.sent[5].message.method, "saveDocument");
-  assert.equal(worker.sent[5].message.documentId, 23);
-  assert.equal(worker.sent[5].message.format, "psb");
-  worker.reply({ id: 6, ok: true, value: new Uint8Array([56, 66, 80, 83]) });
+  assert.equal(worker.sent[7].message.method, "saveDocument");
+  assert.equal(worker.sent[7].message.documentId, 23);
+  assert.equal(worker.sent[7].message.format, "psb");
+  worker.reply({ id: 8, ok: true, value: new Uint8Array([56, 66, 80, 83]) });
   assert.equal((await savedDocument).byteLength, 4);
   const pending = client.save();
   worker.fail("worker trap");

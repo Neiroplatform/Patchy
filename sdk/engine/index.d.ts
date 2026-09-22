@@ -1,4 +1,19 @@
 export interface Rect { x: number; y: number; width: number; height: number }
+export const PATCHY_ENGINE_SDK_VERSION: "0.1.0";
+export const PATCHY_WORKER_RPC_VERSION: 1;
+export const PATCHY_ENGINE_PROTOCOL_VERSION: 1;
+export const PATCHY_ENGINE_REQUIRED_CAPABILITIES: bigint;
+export const PATCHY_ENGINE_CAPABILITIES: Readonly<{
+  layerProjection: bigint; layerVisibility: bigint; history: bigint;
+  boundedRender: bigint; psdSave: bigint; documentProjection: bigint;
+  progressCancellation: bigint; psbSaveAs: bigint;
+}>;
+export interface PatchyWorkerFactoryOptions {
+  WorkerConstructor?: typeof Worker;
+  workerOptions?: WorkerOptions;
+}
+export function createPatchyWorkerClient(workerUrl: string | URL,
+  options?: PatchyWorkerFactoryOptions): PatchyWorkerClient;
 export type RgbColor = [number, number, number];
 export interface LayerEffectBase {
   enabled: boolean; blendMode: number; color: RgbColor; opacity: number;
@@ -80,6 +95,11 @@ export type WorkerState = "starting" | "ready" | "crashed" | "closed";
 export interface FilterProgress {
   completed: number; total: number; stage: number; ratio: number;
 }
+export interface RenderProgress extends FilterProgress { stage: 0 }
+export interface SaveProgress {
+  phase: number; stage: number; logicalOutputBytes: bigint;
+  completed: bigint; total: 0n; ratio: null;
+}
 export interface CancellableOperation<T> { promise: Promise<T>; cancel(): void }
 export interface TransferOptions { transferOwnership?: boolean }
 export interface PsdHeader {
@@ -100,6 +120,9 @@ export class PatchyWorkerClient {
   constructor(worker: Worker);
   readonly state: WorkerState;
   readonly capabilities: bigint;
+  readonly sdkVersion: "0.1.0";
+  readonly rpcVersion: 0 | 1;
+  readonly engineProtocolVersion: 0 | 1;
   addStateListener(listener: (state: WorkerState, error: Error | null) => void): () => void;
   initialize(moduleUrl: string, moduleOptions?: object): Promise<void>;
   open(bytes: Uint8Array, name?: string, options?: TransferOptions): Promise<DocumentProjection>;
@@ -280,8 +303,12 @@ export class PatchyWorkerClient {
               onProgress?: (progress: FilterProgress) => void):
     CancellableOperation<DocumentProjection>;
   render(region: Rect): Promise<Uint8Array>;
+  renderCancellable(region: Rect,
+    onProgress?: (progress: RenderProgress) => void): CancellableOperation<Uint8Array>;
   renderFrame(region: Rect): Promise<RenderFrame>;
   save(format?: "psd" | "psb"): Promise<Uint8Array>;
+  saveCancellable(format?: "psd" | "psb",
+    onProgress?: (progress: SaveProgress) => void): CancellableOperation<Uint8Array>;
   saveDocument(documentId: number, format?: "psd" | "psb"): Promise<Uint8Array>;
   saveBlob(format?: "psd" | "psb"): Promise<Blob>;
   saveDocumentBlob(documentId: number, format?: "psd" | "psb"): Promise<Blob>;

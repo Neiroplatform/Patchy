@@ -580,6 +580,8 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PATCHY_WASM_SDK_SITE_DIR}"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${PROJECT_SOURCE_DIR}/sdk/engine/client.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/index.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/protocol.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/frame-transport.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/blob-ingress.mjs"

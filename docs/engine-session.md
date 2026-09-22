@@ -256,7 +256,13 @@ WASM configurations enforce the same boundary.
 
 ## Browser Worker SDK
 
-`sdk/engine` is the first private browser binding for the C ABI. The client
+`sdk/engine` is the first private browser binding for the C ABI. Its versioned
+package-root entrypoint exports `createPatchyWorkerClient`, TypeScript
+declarations, version constants and named capability bits. Initialization uses
+an exact SDK/Worker-RPC/C-ABI handshake and fails closed before accepting work
+when a version or mandatory capability differs. The compatibility and
+ownership policy is defined in [sdk-compatibility.md](sdk-compatibility.md), and
+API changes are recorded in `sdk/engine/CHANGELOG.md`. The client
 transfers an owned copy of input bytes to one Dedicated Worker, correlates
 typed requests and rejects every pending request if the Worker traps or message
 decoding fails. The Worker alone owns the Emscripten runtime and active session;
@@ -264,7 +270,9 @@ it exposes `open`/`create`, document/layer/selection/mask/text projections,
 layer, text, shape/vector-mask, adjustment and embedded Smart Object authoring,
 replacement and Smart Filters, image/canvas geometry, canonical selection,
 raster masks, one-commit RGBA paint/transform, selected-area filtering,
-undo/redo, render and layered PSD save. Canonical document state never enters
+undo/redo, render and layered PSD/PSB save. Bounded render and both layered
+save formats expose the same cooperative progress/cancellation contract as the
+C ABI; cancellation publishes no partial output. Canonical document state never enters
 the UI process. Filter cancellation is a main-thread `SharedArrayBuffer`
 flag sampled by the C progress callback while the Worker is synchronously in
 Wasm, so cancellation remains responsive without concurrent session access.

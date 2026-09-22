@@ -1654,6 +1654,12 @@ int patchy_engine_session_render_region(
     patchy_engine_session *session, int32_t x, int32_t y, int32_t width,
     int32_t height, patchy_engine_buffer *rgba, patchy_engine_event *event,
     patchy_engine_error *error);
+int patchy_engine_session_render_region_with_progress(
+    patchy_engine_session *session, int32_t x, int32_t y, int32_t width,
+    int32_t height, patchy_engine_render_progress_fn progress,
+    void *progress_user_data, patchy_engine_cancellation *cancellation,
+    patchy_engine_buffer *rgba, patchy_engine_event *event,
+    patchy_engine_error *error);
 int patchy_engine_session_render_with_progress(
     patchy_engine_session *session, patchy_engine_rect region,
     patchy_engine_render_progress_fn progress, void *progress_user_data,
@@ -1673,6 +1679,11 @@ int patchy_engine_session_save_psd_with_progress(
     void *progress_user_data, patchy_engine_cancellation *cancellation,
     patchy_engine_buffer *psd, patchy_engine_event *event,
     patchy_engine_error *error);
+int patchy_engine_session_save_psd_as_with_progress(
+    patchy_engine_session *session, uint8_t large_document,
+    patchy_engine_save_progress_fn progress, void *progress_user_data,
+    patchy_engine_cancellation *cancellation, patchy_engine_buffer *psd,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_event_count(const patchy_engine_session *session,
                                       size_t *count, uint64_t *dropped,
                                       patchy_engine_error *error);

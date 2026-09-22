@@ -2,6 +2,11 @@ import { createWorkerHost } from "./worker-host.mjs";
 import { createRenderFrame } from "./frame-transport.mjs";
 import { createPsdBlob, inspectPsdBlob, readBlobInput } from "./blob-ingress.mjs";
 import { documentPreflight } from "./memory-policy.mjs";
+import {
+  PATCHY_ENGINE_PROTOCOL_VERSION,
+  PATCHY_ENGINE_SDK_VERSION,
+  PATCHY_WORKER_RPC_VERSION,
+} from "./protocol.mjs";
 
 const WORKER_WORKING_SET_LIMIT = 3 * 1024 * 1024 * 1024;
 
@@ -12,9 +17,16 @@ self.onmessage = async ({ data }) => {
   try {
     if (method === "initialize") {
       if (hostPromise) throw new Error("Patchy worker is already initialized");
+      if (payload.sdkVersion !== PATCHY_ENGINE_SDK_VERSION ||
+          payload.rpcVersion !== PATCHY_WORKER_RPC_VERSION ||
+          payload.engineProtocolVersion !== PATCHY_ENGINE_PROTOCOL_VERSION) {
+        throw new Error("Patchy SDK/Worker/engine protocol version mismatch");
+      }
       hostPromise = createWorkerHost(moduleUrl, moduleOptions);
       const host = await hostPromise;
-      self.postMessage({ id, ok: true, value: { capabilities: host.capabilities } });
+      self.postMessage({ id, ok: true, value: { capabilities: host.capabilities,
+        sdkVersion: PATCHY_ENGINE_SDK_VERSION, rpcVersion: PATCHY_WORKER_RPC_VERSION,
+        engineProtocolVersion: host.protocolVersion } });
       return;
     }
     if (!hostPromise) throw new Error("Patchy worker is not initialized");

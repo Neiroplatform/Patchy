@@ -47,6 +47,7 @@ const LAYER_BATCH_EDIT_SIZE = 40;
 const LAYER_BATCH_TRANSFORM_SIZE = 96;
 const LAYER_ARRANGE_SIZE = 40;
 const CAP_PSB_SAVE_AS = 1n << 33n;
+const CAP_PROGRESS_CANCELLATION = 1n << 18n;
 const CAP_LAYER_MASK_STROKE = 1n << 34n;
 const CAP_RICH_TEXT_AUTHORING = 1n << 35n;
 const CAP_MULTI_LAYER_AUTHORING = 1n << 36n;
@@ -119,6 +120,7 @@ export class EmscriptenPatchyEngine {
   }
 
   get capabilities() { return this.#capabilities; }
+  get protocolVersion() { return PROTOCOL_VERSION; }
 
   open(bytes) {
     const input = this.#alloc(bytes.byteLength || 1);
@@ -1564,6 +1566,23 @@ export class EmscriptenPatchyEngine {
         buffer, event, error));
   }
 
+  renderWithProgress(session, region, cancellation, onProgress) {
+    this.#cancellation(cancellation, "Render");
+    const symbol = "_patchy_engine_session_render_region_with_progress";
+    this.#progressCapability(symbol, "Render");
+    let callback = 0;
+    try {
+      callback = this.#module.addFunction((completed, total) => {
+        onProgress?.({ completed, total, stage: 0,
+          ratio: total > 0 ? Math.max(0, Math.min(1, completed / total)) : 0 });
+        return Atomics.load(cancellation, 0) === 0 ? 1 : 0;
+      }, "iiii");
+      return this.#bufferCall((buffer, event, error) => this.#module[symbol](
+        session, region.x, region.y, region.width, region.height,
+        callback, 0, 0, buffer, event, error));
+    } finally { if (callback) this.#module.removeFunction(callback); }
+  }
+
   save(session, { largeDocument = false } = {}) {
     if (typeof largeDocument !== "boolean") {
       throw new TypeError("PSD large-document selection must be boolean");
@@ -1576,6 +1595,28 @@ export class EmscriptenPatchyEngine {
       ((this.#capabilities & CAP_PSB_SAVE_AS) && typeof saveAs === "function")
       ? saveAs(session, Number(largeDocument), buffer, event, error)
       : this.#module._patchy_engine_session_save_psd(session, buffer, event, error));
+  }
+
+  saveWithProgress(session, { largeDocument = false } = {}, cancellation, onProgress) {
+    if (typeof largeDocument !== "boolean") {
+      throw new TypeError("PSD large-document selection must be boolean");
+    }
+    this.#cancellation(cancellation, "Save");
+    const symbol = "_patchy_engine_session_save_psd_as_with_progress";
+    this.#progressCapability(symbol, "Save");
+    if (largeDocument && !(this.#capabilities & CAP_PSB_SAVE_AS)) {
+      throw new PatchyEngineError(2, "Patchy engine does not support PSB Save As");
+    }
+    let callback = 0;
+    try {
+      callback = this.#module.addFunction((phase, logicalOutputBytes) => {
+        onProgress?.({ phase, logicalOutputBytes,
+          stage: phase, completed: logicalOutputBytes, total: 0n, ratio: null });
+        return Atomics.load(cancellation, 0) === 0 ? 1 : 0;
+      }, "iiji");
+      return this.#bufferCall((buffer, event, error) => this.#module[symbol](
+        session, Number(largeDocument), callback, 0, 0, buffer, event, error));
+    } finally { if (callback) this.#module.removeFunction(callback); }
   }
 
   close(session) {
@@ -2457,6 +2498,20 @@ export class EmscriptenPatchyEngine {
         this.#module._free(buffer);
       }
     });
+  }
+
+  #cancellation(cancellation, subject) {
+    if (!(cancellation instanceof Int32Array) ||
+        !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError(`${subject} cancellation must use shared Int32 storage`);
+    }
+  }
+
+  #progressCapability(symbol, subject) {
+    if (!(this.#capabilities & CAP_PROGRESS_CANCELLATION) ||
+        typeof this.#module[symbol] !== "function") {
+      throw new PatchyEngineError(2, `${subject} progress/cancellation is unavailable`);
+    }
   }
 
   #withError(action) {
