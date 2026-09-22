@@ -2,7 +2,7 @@ import { PatchyWorkerClient } from "./engine/client.mjs";
 import { recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
-  documentPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
+  documentPreflight, geometryMutationPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
 import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
@@ -453,7 +453,13 @@ function geometryMutation(title, targetSize, operation) {
     const target = typeof targetSize === "function" ? targetSize() : targetSize;
     const format = documentSaveFormats.get(snapshot.documentId) || "psd";
     layeredGeometrySize(target.width, target.height, format);
-    ensureMemorySafe(target, title);
+    ensureMemorySafe(
+      { currentWidth: snapshot.width, currentHeight: snapshot.height,
+        targetWidth: target.width, targetHeight: target.height,
+        documentPixelBytes: snapshot.memory?.documentPixelBytes,
+        pixelLayerCount: snapshot.layers.filter((layer) => layer.kind === 0).length,
+        maskCount: snapshot.layers.filter((layer) => layer.mask != null).length },
+      title, geometryMutationPreflight);
   } catch (error) {
     showError(`${title} rejected`, error);
     return;
@@ -735,8 +741,8 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
-function ensureMemorySafe(input, label) {
-  const preflight = documentPreflight({ ...input, limitBytes: workingSetLimit });
+function ensureMemorySafe(input, label, policy = documentPreflight) {
+  const preflight = policy({ ...input, limitBytes: workingSetLimit });
   const retainedBytes = (snapshot?.documents || []).reduce(
     (sum, documentTab) => sum + Number(documentTab.retainedBytes || 0), 0);
   const combinedBytes = preflight.estimatedBytes + retainedBytes;

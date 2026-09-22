@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -358,6 +359,9 @@ void engine_session_rejects_non_atomic_lifecycle_commands() {
       RotateCanvas{std::nan(""), patchy::EditColor{}})));
   CHECK(!static_cast<bool>(session.execute(CropDocument{
       {20, 20, 2, 2}, 0.0, patchy::EditColor{}, true})));
+  CHECK(!static_cast<bool>(session.execute(CropDocument{
+      {std::numeric_limits<std::int32_t>::max() - 1, 0, 2, 1}, 0.0,
+      patchy::EditColor{}, false})));
   CHECK(!static_cast<bool>(
       session.execute(WrapOffsetDocument{0, 0, std::nullopt})));
   CHECK(session.state_id() == original_state);
@@ -2499,6 +2503,19 @@ void engine_host_protocol_authors_layers_and_document_geometry() {
   crop.type = PATCHY_ENGINE_COMMAND_CROP_DOCUMENT;
   crop.payload.crop_document.crop = {1, 2, 6, 7};
   crop.payload.crop_document.alpha = 255;
+  patchy_engine_command hostile_crop{};
+  hostile_crop.struct_size = sizeof(hostile_crop);
+  hostile_crop.protocol_version = PATCHY_ENGINE_HOST_PROTOCOL_VERSION;
+  hostile_crop.type = PATCHY_ENGINE_COMMAND_CROP_DOCUMENT;
+  hostile_crop.expected_state_id = project().state_id;
+  hostile_crop.expected_revision = project().revision;
+  hostile_crop.payload.crop_document.crop = {
+      std::numeric_limits<std::int32_t>::max() - 1, 0, 2, 1};
+  CHECK(patchy_engine_session_execute(session, &hostile_crop, &ignored,
+                                      &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  CHECK(project().width == 8);
+  CHECK(project().height == 10);
   execute(crop);
   document = project();
   CHECK(document.width == 6);

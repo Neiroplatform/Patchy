@@ -24,6 +24,44 @@ export function documentPreflight({ sourceBytes = 0, width = 0, height = 0, limi
   return { allowed: estimatedBytes <= limitBytes, estimatedBytes, limitBytes };
 }
 
+export function geometryMutationPreflight({ currentWidth, currentHeight,
+  targetWidth, targetHeight, documentPixelBytes, pixelLayerCount = 0,
+  maskCount = 0, limitBytes }) {
+  const currentPixels = Number(currentWidth) * Number(currentHeight);
+  const targetPixels = Number(targetWidth) * Number(targetHeight);
+  if (![currentWidth, currentHeight, targetWidth, targetHeight, documentPixelBytes,
+    pixelLayerCount, maskCount, limitBytes].every(Number.isFinite) ||
+      ![currentWidth, currentHeight, targetWidth, targetHeight, documentPixelBytes,
+        pixelLayerCount, maskCount, limitBytes].every(Number.isSafeInteger) ||
+      currentWidth <= 0 || currentHeight <= 0 || targetWidth <= 0 || targetHeight <= 0 ||
+      documentPixelBytes < 0 || pixelLayerCount < 0 || maskCount < 0 || limitBytes <= 0 ||
+      !Number.isSafeInteger(currentPixels) || !Number.isSafeInteger(targetPixels)) {
+    throw new TypeError("Geometry memory preflight requires safe positive dimensions and byte counts");
+  }
+  const currentPixelsBig = BigInt(currentPixels);
+  const targetPixelsBig = BigInt(targetPixels);
+  const scaledDocumentBytesBig =
+    (BigInt(documentPixelBytes) * targetPixelsBig + currentPixelsBig - 1n) / currentPixelsBig;
+  // Canvas resize materializes a full target buffer for every pixel layer. Use
+  // the largest supported four-channel float pixel width as a safe floor; masks
+  // need one byte per target pixel. The scaled live census covers channels,
+  // composites and other buffers whose current allocation is already known.
+  const fullSurfaceBytesBig = targetPixelsBig *
+    (BigInt(pixelLayerCount) * 16n + BigInt(maskCount));
+  const targetDocumentBytesBig = scaledDocumentBytesBig > fullSurfaceBytesBig ?
+    scaledDocumentBytesBig : fullSurfaceBytesBig;
+  // Geometry commands clone the canonical document copy-on-write, then allocate
+  // target buffers and render/checkpoint scratch while the old state is retained.
+  const estimatedBytesBig = targetDocumentBytesBig + targetPixelsBig * 8n + BigInt(64 * MIB);
+  if (estimatedBytesBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError("Geometry memory estimate exceeds safe browser arithmetic");
+  }
+  const targetDocumentBytes = Number(targetDocumentBytesBig);
+  const estimatedBytes = Number(estimatedBytesBig);
+  return { allowed: estimatedBytes <= limitBytes, estimatedBytes, limitBytes,
+    targetDocumentBytes };
+}
+
 export function validateInt32Rect(rect) {
   if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isInteger) ||
       rect.x < INT32_MIN || rect.x > INT32_MAX || rect.y < INT32_MIN || rect.y > INT32_MAX ||

@@ -17,6 +17,7 @@
 #include <cstring>
 #include <exception>
 #include <iterator>
+#include <limits>
 #include <set>
 #include <tuple>
 #include <type_traits>
@@ -30,6 +31,18 @@ constexpr auto kTileSeamOffsetMetadataKey = "patchy.tile.seamOffset";
 
 SessionError make_error(SessionErrorCode code, std::string message) {
   return SessionError{code, std::move(message)};
+}
+
+bool rect_edges_representable(Rect rect) noexcept {
+  if (rect.width <= 0 || rect.height <= 0) {
+    return false;
+  }
+  const auto right = static_cast<std::int64_t>(rect.x) + rect.width;
+  const auto bottom = static_cast<std::int64_t>(rect.y) + rect.height;
+  return right >= std::numeric_limits<std::int32_t>::min() &&
+         right <= std::numeric_limits<std::int32_t>::max() &&
+         bottom >= std::numeric_limits<std::int32_t>::min() &&
+         bottom <= std::numeric_limits<std::int32_t>::max();
 }
 
 SavePhase engine_save_phase(psd::SavePhase phase) {
@@ -1118,10 +1131,10 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
          &event_kind](const auto &concrete) {
           using Command = std::decay_t<decltype(concrete)>;
           if constexpr (std::is_same_v<Command, CropDocument>) {
-            if (concrete.crop.width <= 0 || concrete.crop.height <= 0 ||
+            if (!rect_edges_representable(concrete.crop) ||
                 !std::isfinite(concrete.clockwise_degrees)) {
               error = make_error(SessionErrorCode::InvalidArgument,
-                                 "crop rectangle and angle must be valid");
+                                 "crop rectangle edges and angle must be valid");
               return;
             }
             auto crop = concrete.crop;

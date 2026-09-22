@@ -5,7 +5,7 @@ import { PatchyWorkerHost } from "../../sdk/engine/worker-host.mjs";
 import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
-  documentPreflight, layeredGeometrySize, MIB, rotatedGeometrySize,
+  documentPreflight, geometryMutationPreflight, layeredGeometrySize, MIB, rotatedGeometrySize,
   validateInt32Rect } from "../../sdk/engine/memory-policy.mjs";
 import { createRenderFrame } from "../../sdk/engine/frame-transport.mjs";
 import { createPsdBlob, inspectPsdBlob, MAX_BROWSER_SOURCE_BYTES, parsePsdHeader,
@@ -1878,6 +1878,14 @@ test("browser geometry policy rejects ABI truncation and unsaveable layered dime
     { clipToCanvas: true, canvasWidth: 16, canvasHeight: 20 }), { width: 16, height: 20 });
   assert.throws(() => cropGeometrySize({ x: 30, y: 30, width: 2, height: 2 },
     { clipToCanvas: true, canvasWidth: 16, canvasHeight: 20 }), /outside the canvas/);
+  const layeredGrowth = geometryMutationPreflight({ currentWidth: 1000, currentHeight: 1000,
+    targetWidth: 10000, targetHeight: 10000, documentPixelBytes: 40 * MIB,
+    pixelLayerCount: 10, maskCount: 0, limitBytes: 3 * 1024 * MIB });
+  assert.equal(layeredGrowth.allowed, false);
+  assert.ok(layeredGrowth.targetDocumentBytes >= 4_000_000_000);
+  assert.throws(() => geometryMutationPreflight({ currentWidth: 1000, currentHeight: 1000,
+    targetWidth: 10000, targetHeight: 10000, documentPixelBytes: undefined,
+    pixelLayerCount: 10, limitBytes: 3 * 1024 * MIB }), /safe positive dimensions/);
 });
 
 class FakeWorker extends EventTarget {

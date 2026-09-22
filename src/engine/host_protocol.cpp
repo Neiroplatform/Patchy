@@ -3967,6 +3967,16 @@ int patchy_engine_session_execute(patchy_engine_session *session,
       break;
     case PATCHY_ENGINE_COMMAND_CROP_DOCUMENT: {
       const auto crop = command->payload.crop_document.crop;
+      const auto right = static_cast<std::int64_t>(crop.x) + crop.width;
+      const auto bottom = static_cast<std::int64_t>(crop.y) + crop.height;
+      if (crop.width <= 0 || crop.height <= 0 ||
+          right < std::numeric_limits<std::int32_t>::min() ||
+          right > std::numeric_limits<std::int32_t>::max() ||
+          bottom < std::numeric_limits<std::int32_t>::min() ||
+          bottom > std::numeric_limits<std::int32_t>::max()) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "crop rectangle edges must fit signed 32-bit coordinates");
+      }
       result = session->value->execute(patchy::engine::CropDocument{
           {crop.x, crop.y, crop.width, crop.height},
           command->payload.crop_document.clockwise_degrees,
