@@ -420,7 +420,8 @@ struct RotatedCropMap {
 
 [[nodiscard]] RotatedCropMap rotated_crop_map(Rect crop, double angle_degrees) {
   RotatedCropMap map;
-  const auto radians = angle_degrees * (std::numbers::pi / 180.0);
+  const auto normalized_degrees = std::fmod(angle_degrees, 360.0);
+  const auto radians = normalized_degrees * (std::numbers::pi / 180.0);
   map.cos_theta = std::cos(radians);
   map.sin_theta = std::sin(radians);
   map.document_center_x = static_cast<double>(crop.x) + static_cast<double>(crop.width) / 2.0;

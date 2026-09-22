@@ -290,8 +290,8 @@
         <section>
           <h3>Image size</h3>
           <div class="field-row">
-            <label><span>Width</span><input id="documentWidthInput" type="number" min="1" step="1" required></label>
-            <label><span>Height</span><input id="documentHeightInput" type="number" min="1" step="1" required></label>
+            <label><span>Width</span><input id="documentWidthInput" type="number" min="1" max="300000" step="1" required></label>
+            <label><span>Height</span><input id="documentHeightInput" type="number" min="1" max="300000" step="1" required></label>
           </div>
           <label class="check-field"><input id="resizeConstrainInput" type="checkbox" checked><span>Constrain proportions</span></label>
           <div class="dialog-actions"><button class="button" id="resizeImageButton" type="button">Scale image</button></div>
@@ -299,8 +299,8 @@
         <section>
           <h3>Canvas size</h3>
           <div class="field-row">
-            <label><span>Width</span><input id="canvasWidthInput" type="number" min="1" step="1" required></label>
-            <label><span>Height</span><input id="canvasHeightInput" type="number" min="1" step="1" required></label>
+            <label><span>Width</span><input id="canvasWidthInput" type="number" min="1" max="300000" step="1" required></label>
+            <label><span>Height</span><input id="canvasHeightInput" type="number" min="1" max="300000" step="1" required></label>
           </div>
           <div class="field-row">
             <label><span>Anchor</span><select id="canvasAnchorInput">
@@ -323,10 +323,10 @@
         <section>
           <h3>Crop</h3>
           <div class="field-row field-row-four">
-            <label><span>X</span><input id="cropXInput" type="number" step="1" value="0" required></label>
-            <label><span>Y</span><input id="cropYInput" type="number" step="1" value="0" required></label>
-            <label><span>Width</span><input id="cropWidthInput" type="number" min="1" step="1" required></label>
-            <label><span>Height</span><input id="cropHeightInput" type="number" min="1" step="1" required></label>
+            <label><span>X</span><input id="cropXInput" type="number" min="-2147483648" max="2147483647" step="1" value="0" required></label>
+            <label><span>Y</span><input id="cropYInput" type="number" min="-2147483648" max="2147483647" step="1" value="0" required></label>
+            <label><span>Width</span><input id="cropWidthInput" type="number" min="1" max="2147483647" step="1" required></label>
+            <label><span>Height</span><input id="cropHeightInput" type="number" min="1" max="2147483647" step="1" required></label>
           </div>
           <div class="field-row">
             <label><span>Straighten angle</span><input id="cropAngleInput" type="number" step="0.1" value="0" required></label>

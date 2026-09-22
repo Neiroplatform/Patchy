@@ -4,7 +4,9 @@ import test from "node:test";
 import { PatchyWorkerHost } from "../../sdk/engine/worker-host.mjs";
 import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
-import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "../../sdk/engine/memory-policy.mjs";
+import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
+  documentPreflight, layeredGeometrySize, MIB, rotatedGeometrySize,
+  validateInt32Rect } from "../../sdk/engine/memory-policy.mjs";
 import { createRenderFrame } from "../../sdk/engine/frame-transport.mjs";
 import { createPsdBlob, inspectPsdBlob, MAX_BROWSER_SOURCE_BYTES, parsePsdHeader,
   readBlobInput } from "../../sdk/engine/blob-ingress.mjs";
@@ -515,7 +517,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       if (type === 13) {
         assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true),
           view.getInt32(command + 40, true), view.getInt32(command + 44, true)], [-1, 1, 4, 3]);
-        assert.equal(view.getFloat64(command + 48, true), -2.5);
+        assert.equal(view.getFloat64(command + 48, true), 1e308 % 360);
         assert.deepEqual(Array.from(heap.subarray(command + 56, command + 60)), [7, 8, 9, 0]);
         assert.equal(heap[command + 60], 0);
       }
@@ -900,8 +902,12 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.resizeImage(session, snapshot, 6, 4);
   engine.resizeCanvas(session, snapshot, 8, 6, 8, [1, 2, 3, 255]);
   engine.rotateCanvas(session, snapshot, 37.5, [4, 5, 6, 255]);
+  assert.throws(() => engine.cropDocument(session, snapshot,
+    { x: 0x100000000, y: 0, width: 1, height: 1 }), /signed 32-bit/);
+  assert.throws(() => engine.cropDocument(session, snapshot,
+    { x: 0x7ffffffe, y: 0, width: 2, height: 1 }), /edges must fit/);
   engine.cropDocument(session, snapshot, { x: -1, y: 1, width: 4, height: 3 },
-    -2.5, [7, 8, 9, 0], false);
+    1e308, [7, 8, 9, 0], false);
   engine.setSelection(session, snapshot, [{ x: 0, y: 0, width: 2, height: 1 }]);
   engine.setSelectionMask(session, snapshot, { bounds: { x: 0, y: 0, width: 3, height: 2 },
     gray: new Uint8Array([0, 64, 255, 255, 64, 0]) });
@@ -1850,6 +1856,28 @@ test("browser memory policy preflights working sets and selects bounded dirty re
   assert.deepEqual(chooseRenderRegion({ width: 100, height: 100, dirtyRegion: null },
     { documentId: 1, currentDocumentId: 2, width: 100, height: 100 }),
   { x: 0, y: 0, width: 100, height: 100 });
+});
+
+test("browser geometry policy rejects ABI truncation and unsaveable layered dimensions", () => {
+  assert.deepEqual(validateInt32Rect({ x: -2, y: 1, width: 5, height: 4 }),
+    { x: -2, y: 1, width: 5, height: 4, right: 3, bottom: 5 });
+  assert.throws(() => validateInt32Rect({ x: 0x100000000, y: 0, width: 1, height: 1 }),
+    /signed 32-bit/);
+  assert.throws(() => validateInt32Rect({ x: 0x7ffffffe, y: 0, width: 2, height: 1 }),
+    /edges must fit/);
+  assert.deepEqual(layeredGeometrySize(30000, 1, "psd"),
+    { width: 30000, height: 1, format: "psd", limit: 30000 });
+  assert.throws(() => layeredGeometrySize(30001, 1, "psd"), /between 1 and 30000/);
+  assert.deepEqual(layeredGeometrySize(300000, 1, "psb"),
+    { width: 300000, height: 1, format: "psb", limit: 300000 });
+  assert.deepEqual(rotatedGeometrySize(20, 16, 90), { width: 16, height: 20 });
+  assert.deepEqual(rotatedGeometrySize(20, 23, 12.5), { width: 25, height: 27 });
+  assert.deepEqual(cropGeometrySize({ x: -2, y: -1, width: 20, height: 23 },
+    { clipToCanvas: false, canvasWidth: 16, canvasHeight: 20 }), { width: 20, height: 23 });
+  assert.deepEqual(cropGeometrySize({ x: -2, y: -1, width: 20, height: 23 },
+    { clipToCanvas: true, canvasWidth: 16, canvasHeight: 20 }), { width: 16, height: 20 });
+  assert.throws(() => cropGeometrySize({ x: 30, y: 30, width: 2, height: 2 },
+    { clipToCanvas: true, canvasWidth: 16, canvasHeight: 20 }), /outside the canvas/);
 });
 
 class FakeWorker extends EventTarget {

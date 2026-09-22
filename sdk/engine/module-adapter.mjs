@@ -467,13 +467,14 @@ export class EmscriptenPatchyEngine {
                color = [0, 0, 0, 0], clipToCanvas = true) {
     this.#rect(crop);
     if (!Number.isFinite(clockwiseDegrees)) throw new TypeError("Crop rotation must be finite");
+    const normalizedDegrees = clockwiseDegrees % 360;
     const rgba = this.#color(color);
     return this.#command(session, snapshot, 13, (view) => {
       view.setInt32(32, crop.x, true);
       view.setInt32(36, crop.y, true);
       view.setInt32(40, crop.width, true);
       view.setInt32(44, crop.height, true);
-      view.setFloat64(48, clockwiseDegrees, true);
+      view.setFloat64(48, normalizedDegrees, true);
       rgba.forEach((component, index) => view.setUint8(56 + index, component));
       view.setUint8(60, clipToCanvas ? 1 : 0);
     });
@@ -2155,8 +2156,18 @@ export class EmscriptenPatchyEngine {
 
   #rect(rect) {
     if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isInteger) ||
-        rect.width <= 0 || rect.height <= 0) {
-      throw new TypeError("Crop rectangle must contain integer coordinates and positive dimensions");
+        rect.x < -0x80000000 || rect.x > 0x7fffffff ||
+        rect.y < -0x80000000 || rect.y > 0x7fffffff ||
+        rect.width <= 0 || rect.width > 0x7fffffff ||
+        rect.height <= 0 || rect.height > 0x7fffffff) {
+      throw new TypeError("Rectangle must use signed 32-bit coordinates and positive dimensions");
+    }
+    const right = rect.x + rect.width;
+    const bottom = rect.y + rect.height;
+    if (!Number.isSafeInteger(right) || !Number.isSafeInteger(bottom) ||
+        right < -0x80000000 || right > 0x7fffffff ||
+        bottom < -0x80000000 || bottom > 0x7fffffff) {
+      throw new RangeError("Rectangle edges must fit signed 32-bit coordinates");
     }
   }
 

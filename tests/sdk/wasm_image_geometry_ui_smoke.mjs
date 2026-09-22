@@ -33,6 +33,22 @@ try {
     byId("transformButton").click();
     await waitFor(() => byId("documentDialog").open, "Image Geometry dialog did not open");
   };
+  const dragCanvas = async (toolButtonId, start, end) => {
+    byId(toolButtonId).click();
+    const canvas = byId("documentCanvas");
+    const rect = canvas.getBoundingClientRect();
+    const PointerEvent = frame.contentWindow.PointerEvent;
+    canvas.setPointerCapture = () => {};
+    try {
+      const dispatch = (type, point, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 71, pointerType: "mouse", isPrimary: true,
+        button: 0, buttons, clientX: rect.left + point.x, clientY: rect.top + point.y,
+      }));
+      dispatch("pointerdown", start, 1);
+      dispatch("pointermove", end, 1);
+      dispatch("pointerup", end, 0);
+    } finally { delete canvas.setPointerCapture; }
+  };
 
   await waitFor(() => byId("sessionIndicator")?.textContent.includes("Engine ready") && idle(),
     "production editor did not initialize its pthread-WASM worker");
@@ -40,9 +56,16 @@ try {
   await waitFor(() => idle() && revision() === 0n, "New did not create the document");
 
   await openGeometry();
+  let before = revision();
+  byId("resizeConstrainInput").checked = false;
+  byId("documentWidthInput").value = "30001"; byId("documentHeightInput").value = "1";
+  byId("resizeImageButton").click();
+  await waitFor(() => revision() === before && byId("documentDialog").open &&
+    !byId("errorBanner").hidden && byId("errorMessage").textContent.includes("PSD dimensions"),
+  "production geometry preflight did not reject an unsaveable PSD size before mutation");
   byId("resizeConstrainInput").checked = false;
   byId("documentWidthInput").value = "16"; byId("documentHeightInput").value = "12";
-  let before = revision(); byId("resizeImageButton").click();
+  before = revision(); byId("resizeImageButton").click();
   await waitFor(() => { failOnEditorError(); return idle() && revision() === before + 1n && canvasSize() === "16×12"; },
     "production Image Size did not commit one revision");
 
@@ -60,10 +83,30 @@ try {
   await waitFor(() => { failOnEditorError(); return idle() && revision() === before + 1n && canvasSize() === "16×20"; },
     "production arbitrary Rotate did not commit one revision");
 
-  byId("cropToolButton").click();
+  await dragCanvas("cropToolButton", { x: 3.2, y: 4.1 }, { x: 12.7, y: 15.4 });
   check(byId("cropToolButton").getAttribute("aria-pressed") === "true",
     "production Crop tool did not become active");
+  await waitFor(() => byId("documentDialog").open && Number(byId("cropWidthInput").value) > 0 &&
+    Number(byId("cropHeightInput").value) > 0, "visual Crop gesture did not open bounded geometry controls");
+  check(byId("cropXInput").value === "3" && byId("cropYInput").value === "4" &&
+    byId("cropWidthInput").value === "10" && byId("cropHeightInput").value === "12",
+  "visual Crop gesture did not retain document-space coordinates");
+  byId("documentDialog").close();
+
+  before = revision();
+  await dragCanvas("marqueeToolButton", { x: 2.2, y: 3.2 }, { x: 10.6, y: 14.6 });
+  await waitFor(() => idle() && revision() === before + 1n && !byId("selectionOverlay").hidden,
+    "selection fixture for crop-to-selection did not commit");
   await openGeometry();
+  check(!byId("cropFromSelectionButton").disabled, "crop-to-selection remained disabled");
+  const selectionCrop = ["cropXInput", "cropYInput", "cropWidthInput", "cropHeightInput"]
+    .map((id) => byId(id).value);
+  byId("cropXInput").value = "0"; byId("cropYInput").value = "0";
+  byId("cropWidthInput").value = "1"; byId("cropHeightInput").value = "1";
+  byId("cropFromSelectionButton").click();
+  check(["cropXInput", "cropYInput", "cropWidthInput", "cropHeightInput"]
+    .every((id, index) => byId(id).value === selectionCrop[index]),
+  "Use selection did not restore the canonical selection bounds");
   byId("cropXInput").value = "-2"; byId("cropYInput").value = "-1";
   byId("cropWidthInput").value = "20"; byId("cropHeightInput").value = "23";
   byId("cropAngleInput").value = "0"; byId("cropExpandInput").checked = true;

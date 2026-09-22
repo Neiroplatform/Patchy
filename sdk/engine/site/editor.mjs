@@ -1,7 +1,9 @@
 import { PatchyWorkerClient } from "./engine/client.mjs";
 import { recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
-import { browserWorkingSetLimit, chooseRenderRegion, documentPreflight, MIB } from "./engine/memory-policy.mjs";
+import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
+  documentPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
+  rotatedGeometrySize } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
 import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
 
@@ -414,8 +416,10 @@ function integerInput(id, positive = false) {
   const input = $(id);
   if (!input.reportValidity()) return null;
   const value = Number(input.value);
-  if (!Number.isInteger(value) || (positive && value <= 0)) {
-    input.setCustomValidity(positive ? "Enter a positive whole number" : "Enter a whole number");
+  if (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX ||
+      (positive && value <= 0)) {
+    input.setCustomValidity(positive ?
+      "Enter a positive signed 32-bit whole number" : "Enter a signed 32-bit whole number");
     input.reportValidity();
     input.setCustomValidity("");
     return null;
@@ -442,6 +446,19 @@ function geometryFillColor() {
 function documentMutation(title, operation) {
   $("documentDialog").close();
   mutate(title, operation);
+}
+
+function geometryMutation(title, targetSize, operation) {
+  try {
+    const target = typeof targetSize === "function" ? targetSize() : targetSize;
+    const format = documentSaveFormats.get(snapshot.documentId) || "psd";
+    layeredGeometrySize(target.width, target.height, format);
+    ensureMemorySafe(target, title);
+  } catch (error) {
+    showError(`${title} rejected`, error);
+    return;
+  }
+  documentMutation(title, operation);
 }
 
 async function invertSelectedLayer() {
@@ -3183,25 +3200,31 @@ $("cancelOperationButton").addEventListener("click", () => {
 $("resizeImageButton").addEventListener("click", () => {
   const width = integerInput("documentWidthInput", true);
   const height = integerInput("documentHeightInput", true);
-  if (width != null && height != null) documentMutation("Scaling image", () => client.resizeImage(width, height));
+  if (width != null && height != null) {
+    geometryMutation("Scaling image", { width, height }, () => client.resizeImage(width, height));
+  }
 });
 $("resizeCanvasButton").addEventListener("click", () => {
   const width = integerInput("canvasWidthInput", true);
   const height = integerInput("canvasHeightInput", true);
   const anchor = Number($("canvasAnchorInput").value);
   if (width != null && height != null && Number.isInteger(anchor)) {
-    documentMutation("Resizing canvas", () => client.resizeCanvas(width, height,
+    geometryMutation("Resizing canvas", { width, height }, () => client.resizeCanvas(width, height,
       { anchor, color: geometryFillColor() }));
   }
 });
-$("rotateLeftButton").addEventListener("click", () => documentMutation("Rotating canvas", () =>
-  client.rotateCanvas(-90, geometryFillColor())));
-$("rotateRightButton").addEventListener("click", () => documentMutation("Rotating canvas", () =>
-  client.rotateCanvas(90, geometryFillColor())));
+$("rotateLeftButton").addEventListener("click", () => geometryMutation("Rotating canvas",
+  rotatedGeometrySize(snapshot.width, snapshot.height, -90), () =>
+    client.rotateCanvas(-90, geometryFillColor())));
+$("rotateRightButton").addEventListener("click", () => geometryMutation("Rotating canvas",
+  rotatedGeometrySize(snapshot.width, snapshot.height, 90), () =>
+    client.rotateCanvas(90, geometryFillColor())));
 $("rotateArbitraryButton").addEventListener("click", () => {
   const degrees = finiteInput("rotateDegreesInput");
   if (degrees != null && Math.abs(degrees % 360) >= .01) {
-    documentMutation("Rotating canvas", () => client.rotateCanvas(degrees, geometryFillColor()));
+    geometryMutation("Rotating canvas",
+      () => rotatedGeometrySize(snapshot.width, snapshot.height, degrees),
+      () => client.rotateCanvas(degrees, geometryFillColor()));
   }
 });
 $("cropButton").addEventListener("click", () => {
@@ -3211,9 +3234,12 @@ $("cropButton").addEventListener("click", () => {
   const height = integerInput("cropHeightInput", true);
   const clockwiseDegrees = finiteInput("cropAngleInput");
   if ([x, y, width, height, clockwiseDegrees].every((value) => value != null)) {
-    documentMutation("Cropping document", () => client.cropDocument(
-      { x, y, width, height }, { clockwiseDegrees, color: geometryFillColor(),
-        clipToCanvas: !$("cropExpandInput").checked }));
+    const crop = { x, y, width, height };
+    const clipToCanvas = !$("cropExpandInput").checked;
+    geometryMutation("Cropping document", () => cropGeometrySize(crop,
+      { clipToCanvas, canvasWidth: snapshot.width, canvasHeight: snapshot.height }),
+      () => client.cropDocument(crop,
+        { clockwiseDegrees: clockwiseDegrees % 360, color: geometryFillColor(), clipToCanvas }));
   }
 });
 $("cropFromSelectionButton").addEventListener("click", () => {

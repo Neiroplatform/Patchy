@@ -338,6 +338,25 @@ void crop_document_rotated_rect_straightens_content() {
   CHECK(sticker_layer->pixels().pixel(0, 0)[3] == 0);
   CHECK(sticker_layer->pixels().pixel(2, 2)[3] == 255);
   CHECK(sticker_layer->pixels().pixel(2, 2)[0] == 5);
+
+  // Host APIs may receive any finite double. Normalize before converting to
+  // radians so a huge finite angle cannot overflow to Inf/NaN geometry.
+  patchy::Document huge_angle(5, 5, patchy::PixelFormat::rgb8());
+  const auto huge_id = huge_angle.add_pixel_layer("Background", solid_rgb(5, 5, 20, 40, 60)).id();
+  auto normalized_angle = huge_angle;
+  const auto maximum = std::numeric_limits<double>::max();
+  CHECK(patchy::crop_document(huge_angle, patchy::Rect{0, 0, 5, 5}, maximum,
+                              patchy::EditColor{1, 2, 3, 255}));
+  CHECK(patchy::crop_document(normalized_angle, patchy::Rect{0, 0, 5, 5},
+                              std::fmod(maximum, 360.0), patchy::EditColor{1, 2, 3, 255}));
+  CHECK(huge_angle.width() == 5);
+  CHECK(huge_angle.height() == 5);
+  CHECK(huge_angle.find_layer(huge_id) != nullptr);
+  CHECK(normalized_angle.find_layer(huge_id) != nullptr);
+  const auto huge_pixels = std::as_const(*huge_angle.find_layer(huge_id)).pixels().data();
+  const auto normalized_pixels = std::as_const(*normalized_angle.find_layer(huge_id)).pixels().data();
+  CHECK(huge_pixels.size() == normalized_pixels.size());
+  CHECK(std::equal(huge_pixels.begin(), huge_pixels.end(), normalized_pixels.begin()));
 }
 
 void crop_document_contained_rect_matches_two_arg_overload() {
