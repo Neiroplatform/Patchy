@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./editor.css">
 </head>
 <body>
+  <a class="skip-link" href="#workspace">Skip to editor workspace</a>
   <div class="editor-shell" data-state="starting">
     <header class="topbar">
       <a class="brand" href="#workspace" aria-label="Patchy editor home">
@@ -36,13 +37,20 @@
         <button class="icon-button" id="copyPixelsButton" type="button" aria-label="Copy selected editable layer" title="Copy selected layer (Ctrl+C)" disabled>⎘</button>
         <button class="icon-button" id="pastePixelsButton" type="button" aria-label="Paste layer or image" title="Paste layer or image (Ctrl+V)" disabled>⎙</button>
       </nav>
-      <div class="session-indicator" id="sessionIndicator" aria-live="polite">
+      <div class="session-tools">
+        <label class="locale-control"><span class="sr-only">Interface language</span>
+          <select id="localeSelect" aria-label="Interface language">
+            <option value="en">EN</option><option value="ru">RU</option>
+          </select>
+        </label>
+        <div class="session-indicator" id="sessionIndicator" role="status" aria-live="polite" aria-atomic="true">
         <span class="status-dot"></span><span>Starting engine</span>
+        </div>
       </div>
     </header>
 
     <main class="workspace" id="workspace">
-      <aside class="tool-rail" aria-label="Workspace tools">
+      <aside class="tool-rail" role="toolbar" aria-orientation="vertical" aria-label="Workspace tools">
         <button class="tool-button" id="moveToolButton" type="button" aria-label="Move layer" aria-pressed="false" title="Move layer (V)">↗</button>
         <button class="tool-button" id="cropToolButton" type="button" aria-label="Crop document" aria-pressed="false" title="Crop document (C)">⌗</button>
         <button class="tool-button" id="marqueeToolButton" type="button" aria-label="Rectangular selection" aria-pressed="true" title="Rectangular selection (M)">□</button>
@@ -67,7 +75,8 @@
         <button class="tool-button" id="togglePanelsButton" type="button" aria-label="Toggle panels" aria-pressed="false" title="Toggle panels">◫</button>
       </aside>
 
-      <section class="stage" aria-label="Document canvas">
+      <section class="stage" aria-labelledby="workspaceTitle">
+        <h1 class="sr-only" id="workspaceTitle">Document editor workspace</h1>
         <div class="document-tabs" id="documentTabs" role="tablist" aria-label="Open documents" hidden></div>
         <div class="stage-meta" id="stageMeta" hidden>
           <span id="documentName">Untitled</span>
@@ -90,7 +99,7 @@
           </span>
           <span id="documentMetrics"></span>
         </div>
-        <div class="canvas-viewport" id="canvasViewport" tabindex="0">
+        <div class="canvas-viewport" id="canvasViewport" role="region" aria-label="Document canvas" tabindex="0">
           <span class="ruler ruler-horizontal" aria-hidden="true"></span>
           <span class="ruler ruler-vertical" aria-hidden="true"></span>
           <div class="canvas-frame" id="canvasFrame">
@@ -99,10 +108,10 @@
             <div class="selection-overlay" id="selectionOverlay" aria-hidden="true" hidden></div>
             <svg class="transform-overlay" id="transformOverlay" aria-label="Layer transform handles" hidden>
               <polygon id="transformPolygon" vector-effect="non-scaling-stroke"></polygon>
-              <circle data-transform-handle="0" tabindex="0"></circle>
-              <circle data-transform-handle="1" tabindex="0"></circle>
-              <circle data-transform-handle="2" tabindex="0"></circle>
-              <circle data-transform-handle="3" tabindex="0"></circle>
+              <circle data-transform-handle="0" role="button" aria-label="Top-left transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="1" role="button" aria-label="Top-right transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="2" role="button" aria-label="Bottom-right transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="3" role="button" aria-label="Bottom-left transform handle" tabindex="0"></circle>
             </svg>
           </div>
           <div class="empty-state" id="emptyState">
@@ -186,8 +195,8 @@
           <header class="panel-header"><div><p class="eyebrow">APPEARANCE</p><h2 id="propertiesTitle">Selected layer</h2></div></header>
           <div class="property-fields">
             <label><span>Name</span><input id="layerNameInput" type="text" maxlength="256" disabled></label>
-            <label><span>Opacity <output id="layerOpacityOutput">100%</output></span><input id="layerOpacityInput" type="range" min="0" max="100" value="100" disabled></label>
-            <label><span>Fill <output id="layerFillOutput">100%</output></span><input id="layerFillInput" type="range" min="0" max="100" value="100" disabled></label>
+            <label><span>Opacity <output id="layerOpacityOutput">100%</output></span><input id="layerOpacityInput" aria-label="Layer opacity" type="range" min="0" max="100" value="100" disabled></label>
+            <label><span>Fill <output id="layerFillOutput">100%</output></span><input id="layerFillInput" aria-label="Layer fill opacity" type="range" min="0" max="100" value="100" disabled></label>
             <label><span>Blend mode</span><select id="layerBlendSelect" disabled>
               <option value="0">Pass through</option><option value="1">Normal</option><option value="2">Multiply</option>
               <option value="3">Screen</option><option value="4">Overlay</option>
@@ -269,9 +278,9 @@
       <div><strong id="errorTitle">Could not open document</strong><span id="errorMessage"></span></div>
       <button class="icon-button" id="dismissErrorButton" type="button" aria-label="Dismiss error">×</button>
     </div>
-    <input id="fileInput" type="file" accept=".psd,.psb,application/octet-stream" hidden>
-    <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
-    <input id="smartObjectInput" type="file" accept=".psd,.psb,image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
+    <input id="fileInput" aria-label="Open PSD or PSB" type="file" accept=".psd,.psb,application/octet-stream" hidden>
+    <input id="imageInput" aria-label="Import image pixels" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
+    <input id="smartObjectInput" aria-label="Place Smart Object" type="file" accept=".psd,.psb,image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
     <dialog class="document-dialog recovery-dialog" id="recoveryDialog" aria-labelledby="recoveryDialogTitle">
       <form method="dialog">
         <header><div><p class="eyebrow">LOCAL RECOVERY</p><h2 id="recoveryDialogTitle">Recover workspaces</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>

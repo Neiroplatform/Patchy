@@ -412,6 +412,10 @@ function normalizePreferences(value, stored) {
     throw new TypeError("Invalid workspace preferences");
   }
   const result = {};
+  if (value.locale !== undefined) {
+    if (!["en", "ru"].includes(value.locale)) throw new TypeError("Invalid preferred locale");
+    result.locale = value.locale;
+  }
   if (value.tool !== undefined) {
     if (!TOOL_IDS.has(value.tool)) throw new TypeError("Invalid preferred tool");
     result.tool = value.tool;

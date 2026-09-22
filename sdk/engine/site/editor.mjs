@@ -7,9 +7,16 @@ import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
 import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
+import { createLocalizer, installDialogFocusReturn, installRovingToolbar,
+  isEditableTarget } from "./shell-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
+const localizer = createLocalizer(document, document.documentElement.lang);
+const t = (value) => localizer.text(value);
+localizer.localize(document);
+installDialogFocusReturn(document);
+const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"));
 const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
 let client = null;
 const workspaceStore = new PatchyWorkspaceStore();
@@ -274,28 +281,33 @@ function renderHistory() {
     const button = document.createElement("button"); button.type = "button";
     button.className = "history-row"; button.dataset.direction = row.direction;
     button.setAttribute("role", "option"); button.setAttribute("aria-selected", String(row.steps === 0));
-    button.disabled = busy || row.steps === 0;
+    button.disabled = busy;
+    button.setAttribute("aria-disabled", String(busy || row.steps === 0));
     const marker = document.createElement("span"); marker.className = "history-marker";
     marker.textContent = row.steps === 0 ? "●" : row.direction === "undo" ? "↶" : "↷";
-    const label = document.createElement("span"); label.className = "history-label"; label.textContent = row.label;
+    const label = document.createElement("span"); label.className = "history-label"; label.textContent = t(row.label);
     button.append(marker, label);
     if (row.steps) button.addEventListener("click", () => navigateHistory(row.steps));
     list.append(button);
   }
-  list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  const current = list.querySelector('[aria-selected="true"]');
+  for (const button of list.querySelectorAll(".history-row")) {
+    button.tabIndex = button === current ? 0 : -1;
+  }
+  current?.scrollIntoView({ block: "nearest" });
 }
 
 function setSessionState(state, label) {
   shell.dataset.state = state;
-  $("sessionIndicator").lastElementChild.textContent = label;
+  $("sessionIndicator").lastElementChild.textContent = t(label);
 }
 
 function setBusy(active, title = "Working", detail = "The engine is updating the document") {
   busy = active;
   shell.setAttribute("aria-busy", String(active));
   $("busyState").hidden = !active;
-  $("busyTitle").textContent = title;
-  $("busyDetail").textContent = detail;
+  $("busyTitle").textContent = t(title);
+  $("busyDetail").textContent = t(detail);
   if (!active) {
     cancelActiveOperation = null;
     $("busyProgress").hidden = true;
@@ -318,7 +330,7 @@ function updateControls() {
   if (snapshot) {
     const format = documentSaveFormats.get(snapshot.documentId) || "psd";
     $("saveFormatSelect").value = format;
-    $("saveButton").querySelector(".download-label").textContent = `Download ${format.toUpperCase()}`;
+    $("saveButton").querySelector(".download-label").textContent = t(`Download ${format.toUpperCase()}`);
   }
   $("exportFormatSelect").disabled = busy || !snapshot;
   $("exportButton").disabled = busy || !snapshot;
@@ -338,7 +350,7 @@ function updateControls() {
   $("invertLayerButton").disabled = busy || !single || layer?.kind !== 0;
   $("filterLayerButton").disabled = busy || !single || layer?.kind !== 0;
   $("textLayerButton").disabled = busy || !snapshot;
-  $("textLayerButton").textContent = single && layer?.kind === 3 ? "Edit text" : "Add text";
+  $("textLayerButton").textContent = t(single && layer?.kind === 3 ? "Edit text" : "Add text");
   $("layerTransformButton").disabled = busy || !transformSelection();
   const arrangement = transformSelection();
   const arrangementMode = Number($("layerArrangeModeInput").value);
@@ -353,7 +365,7 @@ function updateControls() {
   $("shapeLayerButton").disabled = busy || !snapshot;
   $("adjustmentLayerButton").disabled = busy || !snapshot;
   $("smartObjectButton").disabled = busy || !snapshot;
-  $("smartObjectButton").textContent = layer?.kind === 5 ? "Replace Smart Object" : "Place Smart Object";
+  $("smartObjectButton").textContent = t(layer?.kind === 5 ? "Replace Smart Object" : "Place Smart Object");
   $("openSmartObjectButton").disabled = busy || !single || layer?.kind !== 5 ||
     !layer?.smartObject?.contentsEditable;
   $("smartFilterButton").disabled = busy || !single || layer?.kind !== 5 || !layer?.smartObject?.editable;
@@ -362,9 +374,9 @@ function updateControls() {
     layer.kind === 4 || !hasVectorMaskSource;
   $("createMaskButton").disabled = busy || !single || layer?.kind !== 0 || Boolean(layer?.mask);
   $("toggleMaskButton").disabled = busy || !single || !layer?.mask;
-  $("toggleMaskButton").textContent = layer?.mask?.disabled ? "Enable mask" : "Disable mask";
+  $("toggleMaskButton").textContent = t(layer?.mask?.disabled ? "Enable mask" : "Disable mask");
   $("linkMaskButton").disabled = busy || !single || !layer?.mask;
-  $("linkMaskButton").textContent = layer?.mask?.linked === false ? "Link mask" : "Unlink mask";
+  $("linkMaskButton").textContent = t(layer?.mask?.linked === false ? "Link mask" : "Unlink mask");
   $("invertMaskButton").disabled = busy || !single || !layer?.mask;
   $("removeMaskButton").disabled = busy || !single || !layer?.mask;
   const canPaintMask = Boolean(layer?.mask && !layer.mask.disabled &&
@@ -503,7 +515,7 @@ async function applyPixelFilter(layer, filterId, parameters) {
 }
 
 function showError(title, error) {
-  $("errorTitle").textContent = title;
+  $("errorTitle").textContent = t(title);
   $("errorMessage").textContent = error?.message || String(error);
   $("errorBanner").hidden = false;
   if (client.state === "crashed") setSessionState("crashed", "Worker crashed");
@@ -521,7 +533,7 @@ function newWorkspaceId() {
 function setRecoveryLabel(state, label) {
   const output = $("recoveryLabel");
   output.dataset.state = state;
-  output.textContent = label;
+  output.textContent = t(label);
 }
 
 function renderRecoveryStatus(documentId = snapshot?.documentId) {
@@ -538,6 +550,7 @@ function updateRecoveryCount() { $("recoveryCount").textContent = String(knownWo
 
 function preferenceSnapshot() {
   return {
+    locale: localizer.locale,
     tool: canvasTool,
     brushSize: Number($("brushSizeInput").value),
     color: $("brushColorInput").value,
@@ -651,6 +664,9 @@ function persistPreferences() {
 }
 
 function applyPreferences(preferences) {
+  const locale = preferences.locale === "ru" ? "ru" : "en";
+  $("localeSelect").value = locale;
+  localizer.setLocale(locale);
   $("brushSizeInput").value = String(preferences.brushSize);
   $("brushSizeOutput").textContent = `${preferences.brushSize} px`;
   $("brushColorInput").value = preferences.color;
@@ -662,6 +678,18 @@ function applyPreferences(preferences) {
   shell.classList.toggle("panels-hidden", preferences.panelsHidden);
   $("togglePanelsButton").setAttribute("aria-pressed", String(preferences.panelsHidden));
   setCanvasTool(preferences.tool);
+}
+
+function renderLocalizedShell() {
+  renderHistory();
+  renderLayers();
+  renderLayerProperties();
+  renderStructure();
+  renderMetadata();
+  renderDocumentTabs();
+  renderRecoveryStatus();
+  localizer.localize(document);
+  syncToolRoving();
 }
 
 async function recoverEngineAfterCrash() {
@@ -930,6 +958,7 @@ function scheduleLayerWindowRender() {
 function renderLayers() {
   const list = $("layerList");
   const scrollTop = list.scrollTop;
+  const restoreFocus = list.contains(document.activeElement);
   list.replaceChildren();
   const layers = snapshot ? [...snapshot.layers].reverse() : [];
   $("layerCount").textContent = String(layers.length);
@@ -960,9 +989,11 @@ function renderLayers() {
       <button class="layer-copy layer-select-button" type="button"><span class="layer-name"></span><span class="layer-kind"></span></button>
       <button class="reorder-button" type="button" aria-label="Move layer up" ${index === 0 ? "disabled" : ""}>↑</button>
       <button class="reorder-button" type="button" aria-label="Move layer down" ${index === layers.length - 1 ? "disabled" : ""}>↓</button>`;
-    row.querySelector(".layer-name").textContent = layer.name || "Unnamed layer";
+    row.querySelector(".layer-name").textContent = layer.name || t("Unnamed layer");
     row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}${layer.adjustment ? ` · ${adjustmentName(layer.adjustment.kind)}` : ""}${layer.smartObject ? ` · ${layer.smartObject.filename}` : ""}`;
-    row.querySelector(".layer-select-button").setAttribute("aria-label", `Select ${layer.name || "unnamed layer"}`);
+    const selectButton = row.querySelector(".layer-select-button");
+    selectButton.tabIndex = selectedLayerId === layer.id ? 0 : -1;
+    selectButton.setAttribute("aria-label", t(`Select ${layer.name || "unnamed layer"}`));
     row.querySelector(".layer-select-button").addEventListener("click", (event) => {
       selectLayerFromEvent(layer, event, layers);
       renderLayers();
@@ -1020,6 +1051,8 @@ function renderLayers() {
   bottomSpacer.className = "layer-spacer";
   bottomSpacer.style.height = `${Math.max(0, layers.length - last) * LAYER_ROW_HEIGHT}px`;
   list.append(bottomSpacer);
+  localizer.localize(list);
+  if (restoreFocus) list.querySelector('.layer-row[aria-selected="true"] .layer-select-button')?.focus({ preventScroll: true });
 }
 
 function renderLayerProperties() {
@@ -1271,14 +1304,16 @@ function renderDocumentTabs() {
     });
     const activate = document.createElement("button"); activate.type = "button";
     activate.setAttribute("role", "tab"); activate.setAttribute("aria-selected", String(documentTab.active));
+    activate.tabIndex = documentTab.active ? 0 : -1;
     activate.title = documentTab.name;
     activate.textContent = `${documentTab.dirty ? "• " : ""}${documentTab.name}`;
     activate.addEventListener("click", () => activateDocumentTab(documentTab.id));
     const close = document.createElement("button"); close.type = "button";
-    close.setAttribute("aria-label", `Close ${documentTab.name}`); close.textContent = "×";
+    close.setAttribute("aria-label", t(`Close ${documentTab.name}`)); close.textContent = "×";
     close.addEventListener("click", () => closeDocumentTab(documentTab));
     item.append(activate, close); tabs.append(item);
   }
+  localizer.localize(tabs);
 }
 
 async function renderDocument() {
@@ -1390,6 +1425,7 @@ function setCanvasTool(tool) {
   }
   if (tool === "quickMask") renderQuickMask();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  syncToolRoving(document.querySelector('.tool-rail [aria-pressed="true"]') || document.activeElement);
   updateControls();
   persistPreferences();
 }
@@ -3754,25 +3790,71 @@ window.addEventListener("beforeunload", (event) => {
   if ([...checkpointStates.values()].some((state) => state === "pending")) event.preventDefault();
 });
 
+$("localeSelect").addEventListener("change", () => {
+  localizer.setLocale($("localeSelect").value);
+  renderLocalizedShell();
+  persistPreferences();
+});
+
+$("layerList").addEventListener("keydown", (event) => {
+  if (!event.target.closest?.(".layer-select-button") ||
+      !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  const layers = snapshot ? [...snapshot.layers].reverse() : [];
+  const currentId = event.target.closest(".layer-row")?.dataset.layerId;
+  const current = layers.findIndex((layer) => String(layer.id) === currentId);
+  if (current < 0 || !layers.length) return;
+  event.preventDefault();
+  const index = event.key === "Home" ? 0 : event.key === "End" ? layers.length - 1 :
+    Math.max(0, Math.min(layers.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)));
+  selectLayerFromEvent(layers[index], event, layers);
+  $("layerList").scrollTop = Math.max(0, index * LAYER_ROW_HEIGHT - LAYER_ROW_HEIGHT);
+  renderLayers(); renderLayerProperties(); updateControls();
+});
+
+$("historyList").addEventListener("keydown", (event) => {
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  const rows = [...$("historyList").querySelectorAll(".history-row:not(:disabled)")];
+  const current = rows.indexOf(document.activeElement);
+  if (current < 0 || !rows.length) return;
+  event.preventDefault();
+  const index = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 :
+    Math.max(0, Math.min(rows.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)));
+  for (const row of rows) row.tabIndex = row === rows[index] ? 0 : -1;
+  rows[index].focus();
+});
+
+$("documentTabs").addEventListener("keydown", (event) => {
+  if (!event.target.matches?.('[role="tab"]') ||
+      !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = [...$("documentTabs").querySelectorAll('[role="tab"]')];
+  const current = tabs.indexOf(event.target);
+  if (current < 0 || !tabs.length) return;
+  event.preventDefault();
+  const index = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 :
+    (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  tabs[index].focus(); tabs[index].click();
+});
+
 window.addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
   if (!(event.ctrlKey || event.metaKey)) return;
   const key = event.key.toLowerCase();
-  const editingField = event.target?.matches?.("input, select, textarea, [contenteditable]");
+  const editingField = isEditableTarget(event);
   if (key === "o") { event.preventDefault(); executeCommand("document.open"); }
   if (key === "s") { event.preventDefault(); executeCommand("document.save"); }
   if (key === "c" && !editingField && snapshot) { event.preventDefault(); executeCommand("document.copyPixels"); }
   if (key === "v" && !editingField && snapshot) { event.preventDefault(); executeCommand("document.pastePixels"); }
-  if (key === "z") {
+  if (key === "z" && !editingField) {
     event.preventDefault();
     const redo = event.shiftKey;
     executeCommand(redo ? "history.redo" : "history.undo");
   }
-  if (key === "a") { event.preventDefault(); executeCommand("selection.all"); }
-  if (key === "d") { event.preventDefault(); executeCommand("selection.clear"); }
+  if (key === "a" && !editingField) { event.preventDefault(); executeCommand("selection.all"); }
+  if (key === "d" && !editingField) { event.preventDefault(); executeCommand("selection.clear"); }
 });
 
 window.addEventListener("keydown", (event) => {
-  if (event.ctrlKey || event.metaKey || event.altKey || event.target?.matches?.("input, select, textarea")) return;
+  if (event.ctrlKey || event.metaKey || event.altKey || isEditableTarget(event)) return;
   if (event.key.toLowerCase() === "m") executeCommand("tool.marquee");
   if (event.key.toLowerCase() === "l") executeCommand(event.shiftKey ? "tool.magnetic" : "tool.lasso");
   if (event.key.toLowerCase() === "w") executeCommand(event.shiftKey ? "tool.quickSelect" : "tool.magic");
@@ -3830,7 +3912,7 @@ try {
   workspaceAvailable = await workspaceStore.available();
   if (workspaceAvailable) {
     await loadLocalAssets();
-    applyPreferences(await workspaceStore.loadPreferences({ tool: "marquee", brushSize: 24,
+    applyPreferences(await workspaceStore.loadPreferences({ locale: "en", tool: "marquee", brushSize: 24,
       color: "#111111", paintPreset: "solid", font: "Arial",
       selectionTolerance: 32, historyBudgetMiB: 256, panelsHidden: false }));
     await refreshRecoveryList();

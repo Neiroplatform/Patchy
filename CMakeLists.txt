@@ -567,6 +567,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/patchy.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/shell-ui.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/text-layout.mjs"
             "${PROJECT_SOURCE_DIR}/packaging/web/.htaccess"
             "${PATCHY_WASM_SDK_SITE_DIR}"
@@ -597,7 +598,8 @@ if(PATCHY_BUILD_TESTS)
       COMMAND "${PATCHY_NODE_EXECUTABLE}" --test
               "${PROJECT_SOURCE_DIR}/tests/sdk/worker_contract_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/recovery_controller_tests.mjs"
-              "${PROJECT_SOURCE_DIR}/tests/sdk/workspace_store_tests.mjs")
+              "${PROJECT_SOURCE_DIR}/tests/sdk/workspace_store_tests.mjs"
+              "${PROJECT_SOURCE_DIR}/tests/sdk/shell_ui_tests.mjs")
   endif()
 endif()
 

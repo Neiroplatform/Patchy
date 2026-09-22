@@ -26,7 +26,15 @@
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input, select { font: inherit; }
 button { color: inherit; }
-button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
+[tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important;
+  padding: 0 !important; margin: -1px !important; overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+.skip-link { position: fixed; z-index: 30; top: 8px; left: 8px; padding: 9px 12px;
+  color: var(--accent-ink); background: var(--accent); border-radius: var(--radius);
+  font-size: 12px; font-weight: 700; transform: translateY(-160%); transition: transform 120ms var(--ease); }
+.skip-link:focus { transform: translateY(0); }
 
 .editor-shell { min-width: 0; min-height: 100%; background: var(--bg); }
 .topbar {
@@ -64,7 +72,10 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .icon-button { width: 34px; padding: 0; font-size: 18px; }
 .action-divider { width: 1px; height: 22px; background: var(--line); margin-inline: 2px; }
 
-.session-indicator { justify-self: end; display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 11px; }
+.session-tools { justify-self: end; display: flex; align-items: center; gap: 10px; }
+.locale-control select { min-width: 48px; min-height: 30px; padding: 0 6px; color: var(--text-muted);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-1); font-size: 10px; }
+.session-indicator { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 11px; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #eab75c; box-shadow: 0 0 0 4px #eab75c1a; }
 [data-state="ready"] .status-dot, [data-state="document"] .status-dot { background: var(--accent); box-shadow: 0 0 0 4px #d7ff5514; }
 [data-state="error"] .status-dot, [data-state="crashed"] .status-dot { background: var(--danger); box-shadow: 0 0 0 4px #ff786f18; }
@@ -140,13 +151,13 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .drop-state strong { color: var(--accent); font-size: 20px; }
 .stage-footer { display: flex; align-items: center; gap: 18px; padding: 0 12px; border-top: 1px solid #23282c; color: var(--text-faint); font-size: 10px; }
 .zoom-controls { display: inline-flex; align-items: center; gap: 3px; }
-.zoom-controls button { min-width: 24px; height: 22px; padding: 0 6px; color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: 4px; font-size: 10px; cursor: pointer; }
+.zoom-controls button { min-width: 24px; height: 24px; padding: 0 6px; color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: 4px; font-size: 10px; cursor: pointer; }
 .zoom-controls button:hover { color: var(--text); border-color: var(--line); }
 .zoom-controls output { min-width: 38px; margin-left: 4px; }
 .privacy-label { margin-left: auto; display: flex; gap: 6px; align-items: center; color: var(--text-muted); }
 .privacy-label b { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .memory-control { display: inline-flex; align-items: center; gap: 5px; text-transform: uppercase; letter-spacing: .06em; }
-.memory-control select { height: 22px; padding: 0 5px; color: var(--text-muted); background: transparent; border: 1px solid var(--line); border-radius: 4px; font-size: 10px; }
+.memory-control select { height: 24px; padding: 0 5px; color: var(--text-muted); background: transparent; border: 1px solid var(--line); border-radius: 4px; font-size: 10px; }
 
 .inspector { min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--surface-0); display: block; overflow-y: auto; }
 .panel { min-height: 0; display: flex; flex-direction: column; }
@@ -275,7 +286,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
   .document-actions { gap: 5px; overflow-x: auto; overflow-y: hidden; }
   .document-actions .button { flex: 0 0 auto; padding-inline: 8px; font-size: 11px; }
   .document-actions .icon-button { flex: 0 0 34px; }
-  .session-indicator { grid-column: 2; grid-row: 1; }
+  .session-tools { grid-column: 2; grid-row: 1; }
   .download-label { display: none; }
   .save-label { display: inline; }
   .tool-rail { padding-inline: 3px; }
