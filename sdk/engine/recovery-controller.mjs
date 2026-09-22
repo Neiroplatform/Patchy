@@ -64,10 +64,16 @@ export function checkpointSelection(state) {
   if (state?.selectionMask) return state.selectionMask;
   const rects = state?.selection;
   if (!Array.isArray(rects) || rects.length === 0) return null;
-  const left = Math.min(...rects.map((rect) => rect.x));
-  const top = Math.min(...rects.map((rect) => rect.y));
-  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
-  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
+  let left = rects[0].x;
+  let top = rects[0].y;
+  let right = rects[0].x + rects[0].width;
+  let bottom = rects[0].y + rects[0].height;
+  for (let index = 1; index < rects.length; ++index) {
+    const rect = rects[index];
+    left = Math.min(left, rect.x); top = Math.min(top, rect.y);
+    right = Math.max(right, rect.x + rect.width);
+    bottom = Math.max(bottom, rect.y + rect.height);
+  }
   const width = right - left;
   const height = bottom - top;
   const area = width * height;

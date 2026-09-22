@@ -81,4 +81,6 @@ test("hard multi-rectangle checkpoint materializes exact bounded binary coverage
     { x: 0, y: 0, width: 1, height: 1 },
     { x: 20_000_000, y: 0, width: 1, height: 1 },
   ] }), null);
+  assert.deepEqual([...checkpointSelection({ selection: Array.from({ length: 130_000 },
+    () => ({ x: 1, y: 1, width: 1, height: 1 })) }).gray], [255]);
 });
