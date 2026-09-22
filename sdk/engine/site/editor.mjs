@@ -18,6 +18,7 @@ installDialogFocusReturn(document);
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"));
 const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
 let client = null;
+let errorReturnFocus = null;
 const workspaceStore = new PatchyWorkspaceStore();
 const canvas = $("documentCanvas");
 const context = canvas.getContext("2d", { alpha: true });
@@ -518,15 +519,24 @@ async function applyPixelFilter(layer, filterId, parameters) {
 }
 
 function showError(title, error) {
+  const banner = $("errorBanner");
+  if (!banner.contains(document.activeElement)) errorReturnFocus = document.activeElement;
   localizer.setText($("errorTitle"), title);
   $("errorMessage").textContent = error?.message || String(error);
-  $("errorBanner").hidden = false;
+  banner.hidden = false;
   queueMicrotask(() => $("dismissErrorButton").focus({ preventScroll: true }));
   if (client.state === "crashed") setSessionState("crashed", "Worker crashed");
   else setSessionState(snapshot ? "document" : "error", snapshot ? "Document ready" : "Engine error");
 }
 
-function clearError() { $("errorBanner").hidden = true; }
+function clearError() {
+  const banner = $("errorBanner");
+  const restore = !banner.hidden && banner.contains(document.activeElement) ? errorReturnFocus : null;
+  banner.hidden = true; errorReturnFocus = null;
+  if (restore?.isConnected && !restore.disabled) {
+    queueMicrotask(() => restore.focus({ preventScroll: true }));
+  }
+}
 
 function newWorkspaceId() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -820,7 +830,7 @@ async function restoreWorkspace(id) {
 }
 
 async function removeWorkspace(manifest) {
-  if (!confirm(`Delete the local recovery snapshot for ${manifest.name}?`)) return;
+  if (!confirm(`${localizer.text("Delete the local recovery snapshot for")} ${manifest.name}?`)) return;
   try {
     const activeDocument = [...workspaceIds.entries()].find(([, id]) => id === manifest.id)?.[0];
     if (activeDocument) await checkpointQueues.get(activeDocument)?.whenIdle();
@@ -895,7 +905,11 @@ async function cleanupRecoveryWorkspaces() {
     $("recoverySummary").textContent = "No older recovery workspaces are outside the keep-newest boundary.";
     return;
   }
-  if (!confirm(`Delete ${removable.length} older recovery workspace${removable.length === 1 ? "" : "s"}? Open workspaces and the 8 newest closed workspaces are protected.`)) return;
+  const recoveryKind = localizer.text(removable.length === 1
+    ? "older recovery workspace" : "older recovery workspaces");
+  const protectedCopy = localizer.text(
+    "Open workspaces and the 8 newest closed workspaces are protected.");
+  if (!confirm(`${localizer.text("Delete")} ${removable.length} ${recoveryKind}? ${protectedCopy}`)) return;
   try {
     const removed = await workspaceStore.cleanup({ protectedIds, keepNewest: 8 });
     for (const manifest of removed) knownWorkspaceIds.delete(manifest.id);
@@ -1839,10 +1853,10 @@ async function activateDocumentTab(documentId) {
 
 async function closeDocumentTab(documentTab) {
   if (busy) return;
-  const recoveryWarning = checkpointStates.get(documentTab.id) === "confirmed"
+  const recoveryWarning = localizer.text(checkpointStates.get(documentTab.id) === "confirmed"
     ? "Its latest confirmed local recovery snapshot will remain available."
-    : "Local recovery is not confirmed, so recent changes may be lost.";
-  if (documentTab.dirty && !confirm(`Close ${documentTab.name}? ${recoveryWarning}`)) return;
+    : "Local recovery is not confirmed, so recent changes may be lost.");
+  if (documentTab.dirty && !confirm(`${localizer.text("Close")} ${documentTab.name}? ${recoveryWarning}`)) return;
   clearError(); setBusy(true, "Closing document", "Releasing its canonical Worker session");
   try {
     if (snapshot?.documentId === documentTab.id) {
@@ -3522,7 +3536,8 @@ $("rasterizeLayerButton").addEventListener("click", () => {
 $("mergeVisibleButton").addEventListener("click", () =>
   mutate("Merging visible copy", () => client.mergeVisibleCopy("Merged Visible (Copy)")));
 $("channelRenameButton").addEventListener("click", () => {
-  const channel = selectedChannel(); const name = channel && prompt("Channel name", channel.name);
+  const channel = selectedChannel();
+  const name = channel && prompt(localizer.text("Channel name"), channel.name);
   if (name?.trim()) mutate("Renaming channel", () => client.renameChannel(channel.id, name.trim()));
 });
 $("channelInvertButton").addEventListener("click", () => {
@@ -3539,7 +3554,8 @@ for (const [id, delta] of [["channelUpButton", -1], ["channelDownButton", 1]]) {
   });
 }
 $("pathRenameButton").addEventListener("click", () => {
-  const path = selectedPath(); const name = path && prompt("Path name", path.name);
+  const path = selectedPath();
+  const name = path && prompt(localizer.text("Path name"), path.name);
   if (name?.trim()) mutate("Renaming path", () => client.renamePath(path.id, name.trim()));
 });
 $("pathClipButton").addEventListener("click", () => {

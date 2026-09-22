@@ -115,3 +115,42 @@ test("every literal production status and error has an explicit Russian translat
     .filter((value) => translateMessage(value, "ru") === value).sort();
   assert.deepEqual(missing, []);
 });
+
+test("every literal textContent presentation branch has an explicit Russian translation", async () => {
+  const editor = await source("sdk/engine/site/editor.mjs");
+  const messages = new Set();
+  for (const assignment of editor.matchAll(/\.textContent\s*=\s*([^;\n]+)/g)) {
+    for (const literal of assignment[1].matchAll(/["`]([^"`$]+)["`]/g)) messages.add(literal[1]);
+  }
+  const implementationTokens = new Set([
+    "undo", "fit", "opacity", "fillOpacity", "brushSizeInput", "edgeContrastInput",
+    "layerFillInput", "layerOpacityInput", "selectionToleranceInput",
+  ]);
+  const missing = [...messages].map((value) => value.trim().replace(/^·\s*/, ""))
+    .filter((value) => /[A-Za-z]{2}/.test(value))
+    .filter((value) => !implementationTokens.has(value))
+    .filter((value) => translateMessage(value, "ru") === value).sort();
+  assert.deepEqual(missing, []);
+});
+
+test("every literal production action title has an explicit Russian translation", async () => {
+  const editor = await source("sdk/engine/site/editor.mjs");
+  const actions = [...editor.matchAll(/["`]([A-Z][A-Za-z]+ing(?: [^"`$\n]+)?)["`]/g)]
+    .map((match) => match[1]);
+  const missing = [...new Set(actions)].filter((value) => translateMessage(value, "ru") === value).sort();
+  assert.deepEqual(missing, []);
+  const mutationTitles = new Set();
+  for (const name of ["mutate", "geometryMutation", "commitSelectionMask"]) {
+    const pattern = new RegExp(`${name}\\(\\s*["\\x60]([^"\\x60$\\n]+)["\\x60]`, "g");
+    for (const match of editor.matchAll(pattern)) mutationTitles.add(match[1]);
+  }
+  assert.deepEqual([...mutationTitles]
+    .filter((value) => translateMessage(value, "ru") === value).sort(), []);
+});
+
+test("native prompt and confirmation copy crosses the localization boundary", async () => {
+  const editor = await source("sdk/engine/site/editor.mjs");
+  for (const match of editor.matchAll(/\b(?:confirm|prompt)\(([^\n]+)/g)) {
+    assert.match(match[1], /localizer\.text/, match[0]);
+  }
+});

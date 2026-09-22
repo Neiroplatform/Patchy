@@ -154,6 +154,7 @@ try {
       doc.activeElement === selectedTab;
   }, "document-tab activation did not retain focus on the newly active tab");
 
+  const errorReturn = doc.activeElement;
   const unsupported = new frame.contentWindow.File(["x"], "unsupported.txt", { type: "text/plain" });
   const unsupportedTransfer = new frame.contentWindow.DataTransfer(); unsupportedTransfer.items.add(unsupported);
   frame.contentWindow.dispatchEvent(new frame.contentWindow.DragEvent("drop", {
@@ -165,6 +166,8 @@ try {
   check(dismissRect.top >= 0 && dismissRect.bottom <= frame.contentWindow.innerHeight,
     "focused error dismissal action was outside the viewport");
   byId("dismissErrorButton").click();
+  await waitFor(() => byId("errorBanner").hidden && doc.activeElement === errorReturn,
+    "dismissing an error did not return focus to the prior control");
 
   frame.style.width = "520px"; await delay(80);
   check(doc.documentElement.scrollWidth <= doc.documentElement.clientWidth,
