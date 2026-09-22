@@ -103,6 +103,11 @@ extern "C" void report_fatal_signal(int signal_number, siginfo_t* info, void*) {
 #endif
 
 int main(int argc, char** argv) {
+  if (argc == 3 && argv[1] != nullptr &&
+      std::string_view(argv[1]) == "--psd-atomic-save-crash-probe") {
+    return run_psd_atomic_save_crash_probe(argv[2]);
+  }
+  set_psd_atomic_save_test_executable(argc > 0 ? argv[0] : nullptr);
   patchy::test::suppress_crash_dialogs();
 #ifdef _WIN32
   AddVectoredExceptionHandler(1, report_access_violation);
@@ -146,6 +151,7 @@ int main(int argc, char** argv) {
            smart_filter_pixels_tests,
            smart_filter_descriptors_tests,
            psd_writer_stability_tests,
+           psd_atomic_save_tests,
            psd_save_resource_budget_tests,
            pattern_styles_fixtures_tests,
            adjustments_curves_tests,

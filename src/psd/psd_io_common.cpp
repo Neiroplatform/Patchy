@@ -29,7 +29,6 @@
 #include <cctype>
 #include <climits>
 #include <cstdlib>
-#include <fstream>
 #include <future>
 #include <iomanip>
 #include <limits>
@@ -125,14 +124,6 @@ PixelFormat format_from_header(const Header& header) {
     throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "CMYK PSD file must contain at least 4 channels"));
   }
   return PixelFormat::rgb8();
-}
-
-void write_file_bytes(const std::filesystem::path& path, std::span<const std::uint8_t> bytes) {
-  std::ofstream file(path, std::ios::binary);
-  if (!file) {
-    throw std::runtime_error(PATCHY_TRANSLATE_NOOP("QObject", "Could not open PSD file for writing"));
-  }
-  file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
 bool is_source_color_channel(std::uint16_t channel_id, std::uint16_t source_color_mode) noexcept {
