@@ -366,8 +366,7 @@ enum class LayerStrokePosition {
   Inside,
   Center
 };
-
-inline constexpr auto kLayerStrokePositionMax = LayerStrokePosition::Center;
+static_assert(static_cast<std::uint32_t>(LayerStrokePosition::Center) == 2U);
 
 struct LayerStroke {
   bool enabled{false};
