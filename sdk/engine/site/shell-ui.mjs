@@ -689,6 +689,8 @@ export function translateMessage(value, locale = "en") {
   if (shortcut && RU.has(shortcut[1])) return `${RU.get(shortcut[1])} (${shortcut[2]})`;
   let dynamic = source.match(/^Moving (\d+) state(?:s)?$/);
   if (dynamic) return `Переход на ${dynamic[1]} шаг(а)`;
+  dynamic = source.match(/^(Gradient|Pattern): (.+)$/);
+  if (dynamic) return `${translateMessage(dynamic[1], locale)}: ${dynamic[2]}`;
   dynamic = source.match(/^(.+) needs an estimated (.+) plus (.+) already retained, above this browser's (.+) safety limit\.$/);
   if (dynamic) return `${translateMessage(dynamic[1], locale)}: требуется примерно ${dynamic[2]} плюс ${dynamic[3]} уже занято, что выше безопасного лимита браузера ${dynamic[4]}.`;
   dynamic = source.match(/^Engine returned a (.+) frame, expected (.+)$/);

@@ -25,7 +25,9 @@ test("English and Russian presentation strings share one deterministic boundary"
     "2 workspace(s) restored from confirmed snapshots; 1 could not be restored: abc; 1 had unconfirmed changes and were rolled back.",
     "1 recoverable workspace on this device.", "2 editable layers copied locally",
     "2 MB retained", "1 MB history", "512 KB cache", "3 GB limit",
+    "Gradient: User sunset", "Pattern: User dots",
   ]) assert.notEqual(translateMessage(dynamic, "ru"), dynamic, dynamic);
+  assert.equal(translateMessage("Gradient: User sunset", "ru"), "Градиент: User sunset");
 });
 
 test("virtualized layers always expose one visible roving target", () => {
