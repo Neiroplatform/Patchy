@@ -42,7 +42,7 @@ test("English and Russian presentation strings share one deterministic boundary"
   assert.equal(translateMessage("8-bit RGB", "ru"), "8-бит RGB");
   assert.equal(translateMessage("Drop Shadow: 2 additional", "ru"), "Тень: дополнительных — 2");
   assert.equal(
-    translateMessage("Imported stacked effects preserved — Drop Shadow: 2 additional, Stroke: 1 additional.", "ru"),
+    translateMessage("Imported stacked effects preserved — dropShadow: 2 additional, stroke: 1 additional.", "ru"),
     "Импортированные составные эффекты сохранены — Тень: дополнительных — 2, Обводка: дополнительных — 1.",
   );
   assert.equal(translateMessage("Free transform · 3 layers", "ru"), "Свободная трансформация · Слоёв: 3");
