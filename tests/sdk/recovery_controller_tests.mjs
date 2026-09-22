@@ -14,13 +14,20 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
       calls.push(["open", name, bytes.at(-1), options?.transferOwnership]);
       return projection(nextId++, name);
     },
+    async setSelectionMask(bounds, gray, options) {
+      calls.push(["selection", bounds, [...gray], options?.transferOwnership]);
+      return { ...projection(nextId - 1, "active.psb"),
+        selectionMask: { bounds, gray: gray.slice() } };
+    },
     async activateDocument(id) { calls.push(["activate", id]); return projection(id, `active-${id}.psd`); },
   };
   const store = { async restore(id) {
     if (id === "broken") throw new Error("digest mismatch");
     const format = id === "active" ? "psb" : "psd";
     return { manifest: { id, name: `${id}.psd`, revision: "9", format },
-      bytes: new Uint8Array([56, 66, 80, 83, 0, format === "psb" ? 2 : 1, id.length]) };
+      bytes: new Uint8Array([56, 66, 80, 83, 0, format === "psb" ? 2 : 1, id.length]),
+      selection: id === "active" ? { bounds: { x: 1, y: 2, width: 2, height: 1 },
+        gray: new Uint8Array([64, 255]) } : null };
   } };
   const result = await recoverWorkerSession({ createClient: () => client,
     moduleUrl: "engine.mjs", workspaceStore: store, documents: [
@@ -37,8 +44,13 @@ test("worker recovery restores valid tabs in order, remaps ids and reactivates t
   assert.equal(result.activeSnapshot.documentId, 101);
   assert.equal(result.restored[1].confirmedAtCrash, false);
   assert.equal(result.restored[1].format, "psb");
-  assert.deepEqual(calls.map((item) => item[0]), ["initialize", "open", "open", "open", "activate"]);
+  assert.deepEqual(calls.map((item) => item[0]),
+    ["initialize", "open", "open", "selection", "open", "activate"]);
   assert.ok(calls.filter((item) => item[0] === "open").every((item) => item[3] === true));
+  assert.deepEqual(calls.find((item) => item[0] === "selection")?.slice(1),
+    [{ x: 1, y: 2, width: 2, height: 1 }, [64, 255], true]);
+  assert.deepEqual(result.restored[1].snapshot.selectionMask?.gray,
+    new Uint8Array([64, 255]));
 });
 
 test("worker recovery terminates a replacement that cannot initialize", async () => {

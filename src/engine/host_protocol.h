@@ -1305,6 +1305,7 @@ int patchy_engine_session_magnetic_lasso(
 int patchy_engine_session_preview_selection_refinement(
     const patchy_engine_session *session,
     const patchy_engine_selection_refinement_input *input,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
     patchy_engine_rect *bounds, patchy_engine_buffer *gray,
     patchy_engine_error *error);
 int patchy_engine_session_apply_selection_refinement(

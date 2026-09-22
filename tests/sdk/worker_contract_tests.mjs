@@ -548,8 +548,11 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.equal(view.getUint32(input + 52, true), 6);
       return 1;
     },
-    _patchy_engine_session_preview_selection_refinement(session, input, bounds, output) {
+    _patchy_engine_session_preview_selection_refinement(session, input, progress,
+        progressUserData, bounds, output) {
       assert.equal(session, 22); assert.equal(view.getUint32(input, true), 56);
+      assert.equal(progress, 71); assert.equal(progressUserData, 0);
+      callbackReturns.push(callback(1, 0, progressUserData));
       assert.equal(view.getBigUint64(input + 8, true), 9n);
       assert.equal(view.getBigUint64(input + 16, true), 4n);
       assert.deepEqual([view.getInt32(input + 24, true), view.getInt32(input + 28, true),
@@ -939,6 +942,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     gray: new Uint8Array([0, 64, 192, 255]),
   });
   engine.refineSelection(session, snapshot, refinement);
+  assert.throws(() => engine.refineSelection(session, snapshot,
+    { ...refinement, layerId: (1n << 64n) + 7n }), /Bounded non-empty/);
   engine.modifySelection(session, snapshot, 20, 4);
   engine.modifySelection(session, snapshot, 33, 32);
   engine.modifySelection(session, snapshot, 34, 32);
@@ -1047,7 +1052,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.deepEqual(progress, [0.5, 1]);
   Atomics.store(cancellation, 0, 1);
   engine.applyFilter(session, snapshot, 7n, "patchy.filters.invert", [], cancellation);
-  assert.deepEqual(callbackReturns, [1, 1, 1, 1, 1, 0, 0]);
+  assert.deepEqual(callbackReturns, [1, 1, 1, 1, 1, 1, 0, 0]);
   assert.deepEqual(commandTypes, [2, 3, 6, 7, 35, 36, 4, 5, 9, 10, 11, 12, 13, 20, 33, 34, 23, 28,
     24, 25, 26, 27, 29, 30, 31, 32, 16]);
   assert.equal(engine.render(session, { x: 0, y: 0, width: 3, height: 2 }).byteLength, 24);
@@ -1760,8 +1765,8 @@ test("worker previews and commits one exact-state selection refinement", async (
     create() { return 100; },
     snapshot() { return { ...projection(Number(revision)), revision, stateId: revision,
       selection: [{ x: 1, y: 1, width: 4, height: 3 }] }; },
-    previewSelectionRefinement(session, before, input) {
-      calls.push(["preview", session, before.revision, input]);
+    previewSelectionRefinement(session, before, input, cancellation) {
+      calls.push(["preview", session, before.revision, input, cancellation]);
       return { bounds: { x: 0, y: 0, width: 6, height: 5 },
         gray: new Uint8Array(30).fill(127) };
     },
@@ -1774,9 +1779,12 @@ test("worker previews and commits one exact-state selection refinement", async (
   await host.dispatch({ method: "create", width: 8, height: 6, name: "Refine.psd" });
   const message = { smooth: 4, feather: 2.5, contrast: 35, shiftEdge: -2,
     output: "layerMask", layerId: "7", expectedStateId: "4", expectedRevision: "4" };
-  const preview = await host.dispatch({ method: "previewSelectionRefinement", ...message });
+  const cancellation = new SharedArrayBuffer(4);
+  const preview = await host.dispatch({ method: "previewSelectionRefinement", ...message,
+    cancellation });
   assert.equal(preview.gray.byteLength, 30); assert.equal(revision, 4n);
   assert.equal(calls[0][3].layerId, 7n);
+  assert.ok(calls[0][4] instanceof Int32Array);
   const committed = await host.dispatch({ method: "refineSelection", ...message });
   assert.equal(committed.revision, 5n);
   await assert.rejects(host.dispatch({ method: "refineSelection", ...message }),

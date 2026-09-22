@@ -23,8 +23,12 @@ export async function recoverWorkerSession({
   for (const document of documents) {
     try {
       const recovery = await workspaceStore.restore(document.workspaceId);
-      const next = await client.open(recovery.bytes, recovery.manifest.name,
+      let next = await client.open(recovery.bytes, recovery.manifest.name,
         { transferOwnership: true });
+      if (recovery.selection) {
+        next = await client.setSelectionMask(recovery.selection.bounds,
+          recovery.selection.gray, { transferOwnership: true });
+      }
       const item = {
         previousDocumentId: document.documentId,
         documentId: next.documentId,

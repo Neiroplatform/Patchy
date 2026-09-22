@@ -86,7 +86,7 @@ void selection_refinement_preview_and_commit_share_engine_pixels() {
   patchy_engine_rect bounds{};
   patchy_engine_buffer preview{};
   CHECK(patchy_engine_session_preview_selection_refinement(
-            session, &input, &bounds, &preview, &error) == 1);
+            session, &input, nullptr, nullptr, &bounds, &preview, &error) == 1);
   CHECK(bounds.width > 0);
   CHECK(bounds.height > 0);
   CHECK(preview.size == static_cast<std::size_t>(bounds.width) * bounds.height);
@@ -144,7 +144,7 @@ void selection_refinement_outputs_one_roundtripping_layer_mask() {
   patchy_engine_rect bounds{};
   patchy_engine_buffer preview{};
   CHECK(patchy_engine_session_preview_selection_refinement(
-            session, &input, &bounds, &preview, &error) == 1);
+            session, &input, nullptr, nullptr, &bounds, &preview, &error) == 1);
   const std::vector<std::uint8_t> expected(preview.data,
                                            preview.data + preview.size);
   patchy_engine_buffer_release(&preview);
@@ -155,6 +155,15 @@ void selection_refinement_outputs_one_roundtripping_layer_mask() {
   CHECK(event.dirty == 1);
   CHECK(event.state_id != before.state_id);
   CHECK(event.affected_layer_id == target_layer_id);
+
+  auto repeated = input;
+  const auto applied = project_document(session, &error);
+  repeated.expected_state_id = applied.state_id;
+  repeated.expected_revision = applied.revision;
+  CHECK(patchy_engine_session_apply_selection_refinement(
+            session, &repeated, &event, &error) == 0);
+  CHECK(project_document(session, &error).revision == applied.revision);
+  CHECK(project_document(session, &error).state_id == applied.state_id);
 
   patchy_engine_layer_mask_projection mask{};
   mask.struct_size = sizeof(mask);
@@ -211,11 +220,21 @@ void selection_refinement_rejects_empty_noop_and_invalid_target() {
   patchy_engine_rect bounds{};
   patchy_engine_buffer preview{};
   CHECK(patchy_engine_session_preview_selection_refinement(
-            session, &input, &bounds, &preview, &error) == 0);
+            session, &input, nullptr, nullptr, &bounds, &preview, &error) == 0);
   CHECK(project_document(session, &error).revision == opened.revision);
 
   set_refinement_fixture_selection(session, &error);
   const auto selected = project_document(session, &error);
+  input = refinement_input(selected);
+  const auto cancel = [](std::int32_t, std::int32_t, void *) -> int { return 0; };
+  CHECK(patchy_engine_session_preview_selection_refinement(
+            session, &input, cancel, nullptr, &bounds, &preview, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(preview.data == nullptr);
+  CHECK(preview.size == 0);
+  CHECK(project_document(session, &error).revision == selected.revision);
+  CHECK(project_document(session, &error).state_id == selected.state_id);
+
   input = refinement_input(selected);
   input.smooth = 0;
   input.feather = 0;
@@ -225,6 +244,16 @@ void selection_refinement_rejects_empty_noop_and_invalid_target() {
   CHECK(patchy_engine_session_apply_selection_refinement(
             session, &input, &event, &error) == 0);
   CHECK(project_document(session, &error).revision == selected.revision);
+
+  input = refinement_input(selected);
+  input.smooth = 0;
+  input.feather = 0;
+  input.contrast = 20;
+  input.shift_edge = 0;
+  CHECK(patchy_engine_session_apply_selection_refinement(
+            session, &input, &event, &error) == 0);
+  CHECK(project_document(session, &error).revision == selected.revision);
+  CHECK(project_document(session, &error).state_id == selected.state_id);
 
   input = refinement_input(selected);
   input.feather = std::numeric_limits<double>::quiet_NaN();
@@ -253,7 +282,7 @@ void selection_refinement_rejects_empty_noop_and_invalid_target() {
   const auto oversized = project_document(session, &error);
   input = refinement_input(oversized);
   CHECK(patchy_engine_session_preview_selection_refinement(
-            session, &input, &bounds, &preview, &error) == 0);
+            session, &input, nullptr, nullptr, &bounds, &preview, &error) == 0);
   CHECK(preview.data == nullptr);
   CHECK(preview.size == 0);
   CHECK(project_document(session, &error).revision == oversized.revision);

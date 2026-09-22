@@ -119,6 +119,31 @@ test("alternating generations restore the newest digest-valid PSD", async () => 
   assert.deepEqual((await store.list()).map((item) => item.id), ["document-1"]);
 });
 
+test("workspace generations preserve a digest-bound canonical selection sidecar", async () => {
+  const { root, store } = fixture();
+  const selection = { bounds: { x: 2, y: 3, width: 3, height: 2 },
+    gray: new Uint8Array([0, 32, 128, 192, 224, 255]) };
+  await store.checkpoint({ id: "selected", name: "Selected.psd", revision: 3n,
+    bytes: layeredBytes(3), selection });
+  const restored = await store.restore("selected");
+  assert.deepEqual(restored.selection?.bounds, selection.bounds);
+  assert.deepEqual(restored.selection?.gray, selection.gray);
+  assert.equal(restored.manifest.selection.size, selection.gray.byteLength);
+  assert.match(restored.manifest.selection.sha256, /^[0-9a-f]{64}$/);
+
+  await store.checkpoint({ id: "selected", name: "Selected.psd", revision: 4n,
+    bytes: layeredBytes(4), selection: { ...selection, gray: selection.gray.map((value) => 255 - value) } });
+  const base = await root.getDirectoryHandle("patchy-workspaces-v1");
+  const workspace = await base.getDirectoryHandle("selected");
+  workspace.files.set("selection-b.bin", new Uint8Array([1]));
+  const fallback = await store.restore("selected");
+  assert.equal(fallback.manifest.generation, 1);
+  assert.deepEqual(fallback.selection?.gray, selection.gray);
+  await assert.rejects(store.checkpoint({ id: "bad-selection", name: "Bad.psd", revision: 1n,
+    bytes: layeredBytes(1), selection: { bounds: { x: 0, y: 0, width: 2, height: 2 },
+      gray: new Uint8Array(3) } }), /selection sidecar/);
+});
+
 test("PSB recovery format is bound to encoded bytes rather than the document suffix", async () => {
   const { store } = fixture();
   const manifest = await store.checkpoint({ id: "renamed-psb", name: "Renamed.psd",

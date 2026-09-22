@@ -93,6 +93,7 @@ export interface SelectionRefinementInput {
   smooth: number; feather: number; contrast: number; shiftEdge: number;
   output?: "selection" | "layerMask"; layerId?: bigint | null;
   expectedStateId: bigint; expectedRevision: bigint;
+  cancellation?: Int32Array;
 }
 
 export class PatchyWorkerClient {

@@ -483,7 +483,8 @@ export class PatchyWorkerHost {
         }
         return this.#engine.previewSelectionRefinement(
           this.#requireSession(), before,
-          { ...message, layerId: message.layerId == null ? null : BigInt(message.layerId) });
+          { ...message, layerId: message.layerId == null ? null : BigInt(message.layerId) },
+          new Int32Array(message.cancellation));
       }
       case "refineSelection": {
         const before = this.#snapshot();

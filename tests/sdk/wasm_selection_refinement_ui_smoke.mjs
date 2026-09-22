@@ -66,17 +66,18 @@ try {
     byId("selectionRefinementStatus").textContent.includes("Live engine preview"),
   "Select and Mask did not show live engine preview");
   before = revision();
-  byId("selectionFeatherInput").value = "3";
-  byId("selectionFeatherInput").dispatchEvent(new frame.contentWindow.Event("input", { bubbles: true }));
-  await waitFor(() => byId("selectionRefinementStatus").textContent.includes("Live engine preview"),
-    "refinement controls did not refresh preview");
+  for (let feather = 1; feather <= 10; ++feather) {
+    byId("selectionFeatherInput").value = String(feather);
+    byId("selectionFeatherInput").dispatchEvent(
+      new frame.contentWindow.Event("input", { bubbles: true }));
+  }
   byId("selectionRefinementDialog").close();
   await delay(50);
   check(revision() === before, "Cancel mutated selection, history, or document state");
 
   byId("smoothSelectionButton").click();
   await waitFor(() => byId("selectionRefinementStatus").textContent.includes("Live engine preview"),
-    "Select and Mask did not reopen");
+    "cancelled/coalesced preview queue did not reopen responsively");
   before = revision(); byId("commitSelectionRefinementButton").click();
   await waitFor(() => { failOnEditorError(); return idle() && revision() === before + 1n; },
     "selection output did not commit one revision");

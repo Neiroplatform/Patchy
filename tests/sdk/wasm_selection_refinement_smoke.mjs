@@ -25,10 +25,24 @@ try {
   const unchanged = await client.snapshot();
   check(unchanged.stateId === selected.stateId && unchanged.revision === selected.revision,
     "preview mutated canonical state");
-  const refined = await client.refineSelection(settings);
+  let refined = await client.refineSelection(settings);
   check(refined.stateId === selected.stateId && refined.revision === selected.revision + 1n &&
     refined.selectionMask?.gray.length === preview.gray.length,
   "selection output was not one dirty-neutral revision of preview pixels");
+  const selectionBytes = await client.save("psb");
+  await store.remove(recoveryId).catch(() => {});
+  await store.checkpoint({ id: recoveryId, name: "Recovered selection.psb",
+    revision: refined.revision, dirty: true, format: "psb", bytes: selectionBytes,
+    selection: refined.selectionMask });
+  const selectedRecovery = await store.restore(recoveryId);
+  refined = await client.open(selectedRecovery.bytes, "Recovered selection.psb",
+    { transferOwnership: true });
+  refined = await client.setSelectionMask(selectedRecovery.selection.bounds,
+    selectedRecovery.selection.gray, { transferOwnership: true });
+  check(refined.selectionMask?.gray.length === preview.gray.length &&
+    refined.selectionMask.gray.every((value, index) => value === preview.gray[index]),
+  "local recovery lost refined canonical selection pixels");
+  await store.remove(recoveryId);
 
   const maskSettings = { ...settings, output: "layerMask", layerId: layered.activeLayerId,
     expectedStateId: refined.stateId, expectedRevision: refined.revision };

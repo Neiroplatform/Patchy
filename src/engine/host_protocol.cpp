@@ -1522,6 +1522,7 @@ int patchy_engine_session_magnetic_lasso(
 int patchy_engine_session_preview_selection_refinement(
     const patchy_engine_session *session,
     const patchy_engine_selection_refinement_input *input,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
     patchy_engine_rect *bounds, patchy_engine_buffer *gray,
     patchy_engine_error *error) {
   clear_error(error);
@@ -1551,7 +1552,14 @@ int patchy_engine_session_preview_selection_refinement(
       input->output == PATCHY_ENGINE_SELECTION_REFINEMENT_LAYER_MASK
           ? std::optional<patchy::LayerId>{input->layer_id}
           : std::nullopt};
-  const auto preview = session->value->preview_selection_refinement(command);
+  const patchy::engine::OperationProgress operation_progress{
+      [progress, progress_user_data](std::int32_t completed,
+                                     std::int32_t total) {
+        return progress == nullptr ||
+               progress(completed, total, progress_user_data) != 0;
+      }};
+  const auto preview = session->value->preview_selection_refinement(
+      command, progress == nullptr ? nullptr : &operation_progress);
   if (!preview) {
     return fail(error, preview.error);
   }

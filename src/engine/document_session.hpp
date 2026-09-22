@@ -640,7 +640,8 @@ public:
   [[nodiscard]] std::optional<Rect> take_pending_render_region() noexcept;
   [[nodiscard]] SessionMemoryUsage memory_usage() const;
   [[nodiscard]] SelectionRefinementPreview
-  preview_selection_refinement(const RefineSelection &input) const;
+  preview_selection_refinement(const RefineSelection &input,
+                               const OperationProgress *progress = nullptr) const;
 
   void set_event_sink(EventSink sink) { event_sink_ = std::move(sink); }
   [[nodiscard]] CommandResult

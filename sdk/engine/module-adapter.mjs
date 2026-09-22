@@ -572,19 +572,27 @@ export class EmscriptenPatchyEngine {
     });
   }
 
-  previewSelectionRefinement(session, snapshot, input) {
+  previewSelectionRefinement(session, snapshot, input,
+      cancellation = new Int32Array(new SharedArrayBuffer(4))) {
     const previewSymbol = "_patchy_engine_session_preview_selection_refinement";
     if (!(this.#capabilities & CAP_SELECTION_REFINEMENT) ||
         typeof this.#module[previewSymbol] !== "function") {
       throw new PatchyEngineError(2, "Selection refinement is unavailable");
     }
+    if (!(cancellation instanceof Int32Array) ||
+        !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Selection refinement preview cancellation must use shared Int32 storage");
+    }
     return this.#withError((error) => {
       const value = this.#selectionRefinement(snapshot, input);
       const bounds = this.#alloc(RECT_SIZE);
       const buffer = this.#alloc(BUFFER_SIZE);
+      let callback = 0;
       try {
+        callback = this.#module.addFunction(
+          () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
         this.#check(this.#module[previewSymbol](
-          session, value, bounds, buffer, error), error);
+          session, value, callback, 0, bounds, buffer, error), error);
         const region = this.#view(bounds, RECT_SIZE);
         const output = this.#view(buffer, BUFFER_SIZE);
         const data = output.getUint32(0, true);
@@ -598,6 +606,7 @@ export class EmscriptenPatchyEngine {
         }
         return result;
       } finally {
+        if (callback) this.#module.removeFunction(callback);
         this.#module._patchy_engine_buffer_release(buffer);
         this.#module._free(buffer);
         this.#module._free(bounds);
@@ -2268,7 +2277,8 @@ export class EmscriptenPatchyEngine {
         !Number.isInteger(input.contrast) || input.contrast < 0 || input.contrast > 100 ||
         !Number.isInteger(input.shiftEdge) || input.shiftEdge < -250 || input.shiftEdge > 250 ||
         (input.smooth === 0 && input.feather === 0 && input.contrast === 0 &&
-          input.shiftEdge === 0) || (output === "layerMask" && layerId <= 0n)) {
+          input.shiftEdge === 0) ||
+        (output === "layerMask" && (layerId <= 0n || layerId > UINT64_MAX))) {
       throw new TypeError("Bounded non-empty selection refinement settings are required");
     }
     const value = this.#alloc(SELECTION_REFINEMENT_INPUT_SIZE);

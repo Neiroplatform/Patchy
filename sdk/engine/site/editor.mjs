@@ -64,6 +64,8 @@ let magneticDraft = null;
 let quickMaskDraft = null;
 let selectionRefinementDraft = null;
 let selectionRefinementGeneration = 0;
+let selectionRefinementPreviewTimer = 0;
+let selectionRefinementCancellation = null;
 let clipboardImageBlob = null;
 let layerClipboard = null;
 let draggedLayer = null;
@@ -719,7 +721,8 @@ function scheduleCheckpoint(next) {
       save: (checkpoint) => client.saveDocument(checkpoint.documentId, checkpoint.format),
       write: (checkpoint, bytes) => workspaceStore.checkpoint({ id: workspaceId,
         name: checkpoint.documentName, revision: checkpoint.revision,
-        dirty: checkpoint.dirty, format: checkpoint.format, bytes }),
+        dirty: checkpoint.dirty, format: checkpoint.format, bytes,
+        selection: checkpoint.selectionMask }),
       onState: (state, checkpoint, value) => {
         checkpointStates.set(next.documentId, state);
         if (state === "confirmed") {
@@ -771,8 +774,12 @@ async function restoreWorkspace(id) {
       return;
     }
     const recovered = await workspaceStore.restore(id);
-    const next = await client.open(recovered.bytes, recovered.manifest.name,
+    let next = await client.open(recovered.bytes, recovered.manifest.name,
       { transferOwnership: true });
+    if (recovered.selection) {
+      next = await client.setSelectionMask(recovered.selection.bounds,
+        recovered.selection.gray, { transferOwnership: true });
+    }
     workspaceIds.set(next.documentId, id);
     checkpointStates.set(next.documentId, "confirmed");
     documentSaveFormats.set(next.documentId, recovered.manifest.format || "psd");
@@ -1444,23 +1451,24 @@ function selectionRefinementInput({ report = false } = {}) {
 
 function clearSelectionRefinementPreview() {
   ++selectionRefinementGeneration;
+  if (selectionRefinementPreviewTimer) {
+    clearTimeout(selectionRefinementPreviewTimer);
+    selectionRefinementPreviewTimer = 0;
+  }
+  if (selectionRefinementCancellation) {
+    Atomics.store(selectionRefinementCancellation, 0, 1);
+    selectionRefinementCancellation = null;
+  }
   const target = $("gestureCanvas").getContext("2d");
   target.clearRect(0, 0, $("gestureCanvas").width, $("gestureCanvas").height);
 }
 
-async function previewSelectionRefinement() {
-  const input = selectionRefinementInput();
-  const generation = ++selectionRefinementGeneration;
-  $("commitSelectionRefinementButton").disabled = !input;
-  if (!input) {
-    clearSelectionRefinementPreview();
-    $("selectionRefinementStatus").textContent =
-      "Use bounded values and change at least one refinement setting.";
-    return;
-  }
-  $("selectionRefinementStatus").textContent = "Rendering engine preview…";
+async function runSelectionRefinementPreview(input, generation) {
+  selectionRefinementPreviewTimer = 0;
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  selectionRefinementCancellation = cancellation;
   try {
-    const preview = await client.previewSelectionRefinement(input);
+    const preview = await client.previewSelectionRefinement({ ...input, cancellation });
     if (generation !== selectionRefinementGeneration ||
         !$("selectionRefinementDialog").open) return;
     const overlay = $("gestureCanvas");
@@ -1477,11 +1485,37 @@ async function previewSelectionRefinement() {
     $("selectionRefinementStatus").textContent =
       `Live engine preview · ${preview.bounds.width} × ${preview.bounds.height}px`;
   } catch (error) {
-    if (generation !== selectionRefinementGeneration) return;
+    if (generation !== selectionRefinementGeneration || error.code === 7) return;
     clearSelectionRefinementPreview();
     $("selectionRefinementStatus").textContent = error.message;
     $("commitSelectionRefinementButton").disabled = true;
+  } finally {
+    if (selectionRefinementCancellation === cancellation) {
+      selectionRefinementCancellation = null;
+    }
   }
+}
+
+function previewSelectionRefinement({ immediate = false } = {}) {
+  const input = selectionRefinementInput();
+  const generation = ++selectionRefinementGeneration;
+  if (selectionRefinementPreviewTimer) clearTimeout(selectionRefinementPreviewTimer);
+  selectionRefinementPreviewTimer = 0;
+  if (selectionRefinementCancellation) {
+    Atomics.store(selectionRefinementCancellation, 0, 1);
+    selectionRefinementCancellation = null;
+  }
+  $("commitSelectionRefinementButton").disabled = !input;
+  if (!input) {
+    const target = $("gestureCanvas").getContext("2d");
+    target.clearRect(0, 0, $("gestureCanvas").width, $("gestureCanvas").height);
+    $("selectionRefinementStatus").textContent =
+      "Use bounded values and change at least one refinement setting.";
+    return;
+  }
+  $("selectionRefinementStatus").textContent = "Rendering engine preview…";
+  selectionRefinementPreviewTimer = setTimeout(
+    () => runSelectionRefinementPreview(input, generation), immediate ? 0 : 75);
 }
 
 function openSelectionRefinementDialog() {
@@ -1498,7 +1532,7 @@ function openSelectionRefinementDialog() {
   $("selectionOutputInput").value = "selection";
   $("selectionLayerField").hidden = true;
   $("selectionRefinementDialog").showModal();
-  previewSelectionRefinement();
+  previewSelectionRefinement({ immediate: true });
 }
 
 function combinedSelectionMask(next, mode = "replace") {

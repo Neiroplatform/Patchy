@@ -2,6 +2,8 @@ const ROOT_NAME = "patchy-workspaces-v1";
 const MANIFEST_VERSION = 1;
 const MANIFEST_FILES = ["manifest-a.json", "manifest-b.json"];
 const SNAPSHOT_FILES = ["snapshot-a.psd", "snapshot-b.psd"];
+const SELECTION_FILES = ["selection-a.bin", "selection-b.bin"];
+const MAX_SELECTION_BYTES = 16 * 1024 * 1024;
 const PREFERENCES_FILE = "preferences.json";
 const PREFERENCES_VERSION = 1;
 const ASSET_LIBRARY_FILES = ["assets-a.json", "assets-b.json"];
@@ -76,7 +78,8 @@ export class PatchyWorkspaceStore {
     try { await this.#root(true); return true; } catch { return false; }
   }
 
-  async checkpoint({ id, name, revision, dirty = true, format = "psd", bytes }) {
+  async checkpoint({ id, name, revision, dirty = true, format = "psd", bytes,
+    selection = null }) {
     validateId(id);
     if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
       throw new TypeError("Workspace checkpoint requires non-empty PSD bytes");
@@ -90,7 +93,9 @@ export class PatchyWorkspaceStore {
     const generation = Math.max(0, ...manifests.map((item) => item.generation)) + 1;
     const slotIndex = generation % 2 === 1 ? 0 : 1;
     const snapshotName = SNAPSHOT_FILES[slotIndex];
+    const selectionName = SELECTION_FILES[slotIndex];
     const manifestName = MANIFEST_FILES[slotIndex];
+    const selectionState = normalizeSelection(selection);
 
     await this.#hooks.beforeSnapshotWrite?.({ id, generation, snapshotName });
     await writeFile(workspace, snapshotName, bytes);
@@ -100,6 +105,16 @@ export class PatchyWorkspaceStore {
       throw new Error("Workspace snapshot size verification failed");
     }
     const digest = await sha256(storedBytes);
+    let storedSelection = null;
+    if (selectionState) {
+      await writeFile(workspace, selectionName, selectionState.gray);
+      const gray = await readBytes(workspace, selectionName);
+      if (gray.byteLength !== selectionState.gray.byteLength) {
+        throw new Error("Workspace selection size verification failed");
+      }
+      storedSelection = { bounds: selectionState.bounds, size: gray.byteLength,
+        sha256: await sha256(gray) };
+    }
     const manifest = {
       version: MANIFEST_VERSION,
       id,
@@ -111,6 +126,7 @@ export class PatchyWorkspaceStore {
       dirty: Boolean(dirty),
       snapshotSize: storedBytes.byteLength,
       snapshotSha256: digest,
+      ...(storedSelection ? { selection: storedSelection } : {}),
       updatedAt: this.#clock(),
     };
     await this.#hooks.beforeManifestWrite?.({ ...manifest });
@@ -267,7 +283,14 @@ export class PatchyWorkspaceStore {
         const bytes = await readBytes(workspace, SNAPSHOT_FILES[slotIndex]);
         if (bytes.byteLength !== manifest.snapshotSize) continue;
         if (await sha256(bytes) !== manifest.snapshotSha256) continue;
-        return { manifest, bytes };
+        let selection = null;
+        if (manifest.selection) {
+          const gray = await readBytes(workspace, SELECTION_FILES[slotIndex]);
+          if (gray.byteLength !== manifest.selection.size) continue;
+          if (await sha256(gray) !== manifest.selection.sha256) continue;
+          selection = { bounds: { ...manifest.selection.bounds }, gray };
+        }
+        return { manifest, bytes, selection };
       } catch { /* Try the previous complete generation. */ }
     }
     if (required) throw new Error("Patchy workspace generations failed integrity validation");
@@ -348,7 +371,40 @@ function validManifest(value, id) {
     typeof value.revision === "string" && typeof value.name === "string" &&
     Number.isSafeInteger(value.snapshotSize) && value.snapshotSize > 0 &&
     /^[0-9a-f]{64}$/.test(value.snapshotSha256) &&
+    (value.selection === undefined || validSelectionManifest(value.selection)) &&
     typeof value.updatedAt === "string";
+}
+
+function validSelectionManifest(value) {
+  const bounds = value?.bounds;
+  const area = bounds && bounds.width * bounds.height;
+  return bounds && isInt32(bounds.x) && isInt32(bounds.y) &&
+    isInt32(bounds.width) && bounds.width > 0 &&
+    isInt32(bounds.height) && bounds.height > 0 && Number.isSafeInteger(area) &&
+    Number.isSafeInteger(value.size) && value.size > 0 &&
+    value.size <= MAX_SELECTION_BYTES && area === value.size &&
+    typeof value.sha256 === "string" && /^[0-9a-f]{64}$/.test(value.sha256);
+}
+
+function normalizeSelection(value) {
+  if (value == null) return null;
+  const bounds = value.bounds;
+  const gray = value.gray;
+  const area = bounds && bounds.width * bounds.height;
+  if (!bounds || !isInt32(bounds.x) || !isInt32(bounds.y) ||
+      !isInt32(bounds.width) || bounds.width <= 0 ||
+      !isInt32(bounds.height) || bounds.height <= 0 || !Number.isSafeInteger(area) ||
+      !(gray instanceof Uint8Array) || gray.byteLength === 0 ||
+      gray.byteLength > MAX_SELECTION_BYTES ||
+      area !== gray.byteLength) {
+    throw new TypeError("Workspace selection sidecar is invalid");
+  }
+  return { bounds: { x: bounds.x, y: bounds.y,
+    width: bounds.width, height: bounds.height }, gray: gray.slice() };
+}
+
+function isInt32(value) {
+  return Number.isInteger(value) && value >= -0x80000000 && value <= 0x7fffffff;
 }
 
 function normalizePreferences(value, stored) {

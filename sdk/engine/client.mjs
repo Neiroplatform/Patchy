@@ -275,7 +275,13 @@ export class PatchyWorkerClient {
       expectedRevision: String(input.expectedRevision) });
   }
   previewSelectionRefinement(input) {
+    const cancellation = input.cancellation instanceof Int32Array
+      ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
+    if (!(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Selection refinement cancellation must use shared Int32 storage");
+    }
     return this.#request("previewSelectionRefinement", { ...input,
+      cancellation: cancellation.buffer,
       layerId: input.layerId == null ? null : String(input.layerId),
       expectedStateId: String(input.expectedStateId),
       expectedRevision: String(input.expectedRevision) });
