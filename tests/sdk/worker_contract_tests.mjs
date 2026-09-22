@@ -51,9 +51,12 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "paintTargetSelect", "linkMaskButton",
     "importLayerButton", "groupLayerButton", "removeLayerButton", "layerNameInput",
     "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
-    "documentDialog", "resizeImageButton", "resizeCanvasButton", "rotateLeftButton",
-    "rotateRightButton", "cropButton", "busyProgress", "cancelOperationButton",
-    "canvasFrame", "selectionOverlay", "marqueeToolButton", "panToolButton",
+    "documentDialog", "resizeImageButton", "resizeCanvasButton", "resizeConstrainInput",
+    "canvasWidthInput", "canvasHeightInput", "canvasAnchorInput", "geometryColorInput",
+    "geometryTransparentInput", "rotateLeftButton", "rotateRightButton",
+    "rotateDegreesInput", "rotateArbitraryButton", "cropAngleInput", "cropExpandInput",
+    "cropFromSelectionButton", "cropButton", "busyProgress", "cancelOperationButton",
+    "canvasFrame", "selectionOverlay", "cropToolButton", "marqueeToolButton", "panToolButton",
     "zoomOutButton", "zoomFitButton", "zoomInButton", "createMaskButton",
     "toggleMaskButton", "invertMaskButton", "removeMaskButton",
     "gestureCanvas", "transformOverlay", "moveToolButton", "brushToolButton",
@@ -500,9 +503,22 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
         assert.equal(new TextDecoder().decode(heap.subarray(command + 36, command + 36 + size)), "Group");
       }
       if (type === 10) assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true)], [6, 4]);
-      if (type === 11) assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true), view.getUint32(command + 40, true)], [8, 6, 4]);
-      if (type === 12) assert.equal(view.getFloat64(command + 32, true), 90);
-      if (type === 13) assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true), view.getInt32(command + 40, true), view.getInt32(command + 44, true)], [1, 1, 4, 3]);
+      if (type === 11) {
+        assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true),
+          view.getUint32(command + 40, true)], [8, 6, 8]);
+        assert.deepEqual(Array.from(heap.subarray(command + 44, command + 48)), [1, 2, 3, 255]);
+      }
+      if (type === 12) {
+        assert.equal(view.getFloat64(command + 32, true), 37.5);
+        assert.deepEqual(Array.from(heap.subarray(command + 40, command + 44)), [4, 5, 6, 255]);
+      }
+      if (type === 13) {
+        assert.deepEqual([view.getInt32(command + 32, true), view.getInt32(command + 36, true),
+          view.getInt32(command + 40, true), view.getInt32(command + 44, true)], [-1, 1, 4, 3]);
+        assert.equal(view.getFloat64(command + 48, true), -2.5);
+        assert.deepEqual(Array.from(heap.subarray(command + 56, command + 60)), [7, 8, 9, 0]);
+        assert.equal(heap[command + 60], 0);
+      }
       if (type === 36) {
         assert.equal(view.getUint32(command + 140, true), 1);
         assert.equal(view.getUint32(command + 152, true), 0x1e2832);
@@ -882,9 +898,10 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.renameLayer(session, snapshot, 7n, "Renamed");
   engine.removeLayer(session, snapshot, 7n);
   engine.resizeImage(session, snapshot, 6, 4);
-  engine.resizeCanvas(session, snapshot, 8, 6);
-  engine.rotateCanvas(session, snapshot, 90);
-  engine.cropDocument(session, snapshot, { x: 1, y: 1, width: 4, height: 3 });
+  engine.resizeCanvas(session, snapshot, 8, 6, 8, [1, 2, 3, 255]);
+  engine.rotateCanvas(session, snapshot, 37.5, [4, 5, 6, 255]);
+  engine.cropDocument(session, snapshot, { x: -1, y: 1, width: 4, height: 3 },
+    -2.5, [7, 8, 9, 0], false);
   engine.setSelection(session, snapshot, [{ x: 0, y: 0, width: 2, height: 1 }]);
   engine.setSelectionMask(session, snapshot, { bounds: { x: 0, y: 0, width: 3, height: 2 },
     gray: new Uint8Array([0, 64, 255, 255, 64, 0]) });
@@ -1130,9 +1147,13 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     renameLayer(session, before, layerId, name) { calls.push(["rename", layerId, name]); revision++; },
     removeLayer(session, before, layerId) { calls.push(["remove", layerId]); revision++; },
     resizeImage(session, before, width, height) { calls.push(["resizeImage", width, height]); revision++; },
-    resizeCanvas(session, before, width, height, anchor) { calls.push(["resizeCanvas", width, height, anchor]); revision++; },
-    rotateCanvas(session, before, degrees) { calls.push(["rotate", degrees]); revision++; },
-    cropDocument(session, before, crop) { calls.push(["crop", crop]); revision++; },
+    resizeCanvas(session, before, width, height, anchor, color) {
+      calls.push(["resizeCanvas", width, height, anchor, color]); revision++;
+    },
+    rotateCanvas(session, before, degrees, color) { calls.push(["rotate", degrees, color]); revision++; },
+    cropDocument(session, before, crop, degrees, color, clipToCanvas) {
+      calls.push(["crop", crop, degrees, color, clipToCanvas]); revision++;
+    },
     setSelection(session, before, rects) { calls.push(["selection", rects]); selection = rects; revision++; },
     setSelectionMask(session, before, input) {
       calls.push(["selectionMask", input.gray.byteLength]); selection = [{ x: 0, y: 0, width: 3, height: 2 }]; revision++;
@@ -1233,9 +1254,18 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "renameLayer", layerId: "7", name: "Renamed" });
   await host.dispatch({ method: "removeLayer", layerId: "7" });
   await host.dispatch({ method: "resizeImage", width: 6, height: 4 });
-  await host.dispatch({ method: "resizeCanvas", width: 8, height: 6, anchor: 4 });
-  await host.dispatch({ method: "rotateCanvas", clockwiseDegrees: 90 });
-  await host.dispatch({ method: "cropDocument", crop: { x: 1, y: 1, width: 4, height: 3 } });
+  await host.dispatch({ method: "resizeCanvas", width: 8, height: 6, anchor: 8,
+    color: [1, 2, 3, 255] });
+  await host.dispatch({ method: "rotateCanvas", clockwiseDegrees: 37.5,
+    color: [4, 5, 6, 255] });
+  await host.dispatch({ method: "cropDocument", crop: { x: -1, y: 1, width: 4, height: 3 },
+    clockwiseDegrees: -2.5, color: [7, 8, 9, 0], clipToCanvas: false });
+  assert.deepEqual(calls.find((call) => call[0] === "resizeCanvas"),
+    ["resizeCanvas", 8, 6, 8, [1, 2, 3, 255]]);
+  assert.deepEqual(calls.find((call) => call[0] === "rotate"),
+    ["rotate", 37.5, [4, 5, 6, 255]]);
+  assert.deepEqual(calls.find((call) => call[0] === "crop"),
+    ["crop", { x: -1, y: 1, width: 4, height: 3 }, -2.5, [7, 8, 9, 0], false]);
   await host.dispatch({ method: "setSelection", rects: [{ x: 0, y: 0, width: 1, height: 1 }] });
   await host.dispatch({ method: "setSelectionMask", bounds: { x: 0, y: 0, width: 3, height: 2 },
     gray: new Uint8Array([0, 64, 255, 255, 64, 0]).buffer });
@@ -1912,6 +1942,29 @@ test("client receives Worker-native PSD Blobs without byte transfer lists", asyn
   assert.equal(worker.sent[1].message.format, "psb");
   worker.reply({ id: 2, ok: true, value: new Blob([psdHeader()]) });
   assert.equal((await documentSaved).size, 26);
+});
+
+test("client preserves legacy geometry defaults and transports complete geometry options", async () => {
+  const worker = new FakeWorker(); const client = new PatchyWorkerClient(worker);
+  const legacy = client.resizeCanvas(8, 6, 2);
+  assert.deepEqual(worker.sent[0].message, { id: 1, method: "resizeCanvas",
+    width: 8, height: 6, anchor: 2, color: [0, 0, 0, 0] });
+  worker.reply({ id: 1, ok: true, value: projection(1) }); await legacy;
+  const canvasResize = client.resizeCanvas(9, 7,
+    { anchor: 8, color: [1, 2, 3, 255] });
+  assert.deepEqual(worker.sent[1].message, { id: 2, method: "resizeCanvas",
+    width: 9, height: 7, anchor: 8, color: [1, 2, 3, 255] });
+  worker.reply({ id: 2, ok: true, value: projection(2) }); await canvasResize;
+  const rotation = client.rotateCanvas(12.5, [4, 5, 6, 255]);
+  assert.deepEqual(worker.sent[2].message, { id: 3, method: "rotateCanvas",
+    clockwiseDegrees: 12.5, color: [4, 5, 6, 255] });
+  worker.reply({ id: 3, ok: true, value: projection(3) }); await rotation;
+  const crop = client.cropDocument({ x: -2, y: -1, width: 5, height: 4 },
+    { clockwiseDegrees: -3.5, color: [7, 8, 9, 0], clipToCanvas: false });
+  assert.deepEqual(worker.sent[3].message, { id: 4, method: "cropDocument",
+    crop: { x: -2, y: -1, width: 5, height: 4 }, clockwiseDegrees: -3.5,
+    color: [7, 8, 9, 0], clipToCanvas: false });
+  worker.reply({ id: 4, ok: true, value: projection(4) }); await crop;
 });
 
 test("client correlates RPC, transfers input and rejects all requests on crash", async () => {

@@ -432,15 +432,18 @@ export class PatchyWorkerHost {
       case "resizeCanvas":
         this.#engine.resizeCanvas(
           this.#requireSession(), this.#snapshot(), message.width, message.height,
-          message.anchor);
+          message.anchor, message.color ?? [0, 0, 0, 0]);
         return this.#snapshot();
       case "rotateCanvas":
         this.#engine.rotateCanvas(
-          this.#requireSession(), this.#snapshot(), message.clockwiseDegrees);
+          this.#requireSession(), this.#snapshot(), message.clockwiseDegrees,
+          message.color ?? [0, 0, 0, 0]);
         return this.#snapshot();
       case "cropDocument":
         this.#engine.cropDocument(
-          this.#requireSession(), this.#snapshot(), message.crop);
+          this.#requireSession(), this.#snapshot(), message.crop,
+          message.clockwiseDegrees ?? 0, message.color ?? [0, 0, 0, 0],
+          message.clipToCanvas ?? true);
         return this.#snapshot();
       case "setSelection":
         this.#engine.setSelection(

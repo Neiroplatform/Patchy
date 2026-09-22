@@ -44,6 +44,7 @@
     <main class="workspace" id="workspace">
       <aside class="tool-rail" aria-label="Workspace tools">
         <button class="tool-button" id="moveToolButton" type="button" aria-label="Move layer" aria-pressed="false" title="Move layer (V)">↗</button>
+        <button class="tool-button" id="cropToolButton" type="button" aria-label="Crop document" aria-pressed="false" title="Crop document (C)">⌗</button>
         <button class="tool-button" id="marqueeToolButton" type="button" aria-label="Rectangular selection" aria-pressed="true" title="Rectangular selection (M)">□</button>
         <button class="tool-button" id="lassoToolButton" type="button" aria-label="Freehand lasso" aria-pressed="false" title="Freehand lasso (L)">⌑</button>
         <button class="tool-button" id="polygonToolButton" type="button" aria-label="Polygonal lasso" aria-pressed="false" title="Polygonal lasso (Shift+L)">⬠</button>
@@ -287,16 +288,37 @@
       <form method="dialog">
         <header><div><p class="eyebrow">DOCUMENT</p><h2 id="documentDialogTitle">Canvas operations</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
         <section>
-          <h3>Size</h3>
+          <h3>Image size</h3>
           <div class="field-row">
             <label><span>Width</span><input id="documentWidthInput" type="number" min="1" step="1" required></label>
             <label><span>Height</span><input id="documentHeightInput" type="number" min="1" step="1" required></label>
           </div>
-          <div class="dialog-actions"><button class="button" id="resizeImageButton" type="button">Scale image</button><button class="button" id="resizeCanvasButton" type="button">Resize canvas</button></div>
+          <label class="check-field"><input id="resizeConstrainInput" type="checkbox" checked><span>Constrain proportions</span></label>
+          <div class="dialog-actions"><button class="button" id="resizeImageButton" type="button">Scale image</button></div>
+        </section>
+        <section>
+          <h3>Canvas size</h3>
+          <div class="field-row">
+            <label><span>Width</span><input id="canvasWidthInput" type="number" min="1" step="1" required></label>
+            <label><span>Height</span><input id="canvasHeightInput" type="number" min="1" step="1" required></label>
+          </div>
+          <div class="field-row">
+            <label><span>Anchor</span><select id="canvasAnchorInput">
+              <option value="0">Top left</option><option value="1">Top</option><option value="2">Top right</option>
+              <option value="3">Left</option><option value="4" selected>Center</option><option value="5">Right</option>
+              <option value="6">Bottom left</option><option value="7">Bottom</option><option value="8">Bottom right</option>
+            </select></label>
+            <label><span>Extension color</span><input id="geometryColorInput" type="color" value="#ffffff"></label>
+          </div>
+          <label class="check-field"><input id="geometryTransparentInput" type="checkbox" checked><span>Transparent extension</span></label>
+          <div class="dialog-actions"><button class="button" id="resizeCanvasButton" type="button">Resize canvas</button></div>
         </section>
         <section>
           <h3>Rotate</h3>
-          <div class="dialog-actions"><button class="button" id="rotateLeftButton" type="button">90° left</button><button class="button" id="rotateRightButton" type="button">90° right</button></div>
+          <div class="field-row">
+            <label><span>Clockwise degrees</span><input id="rotateDegreesInput" type="number" step="0.1" value="0" required></label>
+          </div>
+          <div class="dialog-actions"><button class="button" id="rotateLeftButton" type="button">90° left</button><button class="button" id="rotateRightButton" type="button">90° right</button><button class="button" id="rotateArbitraryButton" type="button">Rotate</button></div>
         </section>
         <section>
           <h3>Crop</h3>
@@ -306,7 +328,11 @@
             <label><span>Width</span><input id="cropWidthInput" type="number" min="1" step="1" required></label>
             <label><span>Height</span><input id="cropHeightInput" type="number" min="1" step="1" required></label>
           </div>
-          <div class="dialog-actions"><button class="button button-primary" id="cropButton" type="button">Crop document</button></div>
+          <div class="field-row">
+            <label><span>Straighten angle</span><input id="cropAngleInput" type="number" step="0.1" value="0" required></label>
+            <label class="check-field"><input id="cropExpandInput" type="checkbox"><span>Allow expansion outside canvas</span></label>
+          </div>
+          <div class="dialog-actions"><button class="button" id="cropFromSelectionButton" type="button">Use selection</button><button class="button button-primary" id="cropButton" type="button">Crop document</button></div>
         </section>
       </form>
     </dialog>

@@ -245,13 +245,20 @@ export class PatchyWorkerClient {
   }
   removeLayer(layerId) { return this.#request("removeLayer", { layerId: String(layerId) }); }
   resizeImage(width, height) { return this.#request("resizeImage", { width, height }); }
-  resizeCanvas(width, height, anchor = 4) {
-    return this.#request("resizeCanvas", { width, height, anchor });
+  resizeCanvas(width, height, options = 4) {
+    const { anchor = 4, color = [0, 0, 0, 0] } =
+      typeof options === "number" ? { anchor: options } : (options || {});
+    return this.#request("resizeCanvas", { width, height, anchor, color });
   }
-  rotateCanvas(clockwiseDegrees) {
-    return this.#request("rotateCanvas", { clockwiseDegrees });
+  rotateCanvas(clockwiseDegrees, color = [0, 0, 0, 0]) {
+    return this.#request("rotateCanvas", { clockwiseDegrees, color });
   }
-  cropDocument(crop) { return this.#request("cropDocument", { crop }); }
+  cropDocument(crop, { clockwiseDegrees = 0, color = [0, 0, 0, 0],
+    clipToCanvas = true } = {}) {
+    return this.#request("cropDocument", {
+      crop, clockwiseDegrees, color, clipToCanvas,
+    });
+  }
   setSelection(rects) { return this.#request("setSelection", { rects }); }
   setSelectionMask(bounds, gray, { transferOwnership = false } = {}) {
     const owned = transferableInput(gray, transferOwnership);

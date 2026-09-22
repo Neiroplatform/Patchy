@@ -110,6 +110,7 @@ button:focus-visible, select:focus-visible, [tabindex]:focus-visible { outline: 
 .ruler-horizontal { top: 0; left: 18px; right: 0; height: 18px; background: repeating-linear-gradient(90deg, #59636c 0 1px, transparent 1px 10px, #3d454c 10px 11px, transparent 11px 50px), #171a1de8; border-bottom: 1px solid var(--line); }
 .ruler-vertical { top: 18px; bottom: 0; left: 0; width: 18px; background: repeating-linear-gradient(180deg, #59636c 0 1px, transparent 1px 10px, #3d454c 10px 11px, transparent 11px 50px), #171a1de8; border-right: 1px solid var(--line); }
 .canvas-viewport[data-tool="marquee"] .canvas-frame { cursor: crosshair; }
+.canvas-viewport[data-tool="crop"] .canvas-frame { cursor: crosshair; }
 .canvas-viewport[data-tool="pan"] { cursor: grab; }
 .canvas-viewport[data-tool="pan"][data-panning="true"] { cursor: grabbing; }
 .canvas-viewport[data-tool="move"] .canvas-frame { cursor: move; }

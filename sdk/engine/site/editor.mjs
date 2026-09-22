@@ -26,6 +26,8 @@ let canvasTool = "marquee";
 let zoomMode = "fit";
 let zoom = 1;
 let marqueeDraft = null;
+let cropDraft = null;
+let resizeAspectRatio = 1;
 let panStart = null;
 let moveDraft = null;
 let transformDraft = null;
@@ -393,12 +395,18 @@ function updateControls() {
   renderHistory();
 }
 
-function openDocumentDialog() {
+function openDocumentDialog(crop = null) {
   if (busy || !snapshot) return;
-  for (const id of ["documentWidthInput", "cropWidthInput"]) $(id).value = String(snapshot.width);
-  for (const id of ["documentHeightInput", "cropHeightInput"]) $(id).value = String(snapshot.height);
-  $("cropXInput").value = "0";
-  $("cropYInput").value = "0";
+  for (const id of ["documentWidthInput", "canvasWidthInput"]) $(id).value = String(snapshot.width);
+  for (const id of ["documentHeightInput", "canvasHeightInput"]) $(id).value = String(snapshot.height);
+  resizeAspectRatio = snapshot.width / snapshot.height;
+  const cropBounds = crop || selectionBounds() ||
+    { x: 0, y: 0, width: snapshot.width, height: snapshot.height };
+  $("cropXInput").value = String(cropBounds.x);
+  $("cropYInput").value = String(cropBounds.y);
+  $("cropWidthInput").value = String(cropBounds.width);
+  $("cropHeightInput").value = String(cropBounds.height);
+  $("cropFromSelectionButton").disabled = !selectionBounds();
   $("documentDialog").showModal();
 }
 
@@ -413,6 +421,22 @@ function integerInput(id, positive = false) {
     return null;
   }
   return value;
+}
+
+function finiteInput(id) {
+  const input = $(id);
+  if (!input.reportValidity()) return null;
+  const value = Number(input.value);
+  if (!Number.isFinite(value)) {
+    input.setCustomValidity("Enter a finite number"); input.reportValidity();
+    input.setCustomValidity(""); return null;
+  }
+  return value;
+}
+
+function geometryFillColor() {
+  return [...colorBytes($("geometryColorInput").value),
+    $("geometryTransparentInput").checked ? 0 : 255];
 }
 
 function documentMutation(title, operation) {
@@ -1320,9 +1344,11 @@ function setCanvasTool(tool) {
   if (tool !== "magnetic") magneticDraft = null;
   if (tool !== "quickSelect") quickSelectDraft = null;
   if (tool !== "quickMask") quickMaskDraft = null;
+  if (tool !== "crop" && cropDraft) { cropDraft = null; renderSelection(); }
   canvasTool = tool;
   $("canvasViewport").dataset.tool = tool;
-  for (const [id, value] of [["moveToolButton", "move"], ["marqueeToolButton", "marquee"],
+  for (const [id, value] of [["moveToolButton", "move"], ["cropToolButton", "crop"],
+    ["marqueeToolButton", "marquee"],
     ["lassoToolButton", "lasso"], ["polygonToolButton", "polygon"], ["magicToolButton", "magic"],
     ["quickSelectToolButton", "quickSelect"], ["magneticToolButton", "magnetic"],
     ["quickMaskToolButton", "quickMask"],
@@ -2930,6 +2956,8 @@ registerCommand("history.undo", "undoButton", () => navigateHistory(-1), () => !
 registerCommand("history.redo", "redoButton", () => navigateHistory(1), () => !busy && Boolean(snapshot?.canRedo));
 registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
 registerCommand("tool.move", "moveToolButton", () => setCanvasTool("move"));
+registerCommand("tool.crop", "cropToolButton", () => setCanvasTool("crop"),
+  () => !busy && Boolean(snapshot));
 registerCommand("tool.marquee", "marqueeToolButton", () => setCanvasTool("marquee"));
 registerCommand("tool.lasso", "lassoToolButton", () => setCanvasTool("lasso"));
 registerCommand("tool.polygon", "polygonToolButton", () => setCanvasTool("polygon"));
@@ -3158,19 +3186,59 @@ $("resizeImageButton").addEventListener("click", () => {
   if (width != null && height != null) documentMutation("Scaling image", () => client.resizeImage(width, height));
 });
 $("resizeCanvasButton").addEventListener("click", () => {
-  const width = integerInput("documentWidthInput", true);
-  const height = integerInput("documentHeightInput", true);
-  if (width != null && height != null) documentMutation("Resizing canvas", () => client.resizeCanvas(width, height));
+  const width = integerInput("canvasWidthInput", true);
+  const height = integerInput("canvasHeightInput", true);
+  const anchor = Number($("canvasAnchorInput").value);
+  if (width != null && height != null && Number.isInteger(anchor)) {
+    documentMutation("Resizing canvas", () => client.resizeCanvas(width, height,
+      { anchor, color: geometryFillColor() }));
+  }
 });
-$("rotateLeftButton").addEventListener("click", () => documentMutation("Rotating canvas", () => client.rotateCanvas(-90)));
-$("rotateRightButton").addEventListener("click", () => documentMutation("Rotating canvas", () => client.rotateCanvas(90)));
+$("rotateLeftButton").addEventListener("click", () => documentMutation("Rotating canvas", () =>
+  client.rotateCanvas(-90, geometryFillColor())));
+$("rotateRightButton").addEventListener("click", () => documentMutation("Rotating canvas", () =>
+  client.rotateCanvas(90, geometryFillColor())));
+$("rotateArbitraryButton").addEventListener("click", () => {
+  const degrees = finiteInput("rotateDegreesInput");
+  if (degrees != null && Math.abs(degrees % 360) >= .01) {
+    documentMutation("Rotating canvas", () => client.rotateCanvas(degrees, geometryFillColor()));
+  }
+});
 $("cropButton").addEventListener("click", () => {
   const x = integerInput("cropXInput");
   const y = integerInput("cropYInput");
   const width = integerInput("cropWidthInput", true);
   const height = integerInput("cropHeightInput", true);
-  if ([x, y, width, height].every((value) => value != null)) {
-    documentMutation("Cropping document", () => client.cropDocument({ x, y, width, height }));
+  const clockwiseDegrees = finiteInput("cropAngleInput");
+  if ([x, y, width, height, clockwiseDegrees].every((value) => value != null)) {
+    documentMutation("Cropping document", () => client.cropDocument(
+      { x, y, width, height }, { clockwiseDegrees, color: geometryFillColor(),
+        clipToCanvas: !$("cropExpandInput").checked }));
+  }
+});
+$("cropFromSelectionButton").addEventListener("click", () => {
+  const bounds = selectionBounds();
+  if (!bounds) return;
+  $("cropXInput").value = String(bounds.x); $("cropYInput").value = String(bounds.y);
+  $("cropWidthInput").value = String(bounds.width); $("cropHeightInput").value = String(bounds.height);
+});
+$("resizeConstrainInput").addEventListener("change", () => {
+  const width = Number($("documentWidthInput").value);
+  const height = Number($("documentHeightInput").value);
+  if (width > 0 && height > 0) resizeAspectRatio = width / height;
+});
+$("documentWidthInput").addEventListener("input", () => {
+  if (!$("resizeConstrainInput").checked || !(resizeAspectRatio > 0)) return;
+  const width = Number($("documentWidthInput").value);
+  if (Number.isFinite(width) && width > 0) {
+    $("documentHeightInput").value = String(Math.max(1, Math.round(width / resizeAspectRatio)));
+  }
+});
+$("documentHeightInput").addEventListener("input", () => {
+  if (!$("resizeConstrainInput").checked || !(resizeAspectRatio > 0)) return;
+  const height = Number($("documentHeightInput").value);
+  if (Number.isFinite(height) && height > 0) {
+    $("documentWidthInput").value = String(Math.max(1, Math.round(height * resizeAspectRatio)));
   }
 });
 $("layerNameInput").addEventListener("change", () => {
@@ -3379,6 +3447,31 @@ canvas.addEventListener("pointerdown", (event) => {
     renderTransformOverlay();
     return;
   }
+  if (canvasTool === "crop") {
+    const start = canvasPoint(event);
+    canvas.setPointerCapture(event.pointerId);
+    cropDraft = { x: Math.floor(start.x), y: Math.floor(start.y), width: 1, height: 1 };
+    const move = (nextEvent) => {
+      const point = canvasPoint(nextEvent);
+      const x = Math.floor(Math.min(start.x, point.x));
+      const y = Math.floor(Math.min(start.y, point.y));
+      cropDraft = { x, y, width: Math.max(1, Math.ceil(Math.max(start.x, point.x)) - x),
+        height: Math.max(1, Math.ceil(Math.max(start.y, point.y)) - y) };
+      renderSelection(cropDraft);
+    };
+    const finish = () => {
+      canvas.removeEventListener("pointermove", move);
+      canvas.removeEventListener("pointerup", finish);
+      canvas.removeEventListener("pointercancel", cancel);
+      const crop = cropDraft; cropDraft = null; renderSelection();
+      if (crop) openDocumentDialog(crop);
+    };
+    const cancel = () => { cropDraft = null; renderSelection(); finish(); };
+    canvas.addEventListener("pointermove", move);
+    canvas.addEventListener("pointerup", finish);
+    canvas.addEventListener("pointercancel", cancel);
+    return;
+  }
   if (canvasTool !== "marquee") return;
   const start = canvasPoint(event);
   canvas.setPointerCapture(event.pointerId);
@@ -3540,6 +3633,7 @@ window.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "q") executeCommand("tool.quickMask");
   if (event.key.toLowerCase() === "h") executeCommand("tool.pan");
   if (event.key.toLowerCase() === "v") executeCommand("tool.move");
+  if (event.key.toLowerCase() === "c") executeCommand("tool.crop");
   if (event.key.toLowerCase() === "b") executeCommand("tool.brush");
   if (event.key.toLowerCase() === "e") executeCommand("tool.eraser");
   if (event.key.toLowerCase() === "t") executeCommand("tool.text");

@@ -175,9 +175,14 @@ export class PatchyWorkerClient {
   renameLayer(layerId: bigint, name: string): Promise<DocumentProjection>;
   removeLayer(layerId: bigint): Promise<DocumentProjection>;
   resizeImage(width: number, height: number): Promise<DocumentProjection>;
-  resizeCanvas(width: number, height: number, anchor?: number): Promise<DocumentProjection>;
-  rotateCanvas(clockwiseDegrees: number): Promise<DocumentProjection>;
-  cropDocument(crop: Rect): Promise<DocumentProjection>;
+  resizeCanvas(width: number, height: number,
+    options?: number | { anchor?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+      color?: [number, number, number, number] }): Promise<DocumentProjection>;
+  rotateCanvas(clockwiseDegrees: number,
+    color?: [number, number, number, number]): Promise<DocumentProjection>;
+  cropDocument(crop: Rect, options?: { clockwiseDegrees?: number;
+    color?: [number, number, number, number];
+    clipToCanvas?: boolean }): Promise<DocumentProjection>;
   setSelection(rects: Rect[]): Promise<DocumentProjection>;
   setSelectionMask(bounds: Rect, gray: Uint8Array,
     options?: TransferOptions): Promise<DocumentProjection>;
