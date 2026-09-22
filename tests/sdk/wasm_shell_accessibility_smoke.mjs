@@ -98,6 +98,11 @@ try {
   byId("layerNameInput").dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
     key: "a", ctrlKey: true, bubbles: true, cancelable: true,
   }));
+  const saveEvent = new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "s", ctrlKey: true, bubbles: true, cancelable: true,
+  });
+  byId("layerNameInput").dispatchEvent(saveEvent);
+  check(!saveEvent.defaultPrevented, "editable Ctrl+S was captured by the global save shortcut");
   await delay(80);
   check(byId("detailRevision").textContent === revision, "IME/editable shortcut changed document state");
 

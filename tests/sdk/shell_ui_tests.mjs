@@ -43,6 +43,7 @@ test("production shell exposes keyboard, localization, responsive and motion con
   assert.match(editor, /localizer\.setLocale/);
   assert.match(editor, /event\.isComposing/);
   assert.match(editor, /isEditableTarget\(event\)/);
+  assert.match(editor, /const editingField = isEditableTarget\(event\);\s*if \(editingField\) return;\s*if \(key === "o"\)/);
   assert.match(editor, /\["ArrowUp", "ArrowDown", "Home", "End"\]/);
   assert.match(editor, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
   assert.match(shell, /installDialogFocusReturn/);

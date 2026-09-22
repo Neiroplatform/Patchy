@@ -3840,17 +3840,18 @@ window.addEventListener("keydown", (event) => {
   if (!(event.ctrlKey || event.metaKey)) return;
   const key = event.key.toLowerCase();
   const editingField = isEditableTarget(event);
+  if (editingField) return;
   if (key === "o") { event.preventDefault(); executeCommand("document.open"); }
   if (key === "s") { event.preventDefault(); executeCommand("document.save"); }
-  if (key === "c" && !editingField && snapshot) { event.preventDefault(); executeCommand("document.copyPixels"); }
-  if (key === "v" && !editingField && snapshot) { event.preventDefault(); executeCommand("document.pastePixels"); }
-  if (key === "z" && !editingField) {
+  if (key === "c" && snapshot) { event.preventDefault(); executeCommand("document.copyPixels"); }
+  if (key === "v" && snapshot) { event.preventDefault(); executeCommand("document.pastePixels"); }
+  if (key === "z") {
     event.preventDefault();
     const redo = event.shiftKey;
     executeCommand(redo ? "history.redo" : "history.undo");
   }
-  if (key === "a" && !editingField) { event.preventDefault(); executeCommand("selection.all"); }
-  if (key === "d" && !editingField) { event.preventDefault(); executeCommand("selection.clear"); }
+  if (key === "a") { event.preventDefault(); executeCommand("selection.all"); }
+  if (key === "d") { event.preventDefault(); executeCommand("selection.clear"); }
 });
 
 window.addEventListener("keydown", (event) => {
