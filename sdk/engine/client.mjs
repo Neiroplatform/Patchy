@@ -139,6 +139,17 @@ export class PatchyWorkerClient {
       expectedRevision: String(input.expectedRevision),
     });
   }
+  arrangeLayers(input) {
+    if (!Array.isArray(input.layerIds)) {
+      throw new TypeError("Layer arrangement requires a layer id array");
+    }
+    return this.#request("arrangeLayers", {
+      layerIds: input.layerIds.map(String), mode: input.mode,
+      reference: input.reference ?? 0,
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision),
+    });
+  }
   previewRasterStroke(input) {
     const cancellation = input.cancellation instanceof Int32Array
       ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));

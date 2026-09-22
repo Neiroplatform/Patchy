@@ -160,6 +160,17 @@
             <button type="button" id="smartFilterButton" disabled>Smart Filter</button>
             <button type="button" id="layerTransformButton" disabled>Transform</button>
             <button type="button" id="layerWarpButton" disabled>Warp</button>
+            <select id="layerArrangeModeInput" aria-label="Layer alignment or distribution" disabled>
+              <option value="0">Align left</option><option value="1">Align centers</option>
+              <option value="2">Align right</option><option value="3">Align top</option>
+              <option value="4">Align middles</option><option value="5">Align bottom</option>
+              <option value="6">Distribute horizontal gaps</option>
+              <option value="7">Distribute vertical gaps</option>
+            </select>
+            <select id="layerArrangeReferenceInput" aria-label="Layer alignment reference" disabled>
+              <option value="0">Selection bounds</option><option value="1">Canvas</option>
+            </select>
+            <button type="button" id="arrangeLayersButton" disabled>Arrange layers</button>
             <button type="button" id="createMaskButton" disabled>Add mask</button>
             <button type="button" id="toggleMaskButton" disabled>Disable mask</button>
             <button type="button" id="linkMaskButton" disabled>Unlink mask</button>

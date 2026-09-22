@@ -53,6 +53,7 @@ enum patchy_engine_capability {
   PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING = UINT64_C(1) << 36,
   PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFER = UINT64_C(1) << 37,
   PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM = UINT64_C(1) << 38,
+  PATCHY_ENGINE_CAP_LAYER_ARRANGE = UINT64_C(1) << 39,
 };
 
 enum patchy_engine_error_code {
@@ -141,6 +142,33 @@ typedef struct patchy_engine_layer_batch_transform {
   /* collective top-left, top-right, bottom-right, bottom-left x/y pairs */
   double quad[8];
 } patchy_engine_layer_batch_transform;
+
+enum patchy_engine_layer_arrange_mode {
+  PATCHY_ENGINE_LAYER_ALIGN_LEFT = 0,
+  PATCHY_ENGINE_LAYER_ALIGN_HORIZONTAL_CENTER = 1,
+  PATCHY_ENGINE_LAYER_ALIGN_RIGHT = 2,
+  PATCHY_ENGINE_LAYER_ALIGN_TOP = 3,
+  PATCHY_ENGINE_LAYER_ALIGN_VERTICAL_CENTER = 4,
+  PATCHY_ENGINE_LAYER_ALIGN_BOTTOM = 5,
+  PATCHY_ENGINE_LAYER_DISTRIBUTE_HORIZONTAL_GAPS = 6,
+  PATCHY_ENGINE_LAYER_DISTRIBUTE_VERTICAL_GAPS = 7,
+};
+
+enum patchy_engine_layer_arrange_reference {
+  PATCHY_ENGINE_LAYER_ARRANGE_SELECTION = 0,
+  PATCHY_ENGINE_LAYER_ARRANGE_CANVAS = 1,
+};
+
+typedef struct patchy_engine_layer_arrange {
+  uint32_t struct_size;
+  uint32_t mode;
+  uint64_t expected_state_id;
+  uint64_t expected_revision;
+  const uint64_t *layer_ids;
+  size_t layer_count;
+  uint32_t reference;
+  uint32_t reserved;
+} patchy_engine_layer_arrange;
 
 typedef int (*patchy_engine_transform_progress_fn)(int32_t completed_rows,
                                                    int32_t total_rows,
@@ -1479,6 +1507,10 @@ int patchy_engine_session_preview_layers_transform(
 int patchy_engine_session_transform_layers(
     patchy_engine_session *session,
     const patchy_engine_layer_batch_transform *transform,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_arrange_layers(
+    patchy_engine_session *session,
+    const patchy_engine_layer_arrange *arrangement,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_preview_raster_stroke(
     const patchy_engine_session *session, uint64_t expected_state_id,

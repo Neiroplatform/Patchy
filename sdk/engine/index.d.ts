@@ -121,6 +121,9 @@ export class PatchyWorkerClient {
     expectedStateId: bigint; expectedRevision: bigint }): Promise<{ region: Rect; rgba: Uint8Array }>;
   transformLayers(input: { layerIds: bigint[]; quad: number[]; interpolation?: 0 | 1;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
+  arrangeLayers(input: { layerIds: bigint[]; mode: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    reference?: 0 | 1; expectedStateId: bigint;
+    expectedRevision: bigint }): Promise<DocumentProjection>;
   previewRasterStroke(input: { layerId: bigint; mode: 0 | 1 | 2 | 3; brushSize: number;
     color: number[]; points: number[][]; source?: number[]; cancellation?: Int32Array;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<{ region: Rect; rgba: Uint8Array }>;

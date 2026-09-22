@@ -71,6 +71,7 @@
   "_patchy_engine_session_transform_layer",
   "_patchy_engine_session_preview_layers_transform",
   "_patchy_engine_session_transform_layers",
+  "_patchy_engine_session_arrange_layers",
   "_patchy_engine_session_preview_raster_stroke",
   "_patchy_engine_session_apply_raster_stroke",
   "_patchy_engine_session_preview_layer_mask_stroke",

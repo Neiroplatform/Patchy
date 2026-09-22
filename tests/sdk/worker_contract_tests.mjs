@@ -60,6 +60,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "lassoToolButton", "polygonToolButton", "magicToolButton", "quickSelectToolButton",
     "magneticToolButton", "quickMaskToolButton", "selectionToleranceInput", "edgeContrastInput",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton", "layerWarpButton",
+    "layerArrangeModeInput", "layerArrangeReferenceInput", "arrangeLayersButton",
     "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "textRunList",
     "applyTextRangeButton", "applyTextAllButton", "resetTextRunsButton", "textAlignmentInput",
     "textParagraphRunList", "applyParagraphRangeButton", "applyParagraphAllButton",
@@ -108,6 +109,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.setLayerMaskLinked",
     "client.layerThumbnail", "client.previewLayerTransform",
     "client.transformLayer", "client.previewLayersTransform", "client.transformLayers",
+    "client.arrangeLayers",
     "client.previewRasterStroke", "client.applyRasterStroke",
     "client.previewLayerMaskStroke", "client.applyLayerMaskStroke",
     "client.previewRasterFill", "client.applyRasterFill",
@@ -366,7 +368,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 39n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 40n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -594,6 +596,21 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.equal(view.getUint32(transform + 28, true), 2);
       return 1;
     },
+    _patchy_engine_session_arrange_layers(session, arrangement) {
+      assert.equal(session, 22);
+      assert.equal(view.getUint32(arrangement, true), 40);
+      assert.equal(view.getUint32(arrangement + 4, true), 6);
+      assert.equal(view.getBigUint64(arrangement + 8, true), 9n);
+      assert.equal(view.getBigUint64(arrangement + 16, true), 4n);
+      const ids = view.getUint32(arrangement + 24, true);
+      assert.equal(view.getUint32(arrangement + 28, true), 3);
+      assert.deepEqual([view.getBigUint64(ids, true),
+        view.getBigUint64(ids + 8, true), view.getBigUint64(ids + 16, true)],
+      [9n, 8n, 7n]);
+      assert.equal(view.getUint32(arrangement + 32, true), 0);
+      assert.equal(view.getUint32(arrangement + 36, true), 0);
+      return 1;
+    },
     _patchy_engine_session_preview_layer_mask_stroke(session, state, revision,
         stroke, progress, progressUserData, region, output) {
       assert.deepEqual([session, state, revision], [22, 9n, 4n]);
@@ -785,7 +802,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 39n) - 1n);
+  assert.equal(engine.capabilities, (1n << 40n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -949,6 +966,9 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.transformLayers(session, snapshot, [8n, 7n], batchQuad, 1);
   assert.throws(() => engine.transformLayers(session, snapshot, [7n, 7n], batchQuad, 1),
     /non-zero and unique/);
+  engine.arrangeLayers(session, snapshot, [9n, 8n, 7n], 6, 0);
+  assert.throws(() => engine.arrangeLayers(session, snapshot, [8n, 7n], 6, 0),
+    /at least 3/);
   const maskStroke = { layerId: 7n, mode: 0, brushSize: 3,
     color: [0, 0, 0, 255], points: [[1, 1], [2, 1]], source: [0, 0] };
   const maskPreview = engine.previewLayerMaskStroke(session, snapshot, maskStroke);
@@ -1505,6 +1525,33 @@ test("worker previews and commits one exact-state multi-layer transform", async 
   (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
   assert.deepEqual(calls[0][3], [9n, 7n]);
+  host.dispose();
+});
+
+test("worker commits one exact-state multi-layer arrangement", async () => {
+  let revision = 8n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 39n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision }; },
+    arrangeLayers(session, before, layerIds, mode, reference) {
+      calls.push([session, before.revision, layerIds, mode, reference]);
+      revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 20, height: 10, name: "Arrange.psd" });
+  const committed = await host.dispatch({ method: "arrangeLayers",
+    layerIds: ["9", "8", "7"], mode: 6, reference: 0,
+    expectedStateId: "8", expectedRevision: "8" });
+  assert.equal(committed.revision, 9n);
+  await assert.rejects(host.dispatch({ method: "arrangeLayers",
+    layerIds: ["9", "8", "7"], mode: 6, reference: 0,
+    expectedStateId: "8", expectedRevision: "8" }),
+  (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.deepEqual(calls, [[100, 8n, [9n, 8n, 7n], 6, 0]]);
   host.dispose();
 });
 

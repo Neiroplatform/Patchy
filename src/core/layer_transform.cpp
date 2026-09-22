@@ -312,6 +312,139 @@ std::optional<Rect> bounded_union(const std::vector<std::pair<LayerId, Rect>>& l
               static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)};
 }
 
+struct ArrangeRoot {
+  LayerId id{0};
+  Rect bounds{};
+  std::int64_t dx{0};
+  std::int64_t dy{0};
+};
+
+std::int64_t divide_nearest(std::int64_t numerator,
+                            std::int64_t denominator) {
+  const auto magnitude = numerator < 0 ? -numerator : numerator;
+  const auto rounded = (magnitude + denominator / 2) / denominator;
+  return numerator < 0 ? -rounded : rounded;
+}
+
+bool checked_translated_rect(Rect source, std::int64_t dx, std::int64_t dy,
+                             Rect* translated) {
+  if (source.empty()) {
+    if (translated != nullptr) *translated = source;
+    return true;
+  }
+  const auto left = static_cast<std::int64_t>(source.x);
+  const auto top = static_cast<std::int64_t>(source.y);
+  const auto right = left + source.width;
+  const auto bottom = top + source.height;
+  const auto moved_left = left + dx;
+  const auto moved_top = top + dy;
+  const auto moved_right = right + dx;
+  const auto moved_bottom = bottom + dy;
+  if (left < std::numeric_limits<std::int32_t>::min() ||
+      top < std::numeric_limits<std::int32_t>::min() ||
+      right > std::numeric_limits<std::int32_t>::max() ||
+      bottom > std::numeric_limits<std::int32_t>::max() ||
+      moved_left < std::numeric_limits<std::int32_t>::min() ||
+      moved_top < std::numeric_limits<std::int32_t>::min() ||
+      moved_right > std::numeric_limits<std::int32_t>::max() ||
+      moved_bottom > std::numeric_limits<std::int32_t>::max()) {
+    return false;
+  }
+  if (translated != nullptr) {
+    *translated = Rect{static_cast<std::int32_t>(moved_left),
+                       static_cast<std::int32_t>(moved_top), source.width,
+                       source.height};
+  }
+  return true;
+}
+
+bool validate_arrange_leaf(const Layer& layer, std::string* error) {
+  const bool editable_text = layer_is_text(layer);
+  const bool editable_smart_object = layer_is_smart_object(layer);
+  if (layer.kind() != LayerKind::Pixel && !editable_text &&
+      !editable_smart_object) {
+    return fail(error,
+                "only pixel, editable text and Smart Object layers can be arranged");
+  }
+  if (layer.bounds().empty() || layer.pixels().empty()) {
+    return fail(error, "arrange target has no raster bounds");
+  }
+  if (layer.vector_mask() != nullptr) {
+    return fail(error, "vector-mask arrangement is not supported");
+  }
+  if (layer.mask().has_value() && !layer_mask_linked(layer)) {
+    return fail(error,
+                "an unlinked raster mask cannot share the layer arrangement");
+  }
+  if (editable_text) {
+    const auto found = layer.metadata().find(kLayerMetadataTextTransform);
+    if (found != layer.metadata().end() &&
+        !parse_layer_affine_transform(found->second).has_value()) {
+      return fail(error, "editable text transform metadata is malformed");
+    }
+  }
+  if (editable_smart_object &&
+      (!smart_object_placement_from_layer(layer).has_value() ||
+       !smart_object_lock_reason(layer).empty())) {
+    return fail(error,
+                "Smart Object transform metadata is unavailable or locked");
+  }
+  return true;
+}
+
+bool validate_arrange_translation(const Layer& layer, std::int64_t dx,
+                                  std::int64_t dy, Rect& affected,
+                                  std::string* error) {
+  Rect moved{};
+  if (!checked_translated_rect(layer.bounds(), dx, dy, &moved)) {
+    return fail(error, "layer arrangement exceeds int32 bounds");
+  }
+  for (const auto bounds : {layer.bounds(), moved}) {
+    if (bounds.empty()) continue;
+    const auto combined = bounded_unite(affected, bounds);
+    if (!combined.has_value()) {
+      return fail(error, "layer arrangement affected region exceeds int32 bounds");
+    }
+    affected = *combined;
+  }
+  if (layer.mask().has_value()) {
+    Rect moved_mask{};
+    if (!checked_translated_rect(layer.mask()->bounds, dx, dy, &moved_mask)) {
+      return fail(error, "layer arrangement mask exceeds int32 bounds");
+    }
+    for (const auto bounds : {layer.mask()->bounds, moved_mask}) {
+      if (bounds.empty()) continue;
+      const auto combined = bounded_unite(affected, bounds);
+      if (!combined.has_value()) {
+        return fail(error,
+                    "layer arrangement affected region exceeds int32 bounds");
+      }
+      affected = *combined;
+    }
+  }
+  for (const auto& child : layer.children()) {
+    if (!validate_arrange_translation(child, dx, dy, affected, error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void translate_arrange_tree(Layer& layer, std::int32_t dx, std::int32_t dy,
+                            std::int32_t document_width,
+                            std::int32_t document_height) {
+  for (auto& child : layer.children()) {
+    translate_arrange_tree(child, dx, dy, document_width, document_height);
+  }
+  translate_moved_layer_metadata(layer, dx, dy, document_width,
+                                 document_height);
+  if (!layer.bounds().empty()) {
+    const auto bounds = layer.bounds();
+    layer.set_bounds(Rect{bounds.x + dx, bounds.y + dy, bounds.width,
+                          bounds.height});
+  }
+}
+
 }  // namespace
 
 bool transform_layer(Document& document, LayerId layer_id,
@@ -607,6 +740,194 @@ bool transform_layers(Document& document,
   }
   if (result != nullptr) {
     *result = LayerTransformResult{*collective, *transformed_collective, affected};
+  }
+  if (error != nullptr) error->clear();
+  return true;
+}
+
+bool arrange_layers(Document& document, const LayerArrangeRequest& request,
+                    LayerTransformResult* result, std::string* error) {
+  if (static_cast<std::uint8_t>(request.mode) >
+          static_cast<std::uint8_t>(LayerArrangeMode::DistributeVerticalGaps) ||
+      static_cast<std::uint8_t>(request.reference) >
+          static_cast<std::uint8_t>(LayerArrangeReference::Canvas)) {
+    return fail(error, "layer arrangement mode or reference is invalid");
+  }
+  const bool distribution =
+      request.mode == LayerArrangeMode::DistributeHorizontalGaps ||
+      request.mode == LayerArrangeMode::DistributeVerticalGaps;
+  const auto minimum_roots = distribution ? 3U : 2U;
+  if (request.layer_ids.size() < minimum_roots ||
+      request.layer_ids.size() > 256U) {
+    return fail(error, distribution
+                           ? "layer distribution requires 3 through 256 roots"
+                           : "layer alignment requires 2 through 256 roots");
+  }
+  if (distribution && request.reference != LayerArrangeReference::Selection) {
+    return fail(error, "layer distribution uses selection geometry only");
+  }
+
+  std::vector<ArrangeRoot> roots;
+  roots.reserve(request.layer_ids.size());
+  std::set<LayerId> unique_leaves;
+  std::set<LayerId> unique_roots;
+  std::size_t total_leaves = 0;
+  std::size_t total_groups = 0;
+  for (const auto id : request.layer_ids) {
+    if (!unique_roots.insert(id).second) {
+      return fail(error, "layer arrangement roots must be unique");
+    }
+    const auto* root = std::as_const(document).find_layer(id);
+    if (root == nullptr) return fail(error, "arrange root layer does not exist");
+    std::vector<std::pair<LayerId, Rect>> leaves;
+    std::vector<LayerId> groups;
+    if (!collect_transform_leaves(*root, leaves, groups, unique_leaves, error)) {
+      return false;
+    }
+    total_leaves += leaves.size();
+    total_groups += groups.size();
+    if (total_leaves > 256U || total_groups > 256U) {
+      return fail(error,
+                  "layer arrangement supports at most 256 leaves and 256 groups");
+    }
+    for (const auto& [leaf_id, bounds] : leaves) {
+      (void)bounds;
+      const auto* leaf = std::as_const(document).find_layer(leaf_id);
+      if (leaf == nullptr || !validate_arrange_leaf(*leaf, error)) return false;
+    }
+    const auto bounds = bounded_union(leaves);
+    if (!bounds.has_value()) {
+      return fail(error, "layer arrangement requires finite non-empty root bounds");
+    }
+    roots.push_back(ArrangeRoot{id, *bounds});
+  }
+
+  std::vector<std::pair<LayerId, Rect>> root_bounds;
+  root_bounds.reserve(roots.size());
+  for (const auto& root : roots) root_bounds.emplace_back(root.id, root.bounds);
+  const auto selection_bounds = bounded_union(root_bounds);
+  if (!selection_bounds.has_value()) {
+    return fail(error, "layer arrangement requires finite selection bounds");
+  }
+  const Rect reference = request.reference == LayerArrangeReference::Canvas
+                             ? Rect::from_size(document.width(), document.height())
+                             : *selection_bounds;
+  if (reference.empty()) return fail(error, "layer arrangement reference is empty");
+
+  const auto align_axis = [&](ArrangeRoot& root, bool horizontal,
+                              int edge) {
+    const auto root_start = static_cast<std::int64_t>(
+        horizontal ? root.bounds.x : root.bounds.y);
+    const auto root_extent = static_cast<std::int64_t>(
+        horizontal ? root.bounds.width : root.bounds.height);
+    const auto reference_start = static_cast<std::int64_t>(
+        horizontal ? reference.x : reference.y);
+    const auto reference_extent = static_cast<std::int64_t>(
+        horizontal ? reference.width : reference.height);
+    std::int64_t delta = 0;
+    if (edge < 0) {
+      delta = reference_start - root_start;
+    } else if (edge > 0) {
+      delta = (reference_start + reference_extent) -
+              (root_start + root_extent);
+    } else {
+      delta = divide_nearest(
+          (reference_start * 2 + reference_extent) -
+              (root_start * 2 + root_extent),
+          2);
+    }
+    if (horizontal) root.dx = delta;
+    else root.dy = delta;
+  };
+
+  switch (request.mode) {
+    case LayerArrangeMode::AlignLeft:
+      for (auto& root : roots) align_axis(root, true, -1);
+      break;
+    case LayerArrangeMode::AlignHorizontalCenter:
+      for (auto& root : roots) align_axis(root, true, 0);
+      break;
+    case LayerArrangeMode::AlignRight:
+      for (auto& root : roots) align_axis(root, true, 1);
+      break;
+    case LayerArrangeMode::AlignTop:
+      for (auto& root : roots) align_axis(root, false, -1);
+      break;
+    case LayerArrangeMode::AlignVerticalCenter:
+      for (auto& root : roots) align_axis(root, false, 0);
+      break;
+    case LayerArrangeMode::AlignBottom:
+      for (auto& root : roots) align_axis(root, false, 1);
+      break;
+    case LayerArrangeMode::DistributeHorizontalGaps:
+    case LayerArrangeMode::DistributeVerticalGaps: {
+      const bool horizontal =
+          request.mode == LayerArrangeMode::DistributeHorizontalGaps;
+      std::vector<std::size_t> order(roots.size());
+      for (std::size_t index = 0; index < order.size(); ++index) order[index] = index;
+      std::stable_sort(order.begin(), order.end(), [&](std::size_t first,
+                                                       std::size_t second) {
+        return (horizontal ? roots[first].bounds.x : roots[first].bounds.y) <
+               (horizontal ? roots[second].bounds.x : roots[second].bounds.y);
+      });
+      const auto axis_start = [&](const ArrangeRoot& root) -> std::int64_t {
+        return horizontal ? root.bounds.x : root.bounds.y;
+      };
+      const auto axis_extent = [&](const ArrangeRoot& root) -> std::int64_t {
+        return horizontal ? root.bounds.width : root.bounds.height;
+      };
+      const auto first_start = axis_start(roots[order.front()]);
+      const auto last_end = axis_start(roots[order.back()]) +
+                            axis_extent(roots[order.back()]);
+      std::int64_t total_extent = 0;
+      for (const auto index : order) total_extent += axis_extent(roots[index]);
+      const auto total_gap = last_end - first_start - total_extent;
+      std::int64_t preceding_extent = 0;
+      for (std::size_t position = 0; position < order.size(); ++position) {
+        auto& root = roots[order[position]];
+        const auto target = first_start + preceding_extent +
+                            divide_nearest(total_gap *
+                                               static_cast<std::int64_t>(position),
+                                           static_cast<std::int64_t>(order.size() - 1U));
+        const auto delta = target - axis_start(root);
+        if (horizontal) root.dx = delta;
+        else root.dy = delta;
+        preceding_extent += axis_extent(root);
+      }
+      break;
+    }
+  }
+
+  Rect affected{};
+  std::vector<std::pair<LayerId, Rect>> translated_root_bounds;
+  translated_root_bounds.reserve(roots.size());
+  for (const auto& root : roots) {
+    const auto* layer = std::as_const(document).find_layer(root.id);
+    if (layer == nullptr ||
+        !validate_arrange_translation(*layer, root.dx, root.dy, affected, error)) {
+      return false;
+    }
+    Rect moved{};
+    if (!checked_translated_rect(root.bounds, root.dx, root.dy, &moved) ||
+        root.dx < std::numeric_limits<std::int32_t>::min() ||
+        root.dx > std::numeric_limits<std::int32_t>::max() ||
+        root.dy < std::numeric_limits<std::int32_t>::min() ||
+        root.dy > std::numeric_limits<std::int32_t>::max()) {
+      return fail(error, "layer arrangement translation exceeds int32 bounds");
+    }
+    translated_root_bounds.emplace_back(root.id, moved);
+  }
+
+  for (const auto& root : roots) {
+    auto* layer = document.find_layer(root.id);
+    translate_arrange_tree(*layer, static_cast<std::int32_t>(root.dx),
+                           static_cast<std::int32_t>(root.dy), document.width(),
+                           document.height());
+  }
+  const auto transformed_bounds = bounded_union(translated_root_bounds);
+  if (result != nullptr) {
+    *result = LayerTransformResult{*selection_bounds, *transformed_bounds,
+                                   affected};
   }
   if (error != nullptr) error->clear();
   return true;

@@ -129,6 +129,21 @@ export class PatchyWorkerHost {
           message.layerIds.map(BigInt), message.quad, message.interpolation);
         return this.#snapshot();
       }
+      case "arrangeLayers": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Layer arrangement was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6;
+          throw error;
+        }
+        if (!Array.isArray(message.layerIds)) {
+          throw new TypeError("Layer arrangement requires a layer id array");
+        }
+        this.#engine.arrangeLayers(this.#requireSession(), before,
+          message.layerIds.map(BigInt), message.mode, message.reference);
+        return this.#snapshot();
+      }
       case "previewRasterStroke": {
         const before = this.#snapshot();
         if (before.stateId !== BigInt(message.expectedStateId) ||

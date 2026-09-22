@@ -331,6 +331,14 @@ function updateControls() {
   $("textLayerButton").disabled = busy || !snapshot;
   $("textLayerButton").textContent = single && layer?.kind === 3 ? "Edit text" : "Add text";
   $("layerTransformButton").disabled = busy || !transformSelection();
+  const arrangement = transformSelection();
+  const arrangementMode = Number($("layerArrangeModeInput").value);
+  const arrangementMinimum = arrangementMode >= 6 ? 3 : 2;
+  const canArrange = Boolean(arrangement && arrangement.layerIds.length >= arrangementMinimum);
+  $("layerArrangeModeInput").disabled = busy || !snapshot;
+  $("layerArrangeReferenceInput").disabled = busy || !canArrange || arrangementMode >= 6;
+  if (arrangementMode >= 6) $("layerArrangeReferenceInput").value = "0";
+  $("arrangeLayersButton").disabled = busy || !canArrange;
   $("layerWarpButton").disabled = busy || !single || ![0, 3, 5].includes(layer?.kind) ||
     Boolean(layer?.vectorMask) || Boolean(layer?.mask && !layer.mask.linked);
   $("shapeLayerButton").disabled = busy || !snapshot;
@@ -2696,6 +2704,18 @@ function commitLayerQuad(target, quad, title = "Transforming layer") {
       interpolation: 1, expectedStateId, expectedRevision }));
 }
 
+function arrangeSelectedLayers() {
+  const target = transformSelection();
+  const mode = Number($("layerArrangeModeInput").value);
+  const reference = mode >= 6 ? 0 : Number($("layerArrangeReferenceInput").value);
+  const minimum = mode >= 6 ? 3 : 2;
+  if (!target || target.layerIds.length < minimum || !Number.isInteger(mode) ||
+      mode < 0 || mode > 7 || ![0, 1].includes(reference)) return;
+  return mutate(mode >= 6 ? "Distributing layers" : "Aligning layers", () =>
+    client.arrangeLayers({ layerIds: target.layerIds, mode, reference,
+      expectedStateId: target.stateId, expectedRevision: target.revision }));
+}
+
 function drawPaintSegment(draft, from, to) {
   const size = draft.brushSize;
   const erase = draft.tool === "eraser";
@@ -2981,6 +3001,8 @@ $("commitShapeButton").addEventListener("click", commitShape);
 $("commitSmartFilterButton").addEventListener("click", commitSmartFilter);
 $("layerTransformButton").addEventListener("click", openLayerTransformDialog);
 $("layerWarpButton").addEventListener("click", openLayerWarpDialog);
+$("arrangeLayersButton").addEventListener("click", arrangeSelectedLayers);
+$("layerArrangeModeInput").addEventListener("change", updateControls);
 $("commitTextButton").addEventListener("click", commitTextDialog);
 for (const id of ["textFontInput", "textSizeInput", "textColorInput", "textBoldInput",
   "textItalicInput", "textTrackingInput", "textLeadingInput", "textHorizontalScaleInput",

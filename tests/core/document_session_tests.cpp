@@ -2147,6 +2147,7 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_MEMORY_CONTROL) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_CROSS_DOCUMENT_LAYERS) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_TRANSFORM) != 0);
+  CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_ARRANGE) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_STROKE) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_RASTER_FILL) != 0);
   CHECK((info.capabilities & PATCHY_ENGINE_CAP_LAYER_WARP) != 0);
@@ -4998,6 +4999,348 @@ void core_multi_layer_transform_preserves_forest_geometry_and_fails_closed() {
                    pixel_before.begin()));
 }
 
+void core_layer_arrangement_translates_forests_without_resampling() {
+  Document document(32, 20, PixelFormat::rgba8());
+  const auto group_id = document.allocate_layer_id();
+  const auto pixel_id = document.allocate_layer_id();
+  const auto text_id = document.allocate_layer_id();
+  const auto smart_id = document.allocate_layer_id();
+  const auto other_id = document.allocate_layer_id();
+  patchy::Layer group(group_id, "Forest", patchy::LayerKind::Group);
+  group.set_bounds({1, 2, 8, 3});
+  PixelBuffer mask_pixels(8, 3, PixelFormat::gray8());
+  mask_pixels.clear(173);
+  group.set_mask(patchy::LayerMask{{1, 2, 8, 3}, std::move(mask_pixels),
+                                   255, false});
+  patchy::set_layer_mask_linked(group, true);
+
+  PixelBuffer pixel_bytes(2, 2, PixelFormat::rgba8());
+  pixel_bytes.data()[0] = 17;
+  patchy::Layer pixel(pixel_id, "Pixel", std::move(pixel_bytes));
+  pixel.set_bounds({1, 2, 2, 2});
+  const auto original_pixel_bytes = std::vector<std::uint8_t>(
+      pixel.pixels().data().begin(), pixel.pixels().data().end());
+  group.add_child(std::move(pixel));
+
+  PixelBuffer text_bytes(2, 2, PixelFormat::rgba8());
+  text_bytes.clear(91);
+  patchy::Layer text(text_id, "Text", patchy::LayerKind::Text);
+  text.set_pixels(std::move(text_bytes));
+  text.set_bounds({4, 2, 2, 2});
+  text.metadata()[patchy::kLayerMetadataText] = "Move";
+  text.metadata()[patchy::kLayerMetadataTextTransform] = "1 0 0 1 4 2";
+  group.add_child(std::move(text));
+
+  PixelBuffer smart_bytes(2, 2, PixelFormat::rgba8());
+  smart_bytes.clear(113);
+  patchy::Layer smart(smart_id, "Smart", std::move(smart_bytes));
+  smart.set_bounds({7, 3, 2, 2});
+  patchy::SmartObjectPlacement placement;
+  placement.uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  placement.transform = {7, 3, 9, 3, 9, 5, 7, 5};
+  placement.non_affine_transform = placement.transform;
+  placement.width = 2;
+  placement.height = 2;
+  patchy::set_layer_smart_object_metadata(
+      smart, placement, placement.uuid, "SoLd", "",
+      patchy::kSmartObjectRasterStatusPhotoshop);
+  group.add_child(std::move(smart));
+  document.add_layer(std::move(group));
+
+  PixelBuffer other_bytes(2, 2, PixelFormat::rgba8());
+  other_bytes.clear(201);
+  patchy::Layer other(other_id, "Other", std::move(other_bytes));
+  other.set_bounds({12, 8, 2, 2});
+  document.add_layer(std::move(other));
+
+  patchy::LayerTransformResult result;
+  std::string error;
+  CHECK(patchy::arrange_layers(
+      document,
+      patchy::LayerArrangeRequest{{group_id, other_id},
+          patchy::LayerArrangeMode::AlignRight,
+          patchy::LayerArrangeReference::Canvas},
+      &result, &error));
+  CHECK(document.find_layer(group_id)->bounds().x == 24);
+  CHECK(document.find_layer(pixel_id)->bounds().x == 24);
+  CHECK(document.find_layer(text_id)->bounds().x == 27);
+  CHECK(document.find_layer(smart_id)->bounds().x == 30);
+  CHECK(document.find_layer(other_id)->bounds().x == 30);
+  CHECK(document.find_layer(group_id)->mask()->bounds.x == 24);
+  CHECK(std::equal(document.find_layer(pixel_id)->pixels().data().begin(),
+                   document.find_layer(pixel_id)->pixels().data().end(),
+                   original_pixel_bytes.begin()));
+  const auto text_transform = patchy::parse_layer_affine_transform(
+      document.find_layer(text_id)->metadata().at(
+          patchy::kLayerMetadataTextTransform));
+  CHECK(text_transform.has_value());
+  CHECK((*text_transform)[4] == 27.0);
+  const auto moved_placement = patchy::smart_object_placement_from_layer(
+      *document.find_layer(smart_id));
+  CHECK(moved_placement.has_value());
+  CHECK(moved_placement->transform[0] == 30.0);
+  CHECK(moved_placement->non_affine_transform->at(0) == 30.0);
+
+  struct AlignmentCase {
+    patchy::LayerArrangeMode mode;
+    std::array<patchy::Rect, 2> expected;
+  };
+  const std::array<AlignmentCase, 6> alignment_cases{{
+      {patchy::LayerArrangeMode::AlignLeft,
+       {{{1, 2, 2, 2}, {1, 6, 4, 4}}}},
+      {patchy::LayerArrangeMode::AlignHorizontalCenter,
+       {{{4, 2, 2, 2}, {3, 6, 4, 4}}}},
+      {patchy::LayerArrangeMode::AlignRight,
+       {{{7, 2, 2, 2}, {5, 6, 4, 4}}}},
+      {patchy::LayerArrangeMode::AlignTop,
+       {{{1, 2, 2, 2}, {5, 2, 4, 4}}}},
+      {patchy::LayerArrangeMode::AlignVerticalCenter,
+       {{{1, 5, 2, 2}, {5, 4, 4, 4}}}},
+      {patchy::LayerArrangeMode::AlignBottom,
+       {{{1, 8, 2, 2}, {5, 6, 4, 4}}}},
+  }};
+  const auto same_rect = [](patchy::Rect first, patchy::Rect second) {
+    return first.x == second.x && first.y == second.y &&
+           first.width == second.width && first.height == second.height;
+  };
+  for (const auto& alignment : alignment_cases) {
+    Document aligned(20, 20, PixelFormat::rgba8());
+    std::array<patchy::LayerId, 2> aligned_ids{};
+    const std::array<patchy::Rect, 2> initial{{{1, 2, 2, 2}, {5, 6, 4, 4}}};
+    for (std::size_t index = 0; index < initial.size(); ++index) {
+      PixelBuffer bytes(initial[index].width, initial[index].height,
+                        PixelFormat::rgba8());
+      aligned_ids[index] = aligned.allocate_layer_id();
+      patchy::Layer layer(aligned_ids[index], "Aligned", std::move(bytes));
+      layer.set_bounds(initial[index]);
+      aligned.add_layer(std::move(layer));
+    }
+    CHECK(patchy::arrange_layers(
+        aligned,
+        patchy::LayerArrangeRequest{{aligned_ids[0], aligned_ids[1]},
+            alignment.mode, patchy::LayerArrangeReference::Selection},
+        &result, &error));
+    CHECK(same_rect(aligned.find_layer(aligned_ids[0])->bounds(),
+                    alignment.expected[0]));
+    CHECK(same_rect(aligned.find_layer(aligned_ids[1])->bounds(),
+                    alignment.expected[1]));
+  }
+
+  Document distributed(30, 10, PixelFormat::rgba8());
+  std::vector<patchy::LayerId> ids;
+  for (const auto x : {1, 6, 16}) {
+    PixelBuffer bytes(2, 2, PixelFormat::rgba8());
+    bytes.clear(static_cast<std::uint8_t>(x));
+    const auto id = distributed.allocate_layer_id();
+    patchy::Layer layer(id, "Distributed", std::move(bytes));
+    layer.set_bounds({x, 1, 2, 2});
+    distributed.add_layer(std::move(layer));
+    ids.push_back(id);
+  }
+  CHECK(patchy::arrange_layers(
+      distributed,
+      patchy::LayerArrangeRequest{ids,
+          patchy::LayerArrangeMode::DistributeHorizontalGaps,
+          patchy::LayerArrangeReference::Selection},
+      &result, &error));
+  CHECK(distributed.find_layer(ids[0])->bounds().x == 1);
+  CHECK(distributed.find_layer(ids[1])->bounds().x == 9);
+  CHECK(distributed.find_layer(ids[2])->bounds().x == 16);
+
+  Document tied(20, 10, PixelFormat::rgba8());
+  std::array<patchy::LayerId, 3> tied_ids{};
+  const std::array<std::int32_t, 3> tied_x{1, 1, 10};
+  for (std::size_t index = 0; index < tied_ids.size(); ++index) {
+    PixelBuffer bytes(2, 2, PixelFormat::rgba8());
+    tied_ids[index] = tied.allocate_layer_id();
+    patchy::Layer layer(tied_ids[index], "Tie", std::move(bytes));
+    layer.set_bounds({tied_x[index], 1, 2, 2});
+    tied.add_layer(std::move(layer));
+  }
+  CHECK(patchy::arrange_layers(
+      tied,
+      patchy::LayerArrangeRequest{{tied_ids[1], tied_ids[0], tied_ids[2]},
+          patchy::LayerArrangeMode::DistributeHorizontalGaps,
+          patchy::LayerArrangeReference::Selection},
+      &result, &error));
+  CHECK(tied.find_layer(tied_ids[1])->bounds().x == 1);
+  CHECK(tied.find_layer(tied_ids[0])->bounds().x == 6);
+  CHECK(tied.find_layer(tied_ids[2])->bounds().x == 10);
+
+  Document vertical(10, 24, PixelFormat::rgba8());
+  std::vector<patchy::LayerId> vertical_ids;
+  for (const auto y : {1, 5, 14}) {
+    PixelBuffer bytes(2, 2, PixelFormat::rgba8());
+    bytes.clear(static_cast<std::uint8_t>(y));
+    const auto id = vertical.allocate_layer_id();
+    patchy::Layer layer(id, "Vertical", std::move(bytes));
+    layer.set_bounds({1, y, 2, 2});
+    vertical.add_layer(std::move(layer));
+    vertical_ids.push_back(id);
+  }
+  CHECK(patchy::arrange_layers(
+      vertical,
+      patchy::LayerArrangeRequest{vertical_ids,
+          patchy::LayerArrangeMode::DistributeVerticalGaps,
+          patchy::LayerArrangeReference::Selection},
+      &result, &error));
+  CHECK(vertical.find_layer(vertical_ids[0])->bounds().y == 1);
+  CHECK(vertical.find_layer(vertical_ids[1])->bounds().y == 8);
+  CHECK(vertical.find_layer(vertical_ids[2])->bounds().y == 14);
+  CHECK(!patchy::arrange_layers(
+      vertical,
+      patchy::LayerArrangeRequest{vertical_ids,
+          patchy::LayerArrangeMode::DistributeVerticalGaps,
+          patchy::LayerArrangeReference::Canvas},
+      nullptr, &error));
+  CHECK(vertical.find_layer(vertical_ids[1])->bounds().y == 8);
+
+  const auto before_rejection = distributed.find_layer(ids[0])->bounds();
+  CHECK(!patchy::arrange_layers(
+      distributed,
+      patchy::LayerArrangeRequest{{ids[0], ids[0]},
+          patchy::LayerArrangeMode::AlignLeft,
+          patchy::LayerArrangeReference::Selection},
+      nullptr, &error));
+  CHECK(distributed.find_layer(ids[0])->bounds().x == before_rejection.x);
+  CHECK(!patchy::arrange_layers(
+      distributed,
+      patchy::LayerArrangeRequest{ids,
+          static_cast<patchy::LayerArrangeMode>(255),
+          patchy::LayerArrangeReference::Selection},
+      nullptr, &error));
+  CHECK(distributed.find_layer(ids[0])->bounds().x == before_rejection.x);
+  CHECK(!patchy::arrange_layers(
+      document,
+      patchy::LayerArrangeRequest{{group_id, pixel_id},
+          patchy::LayerArrangeMode::AlignTop,
+          patchy::LayerArrangeReference::Selection},
+      nullptr, &error));
+  CHECK(error.find("overlap") != std::string::npos);
+
+  Document unsupported(20, 10, PixelFormat::rgba8());
+  std::vector<patchy::LayerId> unsupported_ids;
+  for (const auto x : {1, 8}) {
+    PixelBuffer bytes(2, 2, PixelFormat::rgba8());
+    const auto id = unsupported.allocate_layer_id();
+    patchy::Layer layer(id, "Unsupported", std::move(bytes));
+    layer.set_bounds({x, 1, 2, 2});
+    unsupported.add_layer(std::move(layer));
+    unsupported_ids.push_back(id);
+  }
+  PixelBuffer unsupported_mask(2, 2, PixelFormat::gray8());
+  unsupported.find_layer(unsupported_ids[0])->set_mask(
+      patchy::LayerMask{{1, 1, 2, 2}, std::move(unsupported_mask), 255, false});
+  patchy::set_layer_mask_linked(*unsupported.find_layer(unsupported_ids[0]),
+                                false);
+  CHECK(!patchy::arrange_layers(
+      unsupported,
+      patchy::LayerArrangeRequest{unsupported_ids,
+          patchy::LayerArrangeMode::AlignLeft,
+          patchy::LayerArrangeReference::Selection},
+      nullptr, &error));
+  CHECK(error.find("unlinked raster mask") != std::string::npos);
+  CHECK(unsupported.find_layer(unsupported_ids[0])->bounds().x == 1);
+
+  Document hostile(20, 10, PixelFormat::rgba8());
+  std::vector<patchy::LayerId> hostile_ids;
+  for (const auto x : {1, std::numeric_limits<std::int32_t>::max() - 1}) {
+    PixelBuffer bytes(2, 2, PixelFormat::rgba8());
+    const auto id = hostile.allocate_layer_id();
+    patchy::Layer layer(id, "Hostile", std::move(bytes));
+    layer.set_bounds({x, 1, 2, 2});
+    hostile.add_layer(std::move(layer));
+    hostile_ids.push_back(id);
+  }
+  CHECK(!patchy::arrange_layers(
+      hostile,
+      patchy::LayerArrangeRequest{hostile_ids,
+          patchy::LayerArrangeMode::AlignLeft,
+          patchy::LayerArrangeReference::Selection},
+      nullptr, &error));
+  CHECK(hostile.find_layer(hostile_ids[0])->bounds().x == 1);
+}
+
+void engine_host_protocol_arranges_layers_atomically() {
+  patchy_engine_error error{};
+  auto* runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto* session = patchy_engine_session_create_rgba8(runtime, 24, 10, &error);
+  CHECK(session != nullptr);
+  const std::array<std::uint8_t, 16> rgba{
+      11, 22, 33, 255, 11, 22, 33, 255,
+      11, 22, 33, 255, 11, 22, 33, 255};
+  std::array<std::uint64_t, 3> ids{};
+  const std::array<std::int32_t, 3> xs{1, 6, 15};
+  for (std::size_t index = 0; index < ids.size(); ++index) {
+    patchy_engine_document_projection before{};
+    before.struct_size = sizeof(before);
+    CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+    patchy_engine_pixel_layer_input input{};
+    input.struct_size = sizeof(input);
+    input.expected_state_id = before.state_id;
+    input.expected_revision = before.revision;
+    input.bounds = {xs[index], 1, 2, 2};
+    input.width = 2;
+    input.height = 2;
+    input.rgba = rgba.data();
+    input.rgba_size = rgba.size();
+    input.name = "Arrange";
+    input.name_size = 7;
+    patchy_engine_event event{};
+    CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event,
+                                                 &error) == 1);
+    ids[index] = event.affected_layer_id;
+  }
+  patchy_engine_document_projection ready{};
+  ready.struct_size = sizeof(ready);
+  CHECK(patchy_engine_session_document(session, &ready, &error) == 1);
+  patchy_engine_layer_arrange arrangement{};
+  arrangement.struct_size = sizeof(arrangement);
+  arrangement.mode = PATCHY_ENGINE_LAYER_DISTRIBUTE_HORIZONTAL_GAPS;
+  arrangement.expected_state_id = ready.state_id;
+  arrangement.expected_revision = ready.revision;
+  arrangement.layer_ids = ids.data();
+  arrangement.layer_count = ids.size();
+  arrangement.reference = PATCHY_ENGINE_LAYER_ARRANGE_SELECTION;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_arrange_layers(session, &arrangement, &event,
+                                              &error) == 1);
+  CHECK(event.revision == ready.revision + 1U);
+  std::array<std::int32_t, 3> arranged_x{};
+  for (std::uint32_t index = 0; index < 3; ++index) {
+    patchy_engine_layer_projection layer{};
+    CHECK(patchy_engine_session_layer_at(session, index, &layer, &error) == 1);
+    for (std::size_t id_index = 0; id_index < ids.size(); ++id_index) {
+      if (layer.id == ids[id_index]) arranged_x[id_index] = layer.bounds.x;
+    }
+  }
+  const std::array<std::int32_t, 3> expected_x{1, 8, 15};
+  CHECK(arranged_x == expected_x);
+  CHECK(patchy_engine_session_arrange_layers(session, &arrangement, &event,
+                                              &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  for (const auto large_document : {std::uint8_t{0}, std::uint8_t{1}}) {
+    patchy_engine_buffer encoded{};
+    CHECK(patchy_engine_session_save_psd_as(session, large_document, &encoded,
+                                             &event, &error) == 1);
+    auto* reopened = patchy_engine_session_open_psd(
+        runtime, encoded.data, encoded.size, &error);
+    CHECK(reopened != nullptr);
+    patchy_engine_document_projection projection{};
+    projection.struct_size = sizeof(projection);
+    CHECK(patchy_engine_session_document(reopened, &projection, &error) == 1);
+    CHECK(projection.layer_count == 3U);
+    patchy_engine_session_destroy(reopened);
+    patchy_engine_buffer_release(&encoded);
+  }
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 void engine_host_protocol_returns_bounded_layer_thumbnail() {
   patchy_engine_error error{};
   auto* runtime = patchy_engine_runtime_create(
@@ -6027,6 +6370,10 @@ std::vector<TestCase> document_session_tests() {
        core_layer_transform_preserves_smart_object_placement},
       {"core_multi_layer_transform_preserves_forest_geometry_and_fails_closed",
        core_multi_layer_transform_preserves_forest_geometry_and_fails_closed},
+      {"core_layer_arrangement_translates_forests_without_resampling",
+       core_layer_arrangement_translates_forests_without_resampling},
+      {"engine_host_protocol_arranges_layers_atomically",
+       engine_host_protocol_arranges_layers_atomically},
       {"engine_host_protocol_returns_bounded_layer_thumbnail",
        engine_host_protocol_returns_bounded_layer_thumbnail},
       {"core_raster_stroke_respects_selection_and_immutable_clone_source",

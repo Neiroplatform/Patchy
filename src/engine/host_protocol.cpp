@@ -179,7 +179,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_RICH_TEXT_AUTHORING |
     PATCHY_ENGINE_CAP_MULTI_LAYER_AUTHORING |
     PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFER |
-    PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM;
+    PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM |
+    PATCHY_ENGINE_CAP_LAYER_ARRANGE;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -882,6 +883,27 @@ std::optional<patchy::LayerBatchTransformRequest> layer_batch_transform_request(
       input->interpolation == PATCHY_ENGINE_TRANSFORM_NEAREST
           ? patchy::LayerTransformInterpolation::Nearest
           : patchy::LayerTransformInterpolation::Bilinear;
+  return request;
+}
+
+std::optional<patchy::LayerArrangeRequest> layer_arrange_request(
+    const patchy_engine_layer_arrange *input, patchy_engine_error *error) {
+  if (input == nullptr || input->struct_size != sizeof(*input) ||
+      input->mode > PATCHY_ENGINE_LAYER_DISTRIBUTE_VERTICAL_GAPS ||
+      input->reference > PATCHY_ENGINE_LAYER_ARRANGE_CANVAS ||
+      input->reserved != 0U) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "a versioned layer arrangement is required");
+    return std::nullopt;
+  }
+  patchy::LayerArrangeRequest request;
+  if (!copy_layer_ids(input->layer_ids, input->layer_count,
+                      request.layer_ids, error)) {
+    return std::nullopt;
+  }
+  request.mode = static_cast<patchy::LayerArrangeMode>(input->mode);
+  request.reference =
+      static_cast<patchy::LayerArrangeReference>(input->reference);
   return request;
 }
 
@@ -4963,6 +4985,55 @@ int patchy_engine_session_transform_layers(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown multi-layer transform failure");
+  }
+}
+
+int patchy_engine_session_arrange_layers(
+    patchy_engine_session *session,
+    const patchy_engine_layer_arrange *arrangement,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  if (arrangement == nullptr || arrangement->struct_size != sizeof(*arrangement)) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "a versioned layer arrangement is required");
+  }
+  if (!expected_state(session, arrangement->expected_state_id,
+                      arrangement->expected_revision, error)) {
+    return 0;
+  }
+  const auto request = layer_arrange_request(arrangement, error);
+  if (!request.has_value()) return 0;
+  try {
+    auto prepared = session->value->document();
+    patchy::LayerTransformResult arranged;
+    std::string arrange_error;
+    if (!patchy::arrange_layers(prepared, *request, &arranged,
+                               &arrange_error)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  arrange_error.c_str());
+    }
+    const auto affected_layer_id = request->layer_ids.front();
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::TransformLayer,
+            arrangement->expected_state_id, std::move(prepared),
+            arranged.affected_region});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = affected_layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate arranged layer forest");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown layer-arrangement failure");
   }
 }
 

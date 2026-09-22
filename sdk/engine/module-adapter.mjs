@@ -44,12 +44,14 @@ const LAYER_WARP_SIZE = 48;
 const LAYER_BATCH_SIZE = 32;
 const LAYER_BATCH_EDIT_SIZE = 40;
 const LAYER_BATCH_TRANSFORM_SIZE = 96;
+const LAYER_ARRANGE_SIZE = 40;
 const CAP_PSB_SAVE_AS = 1n << 33n;
 const CAP_LAYER_MASK_STROKE = 1n << 34n;
 const CAP_RICH_TEXT_AUTHORING = 1n << 35n;
 const CAP_MULTI_LAYER_AUTHORING = 1n << 36n;
 const CAP_MULTI_LAYER_TRANSFER = 1n << 37n;
 const CAP_MULTI_LAYER_TRANSFORM = 1n << 38n;
+const CAP_LAYER_ARRANGE = 1n << 39n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -795,6 +797,29 @@ export class EmscriptenPatchyEngine {
     return this.#layerBatchTransform(snapshot, layerIds, quad, interpolation,
       (transform) => this.#mutation((event, error) =>
         this.#module[symbol](session, transform, event, error)));
+  }
+
+  arrangeLayers(session, snapshot, layerIds, mode, reference = 0) {
+    const symbol = "_patchy_engine_session_arrange_layers";
+    if (!(this.#capabilities & CAP_LAYER_ARRANGE) ||
+        typeof this.#module[symbol] !== "function") {
+      throw new PatchyEngineError(2, "Layer arrangement is unavailable");
+    }
+    if (!Number.isInteger(mode) || mode < 0 || mode > 7 ||
+        !Number.isInteger(reference) || reference < 0 || reference > 1) {
+      throw new TypeError("A valid layer arrangement mode and reference are required");
+    }
+    const minimum = mode >= 6 ? 3 : 2;
+    if (!Array.isArray(layerIds) || layerIds.length < minimum) {
+      throw new RangeError(`Layer arrangement requires at least ${minimum} ids`);
+    }
+    return this.#layerBatch(session, snapshot, layerIds, LAYER_ARRANGE_SIZE,
+      (view) => {
+        view.setUint32(4, mode, true);
+        view.setUint32(32, reference, true);
+        view.setUint32(36, 0, true);
+      }, (input, event, error) =>
+        this.#module[symbol](session, input, event, error));
   }
 
   previewRasterStroke(session, snapshot, input,
