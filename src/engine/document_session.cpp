@@ -3265,8 +3265,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                     concrete.stroke->size < 0.0F ||
                     static_cast<std::uint32_t>(concrete.stroke->position) >
                         static_cast<std::uint32_t>(
-                            LayerStrokePosition::Inside) +
-                            1U)) ||
+                            kLayerStrokePositionMax))) ||
                   (concrete.inner_shadow.has_value() &&
                    (!valid_blend(concrete.inner_shadow->blend_mode) ||
                     !valid_opacity(concrete.inner_shadow->opacity) ||

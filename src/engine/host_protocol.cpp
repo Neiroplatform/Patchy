@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -587,11 +588,16 @@ patchy::psd::PsdTextStyleRun text_fallback(const patchy::Layer &layer) {
     run.family = std::string(*value);
   if (const auto value = metadata_value(layer, patchy::kLayerMetadataTextSize))
     run.size = std::stod(std::string(*value));
-  if (const auto value = metadata_value(layer, patchy::kLayerMetadataTextColor)) {
-    unsigned red = 0, green = 0, blue = 0;
-    std::sscanf(std::string(*value).c_str(), "#%02x%02x%02x", &red, &green, &blue);
-    run.color = {static_cast<std::uint8_t>(red), static_cast<std::uint8_t>(green),
-                 static_cast<std::uint8_t>(blue)};
+  if (const auto value = metadata_value(layer, patchy::kLayerMetadataTextColor);
+      value.has_value() && value->size() == 7U && value->front() == '#') {
+    unsigned color = 0;
+    const auto parsed = std::from_chars(value->data() + 1, value->data() + 7,
+                                        color, 16);
+    if (parsed.ec == std::errc{} && parsed.ptr == value->data() + 7) {
+      run.color = {static_cast<std::uint8_t>((color >> 16U) & 0xffU),
+                   static_cast<std::uint8_t>((color >> 8U) & 0xffU),
+                   static_cast<std::uint8_t>(color & 0xffU)};
+    }
   }
   run.bold = metadata_value(layer, patchy::kLayerMetadataTextBold)
                  .value_or(std::string_view{}) == "true";
@@ -732,7 +738,7 @@ std::vector<std::uint8_t> materialize_selection_mask(
   for (const auto rect : selection.selection) {
     for (std::int32_t y = rect.y; y < rect.y + rect.height; ++y) {
       std::fill_n(result.data() + static_cast<std::size_t>(y) * width + rect.x,
-                  rect.width, 255U);
+                  rect.width, std::uint8_t{255});
     }
   }
   return result;
@@ -1413,7 +1419,7 @@ int patchy_engine_session_quick_select(
     for (const auto run : segmented.delta_runs) {
       std::fill(base.begin() + static_cast<std::size_t>(run.y) * width + run.x0,
                 base.begin() + static_cast<std::size_t>(run.y) * width + run.x1 + 1,
-                input->subtract != 0 ? 0U : 255U);
+                static_cast<std::uint8_t>(input->subtract != 0 ? 0U : 255U));
     }
     patchy::PixelBuffer mask(width, height, patchy::PixelFormat::gray8());
     std::copy(base.begin(), base.end(), mask.data().begin());
@@ -2568,9 +2574,15 @@ int patchy_engine_session_text(const patchy_engine_session *session,
     unsigned blue = 0;
     const auto color = metadata_value(
         *layer, patchy::kLayerMetadataTextColor);
-    if (color.has_value()) {
-      std::sscanf(std::string(*color).c_str(), "#%02x%02x%02x", &red, &green,
-                  &blue);
+    if (color.has_value() && color->size() == 7U && color->front() == '#') {
+      unsigned packed = 0;
+      const auto parsed = std::from_chars(color->data() + 1, color->data() + 7,
+                                          packed, 16);
+      if (parsed.ec == std::errc{} && parsed.ptr == color->data() + 7) {
+        red = (packed >> 16U) & 0xffU;
+        green = (packed >> 8U) & 0xffU;
+        blue = packed & 0xffU;
+      }
     }
     text->red = static_cast<std::uint8_t>(red);
     text->green = static_cast<std::uint8_t>(green);

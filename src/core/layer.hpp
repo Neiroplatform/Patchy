@@ -367,6 +367,8 @@ enum class LayerStrokePosition {
   Center
 };
 
+inline constexpr auto kLayerStrokePositionMax = LayerStrokePosition::Center;
+
 struct LayerStroke {
   bool enabled{false};
   BlendMode blend_mode{BlendMode::Normal};
