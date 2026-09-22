@@ -29,7 +29,7 @@ if (process.argv.length !== 3) {
     const summary = summarizeDiagnosticBundle(await readBounded(process.argv[2]));
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   } catch (error) {
-    console.error(`REJECTED: ${error?.message || error}`);
+    console.error("REJECTED: diagnostic bundle did not satisfy the bounded schema");
     process.exitCode = 1;
   }
 }

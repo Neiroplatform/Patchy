@@ -137,7 +137,12 @@ test("offline support command validates a bundle and rejects extra content", () 
     writeFileSync(path, Buffer.alloc(128 * 1024 + 1, 0x20));
     const oversized = spawnSync(process.execPath, [script, path], { encoding: "utf8" });
     assert.equal(oversized.status, 1);
-    assert.match(oversized.stderr, /exceeds the size limit/);
+    assert.equal(oversized.stderr.trim(), "REJECTED: diagnostic bundle did not satisfy the bounded schema");
+    writeFileSync(path, "PRIVATE_CONTENT_SENTINEL not-json");
+    const malformed = spawnSync(process.execPath, [script, path], { encoding: "utf8" });
+    assert.equal(malformed.status, 1);
+    assert.equal(malformed.stderr.trim(), "REJECTED: diagnostic bundle did not satisfy the bounded schema");
+    assert.doesNotMatch(malformed.stderr, /PRIVATE|CONTENT|SENTINEL|not-json/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

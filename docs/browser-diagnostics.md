@@ -48,8 +48,10 @@ PATCHY_PLAYWRIGHT_ROOT=/path/to/node_modules/playwright \
 It drives the production pthread-WASM shell through create/edit/failure,
 forces the exact engine Worker to crash, waits for confirmed OPFS recovery,
 downloads the consent-gated bundle and accepts it only through the offline
-validator. Private filename, text, pixel and crash-message sentinels must be
-absent from the downloaded bytes.
+validator. It authors an editable text story and imports a PNG whose decoded
+RGBA channels carry a deterministic marker; those real text/pixel values plus
+the private filename/layer name and crash message must be absent from the
+downloaded bytes.
 
 ## Compatibility and rollback
 

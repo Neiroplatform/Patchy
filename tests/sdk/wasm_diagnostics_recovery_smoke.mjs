@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 
 const baseUrl = process.argv[2];
 if (!baseUrl) {
@@ -19,6 +20,36 @@ async function loadPlaywright() {
     if (!root) throw new Error("Install playwright or set PATCHY_PLAYWRIGHT_ROOT to its package directory", { cause: error });
     return createRequire(import.meta.url)(root);
   }
+}
+
+function crc32(bytes) {
+  let value = 0xffffffff;
+  for (const byte of bytes) {
+    value ^= byte;
+    for (let bit = 0; bit < 8; ++bit) value = (value >>> 1) ^ (0xedb88320 & -(value & 1));
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, payload) {
+  const name = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4); length.writeUInt32BE(payload.length);
+  const checksum = Buffer.alloc(4); checksum.writeUInt32BE(crc32(Buffer.concat([name, payload])));
+  return Buffer.concat([length, name, payload, checksum]);
+}
+
+function rgbaPng(width, height, rgba) {
+  assert.equal(rgba.length, width * height * 4);
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4);
+  header[8] = 8; header[9] = 6;
+  const rows = Buffer.alloc(height * (1 + width * 4));
+  for (let y = 0; y < height; ++y) {
+    rows[y * (1 + width * 4)] = 0;
+    rgba.copy(rows, y * (1 + width * 4) + 1, y * width * 4, (y + 1) * width * 4);
+  }
+  return Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"),
+    pngChunk("IHDR", header), pngChunk("IDAT", deflateSync(rows)), pngChunk("IEND", Buffer.alloc(0))]);
 }
 
 const { chromium } = await loadPlaywright();
@@ -56,12 +87,25 @@ try {
   await page.click("#newButton");
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  const pixelText = Buffer.from("PRIVATE_PIXEL_SENTINEL", "ascii");
+  const pixelWidth = Math.ceil(pixelText.length / 3);
+  const pixelBytes = Buffer.alloc(pixelWidth * 4, 0);
+  for (let index = 0; index < pixelText.length; ++index) {
+    const pixel = Math.floor(index / 3); const channel = index % 3;
+    pixelBytes[pixel * 4 + channel] = pixelText[index]; pixelBytes[pixel * 4 + 3] = 255;
+  }
   await page.setInputFiles("#imageInput", {
-    name: "PRIVATE_FILENAME_SENTINEL.svg",
-    mimeType: "image/svg+xml",
-    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24"><title>PRIVATE_TEXT_SENTINEL</title><rect width="32" height="24" fill="#123456" data-private="PRIVATE_PIXEL_SENTINEL"/></svg>'),
+    name: "PRIVATE_FILENAME_SENTINEL.png",
+    mimeType: "image/png",
+    buffer: rgbaPng(pixelWidth, 1, pixelBytes),
   });
   await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) >= 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  await page.click("#textToolButton");
+  await page.waitForSelector("#textDialog[open]");
+  await page.fill("#textValueInput", "PRIVATE_TEXT_STORY_SENTINEL");
+  await page.click("#commitTextButton");
+  await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) >= 2 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
   await page.click("#selectAllButton");
   await page.waitForFunction(() => Number(document.querySelector("#detailRevision")?.textContent) >= 2 &&
@@ -106,7 +150,11 @@ try {
   assert.ok(bundle.events.some((event) => event.kind === "worker" && event.state === "crashed"));
   assert.ok(bundle.events.some((event) => event.kind === "recovery" &&
     ["succeeded", "partial"].includes(event.phase)));
-  assert.doesNotMatch(bytes, /PRIVATE_|PRIVATE_FILENAME_SENTINEL|PRIVATE_TEXT_SENTINEL|PRIVATE_PIXEL_SENTINEL|PRIVATE_CRASH_ERROR_SENTINEL/);
+  assert.doesNotMatch(bytes, /PRIVATE_|PRIVATE_FILENAME_SENTINEL|PRIVATE_TEXT_STORY_SENTINEL|PRIVATE_CRASH_ERROR_SENTINEL/);
+  for (const encodedPixelMarker of [pixelBytes.toString("base64"), pixelBytes.toString("hex"),
+    [...pixelBytes].join(",")]) {
+    assert.equal(bytes.includes(encodedPixelMarker), false, "diagnostics leaked real raster pixel bytes");
+  }
   assert.deepEqual(failedRequests, []);
   assert.ok(pageErrors.length >= 1 && pageErrors.every((error) => error.includes("PRIVATE_CRASH_ERROR_SENTINEL")),
     `unexpected browser errors: ${pageErrors.join(" | ")}`);
