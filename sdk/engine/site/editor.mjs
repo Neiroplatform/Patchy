@@ -1,5 +1,6 @@
 import { PatchyWorkerClient } from "./engine/client.mjs";
-import { applyRecoveredSelection, recoverWorkerSession } from "./engine/recovery-controller.mjs";
+import { applyRecoveredSelection, checkpointSelection,
+  recoverWorkerSession } from "./engine/recovery-controller.mjs";
 import { PatchyCheckpointQueue, PatchyWorkspaceStore } from "./engine/workspace-store.mjs";
 import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   documentPreflight, geometryMutationPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
@@ -722,8 +723,7 @@ function scheduleCheckpoint(next) {
       write: (checkpoint, bytes) => workspaceStore.checkpoint({ id: workspaceId,
         name: checkpoint.documentName, revision: checkpoint.revision,
         dirty: checkpoint.dirty, format: checkpoint.format, bytes,
-        selection: checkpoint.selectionMask ||
-          (checkpoint.selection?.length ? { rects: checkpoint.selection } : null) }),
+        selection: checkpointSelection(checkpoint) }),
       onState: (state, checkpoint, value) => {
         checkpointStates.set(next.documentId, state);
         if (state === "confirmed") {

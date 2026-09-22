@@ -56,13 +56,14 @@ export async function recoverWorkerSession({
 }
 
 export async function applyRecoveredSelection(client, selection) {
-  if (selection?.gray) {
-    return client.setSelectionMask(selection.bounds, selection.gray,
-      { transferOwnership: true });
-  }
-  const rects = selection?.rects;
-  if (!Array.isArray(rects) || rects.length === 0) return client.setSelection([]);
-  if (rects.length === 1) return client.setSelection(rects);
+  return client.setSelectionMask(selection.bounds, selection.gray,
+    { transferOwnership: true });
+}
+
+export function checkpointSelection(state) {
+  if (state?.selectionMask) return state.selectionMask;
+  const rects = state?.selection;
+  if (!Array.isArray(rects) || rects.length === 0) return null;
   const left = Math.min(...rects.map((rect) => rect.x));
   const top = Math.min(...rects.map((rect) => rect.y));
   const right = Math.max(...rects.map((rect) => rect.x + rect.width));
@@ -71,7 +72,7 @@ export async function applyRecoveredSelection(client, selection) {
   const height = bottom - top;
   const area = width * height;
   if (!Number.isSafeInteger(area) || area <= 0 || area > 16 * 1024 * 1024) {
-    throw new RangeError("Recovered hard selection exceeds the 16 MiB safety limit");
+    return null;
   }
   const gray = new Uint8Array(area);
   for (const rect of rects) {
@@ -80,6 +81,5 @@ export async function applyRecoveredSelection(client, selection) {
       gray.fill(255, y * width + startX, y * width + startX + rect.width);
     }
   }
-  return client.setSelectionMask({ x: left, y: top, width, height }, gray,
-    { transferOwnership: true });
+  return { bounds: { x: left, y: top, width, height }, gray };
 }

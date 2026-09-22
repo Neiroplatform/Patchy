@@ -1,6 +1,7 @@
 import { PatchyWorkerClient } from "../../build/wasm-sdk/site/engine/client.mjs";
 import { PatchyWorkspaceStore } from "../../build/wasm-sdk/site/engine/workspace-store.mjs";
-import { applyRecoveredSelection } from "../../build/wasm-sdk/site/engine/recovery-controller.mjs";
+import { applyRecoveredSelection, checkpointSelection } from
+  "../../build/wasm-sdk/site/engine/recovery-controller.mjs";
 
 const body = document.body;
 const workerUrl = new URL("../../build/wasm-sdk/site/engine/worker.mjs", import.meta.url);
@@ -52,7 +53,7 @@ try {
   await store.remove(recoveryId).catch(() => {});
   await store.checkpoint({ id: recoveryId, name: "Recovered selection.psb",
     revision: refined.revision, dirty: true, format: "psb", bytes: selectionBytes,
-    selection: { rects: refined.selection } });
+    selection: checkpointSelection(refined) });
   const selectedRecovery = await store.restore(recoveryId);
   refined = await client.open(selectedRecovery.bytes, "Recovered selection.psb",
     { transferOwnership: true });
