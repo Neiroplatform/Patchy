@@ -88,12 +88,10 @@ try {
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
   const pixelText = Buffer.from("PRIVATE_PIXEL_SENTINEL", "ascii");
-  const pixelWidth = Math.ceil(pixelText.length / 3);
+  const pixelWidth = Math.ceil(pixelText.length / 4);
   const pixelBytes = Buffer.alloc(pixelWidth * 4, 0);
-  for (let index = 0; index < pixelText.length; ++index) {
-    const pixel = Math.floor(index / 3); const channel = index % 3;
-    pixelBytes[pixel * 4 + channel] = pixelText[index]; pixelBytes[pixel * 4 + 3] = 255;
-  }
+  pixelText.copy(pixelBytes);
+  assert.equal(pixelBytes.subarray(0, pixelText.length).toString("ascii"), "PRIVATE_PIXEL_SENTINEL");
   await page.setInputFiles("#imageInput", {
     name: "PRIVATE_FILENAME_SENTINEL.png",
     mimeType: "image/png",
@@ -151,10 +149,21 @@ try {
   assert.ok(bundle.events.some((event) => event.kind === "recovery" &&
     ["succeeded", "partial"].includes(event.phase)));
   assert.doesNotMatch(bytes, /PRIVATE_|PRIVATE_FILENAME_SENTINEL|PRIVATE_TEXT_STORY_SENTINEL|PRIVATE_CRASH_ERROR_SENTINEL/);
-  for (const encodedPixelMarker of [pixelBytes.toString("base64"), pixelBytes.toString("hex"),
-    [...pixelBytes].join(",")]) {
+  for (const encodedPixelMarker of [pixelBytes.toString("latin1"), pixelBytes.toString("base64"),
+    pixelText.toString("base64"), pixelText.toString("hex")]) {
     assert.equal(bytes.includes(encodedPixelMarker), false, "diagnostics leaked real raster pixel bytes");
   }
+  const numericValues = [];
+  const collectNumbers = (value) => {
+    if (typeof value === "number") numericValues.push(value);
+    else if (Array.isArray(value)) value.forEach(collectNumbers);
+    else if (value && typeof value === "object") Object.values(value).forEach(collectNumbers);
+  };
+  collectNumbers(bundle);
+  const numericNeedle = [...pixelText];
+  const hasNumericPixelLeak = numericValues.some((_, offset) => numericNeedle.every(
+    (value, index) => numericValues[offset + index] === value));
+  assert.equal(hasNumericPixelLeak, false, "diagnostics leaked raster pixels as a formatted numeric array");
   assert.deepEqual(failedRequests, []);
   assert.ok(pageErrors.length >= 1 && pageErrors.every((error) => error.includes("PRIVATE_CRASH_ERROR_SENTINEL")),
     `unexpected browser errors: ${pageErrors.join(" | ")}`);
