@@ -767,7 +767,8 @@ PixelBuffer materialize_selection_alpha(const SelectionSnapshot &selection,
   for (const auto rect : selection.selection) {
     const auto clipped = intersect_rect(rect, Rect::from_size(width, height));
     for (std::int32_t y = 0; y < clipped.height; ++y) {
-      std::fill_n(alpha.pixel(clipped.x, clipped.y + y), clipped.width, 255U);
+      std::fill_n(alpha.pixel(clipped.x, clipped.y + y), clipped.width,
+                  std::uint8_t{255});
     }
   }
   return alpha;
@@ -859,7 +860,9 @@ void morph_selection_alpha(PixelBuffer &coverage, std::int32_t radius,
     std::deque<std::pair<std::int32_t, std::uint8_t>> window;
     for (std::int32_t sample = -radius;
          sample < length + radius; ++sample) {
-      const auto value = sample >= 0 && sample < length ? read(sample) : 0U;
+      const auto value = sample >= 0 && sample < length
+                             ? read(sample)
+                             : std::uint8_t{0};
       while (!window.empty() &&
              (dilate ? window.back().second <= value
                      : window.back().second >= value)) {

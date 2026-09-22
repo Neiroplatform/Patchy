@@ -3007,7 +3007,7 @@ void engine_host_protocol_authors_pixels_channels_and_selection() {
   CHECK(inverted.data[7] == 0);
   patchy_engine_buffer_release(&inverted);
 
-  std::fill(channel_pixels.begin(), channel_pixels.end(), 64U);
+  std::fill(channel_pixels.begin(), channel_pixels.end(), std::uint8_t{64});
   const auto before_second_channel = project();
   channel_input.expected_state_id = before_second_channel.state_id;
   channel_input.expected_revision = before_second_channel.revision;

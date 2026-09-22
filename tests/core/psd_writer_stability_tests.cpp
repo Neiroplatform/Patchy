@@ -778,7 +778,7 @@ void psd_save_channel_workspace_tracks_raw_rle_and_extra_channels() {
 
   std::vector<std::uint8_t> solid(16U, 0U);
   std::vector<std::uint8_t> noisy(16U);
-  std::iota(noisy.begin(), noisy.end(), 0U);
+  std::iota(noisy.begin(), noisy.end(), std::uint8_t{0});
   for (const bool large_document : {false, true}) {
     check_channel(solid, large_document, 1U);
     check_channel(noisy, large_document, 0U);

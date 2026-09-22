@@ -592,16 +592,16 @@ void psd_save_filter_effects_rekey_copy_and_unwind_are_stable() {
   for (const auto limit : std::array<std::uint64_t, 2>{2U, 0U}) {
     current = 0U;
     high_water = 0U;
-    bool rejected = false;
+    bool copy_rejected = false;
     try {
       patchy::psd::SaveLiveBudgetTracker tracker(limit, &current,
                                                   &high_water);
       (void)patchy::psd::serialize_filter_effects_block_tracked(copied,
                                                                 tracker);
     } catch (const patchy::psd::SaveLiveBudgetSignal&) {
-      rejected = true;
+      copy_rejected = true;
     }
-    CHECK(rejected);
+    CHECK(copy_rejected);
     CHECK(current == 0U);
     CHECK(high_water == 0U);
   }
@@ -652,14 +652,15 @@ void psd_save_filter_effects_global_copy_reaches_public_budget() {
 
   patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
   patchy::SmartFilterEffectsBlock block;
-  block.original_payload =
-      std::make_shared<const std::vector<std::uint8_t>>(4096U, 0x5aU);
+  block.original_payload = std::make_shared<const std::vector<std::uint8_t>>(
+      std::size_t{4096}, std::uint8_t{0x5a});
   document.metadata().smart_filter_effects.blocks.push_back(std::move(block));
   patchy::SmartFilterEffectsBlock second_block;
   second_block.key = "FXid";
   second_block.long_length = true;
   second_block.original_payload =
-      std::make_shared<const std::vector<std::uint8_t>>(2048U, 0xa5U);
+      std::make_shared<const std::vector<std::uint8_t>>(
+          std::size_t{2048}, std::uint8_t{0xa5});
   document.metadata().smart_filter_effects.blocks.push_back(
       std::move(second_block));
 
@@ -1257,7 +1258,7 @@ void psd_save_link_normalization_is_tracked_and_byte_stable() {
   truncated_table.resize(48U);
   auto unsplittable = odd_psb;
   std::fill(unsplittable.begin() + 56, unsplittable.begin() + 61,
-            0x80U);
+            std::uint8_t{0x80});
   auto trailing = odd_psb;
   trailing.push_back(0U);
   auto max_psd_row = make_psd_with_max_odd_row_count();
