@@ -527,6 +527,9 @@ const RU = new Map(Object.entries({
   "bold": "жирный",
   "italic": "курсив",
   "left": "слева",
+  "right": "справа",
+  "center": "по центру",
+  "justify": "по ширине",
   "off": "выключена",
   "Channel name": "Имя канала",
   "Path name": "Имя контура",
@@ -677,6 +680,7 @@ const RU = new Map(Object.entries({
   "bitmap frames": "кадры bitmap",
   "RGBA fallback": "резервный RGBA",
   "frame transport waiting": "ожидание транспорта кадра",
+  "filter": "фильтр",
 }));
 
 const excluded = ".layer-name, #documentName, .document-tab, .recovery-copy strong, .text-run-list code";
@@ -691,6 +695,28 @@ export function translateMessage(value, locale = "en") {
   if (dynamic) return `Переход на ${dynamic[1]} шаг(а)`;
   dynamic = source.match(/^(Gradient|Pattern): (.+)$/);
   if (dynamic) return `${translateMessage(dynamic[1], locale)}: ${dynamic[2]}`;
+  dynamic = source.match(/^Applying (.+)$/);
+  if (dynamic) return `Применение: ${translateMessage(dynamic[1], locale)}`;
+  dynamic = source.match(/^(.+) (rejected|failed)$/);
+  if (dynamic) return `${translateMessage(dynamic[1], locale)}: ${dynamic[2] === "rejected" ? "отклонено" : "ошибка"}`;
+  dynamic = source.match(/^Encoding (.+)$/);
+  if (dynamic) return `Кодирование ${dynamic[1]}`;
+  dynamic = source.match(/^Engine mode (\d+)$/);
+  if (dynamic) return `Режим движка ${dynamic[1]}`;
+  dynamic = source.match(/^Imported mode (\d+)$/);
+  if (dynamic) return `Импортированный режим ${dynamic[1]}`;
+  dynamic = source.match(/^Layer (\d+)$/);
+  if (dynamic) return `Слой ${dynamic[1]}`;
+  dynamic = source.match(/^(\d+) layers$/);
+  if (dynamic) return `Слоёв: ${dynamic[1]}`;
+  dynamic = source.match(/^(\d+)-bit RGB$/);
+  if (dynamic) return `${dynamic[1]}-бит RGB`;
+  dynamic = source.match(/^(.+): (\d+) additional$/);
+  if (dynamic) return `${translateMessage(dynamic[1], locale)}: дополнительных — ${dynamic[2]}`;
+  dynamic = source.match(/^Imported stacked effects preserved — (.+)\.$/);
+  if (dynamic) return `Импортированные составные эффекты сохранены — ${dynamic[1].split(", ").map((part) => translateMessage(part, locale)).join(", ")}.`;
+  dynamic = source.match(/^(.+); could not restore the source document$/);
+  if (dynamic) return `${translateMessage(dynamic[1], locale)}; не удалось восстановить исходный документ`;
   dynamic = source.match(/^(.+) needs an estimated (.+) plus (.+) already retained, above this browser's (.+) safety limit\.$/);
   if (dynamic) return `${translateMessage(dynamic[1], locale)}: требуется примерно ${dynamic[2]} плюс ${dynamic[3]} уже занято, что выше безопасного лимита браузера ${dynamic[4]}.`;
   dynamic = source.match(/^Engine returned a (.+) frame, expected (.+)$/);
@@ -715,7 +741,6 @@ export function translateMessage(value, locale = "en") {
     [/^Revision (\d+)$/, "Ревизия $1"],
     [/^Live engine preview · (.+)$/, "Живое превью движка · $1"],
     [/^Filtering selected layer · (\d+)%$/, "Фильтрация выбранного слоя · $1%"],
-    [/^Applying (.+)$/, "Применение: $1"],
     [/^gradient · (.+)$/, "градиент · $1"],
     [/^pattern · (.+)$/, "узор · $1"],
     [/^font · (.+)$/, "шрифт · $1"],

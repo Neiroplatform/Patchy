@@ -28,6 +28,31 @@ test("English and Russian presentation strings share one deterministic boundary"
     "Gradient: User sunset", "Pattern: User dots",
   ]) assert.notEqual(translateMessage(dynamic, "ru"), dynamic, dynamic);
   assert.equal(translateMessage("Gradient: User sunset", "ru"), "Градиент: User sunset");
+  assert.equal(translateMessage("Applying Gaussian Blur", "ru"), "Применение: Размытие по Гауссу");
+  assert.equal(translateMessage("Applying Brightness / Contrast", "ru"),
+    "Применение: Яркость / Контраст");
+  assert.equal(translateMessage("Applying filter", "ru"), "Применение: фильтр");
+  assert.equal(translateMessage("Scaling image rejected", "ru"), "Масштабирование изображения: отклонено");
+  assert.equal(translateMessage("Moving layers failed", "ru"), "Перемещение слоёв: ошибка");
+  assert.equal(translateMessage("Encoding PSD", "ru"), "Кодирование PSD");
+  assert.equal(translateMessage("Engine mode 9", "ru"), "Режим движка 9");
+  assert.equal(translateMessage("Imported mode 4", "ru"), "Импортированный режим 4");
+  assert.equal(translateMessage("Layer 7", "ru"), "Слой 7");
+  assert.equal(translateMessage("3 layers", "ru"), "Слоёв: 3");
+  assert.equal(translateMessage("8-bit RGB", "ru"), "8-бит RGB");
+  assert.equal(translateMessage("Drop Shadow: 2 additional", "ru"), "Тень: дополнительных — 2");
+  assert.equal(
+    translateMessage("Imported stacked effects preserved — Drop Shadow: 2 additional, Stroke: 1 additional.", "ru"),
+    "Импортированные составные эффекты сохранены — Тень: дополнительных — 2, Обводка: дополнительных — 1.",
+  );
+  assert.equal(translateMessage("Free transform · 3 layers", "ru"), "Свободная трансформация · Слоёв: 3");
+  assert.equal(translateMessage("right · indents 1/2/3", "ru"), "справа · отступы 1/2/3");
+  assert.equal(translateMessage("center · indents 1/2/3", "ru"), "по центру · отступы 1/2/3");
+  assert.equal(translateMessage("justify · indents 1/2/3", "ru"), "по ширине · отступы 1/2/3");
+  assert.equal(
+    translateMessage("Clipboard does not contain an image; could not restore the source document", "ru"),
+    "В буфере обмена нет изображения; не удалось восстановить исходный документ",
+  );
 });
 
 test("virtualized layers always expose one visible roving target", () => {
