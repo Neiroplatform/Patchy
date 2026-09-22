@@ -5630,10 +5630,13 @@ int patchy_engine_session_render_with_progress(
           return progress == nullptr ||
                  progress(completed, total, progress_user_data) != 0;
         }};
+    const auto *operation_progress_ptr =
+        progress == nullptr && cancellation == nullptr ? nullptr
+                                                       : &operation_progress;
     const auto rendered = session->value->render(
         {region.x, region.y, region.width, region.height},
         cancellation == nullptr ? nullptr : &cancellation->value,
-        &operation_progress);
+        operation_progress_ptr);
     if (!rendered) {
       return fail(error, rendered.error);
     }

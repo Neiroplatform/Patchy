@@ -2192,6 +2192,20 @@ void engine_host_protocol_runs_versioned_native_wasm_sequence() {
   const std::vector<std::uint8_t> initial_pixels(
       initial_render.data, initial_render.data + initial_render.size);
   patchy_engine_buffer_release(&initial_render);
+  patchy_engine_memory_usage initial_usage{};
+  initial_usage.struct_size = sizeof(initial_usage);
+  CHECK(patchy_engine_session_memory_usage(session, &initial_usage, &error) ==
+        1);
+  CHECK(initial_usage.render_cache_entries == 1);
+  CHECK(initial_usage.render_cache_misses == 1);
+  patchy_engine_buffer cached_render{};
+  CHECK(patchy_engine_session_render(
+            session, {0, 0, 1, 1}, &cached_render, &event, &error) == 1);
+  patchy_engine_buffer_release(&cached_render);
+  CHECK(patchy_engine_session_memory_usage(session, &initial_usage, &error) ==
+        1);
+  CHECK(initial_usage.render_cache_entries == 1);
+  CHECK(initial_usage.render_cache_hits == 1);
 
   patchy_engine_command command{};
   command.struct_size = sizeof(command);

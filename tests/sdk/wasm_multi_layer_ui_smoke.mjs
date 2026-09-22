@@ -32,7 +32,8 @@ try {
   const rows = () => [...doc.querySelectorAll("#layerList .layer-row")];
   const rowName = (row) => row.querySelector(".layer-name")?.textContent;
   const rowByName = (name) => rows().find((row) => rowName(row) === name);
-  const selectedNames = () => rows().filter((row) => row.getAttribute("aria-selected") === "true")
+  const selectedNames = () => rows().filter((row) =>
+    row.querySelector(".layer-select-button")?.getAttribute("aria-pressed") === "true")
     .map(rowName);
   const rowOrder = () => rows().map(rowName).join(",");
   const clickLayer = (name, modifiers = {}) => {

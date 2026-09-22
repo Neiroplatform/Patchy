@@ -11,6 +11,9 @@ const workspaceOne = "wasm-runtime-first-v1";
 const workspaceTwo = "wasm-runtime-second-v1";
 let client = null;
 let createdClients = 0;
+let recoveryPhase = null;
+try { recoveryPhase = JSON.parse(sessionStorage.getItem(phaseKey) || "null"); }
+catch { sessionStorage.removeItem(phaseKey); }
 
 function createClient() {
   createdClients++;
@@ -25,7 +28,7 @@ try {
   check(await workspaceStore.available(), "origin-private workspace storage is unavailable");
   client = createClient();
   await client.initialize(moduleUrl.href);
-  if (sessionStorage.getItem(phaseKey) === "restore") {
+  if (recoveryPhase?.mode === "restore") {
     const listed = await workspaceStore.list();
     check(listed.some(({ id }) => id === workspaceOne) && listed.some(({ id }) => id === workspaceTwo),
       "reload did not retain both isolated workspaces");
@@ -42,9 +45,10 @@ try {
     const first = recovered.restored[0].snapshot;
     const second = recovered.restored[1].snapshot;
     check(recovered.restored[0].manifest.generation === 2 &&
-      recovered.restored[0].manifest.revision === "11",
+      recovered.restored[0].manifest.revision === recoveryPhase.firstRevision,
       "latest complete first generation was not selected");
-    check(recovered.restored[1].manifest.generation === 1,
+    check(recovered.restored[1].manifest.generation === 1 &&
+      recovered.restored[1].manifest.revision === recoveryPhase.secondRevision,
       "second workspace generation was not isolated");
     check(first.width === 4 && first.height === 3 && first.layers.length === 3,
       "first recovered PSD lost authored state");
@@ -72,7 +76,7 @@ try {
       "first document projection mismatch");
     const budgeted = await client.setMemoryBudget(16 * 1024 * 1024, 32 * 1024 * 1024);
     check(budgeted.memoryBudget.documentBytes === 16 * 1024 * 1024 &&
-      budgeted.memory?.totalRetainedBytes > 0,
+      budgeted.memory?.totalRetainedBytes === 0,
     "WASM memory census or budget projection is unavailable");
 
     const rgba = new Uint8Array(4 * 3 * 4);
@@ -83,6 +87,9 @@ try {
     const authored = await client.addPixelLayer({ name: "Pixels", width: 4, height: 3,
       bounds: { x: 0, y: 0, width: 4, height: 3 }, rgba }, { transferOwnership: true });
     check(rgba.byteLength === 0, "owned pixel input was not detached after Worker transfer");
+    check(authored.memory?.documentPixelBytes >= rgbaLength &&
+      authored.memory.totalRetainedBytes >= rgbaLength,
+    "non-empty document memory census was not projected through wasm32");
     const layerId = authored.activeLayerId;
     check(layerId !== 0n && authored.layers.length === 1, "pixel layer was not authored");
 
@@ -139,7 +146,7 @@ try {
       "complete render did not clear the covered dirty region");
     check(renderedSnapshot.memory?.renderCacheEntries === 1 &&
       renderedSnapshot.memory?.renderCacheHits >= 1,
-    "render tile cache was not reused or projected through wasm32");
+    `render tile cache was not reused or projected through wasm32: ${JSON.stringify(renderedSnapshot.memory)}`);
     const transformQuad = [0, 0, 3, 0, 3, 2, 0, 2];
     const transformPreview = await client.previewLayerTransform({ layerId,
       quad: transformQuad, expectedStateId: renderedSnapshot.stateId,
@@ -211,7 +218,9 @@ try {
       revision: opacity.revision, dirty: true, bytes: savedAgain });
 
     const second = await client.create(2, 2, "Second.psd");
-    check(second.documents.length === 2, "second isolated session was not retained");
+    check(second.documents.length === 3 && second.documents.some((item) =>
+      item.smartObjectParentId === first.documentId),
+    "second isolated session or linked Smart Object child was not retained");
     const copied = await client.copyLayerToDocument({
       sourceDocumentId: first.documentId, targetDocumentId: second.documentId,
       layerId, expectedSourceStateId: opacity.stateId,
@@ -235,10 +244,13 @@ try {
       revision: redoneCopy.revision, dirty: true,
       bytes: await client.saveDocument(second.documentId) });
     const restored = await client.activateDocument(first.documentId);
-    check(restored.documentId === first.documentId && restored.layers.length === 1,
-      "document switch lost canonical state");
+    check(restored.documentId === first.documentId && restored.layers.length === 3 &&
+      restored.layers.some((layer) => layer.smartObject?.contentsEditable),
+    "document switch lost canonical state");
 
-    sessionStorage.setItem(phaseKey, "restore");
+    sessionStorage.setItem(phaseKey, JSON.stringify({ mode: "restore",
+      firstRevision: String(opacity.revision),
+      secondRevision: String(redoneCopy.revision) }));
     location.reload();
   }
 } catch (error) {
