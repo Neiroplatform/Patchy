@@ -67,7 +67,7 @@ export interface LayerProjection {
 }
 export interface DocumentProjection {
   width: number; height: number; colorMode: number; bitDepth: number;
-  channels: number; activeLayerId: bigint; revision: bigint; stateId: bigint;
+  activeLayerId: bigint; revision: bigint; stateId: bigint;
   layerCount: number; hasActiveLayer: boolean; dirty: boolean;
   canUndo: boolean; canRedo: boolean; layers: LayerProjection[];
   documentId: number; documentName: string; documents: DocumentTabProjection[];
@@ -109,6 +109,7 @@ export interface PsdHeader {
 export type RenderFrame =
   | { kind: "bitmap"; bitmap: ImageBitmap; width: number; height: number }
   | { kind: "rgba"; bytes: Uint8Array; width: number; height: number };
+export interface RenderPatch { region: Rect; rgba: Uint8Array }
 export interface SelectionRefinementInput {
   smooth: number; feather: number; contrast: number; shiftEdge: number;
   output?: "selection" | "layerMask"; layerId?: bigint | null;
