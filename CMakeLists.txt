@@ -600,6 +600,23 @@ if(PATCHY_BUILD_WASM_SDK)
 endif()
 
 if(PATCHY_BUILD_TESTS)
+  if(NOT EMSCRIPTEN)
+    add_executable(patchy_host_protocol_c_contract
+      tests/engine/host_protocol_c_contract.c)
+    target_include_directories(patchy_host_protocol_c_contract PRIVATE
+      ${PROJECT_SOURCE_DIR}/src)
+    if(PATCHY_ENABLE_STRICT_WARNINGS)
+      if(MSVC)
+        target_compile_options(patchy_host_protocol_c_contract PRIVATE /W4)
+      else()
+        target_compile_options(patchy_host_protocol_c_contract PRIVATE
+          -Wall -Wextra -Wpedantic)
+      endif()
+    endif()
+    add_test(NAME patchy_host_protocol_c_contract
+      COMMAND patchy_host_protocol_c_contract)
+  endif()
+
   find_program(PATCHY_NODE_EXECUTABLE node)
   if(PATCHY_NODE_EXECUTABLE)
     add_test(NAME patchy_sdk_contract_tests

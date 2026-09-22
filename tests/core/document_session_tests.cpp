@@ -5984,7 +5984,7 @@ void engine_session_essential_layer_style_is_atomic_preserving_and_round_trips()
   overlay.color = {90, 80, 70}; overlay.opacity = 0.65F;
   patchy::LayerStroke stroke{}; stroke.enabled = true;
   stroke.color = {200, 100, 50}; stroke.opacity = 0.8F;
-  stroke.size = 6.0F; stroke.position = patchy::LayerStrokePosition::Inside;
+  stroke.size = 6.0F; stroke.position = patchy::LayerStrokePosition::Center;
   patchy::LayerInnerShadow inner_shadow{}; inner_shadow.enabled = true;
   inner_shadow.color = {30, 40, 50}; inner_shadow.opacity = 0.55F;
   inner_shadow.angle_degrees = 75.0F; inner_shadow.distance = 3.0F;
