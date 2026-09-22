@@ -439,8 +439,8 @@ function integerInput(id, positive = false) {
   const value = Number(input.value);
   if (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX ||
       (positive && value <= 0)) {
-    input.setCustomValidity(positive ?
-      "Enter a positive signed 32-bit whole number" : "Enter a signed 32-bit whole number");
+    input.setCustomValidity(localizer.text(positive ?
+      "Enter a positive signed 32-bit whole number" : "Enter a signed 32-bit whole number"));
     input.reportValidity();
     input.setCustomValidity("");
     return null;
@@ -453,7 +453,7 @@ function finiteInput(id) {
   if (!input.reportValidity()) return null;
   const value = Number(input.value);
   if (!Number.isFinite(value)) {
-    input.setCustomValidity("Enter a finite number"); input.reportValidity();
+    input.setCustomValidity(localizer.text("Enter a finite number")); input.reportValidity();
     input.setCustomValidity(""); return null;
   }
   return value;
@@ -522,7 +522,7 @@ function showError(title, error) {
   const banner = $("errorBanner");
   if (!banner.contains(document.activeElement)) errorReturnFocus = document.activeElement;
   localizer.setText($("errorTitle"), title);
-  $("errorMessage").textContent = error?.message || String(error);
+  localizer.setText($("errorMessage"), error?.message || String(error));
   banner.hidden = false;
   queueMicrotask(() => $("dismissErrorButton").focus({ preventScroll: true }));
   if (client.state === "crashed") setSessionState("crashed", "Worker crashed");

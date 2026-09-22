@@ -18,6 +18,13 @@ test("English and Russian presentation strings share one deterministic boundary"
     "Remove", "No local assets yet.", "Filtering selected layer · 42%",
     "Live engine preview · 64 × 48px", "Pixels · Mask off", "Revision 4 · 2 MB",
     "Rendering engine preview…", "Cancelling at the next safe filter checkpoint…",
+    "Moving 3 states", "New document needs an estimated 1 MB plus 2 MB already retained, above this browser's 3 MB safety limit.",
+    "Engine returned a 4 × 5 frame, expected 6 × 7", "Engine returned 8 RGBA bytes, expected 16",
+    "Engine returned an unsupported frame transport: stream", "Browser could not encode image/webp",
+    "Brightness is outside the supported range",
+    "2 workspace(s) restored from confirmed snapshots; 1 could not be restored: abc; 1 had unconfirmed changes and were rolled back.",
+    "1 recoverable workspace on this device.", "2 editable layers copied locally",
+    "2 MB retained", "1 MB history", "512 KB cache", "3 GB limit",
   ]) assert.notEqual(translateMessage(dynamic, "ru"), dynamic, dynamic);
 });
 
@@ -54,6 +61,8 @@ test("production shell exposes keyboard, localization, responsive and motion con
   assert.match(css, /transition-duration: \.001ms !important/);
   assert.match(editor, /locale: localizer\.locale/);
   assert.match(editor, /localizer\.setLocale/);
+  assert.match(editor, /localizer\.setText\(\$\("errorMessage"\)/);
+  assert.match(editor, /setCustomValidity\(localizer\.text/);
   assert.match(editor, /event\.isComposing/);
   assert.match(editor, /isEditableTarget\(event\)/);
   assert.match(editor, /const editingField = isEditableTarget\(event\);\s*if \(editingField\) return;\s*if \(key === "o"\)/);
@@ -152,5 +161,25 @@ test("native prompt and confirmation copy crosses the localization boundary", as
   const editor = await source("sdk/engine/site/editor.mjs");
   for (const match of editor.matchAll(/\b(?:confirm|prompt)\(([^\n]+)/g)) {
     assert.match(match[1], /localizer\.text/, match[0]);
+  }
+});
+
+test("authored error details, generated labels and accessible names are inventoried", async () => {
+  const editor = await source("sdk/engine/site/editor.mjs");
+  const authoredErrors = [...editor.matchAll(/new (?:Error|RangeError|TypeError)\(["']([^"']+)["']\)/g)]
+    .map((match) => match[1]);
+  assert.deepEqual([...new Set(authoredErrors)]
+    .filter((value) => translateMessage(value, "ru") === value).sort(), []);
+  const objectLabels = [...editor.matchAll(/\blabel:\s*["']([^"']+)["']/g)]
+    .map((match) => match[1]);
+  assert.deepEqual([...new Set(objectLabels)]
+    .filter((value) => translateMessage(value, "ru") === value).sort(), []);
+  const generatedNames = [...editor.matchAll(/(?:aria-label|title|placeholder)=\\?"([^"$]+)\\?"/g)]
+    .map((match) => match[1]);
+  assert.deepEqual([...new Set(generatedNames)]
+    .filter((value) => /[A-Za-z]{2}/.test(value))
+    .filter((value) => translateMessage(value, "ru") === value).sort(), []);
+  for (const value of ["Uniform", "Gaussian", "Earlier edit", "Later edit"]) {
+    assert.notEqual(translateMessage(value, "ru"), value, value);
   }
 });

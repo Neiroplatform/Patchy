@@ -618,6 +618,65 @@ const RU = new Map(Object.entries({
   "Updating text": "Обновление текста",
   "Updating vector points": "Обновление векторных точек",
   "Warping layer": "Деформация слоя",
+  "Move layer up": "Переместить слой выше",
+  "Move layer down": "Переместить слой ниже",
+  "Choose a TTF, OTF, WOFF or WOFF2 font file.": "Выберите файл шрифта TTF, OTF, WOFF или WOFF2.",
+  "Font must be between 1 byte and 16 MiB.": "Размер шрифта должен быть от 1 байта до 16 МиБ.",
+  "Enter a font family name.": "Введите имя семейства шрифта.",
+  "Engine returned an incomplete flattened export": "Движок вернул неполный сведённый экспорт",
+  "Clipboard does not contain an image": "В буфере обмена нет изображения",
+  "Image dimensions cannot be represented safely": "Размеры изображения нельзя безопасно представить",
+  "Curves require 2–64 ordered input:output points in the 0–255 range": "Кривые требуют 2–64 упорядоченных точек вход:выход в диапазоне 0–255",
+  "Levels white points must not precede black points": "Белые точки уровней не могут предшествовать чёрным",
+  "Legacy brightness and contrast must stay in the -100–100 range": "Устаревшие яркость и контраст должны быть в диапазоне -100–100",
+  "Smart Object preview exceeds the 512 MB browser editing limit": "Предпросмотр Smart Object превышает лимит редактирования в браузере 512 МБ",
+  "Text style metrics are outside the supported range": "Метрики стиля текста вне поддерживаемого диапазона",
+  "Select a non-empty text range first": "Сначала выделите непустой диапазон текста",
+  "Paragraph metrics are outside the supported range": "Метрики абзаца вне поддерживаемого диапазона",
+  "Text selection is outside the story": "Выделение текста вне материала",
+  "Select a paragraph first": "Сначала выберите абзац",
+  "Text raster exceeds the 512 MB browser editing limit": "Растр текста превышает лимит редактирования в браузере 512 МБ",
+  "Alt-click the canvas to choose a clone/heal source.": "Alt-щелчок по холсту выбирает источник клонирования/восстановления.",
+  "A stroke cannot exceed 65,536 sampled points.": "Штрих не может содержать более 65 536 точек.",
+  "Drop a PSD, PSB, PNG, JPEG, WebP, AVIF, or SVG file.": "Перетащите файл PSD, PSB, PNG, JPEG, WebP, AVIF или SVG.",
+  "Earlier edit": "Более раннее изменение",
+  "Later edit": "Более позднее изменение",
+  "New document": "Новый документ",
+  "Imported image": "Импортированное изображение",
+  "Black input": "Чёрная точка входа",
+  "White input": "Белая точка входа",
+  "Black output": "Чёрная точка выхода",
+  "White output": "Белая точка выхода",
+  "RGB points (input:output)": "Точки RGB (вход:выход)",
+  "Hue": "Цветовой тон",
+  "Saturation": "Насыщенность",
+  "Lightness": "Светлота",
+  "Colorize": "Тонирование",
+  "Colorize hue": "Тон тонирования",
+  "Colorize saturation": "Насыщенность тонирования",
+  "Colorize lightness": "Светлота тонирования",
+  "Cyan / Red": "Голубой / Красный",
+  "Magenta / Green": "Пурпурный / Зелёный",
+  "Yellow / Blue": "Жёлтый / Синий",
+  "Brightness": "Яркость",
+  "Gamma %": "Гамма %",
+  "Legacy mode": "Устаревший режим",
+  "Block size": "Размер блока",
+  "Distribution": "Распределение",
+  "Monochromatic": "Монохромный",
+  "Radius": "Радиус",
+  "Seed": "Зерно",
+  "Uniform": "Равномерное",
+  "Gaussian": "Гауссово",
+  "The engine is updating the document": "Движок обновляет документ",
+  "Engine error": "Ошибка движка",
+  "Enter a finite number": "Введите конечное число",
+  "Enter a signed 32-bit whole number": "Введите целое 32-битное число со знаком",
+  "Enter a positive signed 32-bit whole number": "Введите положительное целое 32-битное число со знаком",
+  "Color must be a six-digit hex value": "Цвет должен быть шестизначным шестнадцатеричным значением",
+  "bitmap frames": "кадры bitmap",
+  "RGBA fallback": "резервный RGBA",
+  "frame transport waiting": "ожидание транспорта кадра",
 }));
 
 const excluded = ".layer-name, #documentName, .document-tab, .recovery-copy strong, .text-run-list code";
@@ -628,6 +687,22 @@ export function translateMessage(value, locale = "en") {
   if (RU.has(source)) return RU.get(source);
   const shortcut = source.match(/^(.+) \(([^)]+)\)$/);
   if (shortcut && RU.has(shortcut[1])) return `${RU.get(shortcut[1])} (${shortcut[2]})`;
+  let dynamic = source.match(/^Moving (\d+) state(?:s)?$/);
+  if (dynamic) return `Переход на ${dynamic[1]} шаг(а)`;
+  dynamic = source.match(/^(.+) needs an estimated (.+) plus (.+) already retained, above this browser's (.+) safety limit\.$/);
+  if (dynamic) return `${translateMessage(dynamic[1], locale)}: требуется примерно ${dynamic[2]} плюс ${dynamic[3]} уже занято, что выше безопасного лимита браузера ${dynamic[4]}.`;
+  dynamic = source.match(/^Engine returned a (.+) frame, expected (.+)$/);
+  if (dynamic) return `Движок вернул кадр ${dynamic[1]}, ожидался ${dynamic[2]}`;
+  dynamic = source.match(/^Engine returned (.+) RGBA bytes, expected (.+)$/);
+  if (dynamic) return `Движок вернул ${dynamic[1]} байт RGBA, ожидалось ${dynamic[2]}`;
+  dynamic = source.match(/^Engine returned an unsupported frame transport: (.+)$/);
+  if (dynamic) return `Движок вернул неподдерживаемый транспорт кадра: ${dynamic[1]}`;
+  dynamic = source.match(/^Browser could not encode (.+)$/);
+  if (dynamic) return `Браузер не смог закодировать ${dynamic[1]}`;
+  dynamic = source.match(/^(.+) is outside the supported range$/);
+  if (dynamic) return `${translateMessage(dynamic[1], locale)}: значение вне поддерживаемого диапазона`;
+  dynamic = source.match(/^(\d+) workspace\(s\) restored from confirmed snapshots; (\d+) could not be restored(?:: ([^;]+))?(?:; (\d+) had unconfirmed changes and were rolled back)?\.$/);
+  if (dynamic) return `Восстановлено из подтверждённых снимков: ${dynamic[1]}; не удалось: ${dynamic[2]}${dynamic[3] ? ` (${dynamic[3]})` : ""}${dynamic[4] ? `; откачены неподтверждённые изменения: ${dynamic[4]}` : ""}.`;
   const rules = [
     [/^(\d+) selected layers$/, "$1 выбранных слоёв"],
     [/^Download (PSD|PSB)$/, "Скачать $1"],
@@ -644,7 +719,12 @@ export function translateMessage(value, locale = "en") {
     [/^font · (.+)$/, "шрифт · $1"],
     [/^indents (.+)$/, "отступы $1"],
     [/^Recovered (\d+) workspace(s?)$/, "Восстановлено рабочих областей: $1"],
-    [/^(\d+) recoverable workspaces on this device\.$/, "Рабочих областей для восстановления: $1."],
+    [/^(\d+) recoverable workspaces? on this device\.$/, "Рабочих областей для восстановления: $1."],
+    [/^(\d+) editable layers? copied locally$/, "Редактируемых слоёв скопировано локально: $1"],
+    [/^(.+) retained$/, "удерживается $1"],
+    [/^(.+) history$/, "история $1"],
+    [/^(.+) cache$/, "кэш $1"],
+    [/^(.+) limit$/, "лимит $1"],
     [/^(.+) used of approximately (.+) browser storage\.$/, "Использовано $1 из примерно $2 хранилища браузера."],
   ];
   for (const [pattern, replacement] of rules) {
