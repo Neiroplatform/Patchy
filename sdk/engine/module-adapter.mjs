@@ -1560,6 +1560,7 @@ export class EmscriptenPatchyEngine {
   }
 
   render(session, region) {
+    this.#rect(region);
     return this.#bufferCall((buffer, event, error) =>
       this.#module._patchy_engine_session_render_region(
         session, region.x, region.y, region.width, region.height,
@@ -1567,6 +1568,7 @@ export class EmscriptenPatchyEngine {
   }
 
   renderWithProgress(session, region, cancellation, onProgress) {
+    this.#rect(region);
     this.#cancellation(cancellation, "Render");
     const symbol = "_patchy_engine_session_render_region_with_progress";
     this.#progressCapability(symbol, "Render");

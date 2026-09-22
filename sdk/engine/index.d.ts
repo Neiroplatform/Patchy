@@ -6,11 +6,23 @@ export const PATCHY_ENGINE_REQUIRED_CAPABILITIES: bigint;
 export const PATCHY_ENGINE_CAPABILITIES: Readonly<{
   layerProjection: bigint; layerVisibility: bigint; history: bigint;
   boundedRender: bigint; psdSave: bigint; documentProjection: bigint;
-  progressCancellation: bigint; psbSaveAs: bigint;
+  layerAppearance: bigint; layerLifecycle: bigint; documentGeometry: bigint;
+  optimisticCommands: bigint; saveState: bigint; selectionProjection: bigint;
+  savedChannels: bigint; pixelAuthoring: bigint; pathProjection: bigint;
+  vectorAuthoring: bigint; layerMaskAuthoring: bigint; filterAuthoring: bigint;
+  progressCancellation: bigint; eventDrain: bigint; textAuthoring: bigint;
+  smartObjectAuthoring: bigint; adjustmentAuthoring: bigint;
+  vectorMaskAuthoring: bigint; smartFilterAuthoring: bigint;
+  selectionAuthoring: bigint; memoryControl: bigint; crossDocumentLayers: bigint;
+  layerTransform: bigint; rasterStroke: bigint; rasterFill: bigint;
+  layerWarp: bigint; essentialLayerStyle: bigint; psbSaveAs: bigint;
+  layerMaskStroke: bigint; richTextAuthoring: bigint; multiLayerAuthoring: bigint;
+  multiLayerTransfer: bigint; multiLayerTransform: bigint; layerArrange: bigint;
+  selectionRefinement: bigint;
 }>;
 export interface PatchyWorkerFactoryOptions {
   WorkerConstructor?: typeof Worker;
-  workerOptions?: WorkerOptions;
+  workerOptions?: Omit<WorkerOptions, "type">;
 }
 export function createPatchyWorkerClient(workerUrl: string | URL,
   options?: PatchyWorkerFactoryOptions): PatchyWorkerClient;

@@ -24,6 +24,13 @@ function check(value, message) {
   if (!value) throw new Error(message);
 }
 
+async function expectCancelled(operation, label) {
+  operation.cancel();
+  let error = null;
+  try { await operation.promise; } catch (caught) { error = caught; }
+  check(error?.code === 7, `${label} did not reject with CANCELLED`);
+}
+
 try {
   check(await workspaceStore.available(), "origin-private workspace storage is unavailable");
   client = createClient();
@@ -145,6 +152,13 @@ try {
       progressivelyRendered.length === rendered.length &&
       progressivelyRendered.every((value, index) => value === rendered[index]),
     "progressive bounded render did not preserve byte parity");
+    const beforeRenderCancel = await client.snapshot();
+    await expectCancelled(client.renderCancellable(
+      { x: 0, y: 0, width: 4, height: 3 }), "progressive render cancellation");
+    const afterRenderCancel = await client.snapshot();
+    check(afterRenderCancel.stateId === beforeRenderCancel.stateId &&
+      afterRenderCancel.revision === beforeRenderCancel.revision,
+    "cancelled render mutated canonical state");
     const frame = await client.renderFrame({ x: 0, y: 0, width: 4, height: 3 });
     check(frame.width === 4 && frame.height === 3, "render frame dimensions mismatch");
     check(frame.kind === "bitmap", `Worker ImageBitmap transport unavailable: ${frame.kind}`);
@@ -199,6 +213,13 @@ try {
     const psb = await progressivePsb.promise;
     check(psb.length > 26 && psb[4] === 0 && psb[5] === 2,
       "progressive PSB save did not produce a version-2 document");
+    const beforeSaveCancel = await client.snapshot();
+    await expectCancelled(client.saveCancellable("psd"), "progressive PSD cancellation");
+    await expectCancelled(client.saveCancellable("psb"), "progressive PSB cancellation");
+    const afterSaveCancel = await client.snapshot();
+    check(afterSaveCancel.stateId === beforeSaveCancel.stateId &&
+      afterSaveCancel.revision === beforeSaveCancel.revision,
+    "cancelled save mutated canonical state");
     const blobOpened = await client.openBlob(
       new Blob([saved], { type: "image/vnd.adobe.photoshop" }), "Worker Blob.psd");
     check(blobOpened.layers.length === 2 && blobOpened.width === 4 && blobOpened.height === 3,

@@ -14,7 +14,6 @@ export function createPatchyWorkerClient(workerUrl, options = {}) {
   if (typeof WorkerConstructor !== "function") {
     throw new TypeError("A Worker constructor is required");
   }
-  const workerOptions = { type: "module", ...(options.workerOptions ?? {}) };
+  const workerOptions = { ...(options.workerOptions ?? {}), type: "module" };
   return new PatchyWorkerClient(new WorkerConstructor(workerUrl, workerOptions));
 }
-

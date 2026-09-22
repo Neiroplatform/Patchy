@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PatchyWorkerHost } from "../../sdk/engine/worker-host.mjs";
 import { PatchyWorkerClient } from "../../sdk/engine/client.mjs";
-import { createPatchyWorkerClient, PATCHY_ENGINE_PROTOCOL_VERSION,
+import { createPatchyWorkerClient, PATCHY_ENGINE_CAPABILITIES, PATCHY_ENGINE_PROTOCOL_VERSION,
   PATCHY_ENGINE_REQUIRED_CAPABILITIES, PATCHY_ENGINE_SDK_VERSION,
   PATCHY_WORKER_RPC_VERSION } from "../../sdk/engine/index.mjs";
 import { EmscriptenPatchyEngine } from "../../sdk/engine/module-adapter.mjs";
@@ -40,6 +40,18 @@ test("WASM export manifest covers every engine symbol used by the adapter", asyn
   assert.ok(exportsList.includes("_malloc"));
   assert.ok(exportsList.includes("_free"));
   assert.equal(new Set(exportsList).size, exportsList.length);
+});
+
+test("public capability names stay in exact parity with the C ABI", async () => {
+  const header = await readFile(new URL("../../src/engine/host_protocol.h", import.meta.url), "utf8");
+  const entries = [...header.matchAll(
+    /PATCHY_ENGINE_CAP_([A-Z0-9_]+) = UINT64_C\(1\) << (\d+)/g)];
+  assert.equal(entries.length, 41);
+  const expected = Object.fromEntries(entries.map(([, cName, bit]) => {
+    const name = cName.toLowerCase().replace(/_([a-z0-9])/g, (_, value) => value.toUpperCase());
+    return [name, 1n << BigInt(bit)];
+  }));
+  assert.deepEqual(PATCHY_ENGINE_CAPABILITIES, expected);
 });
 
 test("self-hosted editor closes the minimal product workflow without remote assets", async () => {
@@ -897,6 +909,17 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.equal(engine.memoryUsage(session).totalRetainedBytes, 8);
   assert.equal(engine.memoryUsage(session).renderCacheEvictions, 15);
   assert.deepEqual(engine.pendingRenderRegion(session), { x: 1, y: 0, width: 2, height: 2 });
+  const invalidRenderCancellation = new Int32Array(new SharedArrayBuffer(4));
+  for (const invalidRegion of [
+    { x: 0.5, y: 0, width: 1, height: 1 },
+    { x: Number.NaN, y: 0, width: 1, height: 1 },
+    { x: 2 ** 32, y: 0, width: 1, height: 1 },
+    { x: 0x7fffffff, y: 0, width: 1, height: 1 },
+  ]) {
+    assert.throws(() => engine.render(session, invalidRegion), /Rectangle/);
+    assert.throws(() => engine.renderWithProgress(
+      session, invalidRegion, invalidRenderCancellation), /Rectangle/);
+  }
   assert.equal(engine.evictOldestUndo(session), true);
   assert.deepEqual(Array.from(engine.smartObjectBytes(session, 7n)), [56, 66, 80, 83, 1, 2]);
   engine.setLayerVisibility(session, snapshot, 7n, false);
@@ -2021,6 +2044,11 @@ test("public SDK entrypoint creates a module Worker and exposes stable versions"
   assert.equal(PATCHY_WORKER_RPC_VERSION, 1);
   assert.equal(PATCHY_ENGINE_PROTOCOL_VERSION, 1);
   assert.ok(PATCHY_ENGINE_REQUIRED_CAPABILITIES > 0n);
+  createPatchyWorkerClient("./worker.mjs", {
+    WorkerConstructor: ConstructedWorker,
+    workerOptions: { name: "forced-module", type: "classic" },
+  });
+  assert.deepEqual(created[1], ["./worker.mjs", { name: "forced-module", type: "module" }]);
 });
 
 test("client fails closed on version drift and missing mandatory capabilities", async () => {
