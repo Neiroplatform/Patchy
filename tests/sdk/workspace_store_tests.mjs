@@ -304,3 +304,80 @@ test("explicit cleanup keeps newest recovery items and protects open workspaces"
   assert.deepEqual(removed.map((item) => item.id), ["oldest"]);
   assert.deepEqual((await store.list()).map((item) => item.id), ["newest", "newer", "protected"]);
 });
+
+test("immutable local versions publish last and restore digest-bound layered state", async () => {
+  const { store } = fixture();
+  const selection = { bounds: { x: 1, y: 2, width: 2, height: 2 },
+    gray: new Uint8Array([0, 64, 192, 255]) };
+  const created = await store.createVersion({ id: "workspace-one", versionId: "version-001",
+    label: "Before colour grade", name: "Artwork.psb", revision: 41n, format: "psb",
+    bytes: layeredBytes(9, "psb"), selection });
+  assert.equal(created.manifest.label, "Before colour grade");
+  assert.equal(created.manifest.format, "psb");
+  assert.deepEqual(created.removed, []);
+  assert.deepEqual((await store.listVersions("workspace-one")).map((item) => item.versionId),
+    ["version-001"]);
+  const restored = await store.restoreVersion("workspace-one", "version-001");
+  assert.deepEqual(restored.bytes, layeredBytes(9, "psb"));
+  assert.deepEqual(restored.selection, selection);
+  await assert.rejects(store.createVersion({ id: "workspace-one", versionId: "version-001",
+    label: "Duplicate", name: "Artwork.psb", revision: 42n, format: "psb",
+    bytes: layeredBytes(8, "psb") }), /already exists/);
+});
+
+test("torn and corrupt local versions remain invisible without hiding valid versions", async () => {
+  let interrupt = false;
+  const { root, store } = fixture({ hooks: { beforeVersionManifestWrite() {
+    if (interrupt) throw new Error("simulated version publication crash");
+  } } });
+  await store.createVersion({ id: "workspace", versionId: "valid", label: "Valid",
+    name: "Valid.psd", revision: 1n, bytes: layeredBytes(1) });
+  interrupt = true;
+  await assert.rejects(store.createVersion({ id: "workspace", versionId: "torn",
+    label: "Torn", name: "Torn.psd", revision: 2n, bytes: layeredBytes(2) }), /publication crash/);
+  assert.deepEqual((await store.listVersions("workspace")).map((item) => item.versionId), ["valid"]);
+  interrupt = false;
+  await store.createVersion({ id: "workspace", versionId: "corrupt", label: "Corrupt",
+    name: "Corrupt.psd", revision: 3n, bytes: layeredBytes(3) });
+  const base = await root.getDirectoryHandle("patchy-versions-v1");
+  const versions = await base.getDirectoryHandle("workspace");
+  versions.files.set("corrupt.layered", new Uint8Array([0]));
+  assert.deepEqual((await store.listVersions("workspace")).map((item) => item.versionId), ["valid"]);
+  await assert.rejects(store.restoreVersion("workspace", "corrupt"), /integrity validation/);
+  await store.pruneVersions({ id: "workspace", keepNewest: 20 });
+  const remainingFiles = [...versions.files.keys()].sort();
+  assert.deepEqual(remainingFiles, ["valid.json", "valid.layered"]);
+});
+
+test("local version retention prunes oldest valid entries and deletion is isolated", async () => {
+  const { store } = fixture();
+  for (const [index, versionId] of ["first", "second", "third"].entries()) {
+    await store.createVersion({ id: "workspace", versionId, label: versionId,
+      name: "History.psd", revision: BigInt(index + 1), bytes: layeredBytes(index + 1),
+      keepNewest: 2 });
+  }
+  assert.deepEqual((await store.listVersions("workspace")).map((item) => item.versionId),
+    ["third", "second"]);
+  await store.removeVersion("workspace", "third");
+  assert.deepEqual((await store.listVersions("workspace")).map((item) => item.versionId), ["second"]);
+  await assert.rejects(store.createVersion({ id: "workspace", versionId: "bad-label",
+    label: "", name: "History.psd", revision: 4n, bytes: layeredBytes(4) }), /label/);
+  await assert.rejects(store.pruneVersions({ id: "workspace", keepNewest: 0 }), /retention/);
+  await assert.rejects(store.createVersion({ id: "workspace", versionId: "bad-revision",
+    label: "Bad revision", name: "History.psd", revision: -1, bytes: layeredBytes(4) }),
+  /revision/);
+});
+
+test("workspace recovery removal preserves immutable local version history", async () => {
+  const { store } = fixture();
+  await store.checkpoint({ id: "workspace", name: "Working.psd", revision: 1n,
+    bytes: layeredBytes(1) });
+  await store.createVersion({ id: "workspace", versionId: "kept", label: "Kept",
+    name: "Working.psd", revision: 1n, bytes: layeredBytes(2) });
+
+  await store.remove("workspace");
+
+  await assert.rejects(store.restore("workspace"), /not found/);
+  assert.deepEqual((await store.listVersions("workspace")).map((item) => item.versionId), ["kept"]);
+  assert.deepEqual((await store.restoreVersion("workspace", "kept")).bytes, layeredBytes(2));
+});

@@ -352,6 +352,17 @@ Recovery preserves the layered document represented by PSD. In-memory undo
 history and transient, non-dirty selection state remain session-local and are
 not represented as durable recovery data.
 
+Named local versions use a separate origin-private root so recovery cleanup or
+workspace deletion cannot erase them. Creating a version encodes the exact
+current PSD or PSB plus the committed selection sidecar, verifies byte counts
+and SHA-256 digests, and publishes its immutable manifest last. Discovery
+isolates torn or corrupt entries; explicit deletion removes only the selected
+version, while successful creation retains the newest twenty. Restoring first
+revalidates every payload, then opens a fresh Worker document with a new
+workspace identity and no native file handle, leaving the source tab unchanged.
+Labels and document names remain local and are excluded from exported
+diagnostics.
+
 The same origin-private root stores the local asset library in alternating,
 fully validated JSON generations. Gradient and pattern definitions are bounded
 declarative values; font files are capped at 16 MiB and published only after

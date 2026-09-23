@@ -115,6 +115,34 @@ try {
   await page.waitForFunction(() => Number(document.querySelector("#detailRevision")?.textContent) >= 2 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
 
+  await page.selectOption("#saveFormatSelect", "psb");
+  await page.waitForFunction(() => document.querySelector("#recoveryLabel")?.dataset.state === "confirmed");
+  await page.click("#versionsButton");
+  await page.fill("#versionLabelInput", "PRIVATE_VERSION_LABEL_SENTINEL");
+  await page.click("#createVersionButton");
+  await page.waitForFunction(() => document.querySelectorAll("#versionHistoryList .recovery-row").length === 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  assert.match(await page.textContent("#versionHistoryList"), /PRIVATE_VERSION_LABEL_SENTINEL/);
+  await page.click('#versionHistoryDialog button[value="cancel"]');
+
+  await page.setInputFiles("#imageInput", {
+    name: "PRIVATE_POST_VERSION_FILENAME_SENTINEL.png",
+    mimeType: "image/png",
+    buffer: rgbaPng(pixelWidth, 1, pixelBytes),
+  });
+  await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) === 3 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  await page.click("#versionsButton");
+  await page.click("#versionHistoryList .recovery-row .button-primary");
+  await page.waitForFunction(() => document.querySelectorAll('#documentTabs [role="tab"]').length === 2 &&
+    Number(document.querySelector("#layerCount")?.textContent) === 2 &&
+    document.querySelector("#saveFormatSelect")?.value === "psb" &&
+    document.querySelector("#clearSelectionButton")?.disabled === false &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  await page.locator('#documentTabs [role="tab"]').first().click();
+  await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) === 3 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+
   await page.click("#pastePixelsButton");
   await page.waitForSelector("#errorBanner:not([hidden])");
   await page.click("#dismissErrorButton");

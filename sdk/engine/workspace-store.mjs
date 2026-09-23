@@ -10,6 +10,9 @@ const ASSET_LIBRARY_FILES = ["assets-a.json", "assets-b.json"];
 const ASSET_LIBRARY_VERSION = 1;
 const FONT_DIRECTORY = "fonts";
 const MAX_FONT_BYTES = 16 * 1024 * 1024;
+const VERSION_ROOT_NAME = "patchy-versions-v1";
+const VERSION_MANIFEST_VERSION = 1;
+const DEFAULT_VERSION_RETENTION = 20;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const TOOL_IDS = new Set(["move", "marquee", "lasso", "polygon", "magic", "pan",
   "brush", "eraser", "clone", "heal", "gradient", "text"]);
@@ -173,6 +176,104 @@ export class PatchyWorkspaceStore {
     return removed;
   }
 
+  async createVersion({ id, versionId, label, name, revision, format = "psd", bytes,
+    selection = null, keepNewest = DEFAULT_VERSION_RETENTION }) {
+    validateId(id); validateId(versionId); validateVersionRetention(keepNewest);
+    const normalizedLabel = normalizeVersionLabel(label);
+    const normalizedName = normalizeName(name);
+    const normalizedRevision = normalizeRevision(revision);
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
+      throw new TypeError("Local version requires non-empty PSD bytes");
+    }
+    const encodedFormat = layeredFormat(bytes);
+    if (format !== encodedFormat) throw new Error("Local version format does not match encoded bytes");
+    const versions = await this.#versions(id, true);
+    const manifestName = versionFilename(versionId, "json");
+    if (await fileExists(versions, manifestName)) throw new Error("Local version id already exists");
+    const payloadName = versionFilename(versionId, "layered");
+    const selectionName = versionFilename(versionId, "selection");
+    const selectionState = normalizeSelection(selection);
+    await this.#hooks.beforeVersionPayloadWrite?.({ id, versionId });
+    await writeFile(versions, payloadName, bytes);
+    const storedBytes = await readBytes(versions, payloadName);
+    if (storedBytes.byteLength !== bytes.byteLength) throw new Error("Local version size verification failed");
+    let storedSelection = null;
+    if (selectionState) {
+      await writeFile(versions, selectionName, selectionState.gray);
+      const gray = await readBytes(versions, selectionName);
+      if (gray.byteLength !== selectionState.gray.byteLength) {
+        throw new Error("Local version selection size verification failed");
+      }
+      storedSelection = { bounds: selectionState.bounds, size: gray.byteLength,
+        sha256: await sha256(gray) };
+    }
+    const manifest = {
+      version: VERSION_MANIFEST_VERSION, workspaceId: id, versionId,
+      label: normalizedLabel, name: normalizedName, format: encodedFormat,
+      revision: normalizedRevision, payloadSize: storedBytes.byteLength,
+      payloadSha256: await sha256(storedBytes),
+      ...(storedSelection ? { selection: storedSelection } : {}), createdAt: this.#clock(),
+    };
+    await this.#hooks.beforeVersionManifestWrite?.({ ...manifest });
+    await writeFile(versions, manifestName, new TextEncoder().encode(JSON.stringify(manifest)));
+    await this.#hooks.afterVersionManifestWrite?.({ ...manifest });
+    const removed = await this.pruneVersions({ id, keepNewest });
+    return { manifest, removed };
+  }
+
+  async listVersions(id) {
+    validateId(id);
+    let versions;
+    try { versions = await this.#versions(id, false); } catch { return []; }
+    const result = [];
+    for await (const entry of versions.values()) {
+      if (entry.kind !== "file" || !entry.name.endsWith(".json")) continue;
+      try {
+        const manifest = JSON.parse(new TextDecoder().decode(await readBytes(versions, entry.name)));
+        if (!validVersionManifest(manifest, id) || entry.name !== versionFilename(manifest.versionId, "json")) continue;
+        const restored = await this.#restoreVersionFromDirectory(versions, manifest);
+        if (restored) result.push(manifest);
+      } catch { /* A torn or corrupt local version is isolated. */ }
+    }
+    result.sort(compareVersionsNewestFirst);
+    return result;
+  }
+
+  async restoreVersion(id, versionId) {
+    validateId(id); validateId(versionId);
+    const versions = await this.#versions(id, false);
+    const manifest = JSON.parse(new TextDecoder().decode(
+      await readBytes(versions, versionFilename(versionId, "json"))));
+    if (!validVersionManifest(manifest, id) || manifest.versionId !== versionId) {
+      throw new Error("Local version manifest is invalid");
+    }
+    const restored = await this.#restoreVersionFromDirectory(versions, manifest);
+    if (!restored) throw new Error("Local version failed integrity validation");
+    return restored;
+  }
+
+  async removeVersion(id, versionId) {
+    validateId(id); validateId(versionId);
+    const versions = await this.#versions(id, false);
+    for (const suffix of ["json", "layered", "selection"]) {
+      try { await versions.removeEntry(versionFilename(versionId, suffix)); }
+      catch { /* Missing sidecars and torn payloads are already non-restorable. */ }
+    }
+  }
+
+  async pruneVersions({ id, keepNewest = DEFAULT_VERSION_RETENTION,
+    protectedVersionIds = [] } = {}) {
+    validateId(id); validateVersionRetention(keepNewest);
+    const protectedSet = new Set(protectedVersionIds);
+    for (const versionId of protectedSet) validateId(versionId);
+    const candidates = (await this.listVersions(id))
+      .filter((manifest) => !protectedSet.has(manifest.versionId));
+    const removed = candidates.slice(keepNewest);
+    for (const manifest of removed) await this.removeVersion(id, manifest.versionId);
+    await this.#removeInvalidVersionFiles(id, await this.listVersions(id));
+    return removed;
+  }
+
   async loadPreferences(fallback = {}) {
     try {
       const root = await this.#root(false);
@@ -309,6 +410,22 @@ export class PatchyWorkspaceStore {
     return result;
   }
 
+  async #restoreVersionFromDirectory(versions, manifest) {
+    try {
+      const bytes = await readBytes(versions, versionFilename(manifest.versionId, "layered"));
+      if (bytes.byteLength !== manifest.payloadSize ||
+          await sha256(bytes) !== manifest.payloadSha256 || layeredFormat(bytes) !== manifest.format) return null;
+      let selection = null;
+      if (manifest.selection) {
+        const gray = await readBytes(versions, versionFilename(manifest.versionId, "selection"));
+        if (gray.byteLength !== manifest.selection.size ||
+            await sha256(gray) !== manifest.selection.sha256) return null;
+        selection = { bounds: { ...manifest.selection.bounds }, gray };
+      }
+      return { manifest, bytes, selection };
+    } catch { return null; }
+  }
+
   async #root(create) {
     const originRoot = await this.#rootProvider();
     return originRoot.getDirectoryHandle(ROOT_NAME, { create });
@@ -316,6 +433,31 @@ export class PatchyWorkspaceStore {
 
   async #workspace(id, create) {
     return (await this.#root(create)).getDirectoryHandle(id, { create });
+  }
+
+  async #versionRoot(create) {
+    const originRoot = await this.#rootProvider();
+    return originRoot.getDirectoryHandle(VERSION_ROOT_NAME, { create });
+  }
+
+  async #versions(id, create) {
+    return (await this.#versionRoot(create)).getDirectoryHandle(id, { create });
+  }
+
+  async #removeInvalidVersionFiles(id, manifests) {
+    const versions = await this.#versions(id, false);
+    const retained = new Set();
+    for (const manifest of manifests) {
+      retained.add(versionFilename(manifest.versionId, "json"));
+      retained.add(versionFilename(manifest.versionId, "layered"));
+      if (manifest.selection) retained.add(versionFilename(manifest.versionId, "selection"));
+    }
+    for await (const entry of versions.values()) {
+      if (entry.kind === "file" && !retained.has(entry.name)) {
+        try { await versions.removeEntry(entry.name); }
+        catch { /* A concurrent browser cleanup may already have removed it. */ }
+      }
+    }
   }
 }
 
@@ -339,6 +481,10 @@ async function readBytes(directory, name) {
   return new Uint8Array(await file.arrayBuffer());
 }
 
+async function fileExists(directory, name) {
+  try { await directory.getFileHandle(name); return true; } catch { return false; }
+}
+
 async function sha256(bytes) {
   if (!globalThis.crypto?.subtle) throw new Error("Web Crypto SHA-256 is unavailable");
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -352,6 +498,29 @@ function validateId(id) {
 function normalizeName(name) {
   const value = String(name || "Recovered.psd").trim();
   return (value || "Recovered.psd").slice(0, 256);
+}
+
+function normalizeVersionLabel(label) {
+  const value = String(label ?? "Version").trim();
+  if (!value || value.length > 128) throw new TypeError("Local version label must be 1 to 128 characters");
+  return value;
+}
+
+function normalizeRevision(revision) {
+  if (typeof revision === "bigint" && revision >= 0n) return String(revision);
+  if (Number.isSafeInteger(revision) && revision >= 0) return String(revision);
+  throw new TypeError("Local version revision must be a non-negative integer");
+}
+
+function versionFilename(versionId, suffix) {
+  validateId(versionId);
+  return `${versionId}.${suffix}`;
+}
+
+function validateVersionRetention(value) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 64) {
+    throw new RangeError("Local version retention must be between 1 and 64");
+  }
 }
 
 function layeredFormat(bytes) {
@@ -384,6 +553,24 @@ function validSelectionManifest(value) {
     Number.isSafeInteger(value.size) && value.size > 0 &&
     value.size <= MAX_SELECTION_BYTES && area === value.size &&
     typeof value.sha256 === "string" && /^[0-9a-f]{64}$/.test(value.sha256);
+}
+
+function validVersionManifest(value, workspaceId) {
+  return value?.version === VERSION_MANIFEST_VERSION && value.workspaceId === workspaceId &&
+    typeof value.versionId === "string" && ID_PATTERN.test(value.versionId) &&
+    typeof value.label === "string" && value.label.length > 0 && value.label.length <= 128 &&
+    typeof value.name === "string" && value.name.length > 0 && value.name.length <= 256 &&
+    (value.format === "psd" || value.format === "psb") &&
+    typeof value.revision === "string" && /^(0|[1-9][0-9]*)$/.test(value.revision) &&
+    Number.isSafeInteger(value.payloadSize) && value.payloadSize > 0 &&
+    typeof value.payloadSha256 === "string" && /^[0-9a-f]{64}$/.test(value.payloadSha256) &&
+    (value.selection === undefined || validSelectionManifest(value.selection)) &&
+    typeof value.createdAt === "string" && Number.isFinite(Date.parse(value.createdAt));
+}
+
+function compareVersionsNewestFirst(left, right) {
+  return right.createdAt.localeCompare(left.createdAt) ||
+    right.versionId.localeCompare(left.versionId);
 }
 
 function normalizeSelection(value) {

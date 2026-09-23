@@ -275,6 +275,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .recovery-copy span { color: var(--text-faint); font-size: 10px; }
 .recovery-actions { display: flex; gap: 6px; }
 .recovery-actions .button { min-height: 30px; }
+.version-create-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; margin-block: 14px; }
+.version-create-row .dialog-field { margin: 0; }
+.version-create-row .button { min-height: 36px; }
 #recoveryCount { display: inline-grid; min-width: 17px; height: 17px; margin-left: 4px; place-items: center; border-radius: 99px; background: #ffffff12; font-size: 9px; }
 #recoveryLabel[data-state="pending"] { color: #eab75c; }
 #recoveryLabel[data-state="confirmed"] { color: var(--accent); }
@@ -296,6 +299,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 
 @media (max-width: 560px) {
+  .version-create-row { grid-template-columns: 1fr; }
   :root { --topbar-height: 112px; --rail-width: 42px; }
   .topbar { grid-template-columns: 1fr auto; grid-template-rows: 52px 60px; }
   .document-actions { grid-column: 1 / -1; grid-row: 2; justify-content: stretch; border-top: 1px solid var(--line); padding-top: 9px; }

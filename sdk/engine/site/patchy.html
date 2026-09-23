@@ -20,6 +20,7 @@
         <button class="button button-primary" id="openButton" type="button">Open PSD</button>
         <button class="button" id="newButton" type="button">New</button>
         <button class="button" id="recoveryButton" type="button">Recovery <span id="recoveryCount">0</span></button>
+        <button class="button" id="versionsButton" type="button" disabled>Versions</button>
         <button class="button" id="assetsButton" type="button">Assets</button>
         <button class="button" id="diagnosticsButton" type="button">Diagnostics</button>
         <span class="action-divider" aria-hidden="true"></span>
@@ -293,6 +294,20 @@
           <div class="recovery-list" id="recoveryList"></div>
           <p class="dialog-note" id="recoveryQuota">Storage estimate unavailable</p>
           <div class="dialog-actions"><button class="button" id="cleanupRecoveryButton" type="button">Clean older workspaces</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog recovery-dialog" id="versionHistoryDialog" aria-labelledby="versionHistoryDialogTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">LOCAL VERSIONS</p><h2 id="versionHistoryDialogTitle">Version history</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section>
+          <p class="dialog-note">Named versions are immutable PSD or PSB snapshots stored only on this device. Restoring opens a new document and leaves the source unchanged.</p>
+          <div class="version-create-row">
+            <label class="dialog-field"><span>Version name</span><input id="versionLabelInput" type="text" maxlength="128" autocomplete="off" placeholder="Before color grading"></label>
+            <button class="button button-primary" id="createVersionButton" type="button">Create version</button>
+          </div>
+          <p class="dialog-note" id="versionHistorySummary" aria-live="polite">Loading local versions…</p>
+          <div class="recovery-list" id="versionHistoryList"></div>
         </section>
       </form>
     </dialog>

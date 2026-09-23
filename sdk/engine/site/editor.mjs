@@ -340,7 +340,7 @@ function setBusy(active, title = "Working", detail = "The engine is updating the
     $("cancelOperationButton").disabled = false;
     $("busyProgress").value = 0;
   }
-  for (const button of [$("openButton"), $("newButton"), $("recoveryButton"), $("saveButton"), $("saveAsButton"), $("undoButton"), $("redoButton")]) {
+  for (const button of [$("openButton"), $("newButton"), $("recoveryButton"), $("versionsButton"), $("saveButton"), $("saveAsButton"), $("undoButton"), $("redoButton")]) {
     button.dataset.busyDisabled = active ? "true" : "false";
   }
   updateControls();
@@ -369,6 +369,8 @@ function updateControls() {
   $("openButton").disabled = busy;
   $("newButton").disabled = busy;
   $("recoveryButton").disabled = busy;
+  $("versionsButton").disabled = busy || !snapshot || !workspaceAvailable;
+  $("createVersionButton").disabled = busy || !snapshot || !workspaceAvailable;
   $("memoryBudgetSelect").disabled = busy;
   $("importLayerButton").disabled = busy || !snapshot;
   $("groupLayerButton").disabled = busy || !layers.length;
@@ -935,6 +937,114 @@ async function openRecoveryDialog() {
   if (busy) return;
   $("recoveryDialog").showModal();
   await refreshRecoveryList();
+}
+
+async function refreshVersionHistoryList() {
+  const list = $("versionHistoryList");
+  list.replaceChildren();
+  const workspaceId = snapshot?.documentId ? workspaceIds.get(snapshot.documentId) : null;
+  if (!workspaceAvailable || !snapshot) {
+    $("versionHistorySummary").textContent = "Local version history is unavailable here.";
+    list.append(Object.assign(document.createElement("p"), { className: "recovery-empty",
+      textContent: "Open a document in a secure browser context first." }));
+    return;
+  }
+  try {
+    const manifests = workspaceId ? await workspaceStore.listVersions(workspaceId) : [];
+    $("versionHistorySummary").textContent = manifests.length
+      ? `${manifests.length} immutable local version${manifests.length === 1 ? "" : "s"}. The newest 20 are retained.`
+      : "No named versions exist for this document yet.";
+    if (!manifests.length) list.append(Object.assign(document.createElement("p"), {
+      className: "recovery-empty", textContent: "Create a named version to preserve the current layered state." }));
+    for (const manifest of manifests) {
+      const row = document.createElement("article"); row.className = "recovery-row";
+      const copy = document.createElement("div"); copy.className = "recovery-copy";
+      const title = document.createElement("strong"); title.textContent = manifest.label;
+      const details = document.createElement("span");
+      details.textContent = `${manifest.format.toUpperCase()} · Revision ${manifest.revision} · ${formatBytes(manifest.payloadSize)} · ${new Date(manifest.createdAt).toLocaleString()}`;
+      copy.append(title, details);
+      const actions = document.createElement("div"); actions.className = "recovery-actions";
+      const restore = document.createElement("button"); restore.type = "button";
+      restore.className = "button button-primary"; restore.textContent = "Restore as new";
+      restore.addEventListener("click", () => restoreLocalVersion(workspaceId, manifest));
+      const remove = document.createElement("button"); remove.type = "button";
+      remove.className = "button"; remove.textContent = "Delete";
+      remove.addEventListener("click", () => removeLocalVersion(workspaceId, manifest));
+      actions.append(restore, remove); row.append(copy, actions); list.append(row);
+    }
+    localizer.localize(list);
+  } catch (error) {
+    $("versionHistorySummary").textContent = "Local version history could not be read.";
+    list.append(Object.assign(document.createElement("p"), { className: "recovery-empty",
+      textContent: error?.message || String(error) }));
+  }
+}
+
+async function openVersionHistoryDialog() {
+  if (busy || !snapshot || !workspaceAvailable) return;
+  $("versionHistoryDialog").showModal();
+  await refreshVersionHistoryList();
+  $("versionLabelInput").focus();
+}
+
+async function createLocalVersion() {
+  if (busy || !snapshot || !workspaceAvailable) return;
+  const label = $("versionLabelInput").value.trim();
+  if (!label) {
+    $("versionLabelInput").setCustomValidity("Enter a version name.");
+    $("versionLabelInput").reportValidity();
+    return;
+  }
+  $("versionLabelInput").setCustomValidity("");
+  const source = snapshot;
+  const format = documentSaveFormats.get(source.documentId) || "psd";
+  const workspaceId = workspaceIds.get(source.documentId) || newWorkspaceId();
+  workspaceIds.set(source.documentId, workspaceId);
+  clearError();
+  setBusy(true, "Creating local version", "Encoding and verifying one immutable layered snapshot");
+  try {
+    const bytes = await client.saveDocument(source.documentId, format);
+    await workspaceStore.createVersion({ id: workspaceId, versionId: `version-${newWorkspaceId()}`,
+      label, name: source.documentName || documentName, revision: source.revision,
+      format, bytes, selection: checkpointSelection(source), keepNewest: 20 });
+    $("versionLabelInput").value = "";
+    await refreshVersionHistoryList();
+    setSessionState("document", "Local version created");
+  } catch (error) {
+    $("versionHistoryDialog").close();
+    showError("Could not create local version", error);
+  } finally { setBusy(false); }
+}
+
+async function restoreLocalVersion(workspaceId, manifest) {
+  if (busy || !snapshot || !workspaceAvailable) return;
+  $("versionHistoryDialog").close(); clearError();
+  setBusy(true, "Restoring local version", "Validating and opening an independent layered document");
+  try {
+    const recovered = await workspaceStore.restoreVersion(workspaceId, manifest.versionId);
+    let next = await client.open(recovered.bytes, recovered.manifest.name, { transferOwnership: true });
+    if (recovered.selection) next = await applyRecoveredSelection(client, recovered.selection);
+    const format = recovered.manifest.format || "psd";
+    workspaceIds.set(next.documentId, newWorkspaceId());
+    documentSaveFormats.set(next.documentId, format);
+    fileLifecycle.register(next.documentId, next, format);
+    clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
+    await acceptSnapshot(next);
+    scheduleCheckpoint(next);
+    setSessionState("document", "Version restored as new document");
+  } catch (error) { showError("Could not restore local version", error); }
+  finally { setBusy(false); }
+}
+
+async function removeLocalVersion(workspaceId, manifest) {
+  if (busy || !confirm(`${localizer.text("Delete")} ${manifest.label}?`)) return;
+  try {
+    await workspaceStore.removeVersion(workspaceId, manifest.versionId);
+    await refreshVersionHistoryList();
+  } catch (error) {
+    $("versionHistoryDialog").close();
+    showError("Could not delete local version", error);
+  }
 }
 
 async function cleanupRecoveryWorkspaces() {
@@ -3434,6 +3544,8 @@ async function openPicker() {
 registerCommand("document.open", "openButton", openPicker, () => !busy);
 registerCommand("document.new", "newButton", newDocument, () => !busy);
 registerCommand("document.recovery", "recoveryButton", openRecoveryDialog, () => !busy);
+registerCommand("document.versions", "versionsButton", openVersionHistoryDialog,
+  () => !busy && Boolean(snapshot) && workspaceAvailable);
 registerCommand("document.assets", "assetsButton", () => $("assetsDialog").showModal(),
   () => !busy && workspaceAvailable);
 registerCommand("support.diagnostics", "diagnosticsButton", openDiagnosticsDialog, () => !busy);
@@ -3488,6 +3600,8 @@ for (const [id, command] of commandRegistry) {
 }
 
 $("emptyOpenButton").addEventListener("click", openPicker);
+$("createVersionButton").addEventListener("click", createLocalVersion);
+$("versionLabelInput").addEventListener("input", () => $("versionLabelInput").setCustomValidity(""));
 $("saveFormatSelect").addEventListener("change", () => {
   if (!snapshot) return;
   documentSaveFormats.set(snapshot.documentId, $("saveFormatSelect").value);
