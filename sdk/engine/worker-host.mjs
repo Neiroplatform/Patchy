@@ -743,6 +743,14 @@ export class PatchyWorkerHost {
       case "saveProgress": return this.#engine.saveWithProgress(
         this.#requireSession(), layeredSaveOptions(message.format),
         new Int32Array(message.cancellation), message.progress);
+      case "markSaved": {
+        const documentId = Number(message.documentId);
+        if (documentId !== this.#activeDocumentId) {
+          throw new Error("Patchy save acknowledgement requires the active document");
+        }
+        this.#engine.markSaved(this.#requireSession(), BigInt(message.expectedStateId));
+        return this.#snapshot();
+      }
       case "saveDocument": {
         const record = this.#sessions.get(Number(message.documentId));
         if (!record) throw new Error("Patchy document does not exist");

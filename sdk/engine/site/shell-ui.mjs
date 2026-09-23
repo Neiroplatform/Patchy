@@ -13,6 +13,7 @@ const RU = new Map(Object.entries({
   "Layered document format": "Формат слоёного документа",
   "Download PSD": "Скачать PSD",
   "Save": "Сохранить",
+  "Save as…": "Сохранить как…",
   "Export format": "Формат экспорта",
   "Export": "Экспорт",
   "Copy selected editable layer": "Скопировать выбранный редактируемый слой",
@@ -39,6 +40,8 @@ const RU = new Map(Object.entries({
   "Engine ready": "Движок готов",
   "Document ready": "Документ готов",
   "Modified locally": "Изменено локально",
+  "Saved to local file": "Сохранено в локальный файл",
+  "Download created · document remains modified": "Скачивание создано · документ остаётся изменённым",
   "Workspace tools": "Инструменты",
   "Move layer": "Переместить слой",
   "Crop document": "Кадрировать документ",
@@ -500,6 +503,7 @@ const RU = new Map(Object.entries({
   "Could not create document": "Не удалось создать документ",
   "Could not delete local recovery": "Не удалось удалить локальное восстановление",
   "Could not encode layered document": "Не удалось записать слоёный документ",
+  "Write permission was not granted; the document remains modified.": "Разрешение на запись не получено; документ остаётся изменённым.",
   "Could not export document": "Не удалось экспортировать документ",
   "Could not import pixels": "Не удалось импортировать пиксели",
   "Could not install font": "Не удалось установить шрифт",
@@ -617,6 +621,7 @@ const RU = new Map(Object.entries({
   "Painting layer mask": "Рисование по маске слоя",
   "Painting pixels": "Рисование пикселей",
   "Preparing a local browser download": "Подготовка локального скачивания в браузере",
+  "Writing after permission to a local file": "Запись в локальный файл после разрешения",
   "Rasterizing layer": "Растрирование слоя",
   "Refining selection": "Уточнение выделения",
   "Refining selection to layer mask": "Уточнение выделения в маску слоя",
@@ -730,6 +735,8 @@ export function translateMessage(value, locale = "en") {
   if (dynamic) return `${translateMessage(dynamic[1], locale)}: ${dynamic[2] === "rejected" ? "отклонено" : "ошибка"}`;
   dynamic = source.match(/^Encoding (.+)$/);
   if (dynamic) return `Кодирование ${dynamic[1]}`;
+  dynamic = source.match(/^(Save|Download) (PSD|PSB)$/);
+  if (dynamic) return `${dynamic[1] === "Save" ? "Сохранить" : "Скачать"} ${dynamic[2]}`;
   dynamic = source.match(/^Engine mode (\d+)$/);
   if (dynamic) return `Режим движка ${dynamic[1]}`;
   dynamic = source.match(/^Imported mode (\d+)$/);

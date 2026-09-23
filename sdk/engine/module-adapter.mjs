@@ -1516,6 +1516,16 @@ export class EmscriptenPatchyEngine {
       this.#module._patchy_engine_session_redo(session, event, error));
   }
 
+  markSaved(session, expectedStateId) {
+    if (typeof expectedStateId !== "bigint" || expectedStateId <= 0n ||
+        expectedStateId > UINT64_MAX) {
+      throw new TypeError("Save acknowledgement requires a positive state id");
+    }
+    return this.#mutation((event, error) =>
+      this.#module._patchy_engine_session_mark_saved(
+        session, expectedStateId, event, error));
+  }
+
   memoryUsage(session) {
     return this.#withError((error) => {
       const output = this.#alloc(MEMORY_USAGE_SIZE);

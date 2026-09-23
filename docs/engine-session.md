@@ -272,8 +272,11 @@ replacement and Smart Filters, image/canvas geometry, canonical selection,
 raster masks, one-commit RGBA paint/transform, selected-area filtering,
 undo/redo, render and layered PSD/PSB save. Bounded render and both layered
 save formats expose the same cooperative progress/cancellation contract as the
-C ABI; cancellation publishes no partial output. Canonical document state never enters
-the UI process. Filter cancellation is a main-thread `SharedArrayBuffer`
+C ABI; cancellation publishes no partial output. `markSaved` separately
+acknowledges exact-state durable persistence and returns the resulting canonical
+projection, so undo to that state restores clean status while a stale write can
+never clear a newer edit. Canonical document state never enters the UI process.
+Filter cancellation is a main-thread `SharedArrayBuffer`
 flag sampled by the C progress callback while the Worker is synchronously in
 Wasm, so cancellation remains responsive without concurrent session access.
 The same one-owner path now covers selection-aware solid/gradient fills,
@@ -301,8 +304,13 @@ release, export closure and explicit crash state. The actual Emscripten build
 remains a required hosted gate when the pinned toolchain is available.
 
 The same preset stages `build/wasm-sdk/site`, a dependency-free self-hosted
-editor shell. It closes the browser product loop from open/drop or blank
-creation through layered PSD download plus flattened PNG/JPEG/WebP/SVG export.
+editor shell. Where the File System Access API is available, native open binds
+a session-local handle and Save/Save As writes the Worker-created PSD/PSB Blob
+through a permission-checked writable stream; only a successful close triggers
+the exact-state save acknowledgement. Other browsers retain file-input and
+layered-download fallback without claiming a durable save. Handles never enter
+OPFS, diagnostics or the Worker and are collision-safely remapped across Worker
+recovery. The shell also provides flattened PNG/JPEG/WebP/SVG export.
 The screen can import decoded RGBA8 PNG/JPEG/WebP/AVIF/SVG pixels as layers,
 open a dropped raster image as a new document, and keep up to 16 isolated
 switchable document sessions inside the same Worker. Document tabs activate or

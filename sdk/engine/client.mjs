@@ -493,6 +493,9 @@ export class PatchyWorkerClient {
   saveDocumentBlob(documentId, format = "psd") {
     return this.#request("saveDocumentBlob", { documentId, format: saveFormat(format) });
   }
+  markSaved(documentId, expectedStateId) {
+    return this.#request("markSaved", { documentId, expectedStateId: String(expectedStateId) });
+  }
   close() { return this.#request("close"); }
 
   #textLayerRequest(method, layerId, input, transferOwnership = false) {

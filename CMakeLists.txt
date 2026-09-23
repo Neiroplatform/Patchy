@@ -565,6 +565,8 @@ if(PATCHY_BUILD_WASM_SDK)
   set_target_properties(patchy_engine_wasm_sdk PROPERTIES
     OUTPUT_NAME patchy-engine
     SUFFIX ".mjs")
+  set_property(TARGET patchy_engine_wasm_sdk APPEND PROPERTY LINK_DEPENDS
+    "${PROJECT_SOURCE_DIR}/sdk/engine/exports.json")
   patchy_configure_target(patchy_engine_wasm_sdk)
   set(PATCHY_WASM_SDK_SITE_DIR "${CMAKE_CURRENT_BINARY_DIR}/site")
   add_custom_target(patchy_engine_wasm_site ALL
@@ -587,6 +589,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/frame-transport.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/blob-ingress.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/file-lifecycle.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/flat-export.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/worker-host.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/module-adapter.mjs"

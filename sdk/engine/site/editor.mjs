@@ -8,6 +8,7 @@ import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   documentPreflight, geometryMutationPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
+import { BrowserFileLifecycle } from "./engine/file-lifecycle.mjs";
 import { normalizeGuides, snapTranslatedQuad } from "./guide-model.mjs";
 import { anchoredScrollDelta, clampScrollPosition, clampZoom, fitZoom,
   rulerTicks } from "./viewport-model.mjs";
@@ -26,6 +27,7 @@ const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
 let client = null;
 let errorReturnFocus = null;
 const workspaceStore = new PatchyWorkspaceStore();
+const fileLifecycle = new BrowserFileLifecycle({ download: downloadBlob });
 const canvas = $("documentCanvas");
 const context = canvas.getContext("2d", { alpha: true });
 let snapshot = null;
@@ -338,7 +340,7 @@ function setBusy(active, title = "Working", detail = "The engine is updating the
     $("cancelOperationButton").disabled = false;
     $("busyProgress").value = 0;
   }
-  for (const button of [$("openButton"), $("newButton"), $("recoveryButton"), $("saveButton"), $("undoButton"), $("redoButton")]) {
+  for (const button of [$("openButton"), $("newButton"), $("recoveryButton"), $("saveButton"), $("saveAsButton"), $("undoButton"), $("redoButton")]) {
     button.dataset.busyDisabled = active ? "true" : "false";
   }
   updateControls();
@@ -349,11 +351,13 @@ function updateControls() {
   const layers = selectedLayers();
   const single = layers.length === 1;
   $("saveButton").disabled = busy || !snapshot;
+  $("saveAsButton").disabled = busy || !snapshot;
   $("saveFormatSelect").disabled = busy || !snapshot;
   if (snapshot) {
     const format = documentSaveFormats.get(snapshot.documentId) || "psd";
     $("saveFormatSelect").value = format;
-    localizer.setText($("saveButton").querySelector(".download-label"), `Download ${format.toUpperCase()}`);
+    localizer.setText($("saveButton").querySelector(".download-label"),
+      fileLifecycle.supported ? `Save ${format.toUpperCase()}` : `Download ${format.toUpperCase()}`);
   }
   $("exportFormatSelect").disabled = busy || !snapshot;
   $("exportButton").disabled = busy || !snapshot;
@@ -754,6 +758,11 @@ async function recoverEngineAfterCrash() {
       workspaceIds.clear(); checkpointStates.clear(); checkpointQueues.clear();
       documentHistoryLabels.clear(); documentSaveFormats.clear();
       documentViewports.clear(); viewportDiagnostics.trackedDocuments = 0;
+      fileLifecycle.remapAll(result.restored.map((item) => ({
+        previousDocumentId: item.previousDocumentId, documentId: item.documentId,
+        projection: item.snapshot, format: item.format,
+      })));
+      for (const item of result.failed) fileLifecycle.release(item.documentId);
       for (const item of result.restored) {
         workspaceIds.set(item.documentId, item.workspaceId);
         checkpointStates.set(item.documentId, "confirmed");
@@ -1325,7 +1334,8 @@ function renderMetadata() {
   $("stageMeta").hidden = !snapshot;
   $("documentName").textContent = documentName;
   $("documentMetrics").textContent = snapshot ? `${snapshot.width} × ${snapshot.height} px` : "";
-  $("detailState").textContent = snapshot ? (snapshot.dirty ? "Modified" : "Saved") : "No document";
+  localizer.setText($("detailState"), snapshot
+    ? (snapshot.dirty ? "Modified" : "Saved") : "No document");
   $("detailFormat").textContent = snapshot ? `${snapshot.bitDepth}-bit RGB` : "-";
   $("detailCanvas").textContent = snapshot ? `${snapshot.width} × ${snapshot.height}` : "-";
   $("detailRevision").textContent = snapshot ? String(snapshot.revision) : "-";
@@ -2097,6 +2107,7 @@ async function closeDocumentTab(documentTab) {
     checkpointQueues.delete(documentTab.id);
     documentHistoryLabels.delete(documentTab.id);
     documentGuides.delete(documentTab.id);
+    fileLifecycle.release(documentTab.id);
     await acceptSnapshot(next, true, !closingActiveDocument);
     documentViewports.delete(documentTab.id);
     viewportDiagnostics.trackedDocuments = documentViewports.size;
@@ -2140,7 +2151,7 @@ async function navigateHistory(steps) {
   }
 }
 
-async function openFile(file) {
+async function openFile(file, handle = null) {
   if (!file || busy) return;
   clearError();
   setBusy(true, "Opening document", "Transferring bytes to the isolated Worker");
@@ -2149,6 +2160,8 @@ async function openFile(file) {
     ensureMemorySafe(header, file.name || "Document");
     const next = await client.openBlob(file, file.name || "Document.psd");
     documentSaveFormats.set(next.documentId, header.version === 2 ? "psb" : "psd");
+    const format = documentSaveFormats.get(next.documentId);
+    fileLifecycle.bindOpened(next.documentId, handle, next, format);
     clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
@@ -2163,6 +2176,7 @@ async function newDocument() {
   try {
     ensureMemorySafe({ width: 1600, height: 1000 }, "New document");
     const next = await client.create(1600, 1000, "Untitled.psd");
+    fileLifecycle.register(next.documentId, next, "psd");
     clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
@@ -2170,14 +2184,15 @@ async function newDocument() {
   finally { setBusy(false); }
 }
 
-async function saveDocument() {
+async function saveDocument(saveAs = false) {
   if (busy || !snapshot) return;
   clearError();
   const activeTab = snapshot.documents.find((item) => item.active);
   const applyingContents = activeTab?.smartObjectParentId != null;
   const format = documentSaveFormats.get(snapshot.documentId) || "psd";
   setBusy(true, applyingContents ? "Applying Smart Object contents" : `Encoding ${format.toUpperCase()}`,
-    applyingContents ? "Committing one guarded parent revision" : "Preparing a local browser download");
+    applyingContents ? "Committing one guarded parent revision" :
+      (fileLifecycle.supported ? "Writing after permission to a local file" : "Preparing a local browser download"));
   try {
     if (applyingContents) {
       const before = snapshot;
@@ -2188,8 +2203,21 @@ async function saveDocument() {
       scheduleCheckpoint(next);
       return;
     }
-    const blob = await client.saveBlob(format);
-    downloadBlob(blob, `${exportBaseName()}.${format}`);
+    const result = await fileLifecycle.save({ documentId: snapshot.documentId,
+      projection: snapshot, format, name: `${exportBaseName()}.${format}`, saveAs,
+      createBlob: () => client.saveBlob(format) });
+    if (result.kind === "permission-denied") {
+      throw new Error("Write permission was not granted; the document remains modified.");
+    }
+    if (result.kind === "cancelled") return;
+    if (result.durable) {
+      const next = await client.markSaved(snapshot.documentId, snapshot.stateId);
+      await acceptSnapshot(next, false);
+      scheduleCheckpoint(next);
+      setSessionState("document", "Saved to local file");
+    } else {
+      setSessionState("document", "Download created · document remains modified");
+    }
   } catch (error) { showError("Could not encode layered document", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally { setBusy(false); }
 }
@@ -3384,7 +3412,14 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
 }
 
-function openPicker() { if (!busy) $("fileInput").click(); }
+async function openPicker() {
+  if (busy) return;
+  try {
+    const picked = await fileLifecycle.pickOpen();
+    if (picked.kind === "fallback") $("fileInput").click();
+    else if (picked.kind === "handle") await openFile(picked.file, picked.handle);
+  } catch (error) { showError("Could not open document", error); }
+}
 registerCommand("document.open", "openButton", openPicker, () => !busy);
 registerCommand("document.new", "newButton", newDocument, () => !busy);
 registerCommand("document.recovery", "recoveryButton", openRecoveryDialog, () => !busy);
@@ -3392,6 +3427,8 @@ registerCommand("document.assets", "assetsButton", () => $("assetsDialog").showM
   () => !busy && workspaceAvailable);
 registerCommand("support.diagnostics", "diagnosticsButton", openDiagnosticsDialog, () => !busy);
 registerCommand("document.save", "saveButton", saveDocument, () => !busy && Boolean(snapshot));
+registerCommand("document.saveAs", "saveAsButton", () => saveDocument(true),
+  () => !busy && Boolean(snapshot));
 registerCommand("layer.openSmartObject", "openSmartObjectButton", openSmartObjectContents,
   () => !busy && Boolean(selectedLayer()?.smartObject?.contentsEditable));
 registerCommand("layer.filter", "filterLayerButton", openFilterDialog,
@@ -4102,7 +4139,8 @@ $("canvasViewport").addEventListener("scroll", () => scheduleViewportUpdate("scr
 window.addEventListener("resize", () => scheduleViewportUpdate("resize"));
 $("layerList").addEventListener("scroll", scheduleLayerWindowRender, { passive: true });
 window.addEventListener("beforeunload", (event) => {
-  if ([...checkpointStates.values()].some((state) => state === "pending")) event.preventDefault();
+  const modified = (snapshot?.documents || []).some((documentTab) => documentTab.dirty);
+  if (modified || [...checkpointStates.values()].some((state) => state === "pending")) event.preventDefault();
 });
 
 $("localeSelect").addEventListener("change", () => {

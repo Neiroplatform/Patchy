@@ -347,6 +347,88 @@ try {
     "Escape did not close dialog and return focus");
   check(byId("detailRevision").textContent === transformRevision, "dialog Escape committed document state");
 
+  smokeStage = "native-file-lifecycle";
+  const fileWrites = [];
+  let writableClosed = 0;
+  let saveTarget = {
+    name: "Native lifecycle.psd",
+    async queryPermission() { return "granted"; },
+    async createWritable() { return {
+      async write(blob) {
+        check(blob instanceof frame.contentWindow.Blob && blob.size > 0,
+          "native Save did not receive a non-empty Worker Blob");
+        fileWrites.push(blob);
+      },
+      async close() { writableClosed++; },
+      async abort() { throw new Error("successful native Save called abort"); },
+    }; },
+  };
+  frame.contentWindow.showOpenFilePicker = async () => [];
+  frame.contentWindow.showSaveFilePicker = async () => saveTarget;
+  byId("saveButton").click();
+  await waitFor(() => writableClosed === 1 &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native Save did not close its writable stream");
+  check(fileWrites.length === 1 && byId("detailState").textContent === "Сохранён",
+    "completed native Save did not publish the exact clean savepoint");
+
+  const savedRevision = Number(byId("detailRevision").textContent);
+  const opacity = byId("layerOpacityInput");
+  opacity.value = String(Number(opacity.value) === 73 ? 72 : 73);
+  opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
+  await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 1 &&
+    byId("detailState").textContent === "Изменён" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "post-save mutation did not restore modified state");
+  byId("undoButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 2 &&
+    byId("detailState").textContent === "Сохранён" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "undo to the exact native savepoint did not restore clean state");
+
+  const restoredRevision = Number(byId("detailRevision").textContent);
+  opacity.value = String(Number(opacity.value) === 61 ? 62 : 61);
+  opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
+  await waitFor(() => Number(byId("detailRevision").textContent) === restoredRevision + 1 &&
+    byId("detailState").textContent === "Изменён",
+  "write-failure fixture did not create a modified state");
+  let abortedWrite = false;
+  saveTarget = {
+    name: "Failed lifecycle.psd",
+    async queryPermission() { return "granted"; },
+    async createWritable() { return {
+      async write() { throw new Error("simulated local write failure"); },
+      async close() { throw new Error("failed write attempted close"); },
+      async abort() { abortedWrite = true; },
+    }; },
+  };
+  byId("saveAsButton").click();
+  await waitFor(() => abortedWrite && !byId("errorBanner").hidden &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native write failure did not abort and surface an error");
+  check(byId("detailState").textContent === "Изменён",
+    "native write failure falsely advanced the durable savepoint");
+  byId("dismissErrorButton").click();
+  delete frame.contentWindow.showOpenFilePicker;
+  delete frame.contentWindow.showSaveFilePicker;
+  let fallbackBlob = null; let fallbackName = null;
+  const originalLifecycleCreateObjectUrl = frame.contentWindow.URL.createObjectURL;
+  const originalLifecycleRevokeObjectUrl = frame.contentWindow.URL.revokeObjectURL;
+  const originalLifecycleAnchorClick = frame.contentWindow.HTMLAnchorElement.prototype.click;
+  frame.contentWindow.URL.createObjectURL = (blob) => { fallbackBlob = blob; return "blob:file-lifecycle-smoke"; };
+  frame.contentWindow.URL.revokeObjectURL = () => {};
+  frame.contentWindow.HTMLAnchorElement.prototype.click = function () { fallbackName = this.download; };
+  byId("saveAsButton").click();
+  await waitFor(() => fallbackBlob &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "download fallback did not create a layered Blob");
+  check(fallbackBlob.size === fileWrites[0].size && /\.psd$/i.test(fallbackName) &&
+    byId("detailState").textContent === "Изменён",
+  "download fallback changed bytes, filename or durable dirty state");
+  frame.contentWindow.URL.createObjectURL = originalLifecycleCreateObjectUrl;
+  frame.contentWindow.URL.revokeObjectURL = originalLifecycleRevokeObjectUrl;
+  frame.contentWindow.HTMLAnchorElement.prototype.click = originalLifecycleAnchorClick;
+
   smokeStage = "document-lifecycle";
   byId("zoomActualButton").click(); await delay(50);
   viewport.scrollLeft = 137; viewport.scrollTop = 91; await delay(50);
@@ -495,6 +577,25 @@ try {
   samples.sort((left, right) => left - right);
   const p95 = samples[Math.ceil(samples.length * .95) - 1];
   check(p95 < 100, `non-render UI command p95 ${p95.toFixed(2)}ms exceeds 100ms`);
+
+  smokeStage = "native-file-open";
+  const reopenedFile = new frame.contentWindow.File([fileWrites[0]], "Native reopen.psd",
+    { type: "application/octet-stream" });
+  const reopenedHandle = { name: reopenedFile.name, async getFile() { return reopenedFile; } };
+  frame.contentWindow.showOpenFilePicker = async () => [reopenedHandle];
+  frame.contentWindow.showSaveFilePicker = async () => saveTarget;
+  byId("openButton").click();
+  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length === 2 &&
+    byId("documentTabs").querySelector('[role="tab"][aria-selected="true"]')?.title ===
+      "Native reopen.psd" && byId("detailState").textContent === "Сохранён" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native Open did not bind and load the selected layered file handle");
+  byId("documentTabs").querySelector('.document-tab[data-active="true"] button[aria-hidden="true"]').click();
+  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length === 1 &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native-opened document did not release its tab and handle binding");
+  delete frame.contentWindow.showOpenFilePicker;
+  delete frame.contentWindow.showSaveFilePicker;
 
   byId("localeSelect").value = "en";
   byId("localeSelect").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));

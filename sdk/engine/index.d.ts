@@ -325,6 +325,7 @@ export class PatchyWorkerClient {
   saveDocument(documentId: number, format?: "psd" | "psb"): Promise<Uint8Array>;
   saveBlob(format?: "psd" | "psb"): Promise<Blob>;
   saveDocumentBlob(documentId: number, format?: "psd" | "psb"): Promise<Blob>;
+  markSaved(documentId: number, expectedStateId: bigint): Promise<DocumentProjection>;
   close(): Promise<null>;
   terminate(): void;
 }

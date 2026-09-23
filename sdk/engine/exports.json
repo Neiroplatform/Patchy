@@ -92,5 +92,6 @@
   "_patchy_engine_session_save_psd",
   "_patchy_engine_session_save_psd_as",
   "_patchy_engine_session_save_psd_as_with_progress",
+  "_patchy_engine_session_mark_saved",
   "_patchy_engine_buffer_release"
 ]

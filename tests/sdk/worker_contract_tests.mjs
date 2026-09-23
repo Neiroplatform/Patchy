@@ -154,6 +154,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
     "client.historyTravel", "client.renderFrame", "client.saveBlob", "client.saveDocument",
+    "client.markSaved",
     "client.setMemoryBudget", "client.openBlob", "client.inspectBlob", "client.placePsdSmartObject"]) {
     assert.ok(script.includes(method), `${method} is not wired`);
   }
@@ -1316,6 +1317,7 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     redo() { calls.push(["redo"]); revision++; visible = false; },
     render() { calls.push(["render"]); return new Uint8Array(24).fill(9); },
     save() { calls.push(["save"]); return new Uint8Array([56, 66, 80, 83]); },
+    markSaved(session, expectedStateId) { calls.push(["markSaved", session, expectedStateId]); },
     close(session) { calls.push(["close", session]); },
     dispose() { calls.push(["dispose"]); },
   };
@@ -1441,6 +1443,9 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   await host.dispatch({ method: "redo" });
   assert.equal((await host.dispatch({ method: "render", region: { x: 0, y: 0, width: 3, height: 2 } })).byteLength, 24);
   assert.deepEqual(Array.from(await host.dispatch({ method: "save" })), [56, 66, 80, 83]);
+  const acknowledged = await host.dispatch({ method: "markSaved",
+    documentId: firstDocument.documentId, expectedStateId: String(revision) });
+  assert.equal(acknowledged.documentId, firstDocument.documentId);
   const secondDocument = await host.dispatch({ method: "create", width: 1, height: 1, name: "Second.psd" });
   assert.equal(secondDocument.documents.length, 2);
   assert.equal(secondDocument.documentName, "Second.psd");
@@ -2193,6 +2198,15 @@ test("client receives Worker-native PSD Blobs without byte transfer lists", asyn
   assert.equal(worker.sent[1].message.format, "psb");
   worker.reply({ id: 2, ok: true, value: new Blob([psdHeader()]) });
   assert.equal((await documentSaved).size, 26);
+});
+
+test("client transports exact save acknowledgements to the canonical engine session", async () => {
+  const worker = new FakeWorker(); const client = new PatchyWorkerClient(worker);
+  const saved = client.markSaved(17, 99n);
+  assert.deepEqual(worker.sent[0].message,
+    { id: 1, method: "markSaved", documentId: 17, expectedStateId: "99" });
+  worker.reply({ id: 1, ok: true, value: projection(2) });
+  assert.equal((await saved).stateId, 2n);
 });
 
 test("client preserves legacy geometry defaults and transports complete geometry options", async () => {

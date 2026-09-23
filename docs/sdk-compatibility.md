@@ -51,6 +51,16 @@ The synchronous `render` and `save` methods remain available for callers that
 do not need progress. Progressive output must remain byte-identical to the
 corresponding synchronous operation.
 
+## Persistence acknowledgement
+
+Encoding and durable persistence are separate operations. `saveBlob` returns a
+Worker-created layered `Blob` without materializing another UI-side byte array.
+After a host has durably persisted those exact bytes, it may call
+`markSaved(documentId, expectedStateId)`. The Worker accepts the acknowledgement
+only for the active document at that exact canonical state; a stale
+acknowledgement fails and cannot clear a newer edit. Cancellation, download-only
+fallbacks and failed writes must not call `markSaved`.
+
 ## Distribution boundary
 
 The package remains marked `private`. A hosted application must pin the SDK,

@@ -9,4 +9,6 @@
 - Added named capability constants for feature negotiation.
 - Added progressive, cooperatively cancellable bounded rendering.
 - Added progressive, cooperatively cancellable layered PSD and PSB encoding.
+- Added exact-state `markSaved(documentId, expectedStateId)` acknowledgement so
+  a host advances the canonical savepoint only after durable persistence.
 - Documented pre-1.0 compatibility, ownership and distribution policy.
