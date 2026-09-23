@@ -717,6 +717,7 @@ function renderLocalizedShell() {
   renderMetadata();
   renderDocumentTabs();
   renderRecoveryStatus();
+  renderGuides();
   localizer.localize(document);
   syncToolRoving();
 }
@@ -1451,7 +1452,11 @@ function renderGuides() {
   const overlay = $("guidesOverlay");
   overlay.replaceChildren();
   overlay.hidden = !snapshot || !guidesVisible;
-  for (const guide of activeGuides()) {
+  const guides = snapshot
+    ? normalizeGuides(activeGuides(), snapshot.width, snapshot.height)
+    : [];
+  if (snapshot) documentGuides.set(snapshot.documentId, guides);
+  for (const guide of guides) {
     const line = document.createElement("button");
     line.type = "button"; line.className = "guide-line";
     line.dataset.orientation = guide.orientation;

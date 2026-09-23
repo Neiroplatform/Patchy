@@ -1,16 +1,18 @@
 const finite = (value) => Number.isFinite(value);
+const orientationLimit = (orientation, width, height) =>
+  orientation === "vertical" ? width : orientation === "horizontal" ? height : null;
 
 export function normalizeGuides(guides, width, height) {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
     return [];
   }
-  const limits = { vertical: width, horizontal: height };
   const seen = new Set();
   const normalized = [];
   for (const guide of Array.isArray(guides) ? guides : []) {
     const orientation = guide?.orientation;
     const position = Math.round(Number(guide?.position));
-    if (!(orientation in limits) || !finite(position) || position < 0 || position > limits[orientation]) continue;
+    const limit = orientationLimit(orientation, width, height);
+    if (limit == null || !finite(position) || position < 0 || position > limit) continue;
     const key = `${orientation}:${position}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -49,6 +51,10 @@ export function snapTranslatedQuad(originalQuad, dx, dy, guides, documentSize,
       originalQuad.some((value) => !finite(value)) || !finite(dx) || !finite(dy) ||
       !finite(threshold) || threshold < 0) {
     throw new TypeError("Snapping requires a finite four-corner quad, translation and threshold.");
+  }
+  if (!Number.isSafeInteger(documentSize?.width) || documentSize.width <= 0 ||
+      !Number.isSafeInteger(documentSize?.height) || documentSize.height <= 0) {
+    throw new TypeError("Snapping requires a positive safe-integer document size.");
   }
   if (bypass) {
     return { quad: translatedQuad(originalQuad, dx, dy), dx, dy, snappedX: null, snappedY: null };

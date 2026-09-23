@@ -10,6 +10,8 @@ test("guides are bounded, de-duplicated and deterministic", () => {
     { orientation: "vertical", position: 50 },
     { orientation: "horizontal", position: -1 },
     { orientation: "diagonal", position: 4 },
+    { orientation: "toString", position: 4 },
+    { orientation: "__proto__", position: 4 },
   ], 100, 80), [
     { orientation: "horizontal", position: 10 },
     { orientation: "vertical", position: 50 },
@@ -40,6 +42,12 @@ test("invalid document geometry drops guides fail closed", () => {
   assert.deepEqual(normalizeGuides([{ orientation: "vertical", position: 1 }], 0, 10), []);
   assert.throws(() => snapTranslatedQuad([], 0, 0, [], { width: 10, height: 10 }),
     /finite four-corner quad/);
+  const quad = [0, 0, 10, 0, 10, 10, 0, 10];
+  for (const documentSize of [null, { width: 0, height: 10 }, { width: 10.5, height: 10 },
+    { width: 10, height: Number.MAX_SAFE_INTEGER + 1 }]) {
+    assert.throws(() => snapTranslatedQuad(quad, 0, 0, [], documentSize),
+      /positive safe-integer document size/);
+  }
 });
 
 test("production shell stages accessible guide controls and snap integration", async () => {

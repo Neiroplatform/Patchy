@@ -69,6 +69,39 @@ try {
   let guides = [...byId("guidesOverlay").querySelectorAll(".guide-line")];
   check(guides.length === 2 && guides.every((guide) => /[Нн]аправляющая/.test(guide.getAttribute("aria-label"))),
     "center guides were not created with localized accessible names");
+  byId("localeSelect").value = "en";
+  byId("localeSelect").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
+  guides = [...byId("guidesOverlay").querySelectorAll(".guide-line")];
+  check(guides.every((guide) => /guide/i.test(guide.getAttribute("aria-label")) &&
+    !/[\u0400-\u04ff]/.test(guide.getAttribute("aria-label"))),
+  "existing guide accessible names did not follow the runtime locale");
+  byId("localeSelect").value = "ru";
+  byId("localeSelect").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
+  guides = [...byId("guidesOverlay").querySelectorAll(".guide-line")];
+  check(guides.every((guide) => /[Нн]аправляющая/.test(guide.getAttribute("aria-label"))),
+    "existing guide accessible names did not return to Russian");
+
+  const geometryRevision = Number(byId("detailRevision").textContent);
+  byId("transformButton").click();
+  await waitFor(() => byId("documentDialog").open, "Canvas operations did not open for guide bounds test");
+  byId("resizeConstrainInput").checked = false;
+  byId("documentWidthInput").value = "400"; byId("documentHeightInput").value = "250";
+  byId("resizeImageButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === geometryRevision + 1 &&
+    byId("detailCanvas").textContent.replaceAll(" ", "") === "400×250",
+  "guide bounds fixture did not shrink the document");
+  check(byId("guidesOverlay").querySelectorAll(".guide-line").length === 0,
+    "geometry shrink retained guides outside the document bounds");
+  byId("transformButton").click();
+  await waitFor(() => byId("documentDialog").open, "Canvas operations did not reopen for guide fixture restore");
+  byId("resizeConstrainInput").checked = false;
+  byId("documentWidthInput").value = "1600"; byId("documentHeightInput").value = "1000";
+  byId("resizeImageButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === geometryRevision + 2 &&
+    byId("detailCanvas").textContent.replaceAll(" ", "") === "1600×1000",
+  "guide bounds fixture did not restore the document");
+  byId("addVerticalGuideButton").click(); byId("addHorizontalGuideButton").click();
+  guides = [...byId("guidesOverlay").querySelectorAll(".guide-line")];
   guides[0].focus();
   guides[0].dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
     key: "Delete", bubbles: true, cancelable: true,
