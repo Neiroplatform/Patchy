@@ -156,7 +156,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.historyTravel", "client.renderFrame", "client.saveBlob", "client.saveDocument",
     "client.markSaved",
     "client.setMemoryBudget", "client.openBlob", "client.inspectBlob", "client.placePsdSmartObject"]) {
-    assert.ok(script.includes(method), `${method} is not wired`);
+    const saveTransactionAlias = ["client.saveSmartObjectContents", "client.saveBlob",
+      "client.markSaved"].includes(method) &&
+      script.includes(method.replace("client.", "savingClient."));
+    assert.ok(script.includes(method) || saveTransactionAlias, `${method} is not wired`);
   }
   const rasterPreviewFlow = script.slice(script.indexOf("function rasterStrokePayload"),
     script.indexOf("async function fillSelectedPixels"));

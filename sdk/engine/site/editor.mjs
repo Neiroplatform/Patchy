@@ -2186,31 +2186,36 @@ async function newDocument() {
 async function saveDocument(saveAs = false) {
   if (busy || !snapshot) return;
   clearError();
-  const activeTab = snapshot.documents.find((item) => item.active);
+  const savingClient = client;
+  const savingSnapshot = snapshot;
+  const recoveryWasEnabled = automaticRecoveryEnabled;
+  const activeTab = savingSnapshot.documents.find((item) => item.active);
   const applyingContents = activeTab?.smartObjectParentId != null;
-  const format = documentSaveFormats.get(snapshot.documentId) || "psd";
+  const format = documentSaveFormats.get(savingSnapshot.documentId) || "psd";
+  automaticRecoveryEnabled = false;
   setBusy(true, applyingContents ? "Applying Smart Object contents" : `Encoding ${format.toUpperCase()}`,
     applyingContents ? "Committing one guarded parent revision" :
       (fileLifecycle.supported ? "Writing after permission to a local file" : "Preparing a local browser download"));
   try {
     if (applyingContents) {
-      const before = snapshot;
-      const next = await client.saveSmartObjectContents(snapshot.documentId);
+      const before = savingSnapshot;
+      const next = await savingClient.saveSmartObjectContents(savingSnapshot.documentId);
       recordHistoryMutation(before, next, "Applying Smart Object contents");
       clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
       await acceptSnapshot(next);
       scheduleCheckpoint(next);
       return;
     }
-    const result = await fileLifecycle.save({ documentId: snapshot.documentId,
-      projection: snapshot, format, name: `${exportBaseName()}.${format}`, saveAs,
-      createBlob: () => client.saveBlob(format) });
+    const result = await fileLifecycle.save({ documentId: savingSnapshot.documentId,
+      projection: savingSnapshot, format, name: `${exportBaseName()}.${format}`, saveAs,
+      createBlob: () => savingClient.saveBlob(format) });
     if (result.kind === "permission-denied") {
       throw new Error("Write permission was not granted; the document remains modified.");
     }
     if (result.kind === "cancelled") return;
     if (result.durable) {
-      const next = await client.markSaved(snapshot.documentId, snapshot.stateId);
+      const next = await savingClient.markSaved(
+        savingSnapshot.documentId, savingSnapshot.stateId);
       await acceptSnapshot(next, false);
       scheduleCheckpoint(next);
       setSessionState("document", "Saved to local file");
@@ -2218,7 +2223,13 @@ async function saveDocument(saveAs = false) {
       setSessionState("document", "Download created · document remains modified");
     }
   } catch (error) { showError("Could not encode layered document", error); return DIAGNOSTIC_COMMAND_FAILED; }
-  finally { setBusy(false); }
+  finally {
+    automaticRecoveryEnabled = recoveryWasEnabled;
+    setBusy(false);
+    if (recoveryWasEnabled && savingClient.state === "crashed" && client === savingClient) {
+      queueMicrotask(() => recoverEngineAfterCrash());
+    }
+  }
 }
 
 async function openSmartObjectContents() {

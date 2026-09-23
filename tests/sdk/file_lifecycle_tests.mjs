@@ -167,7 +167,11 @@ test("production shell stages the lifecycle and exposes open/save/save-as contra
   assert.match(html, /id="saveAsButton"/);
   assert.match(editor, /fileLifecycle\.pickOpen\(\)/);
   assert.match(editor, /fileLifecycle\.save\(/);
-  assert.match(editor, /client\.markSaved\(snapshot\.documentId, snapshot\.stateId\)/);
+  assert.match(editor, /const savingClient = client;/);
+  assert.match(editor, /const savingSnapshot = snapshot;/);
+  assert.match(editor, /automaticRecoveryEnabled = false;/);
+  assert.match(editor, /savingClient\.markSaved\([\s\S]*savingSnapshot\.documentId,[\s\S]*savingSnapshot\.stateId\)/);
+  assert.match(editor, /savingClient\.state === "crashed" && client === savingClient/);
   assert.match(editor, /documentTab\.dirty/);
   assert.match(editor, /fileLifecycle\.remapAll\(/);
 });

@@ -61,6 +61,11 @@ only for the active document at that exact canonical state; a stale
 acknowledgement fails and cannot clear a newer edit. Cancellation, download-only
 fallbacks and failed writes must not call `markSaved`.
 
+The browser shell defers automatic Worker recovery while a file save transaction
+is in flight. It captures one Worker client, document id and canonical state id
+before encoding, then either acknowledges that exact state or lets recovery
+restore a still-dirty workspace after a crash.
+
 ## Distribution boundary
 
 The package remains marked `private`. A hosted application must pin the SDK,
