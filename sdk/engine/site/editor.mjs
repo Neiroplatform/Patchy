@@ -738,12 +738,13 @@ function renderLocalizedShell() {
 
 async function recoverEngineAfterCrash() {
   if (recoveryPromise) return recoveryPromise;
-  const documents = (snapshot?.documents || []).map((documentTab) => ({
+  const openDocuments = (snapshot?.documents || []).map((documentTab) => ({
     documentId: documentTab.id,
     workspaceId: workspaceIds.get(documentTab.id),
     active: documentTab.active,
     confirmed: checkpointStates.get(documentTab.id) === "confirmed",
-  })).filter((documentTab) => documentTab.workspaceId);
+  }));
+  const documents = openDocuments.filter((documentTab) => documentTab.workspaceId);
   automaticRecoveryEnabled = false;
   diagnostics.recordRecovery("started");
   recoveryPromise = (async () => {
@@ -761,7 +762,7 @@ async function recoverEngineAfterCrash() {
       fileLifecycle.remapAll(result.restored.map((item) => ({
         previousDocumentId: item.previousDocumentId, documentId: item.documentId,
         projection: item.snapshot, format: item.format,
-      })), result.failed.map((item) => item.documentId));
+      })), openDocuments.map((item) => item.documentId));
       for (const item of result.restored) {
         workspaceIds.set(item.documentId, item.workspaceId);
         checkpointStates.set(item.documentId, "confirmed");

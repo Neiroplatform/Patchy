@@ -309,8 +309,10 @@ a session-local handle and Save/Save As writes the Worker-created PSD/PSB Blob
 through a permission-checked writable stream; only a successful close triggers
 the exact-state save acknowledgement. Other browsers retain file-input and
 layered-download fallback without claiming a durable save. Handles never enter
-OPFS, diagnostics or the Worker and are collision-safely remapped across Worker
-recovery. The shell also provides flattened PNG/JPEG/WebP/SVG export.
+OPFS, diagnostics or the Worker. Recovery captures the bindings for restorable
+tabs, clears every pre-crash document id including tabs without a checkpoint,
+and only then publishes collision-safe remapped bindings. The shell also
+provides flattened PNG/JPEG/WebP/SVG export.
 The screen can import decoded RGBA8 PNG/JPEG/WebP/AVIF/SVG pixels as layers,
 open a dropped raster image as a new document, and keep up to 16 isolated
 switchable document sessions inside the same Worker. Document tabs activate or

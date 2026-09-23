@@ -116,6 +116,20 @@ test("partial recovery releases failed old ids before publishing colliding new i
   assert.equal(failed.writes.length, 0); assert.equal(restored.writes.length, 1);
 });
 
+test("recovery clears handles for every pre-crash id including tabs without checkpoints", async () => {
+  const restored = handle("Restored.psd"); const unrecoverable = handle("No checkpoint.psd");
+  const lifecycle = new BrowserFileLifecycle({ scope: { showOpenFilePicker() {}, showSaveFilePicker() {} } });
+  lifecycle.bindOpened(1, restored, projection(1, false, 1), "psd");
+  lifecycle.bindOpened(2, unrecoverable, projection(1, false, 2), "psd");
+  lifecycle.remapAll([
+    { previousDocumentId: 1, documentId: 2, projection: projection(1, true, 2), format: "psd" },
+  ], [1, 2]);
+  assert.equal(lifecycle.hasHandle(1), false); assert.equal(lifecycle.hasHandle(2), true);
+  await lifecycle.save({ documentId: 2, projection: projection(2, true, 2), format: "psd",
+    name: "Restored.psd", createBlob: async () => new Blob(["restored"]) });
+  assert.equal(restored.writes.length, 1); assert.equal(unrecoverable.writes.length, 0);
+});
+
 test("write failure aborts and preserves the previous savepoint", async () => {
   const target = handle();
   target.createWritable = async () => ({ async write() { throw new Error("disk full"); },
@@ -174,4 +188,5 @@ test("production shell stages the lifecycle and exposes open/save/save-as contra
   assert.match(editor, /savingClient\.state === "crashed" && client === savingClient/);
   assert.match(editor, /documentTab\.dirty/);
   assert.match(editor, /fileLifecycle\.remapAll\(/);
+  assert.match(editor, /openDocuments\.map\(\(item\) => item\.documentId\)/);
 });
