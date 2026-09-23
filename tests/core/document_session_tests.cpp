@@ -754,6 +754,48 @@ void engine_session_external_shell_adapter_preserves_state_identity() {
   CHECK(!session.can_redo());
 }
 
+void engine_session_groups_typed_automation_history_atomically() {
+  DocumentSession session(make_session_document());
+  const auto layer_id = session.document().layers().front().id();
+  const auto initial_name = session.document().layers().front().name();
+  const auto first_run = session.allocate_history_group_id();
+  const auto second_run = session.allocate_history_group_id();
+  CHECK(first_run != 0);
+  CHECK(second_run != 0);
+  CHECK(first_run != second_run);
+
+  const auto rejected = session.execute_grouped(
+      RenameLayer{std::numeric_limits<decltype(layer_id)>::max(), "invalid"},
+      first_run);
+  CHECK(!static_cast<bool>(rejected));
+  CHECK(session.undo_size() == 0);
+
+  CHECK(static_cast<bool>(
+      session.execute_grouped(SetLayerVisibility{layer_id, false}, first_run)));
+  CHECK(static_cast<bool>(
+      session.execute_grouped(RenameLayer{layer_id, "Grouped"}, first_run)));
+  CHECK(session.undo_size() == 1);
+  CHECK(!session.document().find_layer(layer_id)->visible());
+  CHECK(session.document().find_layer(layer_id)->name() == "Grouped");
+  CHECK(static_cast<bool>(session.undo()));
+  CHECK(session.document().find_layer(layer_id)->visible());
+  CHECK(session.document().find_layer(layer_id)->name() == initial_name);
+  CHECK(static_cast<bool>(session.redo()));
+
+  CHECK(static_cast<bool>(
+      session.execute_grouped(SetLayerOpacity{layer_id, 0.5F}, second_run)));
+  CHECK(session.undo_size() == 2);
+
+  DocumentSession adopted(make_session_document());
+  const auto adopted_layer_id = adopted.document().layers().front().id();
+  adopted.push_external_undo_state(adopted.document(), adopted.state_id(),
+                                   adopted.selection());
+  adopted.adopt_history_group(11);
+  CHECK(static_cast<bool>(adopted.execute_grouped(
+      SetLayerVisibility{adopted_layer_id, false}, 11)));
+  CHECK(adopted.undo_size() == 1);
+}
+
 void engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes() {
   SelectionSnapshot snapshot;
   snapshot.selection = {{1, 2, 3, 4}, {8, 9, 2, 2}};
@@ -6350,6 +6392,8 @@ std::vector<TestCase> document_session_tests() {
        engine_session_tile_cache_reuses_and_invalidates_dirty_tiles},
       {"engine_session_external_shell_adapter_preserves_state_identity",
        engine_session_external_shell_adapter_preserves_state_identity},
+      {"engine_session_groups_typed_automation_history_atomically",
+       engine_session_groups_typed_automation_history_atomically},
       {"engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes",
        engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes},
       {"engine_session_memory_census_is_cow_aware_across_owned_state",

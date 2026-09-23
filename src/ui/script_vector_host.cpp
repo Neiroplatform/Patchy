@@ -67,7 +67,8 @@ void ScriptEngineHost::select_vector_path(std::int64_t session, const VectorPath
           ? QStringList{"replace", "add", "subtract", "intersect"}.indexOf(
                 operation)
           : 0;
-  const auto result = target_session->engine_session.execute_external(
+  const auto result = execute_engine_command(
+      session,
       patchy::engine::SelectVectorPath{
           path, feather, antialias,
           static_cast<patchy::engine::SelectionCombineMode>(operation_index)});

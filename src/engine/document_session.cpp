@@ -1254,6 +1254,42 @@ CommandResult DocumentSession::execute(const DocumentCommand &command,
   return execute_impl(command, true, filter_progress);
 }
 
+CommandResult DocumentSession::execute_grouped(
+    const DocumentCommand &command, HistoryGroupId group_id,
+    const FilterProgress *filter_progress) {
+  if (group_id == 0) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "history group id must be non-zero")};
+  }
+  if (preview_active()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "cannot execute a command during a transient preview")};
+  }
+  const bool record_history = active_history_group_ != group_id;
+  auto result = execute_impl(command, record_history, filter_progress);
+  if (result && result.changed) {
+    active_history_group_ = group_id;
+  }
+  return result;
+}
+
+DocumentSession::HistoryGroupId
+DocumentSession::allocate_history_group_id() noexcept {
+  auto group_id = next_history_group_id_++;
+  if (group_id == 0) {
+    group_id = next_history_group_id_++;
+  }
+  return group_id;
+}
+
+void DocumentSession::adopt_history_group(HistoryGroupId group_id) noexcept {
+  if (group_id != 0) {
+    active_history_group_ = group_id;
+  }
+}
+
 CommandResult
 DocumentSession::execute_external(const DocumentCommand &command,
                                   const FilterProgress *filter_progress) {
@@ -3708,6 +3744,7 @@ void DocumentSession::push_external_undo_state(
 void DocumentSession::clear_history() noexcept {
   undo_stack_.clear();
   redo_stack_.clear();
+  active_history_group_.reset();
 }
 
 bool DocumentSession::evict_oldest_undo() noexcept {
@@ -3736,6 +3773,7 @@ void DocumentSession::restore_external(Document document,
   selection_ = std::move(selection);
   undo_stack_.clear();
   redo_stack_.clear();
+  active_history_group_.reset();
   state_id_ = state_id;
   next_state_id_ = std::max(next_state_id_, state_id + 1U);
   ++revision_;
@@ -3748,6 +3786,7 @@ void DocumentSession::replace_external(Document document, bool saved) {
   selection_ = {};
   undo_stack_.clear();
   redo_stack_.clear();
+  active_history_group_.reset();
   state_id_ = next_state_id_++;
   ++revision_;
   if (saved) {

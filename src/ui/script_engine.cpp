@@ -1088,6 +1088,7 @@ bool ScriptEngineHost::prepare_mutation(std::int64_t session_id,
     // a native stroke is not an edit boundary and must never split that stroke.
     if (slow_mode() && !run_->pending_mutations.count(session_id)) {
       run_->undo_group_sessions.erase(session_id);
+      run_->engine_history_groups.erase(session_id);
       run_->slow_mutations.insert(session_id);
     }
     run_->pending_mutations.insert(session_id);
@@ -1103,6 +1104,10 @@ bool ScriptEngineHost::prepare_mutation(std::int64_t session_id,
       const auto label = slow_mode() ? tr("Script: %1 (step %2)").arg(run_->name).arg(run_->undo_steps[session_id] + 1)
                                     : tr("Script: %1").arg(run_->name);
       window_.push_undo_snapshot(*session, label, mark_modified);
+      const auto group_id =
+          session->engine_session.allocate_history_group_id();
+      session->engine_session.adopt_history_group(group_id);
+      run_->engine_history_groups[session_id] = group_id;
       run_->snapshotted_sessions.insert(session_id);
       run_->undo_group_sessions.insert(session_id);
       ++run_->undo_steps[session_id];
@@ -1118,11 +1123,64 @@ bool ScriptEngineHost::prepare_mutation(std::int64_t session_id,
 patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
     std::int64_t session_id, const patchy::engine::DocumentCommand& command) {
   auto* session = window_.session_with_id(session_id);
-  if (session == nullptr || !prepare_mutation(session_id, false)) {
+  pump_progress_indicator();
+  if (session == nullptr || (engine_ && engine_->isInterrupted())) {
     return patchy::engine::CommandResult{
         false,
         {patchy::engine::SessionErrorCode::CommandFailed,
          "document session is no longer open"}};
+  }
+  patchy::engine::CommandResult result;
+  if (run_ == nullptr) {
+    result = window_.execute_engine_command(
+        *session, tr("Script"), command);
+  } else {
+    if (slow_mode() && !run_->pending_mutations.count(session_id)) {
+      run_->undo_group_sessions.erase(session_id);
+      run_->engine_history_groups.erase(session_id);
+      run_->slow_mutations.insert(session_id);
+    }
+    run_->pending_mutations.insert(session_id);
+    if (!run_->undo_enabled) {
+      result = session->engine_session.execute_external(command);
+    } else {
+      const bool new_group =
+          run_->undo_group_sessions.count(session_id) == 0;
+      auto group_id = patchy::engine::DocumentSession::HistoryGroupId{};
+      QString label;
+      if (new_group) {
+        group_id = session->engine_session.allocate_history_group_id();
+        label = slow_mode()
+                    ? tr("Script: %1 (step %2)")
+                          .arg(run_->name)
+                          .arg(run_->undo_steps[session_id] + 1)
+                    : tr("Script: %1").arg(run_->name);
+      } else {
+        const auto group = run_->engine_history_groups.find(session_id);
+        if (group == run_->engine_history_groups.end()) {
+          return patchy::engine::CommandResult{
+              false,
+              {patchy::engine::SessionErrorCode::CommandFailed,
+               "script history group is missing"}};
+        }
+        group_id = group->second;
+      }
+      result = session->engine_session.execute_grouped(command, group_id);
+      if (result && result.changed && new_group) {
+        window_.record_history_push(*session, label);
+        run_->engine_history_groups[session_id] = group_id;
+        run_->snapshotted_sessions.insert(session_id);
+        run_->undo_group_sessions.insert(session_id);
+        ++run_->undo_steps[session_id];
+        if (session == window_.active_session()) {
+          window_.refresh_history_panel();
+          window_.statusBar()->showMessage(label);
+        }
+        window_.refresh_document_tab_titles();
+        window_.update_undo_redo_actions();
+        window_.refresh_document_info();
+      }
+    }
   }
   bool vector_structure_change =
       std::holds_alternative<patchy::engine::RasterizeVectorMask>(command) ||
@@ -1134,7 +1192,6 @@ patchy::engine::CommandResult ScriptEngineHost::execute_engine_command(
         layer != nullptr &&
         (layer->vector_mask() != nullptr) != set_mask->mask.has_value();
   }
-  auto result = session->engine_session.execute_external(command);
   if (result) {
     const bool resets_selection =
         std::holds_alternative<patchy::engine::ResizeImage>(command) ||
@@ -1261,6 +1318,7 @@ void ScriptEngineHost::finish_manual_pause() {
   if (pause_history_state() != *run_->paused_documents) {
     // Manual history and the next automation edit must have distinct snapshots.
     run_->undo_group_sessions.clear();
+    run_->engine_history_groups.clear();
     run_->pending_mutations.clear();
     run_->slow_mutations.clear();
   }
@@ -1318,6 +1376,7 @@ void ScriptEngineHost::complete_mutation(std::int64_t session_id) {
   const bool began_slow = run_->slow_mutations.erase(session_id) != 0;
   if (!began_slow && !slow_mode()) { return; }
   run_->undo_group_sessions.erase(session_id);
+  run_->engine_history_groups.erase(session_id);
   if (slow_mode()) { present_script_view(60, true); }
 }
 
@@ -1499,7 +1558,8 @@ void ScriptEngineHost::select_all(std::int64_t session_id) {
   if (session == nullptr || session->canvas == nullptr) {
     return;
   }
-  const auto result = session->engine_session.execute_external(
+  const auto result = execute_engine_command(
+      session_id,
       patchy::engine::ModifySelection{
           patchy::engine::SelectionOperation::SelectAll});
   if (!result) {
@@ -1515,7 +1575,8 @@ void ScriptEngineHost::deselect(std::int64_t session_id) {
   if (session == nullptr || session->canvas == nullptr) {
     return;
   }
-  const auto result = session->engine_session.execute_external(
+  const auto result = execute_engine_command(
+      session_id,
       patchy::engine::ModifySelection{
           patchy::engine::SelectionOperation::Clear});
   if (!result) {
@@ -1547,7 +1608,8 @@ void ScriptEngineHost::sync_canvas_selection(std::int64_t session_id) {
   if (session == nullptr || session->canvas == nullptr) {
     return;
   }
-  const auto result = session->engine_session.execute_external(
+  const auto result = execute_engine_command(
+      session_id,
       patchy::engine::SetSelection{
           session->canvas->capture_engine_selection_snapshot()});
   if (!result) {

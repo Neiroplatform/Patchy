@@ -380,6 +380,8 @@ private:
     int include_depth{0};
     std::set<std::int64_t> snapshotted_sessions;
     std::set<std::int64_t> undo_group_sessions;
+    std::map<std::int64_t, patchy::engine::DocumentSession::HistoryGroupId>
+        engine_history_groups;
     std::set<std::int64_t> pending_mutations;
     std::set<std::int64_t> slow_mutations;
     std::map<std::int64_t, std::size_t> undo_steps;
