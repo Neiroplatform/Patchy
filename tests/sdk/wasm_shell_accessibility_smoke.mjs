@@ -239,8 +239,9 @@ try {
     `navigation burst was not animation-frame coalesced (${burstUpdates} updates)`);
   check(viewportDiagnostics.renderRequests === rendersBeforeNavigation,
     "pan/zoom navigation requested an engine recomposite");
+  const navigationSampleOffset = viewportDiagnostics.samples.length;
   const navigationIntervals = [];
-  const navigationSamples = [];
+  const navigationDispatchSamples = [];
   await new Promise((resolve) => {
     let remaining = 60; let previous = null;
     const navigate = (timestamp) => {
@@ -251,7 +252,7 @@ try {
         deltaY: remaining % 2 ? 40 : -40, ctrlKey: true,
         clientX: zoomAnchor.x, clientY: zoomAnchor.y, bubbles: true, cancelable: true,
       }));
-      navigationSamples.push(frame.contentWindow.performance.now() - sampleStarted);
+      navigationDispatchSamples.push(frame.contentWindow.performance.now() - sampleStarted);
       remaining--;
       if (remaining > 0) frame.contentWindow.requestAnimationFrame(navigate);
       else frame.contentWindow.requestAnimationFrame((finalTimestamp) => {
@@ -262,12 +263,18 @@ try {
   });
   longTaskObserver?.disconnect();
   check(longTasks.length === 0, `navigation burst produced ${longTasks.length} long tasks`);
+  const navigationSamples = viewportDiagnostics.samples.slice(navigationSampleOffset);
+  check(navigationSamples.length === 60,
+    `frame-paced navigation produced ${navigationSamples.length} viewport flush samples`);
   navigationIntervals.sort((a, b) => a - b);
   navigationSamples.sort((a, b) => a - b);
+  navigationDispatchSamples.sort((a, b) => a - b);
   const navigationIntervalP95 = Number(
     navigationIntervals[Math.ceil(navigationIntervals.length * .95) - 1].toFixed(2));
   const navigationP95 = Number(
     navigationSamples[Math.ceil(navigationSamples.length * .95) - 1].toFixed(2));
+  const navigationDispatchP95 = Number(
+    navigationDispatchSamples[Math.ceil(navigationDispatchSamples.length * .95) - 1].toFixed(2));
   check(navigationP95 <= 16.67,
     `navigation work p95 ${navigationP95.toFixed(2)}ms exceeds the 60 fps frame budget`);
   check(viewportDiagnostics.renderRequests === rendersBeforeNavigation,
@@ -495,7 +502,8 @@ try {
   body.dataset.result = "PASS"; body.dataset.p95 = p95.toFixed(2);
   body.dataset.navigationP95 = navigationP95.toFixed(2);
   body.dataset.navigationIntervalP95 = navigationIntervalP95.toFixed(2);
-  body.textContent = `PASS locale=ru-persisted keyboard=toolbar,layers,history,dialog diagnostics=private narrow=520 navigation-p95=${navigationP95.toFixed(2)}ms frame-interval-p95=${navigationIntervalP95.toFixed(2)}ms p95=${p95.toFixed(2)}ms`;
+  body.dataset.navigationDispatchP95 = navigationDispatchP95.toFixed(2);
+  body.textContent = `PASS locale=ru-persisted keyboard=toolbar,layers,history,dialog diagnostics=private narrow=520 navigation-p95=${navigationP95.toFixed(2)}ms dispatch-p95=${navigationDispatchP95.toFixed(2)}ms frame-interval-p95=${navigationIntervalP95.toFixed(2)}ms p95=${p95.toFixed(2)}ms`;
 } catch (error) {
   body.dataset.result = "FAIL"; body.dataset.failureStage = smokeStage;
   body.dataset.error = String(error?.stack || error);
