@@ -261,6 +261,8 @@ try {
     };
     frame.contentWindow.requestAnimationFrame(navigate);
   });
+  await delay(0);
+  if (longTaskObserver) longTasks.push(...longTaskObserver.takeRecords());
   longTaskObserver?.disconnect();
   check(longTasks.length === 0, `navigation burst produced ${longTasks.length} long tasks`);
   const navigationSamples = viewportDiagnostics.samples.slice(navigationSampleOffset);
