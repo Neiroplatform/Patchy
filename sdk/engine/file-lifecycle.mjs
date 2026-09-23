@@ -73,14 +73,18 @@ export class BrowserFileLifecycle {
 
   release(documentId) { this.#bindings.delete(documentId); }
 
-  remapAll(items) {
-    if (!Array.isArray(items)) throw new TypeError("remap items must be an array");
+  remapAll(items, releasedDocumentIds = []) {
+    if (!Array.isArray(items) || !Array.isArray(releasedDocumentIds)) {
+      throw new TypeError("remap items and released document ids must be arrays");
+    }
     const captured = items.map((item) => {
       finiteDocumentId(item.previousDocumentId); finiteDocumentId(item.documentId);
       layeredFormat(item.format);
       return { ...item, previous: this.#bindings.get(item.previousDocumentId) };
     });
+    releasedDocumentIds.forEach(finiteDocumentId);
     for (const item of captured) this.#bindings.delete(item.previousDocumentId);
+    for (const documentId of releasedDocumentIds) this.#bindings.delete(documentId);
     for (const { documentId, projection, format, previous } of captured) {
       this.#bindings.set(documentId, { handle: previous?.handle || null, format,
         name: previous?.name || projection?.documentName || `Untitled.${format}` });

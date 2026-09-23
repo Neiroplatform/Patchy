@@ -102,6 +102,20 @@ test("worker recovery remaps colliding document ids without moving handles betwe
   assert.equal(first.writes.length, 0); assert.equal(second.writes.length, 1);
 });
 
+test("partial recovery releases failed old ids before publishing colliding new ids", async () => {
+  const failed = handle("Failed.psd"); const restored = handle("Restored.psd");
+  const lifecycle = new BrowserFileLifecycle({ scope: { showOpenFilePicker() {}, showSaveFilePicker() {} } });
+  lifecycle.bindOpened(1, failed, projection(1, false, 1), "psd");
+  lifecycle.bindOpened(2, restored, projection(1, false, 2), "psd");
+  lifecycle.remapAll([
+    { previousDocumentId: 2, documentId: 1, projection: projection(1, true, 1), format: "psd" },
+  ], [1]);
+  assert.equal(lifecycle.hasHandle(1), true); assert.equal(lifecycle.hasHandle(2), false);
+  await lifecycle.save({ documentId: 1, projection: projection(2, true, 1), format: "psd",
+    name: "Restored.psd", createBlob: async () => new Blob(["restored"]) });
+  assert.equal(failed.writes.length, 0); assert.equal(restored.writes.length, 1);
+});
+
 test("write failure aborts and preserves the previous savepoint", async () => {
   const target = handle();
   target.createWritable = async () => ({ async write() { throw new Error("disk full"); },

@@ -761,8 +761,7 @@ async function recoverEngineAfterCrash() {
       fileLifecycle.remapAll(result.restored.map((item) => ({
         previousDocumentId: item.previousDocumentId, documentId: item.documentId,
         projection: item.snapshot, format: item.format,
-      })));
-      for (const item of result.failed) fileLifecycle.release(item.documentId);
+      })), result.failed.map((item) => item.documentId));
       for (const item of result.restored) {
         workspaceIds.set(item.documentId, item.workspaceId);
         checkpointStates.set(item.documentId, "confirmed");
