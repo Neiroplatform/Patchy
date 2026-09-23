@@ -6331,6 +6331,18 @@ void core_liquify_respects_selection_and_fails_closed() {
   document.find_layer(layer_id)->set_lock_flags(patchy::kLayerLockImagePixels);
   CHECK(!patchy::liquify_layer(document, layer_id, request, nullptr, &error));
   CHECK(error == "Liquify target pixels are locked");
+
+  document.find_layer(layer_id)->set_lock_flags(0);
+  const auto before_unbounded = document.find_layer(layer_id)->pixels();
+  request.strokes = {{patchy::LiquifyTool::ForwardWarp,
+                      -std::numeric_limits<double>::max(), 5.0,
+                      std::numeric_limits<double>::max(), 5.0,
+                      1.0, 100.0, 100.0}};
+  CHECK(!patchy::liquify_layer(document, layer_id, request, nullptr, &error));
+  CHECK(error == "Liquify stroke batch exceeds its computational budget");
+  const auto &after_unbounded = document.find_layer(layer_id)->pixels().data();
+  CHECK(std::equal(after_unbounded.begin(), after_unbounded.end(),
+                   before_unbounded.data().begin()));
 }
 
 void engine_host_protocol_commits_advanced_selection_gestures() {

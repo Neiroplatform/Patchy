@@ -3885,6 +3885,10 @@ $("liquifyDialog").addEventListener("close", () => {
 });
 $("liquifyCanvas").addEventListener("pointerdown", (event) => {
   if (!liquifyDraft || event.button !== 0) return;
+  if (liquifyDraft.strokes.length >= 4096) {
+    $("liquifyStatus").textContent = "Liquify stroke limit reached.";
+    return;
+  }
   const controls = liquifyControls();
   if (!controls) {
     $("liquifyStatus").textContent = "Use bounded brush controls.";

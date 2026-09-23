@@ -234,6 +234,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /styleRuns: runs, paragraphRuns: paragraphs/);
   assert.match(script, /value === textDialogOriginalValue[\s\S]*textDialogOriginalRuns\.map/);
   assert.match(script, /client\.updateTextLayer/);
+  assert.match(script, /liquifyDraft\.strokes\.length >= 4096/);
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
     "quickSelect(", "magneticLasso(", "previewSelectionRefinement(", "refineSelection(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",

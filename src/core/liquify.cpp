@@ -19,6 +19,7 @@ constexpr std::int64_t kFieldScale = 256;
 constexpr std::int64_t kGridScale = 65536;
 constexpr double kPi = 3.14159265358979323846;
 constexpr std::size_t kMaximumLiquifyStrokes = 4096;
+constexpr std::size_t kMaximumLiquifyDabs = 8192;
 constexpr double kMaximumLiquifyBrushSize = 4096.0;
 constexpr std::uint64_t kMaximumLiquifyBytes = 512ULL * 1024ULL * 1024ULL;
 
@@ -44,6 +45,22 @@ std::int64_t divide_rounded(std::int64_t numerator,
     return (numerator + denominator / 2) / denominator;
   }
   return -((-numerator + denominator / 2) / denominator);
+}
+
+std::optional<std::size_t> liquify_dab_count(
+    const LiquifyStroke& stroke) {
+  const double dx = stroke.to_x - stroke.from_x;
+  const double dy = stroke.to_y - stroke.from_y;
+  const double distance = std::hypot(dx, dy);
+  const double radius = std::max(0.5, stroke.size * 0.5);
+  const double count = std::ceil(
+      distance / std::max(1.0, radius * 0.2));
+  if (!std::isfinite(dx) || !std::isfinite(dy) ||
+      !std::isfinite(distance) || !std::isfinite(count) ||
+      count > static_cast<double>(kMaximumLiquifyDabs)) {
+    return std::nullopt;
+  }
+  return std::max<std::size_t>(1, static_cast<std::size_t>(count));
 }
 
 std::int32_t bilinear_field(const std::vector<std::int32_t>& values,
@@ -171,11 +188,15 @@ void LiquifyMesh::apply_stroke(LiquifyTool tool, double from_x, double from_y,
   const double radius = std::max(0.5, size * 0.5);
   pressure = std::clamp(pressure, 1.0, 100.0) / 100.0;
   density = std::clamp(density, 1.0, 100.0) / 100.0;
+  const LiquifyStroke stroke{tool, from_x, from_y, to_x, to_y, size,
+                             pressure, density};
+  const auto dab_count = liquify_dab_count(stroke);
+  if (!dab_count.has_value()) {
+    return;
+  }
   const double dx = to_x - from_x;
   const double dy = to_y - from_y;
-  const double distance = std::hypot(dx, dy);
-  const int steps = std::max(1, static_cast<int>(std::ceil(
-                                    distance / std::max(1.0, radius * 0.2))));
+  const int steps = static_cast<int>(*dab_count);
   for (int step = 1; step <= steps; ++step) {
     const double t = static_cast<double>(step) / steps;
     const double previous_t = static_cast<double>(step - 1) / steps;
@@ -450,6 +471,7 @@ bool liquify_layer(Document& document, LayerId layer_id,
   if (retained_bytes > kMaximumLiquifyBytes) {
     return fail(error, "Liquify source and output exceed the 512 MiB budget");
   }
+  std::size_t total_dabs = 0;
   for (const auto& stroke : request.strokes) {
     const auto tool = static_cast<std::uint32_t>(stroke.tool);
     if (tool > static_cast<std::uint32_t>(LiquifyTool::ThawMask) ||
@@ -462,6 +484,12 @@ bool liquify_layer(Document& document, LayerId layer_id,
         stroke.density > 100.0) {
       return fail(error, "Liquify stroke controls exceed their bounded contract");
     }
+    const auto dab_count = liquify_dab_count(stroke);
+    if (!dab_count.has_value() ||
+        *dab_count > kMaximumLiquifyDabs - total_dabs) {
+      return fail(error, "Liquify stroke batch exceeds its computational budget");
+    }
+    total_dabs += *dab_count;
   }
 
   const auto source = layer->pixels();

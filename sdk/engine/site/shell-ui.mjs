@@ -180,6 +180,7 @@ const RU = new Map(Object.entries({
   "Drag over the preview. Cancel leaves pixels and history unchanged.": "Проведите по предпросмотру. Отмена не изменит пиксели и историю.",
   "All Liquify strokes restored.": "Все штрихи пластики сброшены.",
   "Use bounded brush controls.": "Задайте допустимые параметры кисти.",
+  "Liquify stroke limit reached.": "Достигнут лимит штрихов пластики.",
   "Add mask": "Добавить маску",
   "Disable mask": "Отключить маску",
   "Enable mask": "Включить маску",
