@@ -33,6 +33,9 @@ try {
   byId("localeSelect").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
   await waitFor(() => doc.documentElement.lang === "ru" && byId("newButton").textContent.trim() === "Новый",
     "runtime Russian localization did not apply");
+  byId("toggleSnapButton").click();
+  check(byId("toggleSnapButton").getAttribute("aria-pressed") === "false",
+    "snap preference did not publish its disabled state");
   await delay(300);
 
   doc = await loadEditor("persisted"); byId = (id) => doc.getElementById(id);
@@ -40,6 +43,12 @@ try {
   check(byId("newButton").textContent.trim() === "Новый", "persisted locale did not render the shell");
   check(byId("sessionIndicator").textContent.includes("Движок готов"),
     "dynamic ready status bypassed localization");
+  check(byId("toggleSnapButton").getAttribute("aria-pressed") === "false",
+    "snap preference did not survive reload");
+  byId("toggleSnapButton").click();
+  check(byId("toggleSnapButton").getAttribute("aria-pressed") === "true",
+    "snap preference did not re-enable");
+  await delay(300);
 
   const toolbar = doc.querySelector(".tool-rail");
   const initialTool = toolbar.querySelector('button[tabindex="0"]');
@@ -56,6 +65,17 @@ try {
   byId("newButton").click();
   await waitFor(() => byId("detailRevision").textContent === "0" && !byId("importLayerButton").disabled,
     "New did not create a production document");
+  byId("addVerticalGuideButton").click(); byId("addHorizontalGuideButton").click();
+  let guides = [...byId("guidesOverlay").querySelectorAll(".guide-line")];
+  check(guides.length === 2 && guides.every((guide) => /[Нн]аправляющая/.test(guide.getAttribute("aria-label"))),
+    "center guides were not created with localized accessible names");
+  guides[0].focus();
+  guides[0].dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "Delete", bubbles: true, cancelable: true,
+  }));
+  check(byId("guidesOverlay").querySelectorAll(".guide-line").length === 1,
+    "guide keyboard deletion did not remove exactly one guide");
+  byId("addHorizontalGuideButton").click();
   const importSvg = async (name, color) => {
     const file = new frame.contentWindow.File([
       `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><rect width="64" height="48" fill="${color}"/></svg>`,
@@ -68,6 +88,30 @@ try {
   };
   await importSvg("one.svg", "#4b91e2");
   await importSvg("two.svg", "#df6e46");
+
+  byId("moveToolButton").click();
+  const moveCanvas = byId("documentCanvas");
+  moveCanvas.setPointerCapture = () => {};
+  const canvasRect = moveCanvas.getBoundingClientRect();
+  const pointer = (type, x, y, buttons) => new frame.contentWindow.PointerEvent(type, {
+    pointerId: 71, pointerType: "mouse", button: 0, buttons, bubbles: true, cancelable: true,
+    clientX: canvasRect.left + x * canvasRect.width / 1600,
+    clientY: canvasRect.top + y * canvasRect.height / 1000,
+  });
+  const moveRevision = Number(byId("detailRevision").textContent);
+  const start = { x: 200, y: 200 };
+  moveCanvas.dispatchEvent(pointer("pointerdown", start.x, start.y, 1));
+  const originalPoints = byId("transformPolygon").getAttribute("points").trim().split(/[ ,]+/).map(Number);
+  const originalRight = Math.max(originalPoints[0], originalPoints[2], originalPoints[4], originalPoints[6]);
+  const nearCenterDelta = 800 - originalRight - 1;
+  moveCanvas.dispatchEvent(pointer("pointermove", start.x + nearCenterDelta, start.y, 1));
+  const snappedPoints = byId("transformPolygon").getAttribute("points").trim().split(/[ ,]+/).map(Number);
+  check(Math.max(snappedPoints[0], snappedPoints[2], snappedPoints[4], snappedPoints[6]) === 800,
+    "Move preview did not snap the selected layer edge to the center guide");
+  moveCanvas.dispatchEvent(pointer("pointerup", start.x + nearCenterDelta, start.y, 0));
+  await waitFor(() => Number(byId("detailRevision").textContent) === moveRevision + 1 &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "snapped Move did not commit exactly one document revision");
 
   const selected = byId("layerList").querySelector('.layer-row[data-active="true"] .layer-select-button');
   selected.focus(); const beforeLayer = selected.closest(".layer-row").dataset.layerId;
