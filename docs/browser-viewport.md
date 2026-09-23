@@ -23,7 +23,9 @@ geometry.
 real browser. It checks pointer and keyboard navigation, cursor-anchored zoom,
 independent state and cleanup across document tabs, checkerboard/ruler geometry,
 animation-frame coalescing and zero render requests. Its navigation performance
-sample dispatches one zoom event per frame for 60 frames and requires the frame
-interval p95 to stay at or below 16.67 ms with no long task, page error or failed
-request. Node viewport tests cover math and staging but cannot replace DOM
-layout, paint cadence and input evidence.
+sample dispatches one zoom event per frame for 60 real animation frames, records
+the observed frame-interval p95, and requires the synchronous navigation-work
+p95 to stay at or below 16.67 ms with no long task, page error or failed request.
+The work sample is independent of host refresh-clock jitter while the 60-frame
+sequence still exercises DOM layout, paint cadence and input handling. Node
+viewport tests cover math and staging but cannot replace that browser evidence.
