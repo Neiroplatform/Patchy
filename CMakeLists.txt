@@ -605,6 +605,7 @@ if(PATCHY_BUILD_TESTS)
   if(NOT EMSCRIPTEN)
     add_executable(patchy_host_protocol_c_contract
       tests/engine/host_protocol_c_contract.c)
+    target_compile_features(patchy_host_protocol_c_contract PRIVATE c_std_11)
     target_include_directories(patchy_host_protocol_c_contract PRIVATE
       ${PROJECT_SOURCE_DIR}/src)
     if(PATCHY_ENABLE_STRICT_WARNINGS)
