@@ -88,7 +88,9 @@ try {
   byId("documentWidthInput").value = "400"; byId("documentHeightInput").value = "250";
   byId("resizeImageButton").click();
   await waitFor(() => Number(byId("detailRevision").textContent) === geometryRevision + 1 &&
-    byId("detailCanvas").textContent.replaceAll(" ", "") === "400×250",
+    byId("detailCanvas").textContent.replaceAll(" ", "") === "400×250" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
+    !byId("documentDialog").open,
   "guide bounds fixture did not shrink the document");
   check(byId("guidesOverlay").querySelectorAll(".guide-line").length === 0,
     "geometry shrink retained guides outside the document bounds");
@@ -98,7 +100,9 @@ try {
   byId("documentWidthInput").value = "1600"; byId("documentHeightInput").value = "1000";
   byId("resizeImageButton").click();
   await waitFor(() => Number(byId("detailRevision").textContent) === geometryRevision + 2 &&
-    byId("detailCanvas").textContent.replaceAll(" ", "") === "1600×1000",
+    byId("detailCanvas").textContent.replaceAll(" ", "") === "1600×1000" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
+    !byId("documentDialog").open,
   "guide bounds fixture did not restore the document");
   byId("addVerticalGuideButton").click(); byId("addHorizontalGuideButton").click();
   guides = [...byId("guidesOverlay").querySelectorAll(".guide-line")];
