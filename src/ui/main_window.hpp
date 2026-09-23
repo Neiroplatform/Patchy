@@ -1101,6 +1101,17 @@ private:
   // signature above means "the active session".
   void push_undo_snapshot(DocumentSession& target_session, QString label,
                           bool mark_modified = true);
+  // Execute a fully prepared typed engine command as one atomic desktop
+  // transaction. The engine owns the document/selection snapshot and only a
+  // successful state change publishes the parallel Qt history label.
+  [[nodiscard]] patchy::engine::CommandResult execute_engine_command(
+      DocumentSession& target_session, QString label,
+      patchy::engine::DocumentCommand command);
+  [[nodiscard]] patchy::engine::CommandResult execute_engine_command(
+      QString label, patchy::engine::DocumentCommand command) {
+    return execute_engine_command(session(), std::move(label),
+                                  std::move(command));
+  }
   // Push an undo entry for a selection-only edit, holding the pre-edit selection
   // `before` against the current (unchanged) document. When `coalesce` is true
   // and the previous entry was also a coalescing move, the new state merges into

@@ -1339,8 +1339,8 @@ void MainWindow::resize_canvas_dialog() {
     return;
   }
 
-  push_undo_snapshot(tr("Canvas size"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Canvas size"),
       patchy::engine::ResizeCanvas{settings->width, settings->height,
                                   settings->anchor,
                                   edit_color(settings->extension_color)});
@@ -1349,10 +1349,8 @@ void MainWindow::resize_canvas_dialog() {
     return;
   }
   refresh_document_tab_titles();
-  canvas_->clear_selection();
-  static_cast<void>(session().engine_session.execute_external(
-      patchy::engine::SetSelection{
-          canvas_->capture_engine_selection_snapshot()}));
+  canvas_->apply_engine_selection_snapshot(
+      session().engine_session.selection());
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -1383,9 +1381,9 @@ void MainWindow::rotate_canvas_arbitrary() {
     return;
   }
 
-  push_undo_snapshot(tr("Rotate canvas"), false);
   // Exposed corners take the background color under a Background layer, transparent elsewhere.
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Rotate canvas"),
       patchy::engine::RotateCanvas{settings->clockwise_degrees,
                                   edit_color(canvas_->secondary_color())});
   if (!result) {
@@ -1396,10 +1394,8 @@ void MainWindow::rotate_canvas_arbitrary() {
   // The rotation resampled every raster; text layers re-render crisp through the composed
   // matrix, exactly as after Image Size.
   rerender_text_layers_through_transforms(session());
-  canvas_->clear_selection();
-  static_cast<void>(session().engine_session.execute_external(
-      patchy::engine::SetSelection{
-          canvas_->capture_engine_selection_snapshot()}));
+  canvas_->apply_engine_selection_snapshot(
+      session().engine_session.selection());
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();

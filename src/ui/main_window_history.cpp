@@ -623,6 +623,29 @@ void MainWindow::push_undo_snapshot(DocumentSession& target_session, QString lab
   log_ui_profile("push_undo_snapshot", elapsed, label.toStdString());
 }
 
+patchy::engine::CommandResult MainWindow::execute_engine_command(
+    DocumentSession& target_session, QString label,
+    patchy::engine::DocumentCommand command) {
+  const bool target_is_active = &target_session == active_session();
+  if (target_is_active) {
+    finish_pending_layer_opacity_edit();
+    finish_pending_layer_fill_opacity_edit();
+  }
+  auto result = target_session.engine_session.execute(command);
+  if (!result || !result.changed) {
+    return result;
+  }
+  record_history_push(target_session, label);
+  if (target_is_active) {
+    refresh_history_panel();
+    statusBar()->showMessage(label);
+  }
+  refresh_document_tab_titles();
+  update_undo_redo_actions();
+  refresh_document_info();
+  return result;
+}
+
 void MainWindow::push_selection_history(DocumentSession& target_session, QString label,
                                         patchy::engine::SelectionSnapshot before,
                                         bool coalesce) {

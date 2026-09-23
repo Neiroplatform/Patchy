@@ -250,8 +250,8 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
           origination->index = group;
           content.origination.push_back(std::move(*origination));
         }
-        push_undo_snapshot(tr("Edit shape"), false);
-        const auto result = session().engine_session.execute_external(
+        const auto result = execute_engine_command(
+            tr("Edit shape"),
             patchy::engine::UpdateVectorShapeLayer{
                 layer_id, std::move(content), doc.metadata().patterns});
         if (!result) {
@@ -288,7 +288,6 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
     anchor_id = selected_ids.front();
   }
 
-  push_undo_snapshot(tr("New shape layer"), false);
   auto content = current_shape_appearance_content();
   content.path.subpaths = std::move(subpaths);
   if (origination.has_value()) {
@@ -296,10 +295,13 @@ void MainWindow::create_or_extend_shape_layer(std::vector<PathSubpath> subpaths,
   }
   // A pattern default picked from the library must land in the document store
   // before the rasterize (and before the writer's Patt collection).
-  ensure_vector_fill_patterns(doc, content, pattern_library());
-  const auto result = session().engine_session.execute_external(
+  auto staged_document = doc;
+  ensure_vector_fill_patterns(staged_document, content, pattern_library());
+  const auto result = execute_engine_command(
+      tr("New shape layer"),
       patchy::engine::AddVectorShapeLayer{
-          name, std::move(content), doc.metadata().patterns, anchor_id});
+          name, std::move(content),
+          std::move(staged_document.metadata().patterns), anchor_id});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
     return;
@@ -835,8 +837,8 @@ void MainWindow::create_fill_layer(const VectorFill& fill, const QString& name, 
     mask = LayerMask{to_core_rect(selection_rect),
                      selection_mask_pixels(*canvas_, selection_rect), 0, false};
   }
-  push_undo_snapshot(std::move(label), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      std::move(label),
       patchy::engine::AddVectorShapeLayer{
           name.toStdString(), std::move(content),
           std::move(staged_document.metadata().patterns), anchor_id,
@@ -1066,8 +1068,8 @@ void MainWindow::add_vector_mask(bool hide_all, bool from_work_path) {
     mask.path = work->path();
   }
   mask.inverted = hide_all;
-  push_undo_snapshot(tr("Add vector mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Add vector mask"),
       patchy::engine::SetVectorMaskState{layer_id, std::move(mask)});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1088,8 +1090,8 @@ void MainWindow::delete_active_vector_mask() {
     return;
   }
   const auto layer_id = layer->id();
-  push_undo_snapshot(tr("Delete vector mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Delete vector mask"),
       patchy::engine::SetVectorMaskState{layer_id, std::nullopt});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1116,8 +1118,8 @@ void MainWindow::set_active_layer_vector_mask_disabled(bool disabled) {
   const auto layer_id = layer->id();
   auto mask = *layer->vector_mask();
   mask.disabled = disabled;
-  push_undo_snapshot(disabled ? tr("Disable vector mask") : tr("Enable vector mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      disabled ? tr("Disable vector mask") : tr("Enable vector mask"),
       patchy::engine::SetVectorMaskState{layer_id, std::move(mask)});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1136,8 +1138,8 @@ void MainWindow::rasterize_active_vector_mask() {
     return;
   }
   const auto layer_id = layer->id();
-  push_undo_snapshot(tr("Rasterize vector mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Rasterize vector mask"),
       patchy::engine::RasterizeVectorMask{layer_id});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1544,8 +1546,8 @@ bool MainWindow::apply_options_bar_appearance_to_active_shape() {
   auto& doc = document();
   auto staged_document = doc;
   ensure_vector_fill_patterns(staged_document, content, pattern_library());
-  push_undo_snapshot(tr("Shape appearance"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Shape appearance"),
       patchy::engine::UpdateVectorShapeLayer{
           layer_id, std::move(content),
           std::move(staged_document.metadata().patterns)});

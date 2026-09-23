@@ -291,6 +291,12 @@ public:
     return window.session().engine_session.revision();
   }
 
+  static patchy::engine::CommandResult execute_engine_command(
+      MainWindow& window, QString label,
+      patchy::engine::DocumentCommand command) {
+    return window.execute_engine_command(std::move(label), std::move(command));
+  }
+
   static bool active_engine_preview_active(MainWindow& window) {
     return window.session().engine_session.preview_active();
   }

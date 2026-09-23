@@ -1222,8 +1222,8 @@ bool MainWindow::commit_smart_filter_stack_edit(
   const auto rendered_bounds = candidate.has_value()
                                    ? preview->rendered.bounds
                                    : unfiltered_only->bounds;
-  push_undo_snapshot(target_session, undo_text, false);
-  const auto committed = target_session.engine_session.execute_external(
+  const auto committed = execute_engine_command(
+      target_session, undo_text,
       patchy::engine::CommitSmartFilterState{
           layer_id, std::move(candidate), std::move(rendered_pixels),
           rendered_bounds, std::move(regenerated_blocks),
@@ -2545,8 +2545,8 @@ void MainWindow::apply_filter(const QString& identifier) {
       return;
     }
 
-    push_undo_snapshot(tr("Filter: %1").arg(display_name), false);
-    const auto command_result = session().engine_session.execute_external(
+    const auto command_result = execute_engine_command(
+        tr("Filter: %1").arg(display_name),
         patchy::engine::ReplaceLayerPixels{*active, std::move(final_pixels),
                                            final_bounds,
                                            rasterize_smart_object_for_filter});
@@ -2680,8 +2680,8 @@ void MainWindow::auto_all_adjustments() {
     statusBar()->showMessage(tr("%1 made no changes").arg(display_name));
     return;
   }
-  push_undo_snapshot(display_name, false);
-  const auto command_result = session().engine_session.execute_external(
+  const auto command_result = execute_engine_command(
+      display_name,
       patchy::engine::ReplaceLayerPixels{active_id, std::move(final_pixels),
                                          bounds});
   if (!command_result) {

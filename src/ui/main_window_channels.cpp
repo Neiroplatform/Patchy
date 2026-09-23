@@ -521,8 +521,8 @@ void MainWindow::create_alpha_channel() {
     pixels.clear(0);
     const auto id = doc.allocate_channel_id();
     const auto name = doc.next_alpha_channel_name();
-    push_undo_snapshot(tr("New channel"), false);
-    const auto result = session().engine_session.execute_external(
+    const auto result = execute_engine_command(
+        tr("New channel"),
         patchy::engine::AddDocumentChannel{DocumentChannel(
             id, name, DocumentChannelKind::Alpha, std::move(pixels))});
     if (!result) {
@@ -549,8 +549,8 @@ void MainWindow::save_selection_as_channel() {
     auto pixels = canvas_->selection_as_grayscale();
     const auto id = doc.allocate_channel_id();
     const auto name = doc.next_alpha_channel_name();
-    push_undo_snapshot(tr("Save selection as channel"), false);
-    const auto result = session().engine_session.execute_external(
+    const auto result = execute_engine_command(
+        tr("Save selection as channel"),
         patchy::engine::AddDocumentChannel{DocumentChannel(
             id, name, DocumentChannelKind::Alpha, std::move(pixels))});
     if (!result) {
@@ -669,8 +669,8 @@ void MainWindow::rename_active_channel() {
     return;
   }
   const auto id = channel->id();
-  push_undo_snapshot(tr("Rename channel"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Rename channel"),
       patchy::engine::RenameDocumentChannel{id, name.toStdString()});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -686,8 +686,8 @@ void MainWindow::invert_active_channel() {
     return;
   }
   const auto id = channel->id();
-  push_undo_snapshot(tr("Invert channel"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Invert channel"),
       patchy::engine::InvertDocumentChannel{id});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -705,8 +705,8 @@ void MainWindow::delete_active_channel() {
   }
   const auto id = channel->id();
   const auto name = QString::fromStdString(channel->name());
-  push_undo_snapshot(tr("Delete channel"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Delete channel"),
       patchy::engine::RemoveDocumentChannel{id});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -744,8 +744,8 @@ void MainWindow::reorder_channels_from_panel(std::vector<ChannelId> order) {
   if (!changed) {
     return;
   }
-  push_undo_snapshot(tr("Reorder channels"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Reorder channels"),
       patchy::engine::ReorderDocumentChannels{std::move(order)});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));

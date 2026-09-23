@@ -687,8 +687,8 @@ void MainWindow::create_adjustment_layer(QString label, const AdjustmentSettings
 
   auto mask = adjustment_mask_from_selection(std::as_const(document()),
                                              *canvas_);
-  push_undo_snapshot(tr("%1 adjustment layer").arg(label), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("%1 adjustment layer").arg(label),
       patchy::engine::AddAdjustmentLayer{
           label.toStdString(), settings, std::move(mask)});
   if (!result) {
@@ -958,11 +958,9 @@ void MainWindow::edit_active_adjustment_layer() {
     return;
   }
 
-  push_undo_snapshot(
+  const auto result = execute_engine_command(
       tr("Edit %1 adjustment")
           .arg(localized_adjustment_display_name(original_settings->kind)),
-      false);
-  const auto result = session().engine_session.execute_external(
       patchy::engine::UpdateAdjustmentLayer{layer_id, *accepted_settings});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));

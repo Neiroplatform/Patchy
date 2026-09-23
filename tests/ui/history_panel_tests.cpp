@@ -14,6 +14,8 @@
 #include <QTest>
 #include <QTimer>
 
+#include <limits>
+
 #include "test_harness.hpp"
 #include "ui_test_access.hpp"
 #include "ui_test_groups.hpp"
@@ -134,6 +136,36 @@ void ui_history_new_edit_after_rollback_discards_future_rows() {
     CHECK(history->item(row)->foreground().color() != patchy::ui::theme().history_future_text);
   }
   CHECK(color_close(canvas_pixel(*canvas, QPoint(40, 40)), QColor(240, 240, 30), 6));
+}
+
+void ui_engine_command_failure_does_not_publish_desktop_history() {
+  patchy::ui::MainWindow window;
+  show_window(window);
+  auto* history = require_history_list(window);
+  const auto undo_depth =
+      MainWindowTestAccess::active_session_undo_depth(window);
+  const auto engine_undo_depth =
+      MainWindowTestAccess::active_engine_undo_depth(window);
+  const auto state_id = MainWindowTestAccess::active_engine_state_id(window);
+  const auto revision = MainWindowTestAccess::active_engine_revision(window);
+  const auto modified =
+      MainWindowTestAccess::active_session_is_modified(window);
+  const auto row_count = history->count();
+  const auto current_row = history->currentRow();
+
+  const auto result = MainWindowTestAccess::execute_engine_command(
+      window, QStringLiteral("Invalid rename"),
+      patchy::engine::RenameLayer{std::numeric_limits<patchy::LayerId>::max(),
+                                  "must not appear"});
+  CHECK(!result);
+  CHECK(MainWindowTestAccess::active_session_undo_depth(window) == undo_depth);
+  CHECK(MainWindowTestAccess::active_engine_undo_depth(window) ==
+        engine_undo_depth);
+  CHECK(MainWindowTestAccess::active_engine_state_id(window) == state_id);
+  CHECK(MainWindowTestAccess::active_engine_revision(window) == revision);
+  CHECK(MainWindowTestAccess::active_session_is_modified(window) == modified);
+  CHECK(history->count() == row_count);
+  CHECK(history->currentRow() == current_row);
 }
 
 void ui_history_cap_eviction_keeps_rows_consistent() {
@@ -434,6 +466,8 @@ std::vector<patchy::test::TestCase> history_panel_tests() {
       {"ui_history_click_jumps_backward_and_forward", ui_history_click_jumps_backward_and_forward},
       {"ui_history_new_edit_after_rollback_discards_future_rows",
        ui_history_new_edit_after_rollback_discards_future_rows},
+      {"ui_engine_command_failure_does_not_publish_desktop_history",
+       ui_engine_command_failure_does_not_publish_desktop_history},
       {"ui_history_cap_eviction_keeps_rows_consistent", ui_history_cap_eviction_keeps_rows_consistent},
       {"ui_history_budget_evicts_oldest_but_keeps_floor", ui_history_budget_evicts_oldest_but_keeps_floor},
       {"ui_history_budget_is_global_across_sessions", ui_history_budget_is_global_across_sessions},

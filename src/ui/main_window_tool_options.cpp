@@ -1260,8 +1260,8 @@ void MainWindow::set_active_layer_blend(int index) {
   if (ids.empty()) {
     return;
   }
-  push_undo_snapshot(tr("Blend mode"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Blend mode"),
       patchy::engine::SetLayersBlendMode{
           ids,
           static_cast<BlendMode>(blend_combo_->itemData(index).toInt())});
@@ -1288,8 +1288,8 @@ void MainWindow::set_active_layer_visible(bool visible) {
   if (ids.empty()) {
     return;
   }
-  push_undo_snapshot(tr("Visibility"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Visibility"),
       patchy::engine::SetLayersVisibility{ids, visible});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1319,8 +1319,8 @@ void MainWindow::set_layer_lock_flag_state(LayerId id, LayerLockFlags flag, bool
   }
   auto flags = layer_lock_flags(*layer);
   flags = locked ? flags | flag : flags & ~flag;
-  push_undo_snapshot(tr("Lock layer"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Lock layer"),
       patchy::engine::SetLayerLockStates{{{id, flags}}});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1363,8 +1363,8 @@ void MainWindow::set_active_layer_lock_flag(LayerLockFlags flag, bool locked) {
   if (states.empty()) {
     return;
   }
-  push_undo_snapshot(tr("Lock layer"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Lock layer"),
       patchy::engine::SetLayerLockStates{std::move(states)});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1426,8 +1426,8 @@ void MainWindow::toggle_active_layer_clipping() {
     return;
   }
 
-  push_undo_snapshot(clipped ? tr("Release clipping mask") : tr("Create clipping mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      clipped ? tr("Release clipping mask") : tr("Create clipping mask"),
       patchy::engine::SetLayerClipping{*active, !clipped});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1471,8 +1471,8 @@ void MainWindow::set_active_layer_lock_all(bool locked) {
   if (states.empty()) {
     return;
   }
-  push_undo_snapshot(tr("Lock layer"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Lock layer"),
       patchy::engine::SetLayerLockStates{std::move(states)});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));

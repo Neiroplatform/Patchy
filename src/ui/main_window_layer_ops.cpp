@@ -697,8 +697,8 @@ void MainWindow::ungroup_selected_layers() {
                            group->vector_mask() != nullptr || group->clipped();
     }
   }
-  push_undo_snapshot(tr("Ungroup layers"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Ungroup layers"),
       patchy::engine::UngroupLayers{groups});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1196,10 +1196,10 @@ void MainWindow::add_layer() {
     anchor_id = selected_ids.front();
   }
 
-  push_undo_snapshot(tr("New layer"), false);
   auto layer_pixels =
       make_solid_pixels(doc.width(), doc.height(), QColor(0, 0, 0, 0), PixelFormat::rgba8());
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("New layer"),
       patchy::engine::AddPixelLayer{name.toStdString(), std::move(layer_pixels),
                                    anchor_id});
   if (!result) {
@@ -1228,8 +1228,8 @@ void MainWindow::create_layer_folder_from_layers(std::vector<LayerId> ids) {
   } while (existing_names.contains(name));
 
   auto grouped_ids = root_drop_layer_ids(doc.layers(), ids);
-  push_undo_snapshot(tr("New folder"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("New folder"),
       patchy::engine::AddGroup{name, grouped_ids});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1353,8 +1353,8 @@ void MainWindow::add_layer_mask() {
     mask = LayerMask{Rect{0, 0, doc.width(), doc.height()},
                      std::move(mask_pixels), 255, false};
   }
-  push_undo_snapshot(tr("Add layer mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Add layer mask"),
       patchy::engine::SetLayerMaskState{*active, std::move(mask), true});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1387,8 +1387,8 @@ void MainWindow::delete_active_layer_mask() {
     return;
   }
 
-  push_undo_snapshot(tr("Delete layer mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Delete layer mask"),
       patchy::engine::SetLayerMaskState{*active, std::nullopt, true});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1424,8 +1424,8 @@ void MainWindow::set_active_layer_mask_linked(bool linked) {
   }
 
   const auto mask = *layer->mask();
-  push_undo_snapshot(linked ? tr("Link layer mask") : tr("Unlink layer mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      linked ? tr("Link layer mask") : tr("Unlink layer mask"),
       patchy::engine::SetLayerMaskState{*active, mask, linked});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1621,8 +1621,8 @@ void MainWindow::set_active_layer_mask_disabled(bool disabled) {
   auto mask = *layer->mask();
   mask.disabled = disabled;
   const auto linked = layer_mask_linked(*layer);
-  push_undo_snapshot(disabled ? tr("Disable layer mask") : tr("Enable layer mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      disabled ? tr("Disable layer mask") : tr("Enable layer mask"),
       patchy::engine::SetLayerMaskState{*active, std::move(mask), linked});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -1666,8 +1666,8 @@ void MainWindow::invert_active_layer_mask() {
     }
   }
   const auto linked = layer_mask_linked(*layer);
-  push_undo_snapshot(tr("Invert layer mask"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Invert layer mask"),
       patchy::engine::SetLayerMaskState{*active, std::move(mask), linked});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -2131,8 +2131,8 @@ void MainWindow::rename_active_layer() {
     return;
   }
 
-  push_undo_snapshot(tr("Rename layer"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Rename layer"),
       patchy::engine::RenameLayer{layer->id(), new_name->trimmed().toStdString()});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -2386,11 +2386,9 @@ void MainWindow::edit_active_layer_style() {
   restore_original();
   const auto restore_ms = phase_ms(restore_started);
   preview_edit_lock.release();
-  const auto undo_started = std::chrono::steady_clock::now();
-  push_undo_snapshot(tr("Layer style"), false);
-  const auto undo_ms = phase_ms(undo_started);
   const auto apply_started = std::chrono::steady_clock::now();
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Layer style"),
       patchy::engine::CommitPreviewedLayerStates{
           {{layer_id, std::move(prepared_layer)}}, {}, dialog_patterns});
   if (!result) {
@@ -2412,7 +2410,7 @@ void MainWindow::edit_active_layer_style() {
   const auto controls_ms = phase_ms(controls_started);
   std::ostringstream detail;
   detail << "committed dialog_ms=" << dialog_ms << " restore_ms=" << restore_ms
-         << " undo_ms=" << undo_ms << " apply_ms=" << apply_ms << " list_ms=" << list_ms
+         << " transaction_ms=" << apply_ms << " list_ms=" << list_ms
          << " controls_ms=" << controls_ms;
   log_ui_profile("edit_active_layer_style", phase_ms(dialog_started), detail.str());
   statusBar()->showMessage(tr("Updated layer style"));
@@ -2509,8 +2507,8 @@ void MainWindow::paste_layer_style_to_selected_layers() {
     }
     prepared_layers.push_back({id, *layer});
   }
-  push_undo_snapshot(tr("Paste layer style"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Paste layer style"),
       patchy::engine::CommitPreviewedLayerStates{
           std::move(prepared_layers), {}, prepared_document.metadata().patterns});
   if (!result) {
@@ -2557,8 +2555,8 @@ void MainWindow::delete_selected_layer_styles() {
     prepared.layer_style() = {};
     prepared_layers.push_back({id, std::move(prepared)});
   }
-  push_undo_snapshot(tr("Delete layer style"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Delete layer style"),
       patchy::engine::CommitPreviewedLayerStates{
           std::move(prepared_layers), {}, std::nullopt});
   if (!result) {
@@ -2621,8 +2619,8 @@ void MainWindow::delete_layers(std::vector<LayerId> ids) {
   if (ids.empty()) {
     return;
   }
-  push_undo_snapshot(tr("Delete layer"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Delete layer"),
       patchy::engine::RemoveLayers{ids});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
@@ -3655,8 +3653,8 @@ void MainWindow::flip_active_layer_horizontal() {
     return;
   }
 
-  push_undo_snapshot(tr("Flip horizontal"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Flip horizontal"),
       patchy::engine::FlipLayers{editable_ids,
                                  patchy::engine::FlipAxis::Horizontal});
   if (!result) {
@@ -3698,8 +3696,8 @@ void MainWindow::flip_active_layer_vertical() {
     return;
   }
 
-  push_undo_snapshot(tr("Flip vertical"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Flip vertical"),
       patchy::engine::FlipLayers{editable_ids,
                                  patchy::engine::FlipAxis::Vertical});
   if (!result) {
@@ -3723,8 +3721,8 @@ void MainWindow::crop_to_selection() {
   }
 
   auto& doc = document();
-  push_undo_snapshot(tr("Crop"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Crop"),
       patchy::engine::CropDocument{to_core_rect(*selection), 0.0,
                                    edit_color(canvas_->secondary_color()),
                                    true});
@@ -3761,8 +3759,8 @@ void MainWindow::commit_crop_rect(QRect rect, double angle_degrees) {
   // The rect may extend past the canvas; the expansion fills with the
   // background color under a "Background" layer, transparent elsewhere. A
   // rotated box straightens on commit.
-  push_undo_snapshot(tr("Crop"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Crop"),
       patchy::engine::CropDocument{to_core_rect(rect), angle_degrees,
                                    edit_color(canvas_->secondary_color()),
                                    false});
@@ -3792,18 +3790,16 @@ void MainWindow::rotate_canvas_clockwise() {
   if (refuse_document_geometry_change()) {
     return;
   }
-  push_undo_snapshot(tr("Rotate canvas"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Rotate canvas"),
       patchy::engine::RotateCanvas{90.0, edit_color(canvas_->secondary_color())});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
     return;
   }
   refresh_document_tab_titles();
-  canvas_->clear_selection();
-  static_cast<void>(session().engine_session.execute_external(
-      patchy::engine::SetSelection{
-          canvas_->capture_engine_selection_snapshot()}));
+  canvas_->apply_engine_selection_snapshot(
+      session().engine_session.selection());
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -3822,18 +3818,16 @@ void MainWindow::rotate_canvas_counterclockwise() {
   if (refuse_document_geometry_change()) {
     return;
   }
-  push_undo_snapshot(tr("Rotate canvas"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Rotate canvas"),
       patchy::engine::RotateCanvas{-90.0, edit_color(canvas_->secondary_color())});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
     return;
   }
   refresh_document_tab_titles();
-  canvas_->clear_selection();
-  static_cast<void>(session().engine_session.execute_external(
-      patchy::engine::SetSelection{
-          canvas_->capture_engine_selection_snapshot()}));
+  canvas_->apply_engine_selection_snapshot(
+      session().engine_session.selection());
   const auto previous_channel_target = canvas_->layer_edit_target();
   const auto previous_channel_id = canvas_->active_document_channel_id();
   const auto previous_channel_display = canvas_->mask_display_mode();
@@ -3877,8 +3871,8 @@ void MainWindow::toggle_tile_seam_offset() {
     show_status_error(tr("Document too small to shift seams"));
     return;
   }
-  push_undo_snapshot(tr("Shift seams"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Shift seams"),
       patchy::engine::WrapOffsetDocument{
           dx, dy,
           shifting_back

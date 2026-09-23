@@ -2421,8 +2421,8 @@ void MainWindow::handle_layer_drop() {
     return;
   }
 
-  push_undo_snapshot(tr("Reorder layers"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Reorder layers"),
       patchy::engine::MoveLayers{request->layer_ids_top_to_bottom,
                                 request->target_layer_id, request->position});
   if (!result) {
@@ -2564,8 +2564,8 @@ void MainWindow::reorder_layers_from_list() {
   }
 
   std::reverse(top_to_bottom.begin(), top_to_bottom.end());
-  push_undo_snapshot(tr("Reorder layers"), false);
-  const auto result = session().engine_session.execute_external(
+  const auto result = execute_engine_command(
+      tr("Reorder layers"),
       patchy::engine::PlaceLayers{top_to_bottom, std::nullopt, 0});
   if (!result) {
     show_status_error(QString::fromStdString(result.error.message));
