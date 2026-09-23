@@ -8,6 +8,7 @@ import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   documentPreflight, geometryMutationPreflight, INT32_MAX, INT32_MIN, layeredGeometrySize, MIB,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
+import { normalizeGuides, snapTranslatedQuad } from "./guide-model.mjs";
 import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
 import { chooseRovingLayerId, createLocalizer, installDialogFocusReturn, installRovingToolbar,
   isEditableTarget } from "./shell-ui.mjs";
@@ -38,6 +39,9 @@ let cancelActiveOperation = null;
 let canvasTool = "marquee";
 let zoomMode = "fit";
 let zoom = 1;
+let guidesVisible = true;
+let snappingEnabled = true;
+const documentGuides = new Map();
 let marqueeDraft = null;
 let cropDraft = null;
 let resizeAspectRatio = 1;
@@ -579,6 +583,8 @@ function preferenceSnapshot() {
     selectionTolerance: Number($("selectionToleranceInput").value),
     historyBudgetMiB: Number($("memoryBudgetSelect").value),
     panelsHidden: shell.classList.contains("panels-hidden"),
+    guidesVisible,
+    snappingEnabled,
   };
 }
 
@@ -697,7 +703,10 @@ function applyPreferences(preferences) {
   $("memoryBudgetSelect").value = String(preferences.historyBudgetMiB);
   shell.classList.toggle("panels-hidden", preferences.panelsHidden);
   $("togglePanelsButton").setAttribute("aria-pressed", String(preferences.panelsHidden));
+  guidesVisible = preferences.guidesVisible !== false;
+  snappingEnabled = preferences.snappingEnabled !== false;
   setCanvasTool(preferences.tool);
+  renderGuides();
 }
 
 function renderLocalizedShell() {
@@ -1410,6 +1419,88 @@ function applyViewport() {
   $("canvasFrame").style.width = `${Math.max(1, snapshot.width * zoom)}px`;
   $("canvasFrame").style.height = `${Math.max(1, snapshot.height * zoom)}px`;
   $("zoomLabel").textContent = zoomMode === "fit" ? `Fit · ${Math.round(zoom * 100)}%` : `${Math.round(zoom * 100)}%`;
+  renderGuides();
+}
+
+function activeGuides(create = false) {
+  if (!snapshot) return [];
+  if (create && !documentGuides.has(snapshot.documentId)) documentGuides.set(snapshot.documentId, []);
+  return documentGuides.get(snapshot.documentId) || [];
+}
+
+function setActiveGuides(guides) {
+  if (!snapshot) return;
+  documentGuides.set(snapshot.documentId, normalizeGuides(guides, snapshot.width, snapshot.height));
+  renderGuides();
+}
+
+function removeGuide(guide) {
+  setActiveGuides(activeGuides().filter((candidate) => candidate !== guide));
+}
+
+function guideAccessibleText(guide, includeHint = false) {
+  const orientation = localizer.text(
+    guide.orientation === "vertical" ? "Vertical guide" : "Horizontal guide");
+  const position = `${guide.position} ${localizer.text("pixels")}`;
+  return includeHint
+    ? `${orientation} · ${position} · ${localizer.text("drag or press Delete")}`
+    : `${orientation}: ${position}`;
+}
+
+function renderGuides() {
+  const overlay = $("guidesOverlay");
+  overlay.replaceChildren();
+  overlay.hidden = !snapshot || !guidesVisible;
+  for (const guide of activeGuides()) {
+    const line = document.createElement("button");
+    line.type = "button"; line.className = "guide-line";
+    line.dataset.orientation = guide.orientation;
+    line.setAttribute("aria-label", guideAccessibleText(guide));
+    line.title = guideAccessibleText(guide, true);
+    line.style[guide.orientation === "vertical" ? "left" : "top"] =
+      `${guide.position / (guide.orientation === "vertical" ? snapshot.width : snapshot.height) * 100}%`;
+    line.addEventListener("keydown", (event) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      event.preventDefault(); removeGuide(guide);
+    });
+    line.addEventListener("dblclick", (event) => { event.stopPropagation(); removeGuide(guide); });
+    line.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.stopPropagation(); line.setPointerCapture(event.pointerId);
+      const move = (nextEvent) => {
+        const point = canvasPointUnclamped(nextEvent);
+        const limit = guide.orientation === "vertical" ? snapshot.width : snapshot.height;
+        guide.position = Math.max(0, Math.min(limit,
+          Math.round(guide.orientation === "vertical" ? point.x : point.y)));
+        line.style[guide.orientation === "vertical" ? "left" : "top"] =
+          `${guide.position / limit * 100}%`;
+        line.setAttribute("aria-label", guideAccessibleText(guide));
+        line.title = guideAccessibleText(guide, true);
+      };
+      const finish = () => {
+        line.removeEventListener("pointermove", move);
+        line.removeEventListener("pointerup", finish);
+        line.removeEventListener("pointercancel", finish);
+        setActiveGuides(activeGuides());
+      };
+      line.addEventListener("pointermove", move);
+      line.addEventListener("pointerup", finish);
+      line.addEventListener("pointercancel", finish);
+    });
+    overlay.append(line);
+  }
+  $("addVerticalGuideButton").disabled = !snapshot;
+  $("addHorizontalGuideButton").disabled = !snapshot;
+  $("clearGuidesButton").disabled = !snapshot || activeGuides().length === 0;
+  $("toggleGuidesButton").setAttribute("aria-pressed", String(guidesVisible));
+  $("toggleSnapButton").setAttribute("aria-pressed", String(snappingEnabled));
+}
+
+function addCenteredGuide(orientation) {
+  if (!snapshot) return;
+  const position = Math.round((orientation === "vertical" ? snapshot.width : snapshot.height) / 2);
+  setActiveGuides([...activeGuides(true), { orientation, position }]);
+  $("guidesOverlay").querySelector(`.guide-line[data-orientation="${orientation}"]`)?.focus();
 }
 
 function renderSelection(rect = marqueeDraft) {
@@ -1880,6 +1971,7 @@ async function closeDocumentTab(documentTab) {
     documentSaveFormats.delete(documentTab.id);
     checkpointQueues.delete(documentTab.id);
     documentHistoryLabels.delete(documentTab.id);
+    documentGuides.delete(documentTab.id);
     await acceptSnapshot(next);
   } catch (error) { showError("Could not close document", error); }
   finally { setBusy(false); }
@@ -3211,6 +3303,10 @@ registerCommand("selection.clear", "clearSelectionButton", () => mutate("Clearin
 registerCommand("view.zoomOut", "zoomOutButton", () => setZoom(zoom / 1.25), () => Boolean(snapshot));
 registerCommand("view.zoomIn", "zoomInButton", () => setZoom(zoom * 1.25), () => Boolean(snapshot));
 registerCommand("view.fit", "zoomFitButton", () => setZoom("fit"), () => Boolean(snapshot));
+registerCommand("view.guide.vertical", "addVerticalGuideButton", () => addCenteredGuide("vertical"),
+  () => !busy && Boolean(snapshot));
+registerCommand("view.guide.horizontal", "addHorizontalGuideButton", () => addCenteredGuide("horizontal"),
+  () => !busy && Boolean(snapshot));
 for (const [id, command] of commandRegistry) {
   command.button?.addEventListener("click", () => executeCommand(id));
 }
@@ -3640,6 +3736,13 @@ $("savePatternAssetButton").addEventListener("click", () => saveFillAsset("patte
   .catch((error) => showError("Could not save pattern", error)));
 $("installFontAssetButton").addEventListener("click", () => installFontAsset()
   .catch((error) => showError("Could not install font", error)));
+$("toggleGuidesButton").addEventListener("click", () => {
+  guidesVisible = !guidesVisible; renderGuides(); persistPreferences();
+});
+$("toggleSnapButton").addEventListener("click", () => {
+  snappingEnabled = !snappingEnabled; renderGuides(); persistPreferences();
+});
+$("clearGuidesButton").addEventListener("click", () => setActiveGuides([]));
 
 canvas.addEventListener("pointerdown", (event) => {
   if (busy || !snapshot || event.button !== 0) return;
@@ -3785,7 +3888,10 @@ canvas.addEventListener("pointermove", (event) => {
   if (!moveDraft) return;
   const point = canvasPoint(event);
   const dx = Math.round(point.x - moveDraft.start.x); const dy = Math.round(point.y - moveDraft.start.y);
-  moveDraft.quad = moveDraft.originalQuad.map((coordinate, index) => coordinate + (index % 2 ? dy : dx));
+  moveDraft.quad = snappingEnabled
+    ? snapTranslatedQuad(moveDraft.originalQuad, dx, dy, activeGuides(), snapshot,
+      { threshold: Math.max(1, 6 / zoom), bypass: event.altKey }).quad
+    : moveDraft.originalQuad.map((coordinate, index) => coordinate + (index % 2 ? dy : dx));
   renderTransformOverlay();
   scheduleTransformPreview(moveDraft.target, moveDraft.quad);
 });
@@ -3997,7 +4103,8 @@ try {
     await loadLocalAssets();
     applyPreferences(await workspaceStore.loadPreferences({ locale: "en", tool: "marquee", brushSize: 24,
       color: "#111111", paintPreset: "solid", font: "Arial",
-      selectionTolerance: 32, historyBudgetMiB: 256, panelsHidden: false }));
+      selectionTolerance: 32, historyBudgetMiB: 256, panelsHidden: false,
+      guidesVisible: true, snappingEnabled: true }));
     await refreshRecoveryList();
   } else {
     setCanvasTool("marquee");

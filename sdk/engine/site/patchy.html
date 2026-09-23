@@ -106,6 +106,7 @@
           <div class="canvas-frame" id="canvasFrame">
             <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
             <canvas id="gestureCanvas" aria-hidden="true"></canvas>
+            <div class="guides-overlay" id="guidesOverlay" aria-label="Document guides"></div>
             <div class="selection-overlay" id="selectionOverlay" aria-hidden="true" hidden></div>
             <svg class="transform-overlay" id="transformOverlay" aria-label="Layer transform handles" hidden>
               <polygon id="transformPolygon" vector-effect="non-scaling-stroke"></polygon>
@@ -138,6 +139,7 @@
         </div>
         <footer class="stage-footer">
           <span class="zoom-controls"><button id="zoomOutButton" type="button" aria-label="Zoom out">−</button><button id="zoomFitButton" type="button">Fit</button><button id="zoomInButton" type="button" aria-label="Zoom in">+</button><output id="zoomLabel">Fit</output></span>
+          <span class="guide-controls" aria-label="Guides and snapping"><button id="addVerticalGuideButton" type="button" aria-label="Add vertical guide at document center">+V</button><button id="addHorizontalGuideButton" type="button" aria-label="Add horizontal guide at document center">+H</button><button id="toggleGuidesButton" type="button" aria-pressed="true">Guides</button><button id="toggleSnapButton" type="button" aria-pressed="true">Snap</button><button id="clearGuidesButton" type="button">Clear</button></span>
           <span class="privacy-label"><b></b>Local session</span>
           <span id="recoveryLabel" aria-live="polite">Recovery starting</span>
           <span id="memoryLabel" aria-live="polite">Memory ready</span>

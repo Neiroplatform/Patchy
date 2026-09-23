@@ -459,6 +459,8 @@ function normalizePreferences(value, stored) {
     result.historyBudgetMiB = historyBudgetMiB;
   }
   if (value.panelsHidden !== undefined) result.panelsHidden = Boolean(value.panelsHidden);
+  if (value.guidesVisible !== undefined) result.guidesVisible = Boolean(value.guidesVisible);
+  if (value.snappingEnabled !== undefined) result.snappingEnabled = Boolean(value.snappingEnabled);
   return result;
 }
 

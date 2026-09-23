@@ -574,6 +574,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/patchy.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/guide-model.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/shell-ui.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/text-layout.mjs"
             "${PROJECT_SOURCE_DIR}/packaging/web/.htaccess"
@@ -628,6 +629,7 @@ if(PATCHY_BUILD_TESTS)
               "${PROJECT_SOURCE_DIR}/tests/sdk/recovery_controller_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/workspace_store_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/support_diagnostics_tests.mjs"
+              "${PROJECT_SOURCE_DIR}/tests/sdk/guide_model_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/shell_ui_tests.mjs")
   endif()
 endif()
