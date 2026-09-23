@@ -1,4 +1,12 @@
 export interface Rect { x: number; y: number; width: number; height: number }
+export interface LiquifyStrokeInput {
+  tool: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  from: [number, number];
+  to: [number, number];
+  size: number;
+  pressure: number;
+  density: number;
+}
 export const PATCHY_ENGINE_SDK_VERSION: "0.1.0";
 export const PATCHY_WORKER_RPC_VERSION: 1;
 export const PATCHY_ENGINE_PROTOCOL_VERSION: 1;
@@ -18,7 +26,7 @@ export const PATCHY_ENGINE_CAPABILITIES: Readonly<{
   layerWarp: bigint; essentialLayerStyle: bigint; psbSaveAs: bigint;
   layerMaskStroke: bigint; richTextAuthoring: bigint; multiLayerAuthoring: bigint;
   multiLayerTransfer: bigint; multiLayerTransform: bigint; layerArrange: bigint;
-  selectionRefinement: bigint;
+  selectionRefinement: bigint; liquifyAuthoring: bigint;
 }>;
 export interface PatchyWorkerFactoryOptions {
   WorkerConstructor?: typeof Worker;
@@ -197,6 +205,11 @@ export class PatchyWorkerClient {
     style: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
     bend: number; horizontalDistortion: number; verticalDistortion: number;
     rotateVertical?: boolean; interpolation?: 0 | 1;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
+  previewLiquify(input: { layerId: bigint; strokes: LiquifyStrokeInput[];
+    cancellation?: Int32Array; expectedStateId: bigint;
+    expectedRevision: bigint }): Promise<RenderPatch>;
+  applyLiquify(input: { layerId: bigint; strokes: LiquifyStrokeInput[];
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   closeDocument(documentId: number): Promise<DocumentProjection | null>;
   setMemoryBudget(documentBytes: number, globalBytes: number): Promise<DocumentProjection>;

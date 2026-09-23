@@ -5,6 +5,7 @@
 #include "core/layer_metadata.hpp"
 #include "core/layer_transform.hpp"
 #include "core/layer_warp.hpp"
+#include "core/liquify.hpp"
 #include "core/magnetic_lasso.hpp"
 #include "core/quick_select.hpp"
 #include "core/raster_stroke.hpp"
@@ -187,7 +188,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFER |
     PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM |
     PATCHY_ENGINE_CAP_LAYER_ARRANGE |
-    PATCHY_ENGINE_CAP_SELECTION_REFINEMENT;
+    PATCHY_ENGINE_CAP_SELECTION_REFINEMENT |
+    PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -1003,6 +1005,41 @@ std::optional<patchy::LayerWarpRequest> layer_warp_request(
       input->interpolation == PATCHY_ENGINE_TRANSFORM_NEAREST
           ? patchy::LayerTransformInterpolation::Nearest
           : patchy::LayerTransformInterpolation::Bilinear;
+  return request;
+}
+
+std::optional<patchy::LiquifyRequest> liquify_request(
+    const patchy_engine_session *session,
+    const patchy_engine_liquify *input, patchy_engine_error *error) {
+  if (input == nullptr || input->struct_size != sizeof(*input) ||
+      input->reserved != 0U || input->layer_id == 0 ||
+      input->strokes == nullptr || input->stroke_count == 0 ||
+      input->stroke_count > 4096U) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "a bounded versioned Liquify batch is required");
+    return std::nullopt;
+  }
+  patchy::LiquifyRequest request;
+  request.strokes.reserve(input->stroke_count);
+  for (std::size_t index = 0; index < input->stroke_count; ++index) {
+    const auto& value = input->strokes[index];
+    if (value.reserved != 0U ||
+        value.tool > PATCHY_ENGINE_LIQUIFY_THAW_MASK) {
+      fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+           "Liquify strokes require a known tool and zero reserved fields");
+      return std::nullopt;
+    }
+    request.strokes.push_back(
+        {static_cast<patchy::LiquifyTool>(value.tool), value.from_x,
+         value.from_y, value.to_x, value.to_y, value.size, value.pressure,
+         value.density});
+  }
+  const auto& selection = session->value->selection();
+  request.selection = selection.selection;
+  if (!selection.mask_alpha.empty()) {
+    request.selection_mask_bounds = selection.mask_bounds;
+    request.selection_mask = selection.mask_alpha;
+  }
   return request;
 }
 
@@ -5527,6 +5564,118 @@ int patchy_engine_session_warp_layer(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown layer-warp failure");
+  }
+}
+
+int patchy_engine_session_preview_liquify(
+    const patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, const patchy_engine_liquify *liquify,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || region == nullptr ||
+      rgba == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session, preview region and buffer are required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  auto request = liquify_request(session, liquify, error);
+  if (!request.has_value()) {
+    return 0;
+  }
+  request->progress = [progress, progress_user_data](int completed, int total) {
+    return progress == nullptr ||
+           progress(completed, total, progress_user_data) != 0;
+  };
+  try {
+    auto preview_document = session->value->document();
+    patchy::LiquifyResult liquified;
+    std::string liquify_error;
+    if (!patchy::liquify_layer(preview_document, liquify->layer_id, *request,
+                               &liquified, &liquify_error)) {
+      return fail(error,
+                  liquify_error == "Liquify was cancelled"
+                      ? PATCHY_ENGINE_ERROR_CANCELLED
+                      : PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  liquify_error.c_str());
+    }
+    const auto preview_region = patchy::intersect_rect(
+        liquified.affected_region,
+        patchy::Rect::from_size(preview_document.width(),
+                                preview_document.height()));
+    if (preview_region.empty()) {
+      *region = {};
+      return 1;
+    }
+    DocumentSession preview(std::move(preview_document));
+    const auto rendered = preview.render(preview_region);
+    if (!rendered) {
+      return fail(error, rendered.error);
+    }
+    if (!copy_buffer(rendered.pixels.data(), rgba, error)) {
+      return 0;
+    }
+    *region = {preview_region.x, preview_region.y, preview_region.width,
+               preview_region.height};
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate Liquify preview");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown Liquify preview failure");
+  }
+}
+
+int patchy_engine_session_apply_liquify(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, const patchy_engine_liquify *liquify,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  auto request = liquify_request(session, liquify, error);
+  if (!request.has_value()) {
+    return 0;
+  }
+  try {
+    auto prepared = session->value->document();
+    patchy::LiquifyResult liquified;
+    std::string liquify_error;
+    if (!patchy::liquify_layer(prepared, liquify->layer_id, *request,
+                               &liquified, &liquify_error)) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  liquify_error.c_str());
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::Liquify,
+            expected_state_id, std::move(prepared),
+            liquified.affected_region});
+    if (!result) {
+      return fail(error, result.error);
+    }
+    result.affected_layer_id = liquify->layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate Liquify result");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown Liquify failure");
   }
 }
 

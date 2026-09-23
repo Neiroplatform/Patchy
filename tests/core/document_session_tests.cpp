@@ -6,6 +6,7 @@
 #include "core/layer_metadata.hpp"
 #include "core/layer_transform.hpp"
 #include "core/layer_warp.hpp"
+#include "core/liquify.hpp"
 #include "core/raster_stroke.hpp"
 #include "core/vector_raster.hpp"
 #include "core/vector_live_shapes.hpp"
@@ -6164,6 +6165,174 @@ void engine_host_protocol_previews_and_commits_one_layer_warp() {
   patchy_engine_session_destroy(session); patchy_engine_runtime_destroy(runtime);
 }
 
+void engine_host_protocol_previews_and_commits_one_liquify_session() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 14, 10, &error);
+  patchy_engine_document_projection before{};
+  before.struct_size = sizeof(before);
+  CHECK(patchy_engine_session_document(session, &before, &error) == 1);
+
+  std::array<std::uint8_t, 8 * 4 * 4> rgba{};
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      const auto offset = static_cast<std::size_t>((y * 8 + x) * 4);
+      rgba[offset] = static_cast<std::uint8_t>(20 + x * 25);
+      rgba[offset + 1] = static_cast<std::uint8_t>(30 + y * 45);
+      rgba[offset + 2] = static_cast<std::uint8_t>(180 - x * 12);
+      rgba[offset + 3] = 255;
+    }
+  }
+  patchy_engine_pixel_layer_input layer{};
+  layer.struct_size = sizeof(layer);
+  layer.expected_state_id = before.state_id;
+  layer.expected_revision = before.revision;
+  layer.bounds = {2, 3, 8, 4};
+  layer.width = 8;
+  layer.height = 4;
+  layer.rgba = rgba.data();
+  layer.rgba_size = rgba.size();
+  layer.name = "Liquify";
+  layer.name_size = 7;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &layer, &event, &error) == 1);
+  const auto layer_id = event.affected_layer_id;
+
+  patchy_engine_document_projection ready{};
+  ready.struct_size = sizeof(ready);
+  CHECK(patchy_engine_session_document(session, &ready, &error) == 1);
+  patchy_engine_buffer original_buffer{};
+  CHECK(patchy_engine_session_layer_rgba8_pixels(
+            session, layer_id, &original_buffer, &error) == 1);
+  const std::vector<std::uint8_t> original(
+      original_buffer.data, original_buffer.data + original_buffer.size);
+  patchy_engine_buffer_release(&original_buffer);
+
+  const std::array<patchy_engine_liquify_stroke, 2> strokes{{
+      {PATCHY_ENGINE_LIQUIFY_FREEZE_MASK, 0, 2.5, 3.5, 2.5, 3.5,
+       2.0, 100.0, 100.0},
+      {PATCHY_ENGINE_LIQUIFY_FORWARD_WARP, 0, 5.0, 5.0, 8.0, 5.0,
+       6.0, 85.0, 70.0},
+  }};
+  patchy_engine_liquify liquify{};
+  liquify.struct_size = sizeof(liquify);
+  liquify.layer_id = layer_id;
+  liquify.strokes = strokes.data();
+  liquify.stroke_count = strokes.size();
+
+  patchy_engine_rect region{};
+  patchy_engine_buffer preview{};
+  const auto cancel = [](std::int32_t, std::int32_t, void *) { return 0; };
+  CHECK(patchy_engine_session_preview_liquify(
+            session, ready.state_id, ready.revision, &liquify, cancel, nullptr,
+            &region, &preview, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_CANCELLED);
+  CHECK(patchy_engine_session_preview_liquify(
+            session, ready.state_id, ready.revision, &liquify, nullptr, nullptr,
+            &region, &preview, &error) == 1);
+  CHECK(region.width == 8 && region.height == 4);
+  CHECK(preview.size == static_cast<std::size_t>(region.width * region.height * 4));
+  patchy_engine_buffer_release(&preview);
+  patchy_engine_document_projection after_preview{};
+  after_preview.struct_size = sizeof(after_preview);
+  CHECK(patchy_engine_session_document(session, &after_preview, &error) == 1);
+  CHECK(after_preview.state_id == ready.state_id);
+  CHECK(after_preview.revision == ready.revision);
+
+  CHECK(patchy_engine_session_apply_liquify(
+            session, ready.state_id, ready.revision, &liquify, &event, &error) == 1);
+  CHECK(event.revision == ready.revision + 1U);
+  CHECK(event.affected_layer_id == layer_id);
+  CHECK(patchy_engine_session_apply_liquify(
+            session, ready.state_id, ready.revision, &liquify, &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+
+  patchy_engine_buffer changed_buffer{};
+  CHECK(patchy_engine_session_layer_rgba8_pixels(
+            session, layer_id, &changed_buffer, &error) == 1);
+  const std::vector<std::uint8_t> changed(
+      changed_buffer.data, changed_buffer.data + changed_buffer.size);
+  patchy_engine_buffer_release(&changed_buffer);
+  CHECK(changed != original);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  patchy_engine_buffer undone_buffer{};
+  CHECK(patchy_engine_session_layer_rgba8_pixels(
+            session, layer_id, &undone_buffer, &error) == 1);
+  CHECK(std::equal(original.begin(), original.end(), undone_buffer.data));
+  patchy_engine_buffer_release(&undone_buffer);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+
+  for (const auto large_document : {std::uint8_t{0}, std::uint8_t{1}}) {
+    patchy_engine_buffer saved{};
+    CHECK(patchy_engine_session_save_psd_as(
+              session, large_document, &saved, &event, &error) == 1);
+    auto *reopened = patchy_engine_session_open_psd(
+        runtime, saved.data, saved.size, &error);
+    CHECK(reopened != nullptr);
+    patchy_engine_buffer reopened_pixels{};
+    CHECK(patchy_engine_session_layer_rgba8_pixels(
+              reopened, layer_id, &reopened_pixels, &error) == 1);
+    CHECK(reopened_pixels.size == changed.size());
+    CHECK(std::equal(changed.begin(), changed.end(), reopened_pixels.data));
+    patchy_engine_buffer_release(&reopened_pixels);
+    patchy_engine_session_destroy(reopened);
+    patchy_engine_buffer_release(&saved);
+  }
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
+void core_liquify_respects_selection_and_fails_closed() {
+  Document document(12, 10, PixelFormat::rgba8());
+  PixelBuffer pixels(8, 4, PixelFormat::rgba8());
+  for (int y = 0; y < pixels.height(); ++y) {
+    for (int x = 0; x < pixels.width(); ++x) {
+      auto *pixel = pixels.pixel(x, y);
+      pixel[0] = static_cast<std::uint8_t>(20 + x * 25);
+      pixel[1] = static_cast<std::uint8_t>(30 + y * 45);
+      pixel[2] = static_cast<std::uint8_t>(180 - x * 12);
+      pixel[3] = 255;
+    }
+  }
+  const auto layer_id = document.allocate_layer_id();
+  patchy::Layer layer(layer_id, "Liquify", std::move(pixels));
+  layer.set_bounds({2, 3, 8, 4});
+  document.add_layer(std::move(layer));
+  const auto original = document.find_layer(layer_id)->pixels();
+
+  patchy::LiquifyRequest request;
+  request.selection = {{4, 3, 6, 4}};
+  request.strokes.push_back({patchy::LiquifyTool::ForwardWarp,
+                             5.0, 5.0, 8.0, 5.0, 6.0, 85.0, 70.0});
+  patchy::LiquifyResult result;
+  std::string error;
+  CHECK(patchy::liquify_layer(document, layer_id, request, &result, &error));
+  const auto &changed = document.find_layer(layer_id)->pixels();
+  for (int y = 0; y < changed.height(); ++y) {
+    for (int x = 0; x < 2; ++x) {
+      CHECK(std::equal(original.pixel(x, y), original.pixel(x, y) + 4,
+                       changed.pixel(x, y)));
+    }
+  }
+  CHECK(!std::equal(changed.data().begin(), changed.data().end(),
+                    original.data().begin()));
+
+  auto cancelled = document;
+  const auto cancelled_before = cancelled.find_layer(layer_id)->pixels();
+  request.progress = [](int, int) { return false; };
+  CHECK(!patchy::liquify_layer(cancelled, layer_id, request, nullptr, &error));
+  CHECK(error == "Liquify was cancelled");
+  const auto cancelled_after = cancelled.find_layer(layer_id)->pixels().data();
+  CHECK(std::equal(cancelled_after.begin(), cancelled_after.end(),
+                   cancelled_before.data().begin()));
+
+  request.progress = {};
+  document.find_layer(layer_id)->set_lock_flags(patchy::kLayerLockImagePixels);
+  CHECK(!patchy::liquify_layer(document, layer_id, request, nullptr, &error));
+  CHECK(error == "Liquify target pixels are locked");
+}
+
 void engine_host_protocol_commits_advanced_selection_gestures() {
   patchy_engine_error error{};
   auto *runtime = patchy_engine_runtime_create(
@@ -6486,6 +6655,10 @@ std::vector<TestCase> document_session_tests() {
        engine_session_essential_layer_style_is_atomic_preserving_and_round_trips},
       {"engine_host_protocol_previews_and_commits_one_layer_warp",
        engine_host_protocol_previews_and_commits_one_layer_warp},
+      {"engine_host_protocol_previews_and_commits_one_liquify_session",
+       engine_host_protocol_previews_and_commits_one_liquify_session},
+      {"core_liquify_respects_selection_and_fails_closed",
+       core_liquify_respects_selection_and_fails_closed},
       {"engine_host_protocol_commits_advanced_selection_gestures",
        engine_host_protocol_commits_advanced_selection_gestures},
       {"core_layer_warp_supports_linked_mask_and_fails_closed",

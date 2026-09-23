@@ -231,6 +231,18 @@ export class PatchyWorkerClient {
       layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
       expectedRevision: String(input.expectedRevision) });
   }
+  previewLiquify(input) {
+    const cancellation = input.cancellation instanceof Int32Array
+      ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
+    return this.#request("previewLiquify", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision), cancellation: cancellation.buffer });
+  }
+  applyLiquify(input) {
+    return this.#request("applyLiquify", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
   closeDocument(documentId) { return this.#request("closeDocument", { documentId }); }
   setMemoryBudget(documentBytes, globalBytes) {
     return this.#request("setMemoryBudget", { documentBytes, globalBytes });

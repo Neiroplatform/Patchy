@@ -29,9 +29,28 @@ try {
   const filled = await client.applyRasterFill(fill);
   check(filled.revision === authored.revision + 1n, "fill was not one canonical revision");
 
+  const liquify = { layerId, strokes: [
+    { tool: 7, from: [0.5, 1.5], to: [0.5, 1.5], size: 2,
+      pressure: 100, density: 100 },
+    { tool: 0, from: [3, 2], to: [6, 2], size: 5,
+      pressure: 80, density: 60 },
+  ], expectedStateId: filled.stateId, expectedRevision: filled.revision };
+  const cancelledLiquify = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.store(cancelledLiquify, 0, 1); let liquifyCancelCode = 0;
+  try { await client.previewLiquify({ ...liquify, cancellation: cancelledLiquify }); }
+  catch (error) { liquifyCancelCode = error.code; }
+  check(liquifyCancelCode === 7, "Liquify preview cancellation did not cross wasm32");
+  const liquifyPreview = await client.previewLiquify(liquify);
+  check(liquifyPreview.region.width === 8 && liquifyPreview.region.height === 4 &&
+    liquifyPreview.rgba.length === 128 && (await client.snapshot()).revision === filled.revision,
+  "Liquify preview mutated state or returned inconsistent pixels");
+  const liquified = await client.applyLiquify(liquify);
+  check(liquified.revision === filled.revision + 1n,
+    "Liquify was not one canonical revision");
+
   const warp = { layerId, style: 0, bend: 55, horizontalDistortion: 8,
     verticalDistortion: -4, rotateVertical: false, interpolation: 1,
-    expectedStateId: filled.stateId, expectedRevision: filled.revision };
+    expectedStateId: liquified.stateId, expectedRevision: liquified.revision };
   const cancelledWarp = new Int32Array(new SharedArrayBuffer(4));
   Atomics.store(cancelledWarp, 0, 1); let warpCancelCode = 0;
   try { await client.previewLayerWarp({ ...warp, cancellation: cancelledWarp }); }
@@ -41,7 +60,7 @@ try {
   check(warpPreview.rgba.length === warpPreview.region.width * warpPreview.region.height * 4,
     "warp preview returned inconsistent pixels");
   const warped = await client.warpLayer(warp);
-  check(warped.revision === filled.revision + 1n,
+  check(warped.revision === liquified.revision + 1n,
     "warp was not one canonical revision");
 
   const smartSource = await client.save();

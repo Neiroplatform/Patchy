@@ -56,6 +56,7 @@ enum patchy_engine_capability : uint64_t {
   PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM = UINT64_C(1) << 38,
   PATCHY_ENGINE_CAP_LAYER_ARRANGE = UINT64_C(1) << 39,
   PATCHY_ENGINE_CAP_SELECTION_REFINEMENT = UINT64_C(1) << 40,
+  PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING = UINT64_C(1) << 41,
 };
 #else
 enum patchy_engine_capability {
@@ -104,6 +105,7 @@ typedef uint64_t patchy_engine_capability;
 #define PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM (UINT64_C(1) << 38)
 #define PATCHY_ENGINE_CAP_LAYER_ARRANGE (UINT64_C(1) << 39)
 #define PATCHY_ENGINE_CAP_SELECTION_REFINEMENT (UINT64_C(1) << 40)
+#define PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING (UINT64_C(1) << 41)
 #endif
 
 enum patchy_engine_error_code {
@@ -312,6 +314,38 @@ typedef struct patchy_engine_layer_warp {
   uint8_t rotate_vertical;
   uint8_t reserved[3];
 } patchy_engine_layer_warp;
+
+enum patchy_engine_liquify_tool {
+  PATCHY_ENGINE_LIQUIFY_FORWARD_WARP = 0,
+  PATCHY_ENGINE_LIQUIFY_RECONSTRUCT = 1,
+  PATCHY_ENGINE_LIQUIFY_SMOOTH = 2,
+  PATCHY_ENGINE_LIQUIFY_TWIRL_CLOCKWISE = 3,
+  PATCHY_ENGINE_LIQUIFY_TWIRL_COUNTER_CLOCKWISE = 4,
+  PATCHY_ENGINE_LIQUIFY_PUCKER = 5,
+  PATCHY_ENGINE_LIQUIFY_BLOAT = 6,
+  PATCHY_ENGINE_LIQUIFY_FREEZE_MASK = 7,
+  PATCHY_ENGINE_LIQUIFY_THAW_MASK = 8,
+};
+
+typedef struct patchy_engine_liquify_stroke {
+  uint32_t tool;
+  uint32_t reserved;
+  double from_x;
+  double from_y;
+  double to_x;
+  double to_y;
+  double size;
+  double pressure;
+  double density;
+} patchy_engine_liquify_stroke;
+
+typedef struct patchy_engine_liquify {
+  uint32_t struct_size;
+  uint32_t reserved;
+  uint64_t layer_id;
+  const patchy_engine_liquify_stroke *strokes;
+  size_t stroke_count;
+} patchy_engine_liquify;
 
 typedef struct patchy_engine_memory_usage {
   uint32_t struct_size;
@@ -1629,6 +1663,16 @@ int patchy_engine_session_preview_layer_warp(
 int patchy_engine_session_warp_layer(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const patchy_engine_layer_warp *warp,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_preview_liquify(
+    const patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_liquify *liquify,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_rect *region, patchy_engine_buffer *rgba,
+    patchy_engine_error *error);
+int patchy_engine_session_apply_liquify(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, const patchy_engine_liquify *liquify,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,

@@ -423,6 +423,7 @@ enum class PreparedDocumentMutationKind : std::uint8_t {
   RasterStroke,
   RasterFill,
   LayerWarp,
+  Liquify,
 };
 
 struct CommitPreparedDocumentState {

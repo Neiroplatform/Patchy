@@ -233,6 +233,28 @@ export class PatchyWorkerHost {
           { ...message, layerId: BigInt(message.layerId) });
         return this.#snapshot();
       }
+      case "previewLiquify": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Liquify was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        return this.#engine.previewLiquify(this.#requireSession(), before,
+          { ...message, layerId: BigInt(message.layerId) },
+          new Int32Array(message.cancellation));
+      }
+      case "applyLiquify": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Liquify was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        this.#engine.applyLiquify(this.#requireSession(), before,
+          { ...message, layerId: BigInt(message.layerId) });
+        return this.#snapshot();
+      }
       case "closeDocument": return this.#closeDocument(message.documentId);
       case "addPsdSmartObject": {
         const parent = this.#sessions.get(this.#activeDocumentId);

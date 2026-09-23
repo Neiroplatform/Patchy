@@ -42,6 +42,8 @@ const LAYER_TRANSFORM_SIZE = 80;
 const RASTER_STROKE_SIZE = 48;
 const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
+const LIQUIFY_INPUT_SIZE = 24;
+const LIQUIFY_STROKE_SIZE = 64;
 const LAYER_BATCH_SIZE = 32;
 const LAYER_BATCH_EDIT_SIZE = 40;
 const LAYER_BATCH_TRANSFORM_SIZE = 96;
@@ -55,6 +57,7 @@ const CAP_MULTI_LAYER_TRANSFER = 1n << 37n;
 const CAP_MULTI_LAYER_TRANSFORM = 1n << 38n;
 const CAP_LAYER_ARRANGE = 1n << 39n;
 const CAP_SELECTION_REFINEMENT = 1n << 40n;
+const CAP_LIQUIFY_AUTHORING = 1n << 41n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -1026,6 +1029,53 @@ export class EmscriptenPatchyEngine {
         this.#module._patchy_engine_session_warp_layer(
           session, snapshot.stateId, snapshot.revision, warp, event, error));
     } finally { this.#module._free(warp); }
+  }
+
+  previewLiquify(session, snapshot, input,
+                 cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    if (!(this.#capabilities & CAP_LIQUIFY_AUTHORING) ||
+        typeof this.#module._patchy_engine_session_preview_liquify !== "function") {
+      throw new PatchyEngineError(2, "Patchy engine does not support Liquify");
+    }
+    if (!(cancellation instanceof Int32Array) ||
+        !(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Liquify preview cancellation must use shared Int32 storage");
+    }
+    return this.#withError((error) => {
+      const value = this.#liquify(input);
+      let region = 0; let buffer = 0; let callback = 0;
+      try {
+        region = this.#alloc(RECT_SIZE); buffer = this.#alloc(BUFFER_SIZE);
+        callback = this.#module.addFunction(
+          () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
+        this.#check(this.#module._patchy_engine_session_preview_liquify(
+          session, snapshot.stateId, snapshot.revision, value.input, callback, 0,
+          region, buffer, error), error);
+        const r = this.#view(region, RECT_SIZE); const b = this.#view(buffer, BUFFER_SIZE);
+        const data = b.getUint32(0, true); const size = b.getUint32(4, true);
+        return { region: { x: r.getInt32(0, true), y: r.getInt32(4, true),
+          width: r.getInt32(8, true), height: r.getInt32(12, true) },
+        rgba: this.#module.HEAPU8.slice(data, data + size) };
+      } finally {
+        if (callback) this.#module.removeFunction(callback);
+        if (buffer) { this.#module._patchy_engine_buffer_release(buffer); this.#module._free(buffer); }
+        if (region) this.#module._free(region);
+        this.#module._free(value.strokes); this.#module._free(value.input);
+      }
+    });
+  }
+
+  applyLiquify(session, snapshot, input) {
+    if (!(this.#capabilities & CAP_LIQUIFY_AUTHORING) ||
+        typeof this.#module._patchy_engine_session_apply_liquify !== "function") {
+      throw new PatchyEngineError(2, "Patchy engine does not support Liquify");
+    }
+    const value = this.#liquify(input);
+    try {
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_apply_liquify(
+          session, snapshot.stateId, snapshot.revision, value.input, event, error));
+    } finally { this.#module._free(value.strokes); this.#module._free(value.input); }
   }
 
   rasterizeLayer(session, snapshot, layerId) {
@@ -2492,6 +2542,50 @@ export class EmscriptenPatchyEngine {
     view.setUint32(40, input.interpolation ?? 1, true);
     view.setUint8(44, input.rotateVertical ? 1 : 0);
     return warp;
+  }
+
+  #liquify(input) {
+    if (typeof input.layerId !== "bigint" || input.layerId <= 0n ||
+        !Array.isArray(input.strokes) || input.strokes.length < 1 ||
+        input.strokes.length > 4096) {
+      throw new TypeError("A bounded Liquify batch is required");
+    }
+    const normalized = input.strokes.map((stroke) => {
+      const from = stroke?.from; const to = stroke?.to;
+      if (!stroke || !Number.isInteger(stroke.tool) || stroke.tool < 0 || stroke.tool > 8 ||
+          !Array.isArray(from) || from.length !== 2 || !from.every(Number.isFinite) ||
+          !Array.isArray(to) || to.length !== 2 || !to.every(Number.isFinite) ||
+          !Number.isFinite(stroke.size) || stroke.size < 1 || stroke.size > 4096 ||
+          !Number.isFinite(stroke.pressure) || stroke.pressure < 1 || stroke.pressure > 100 ||
+          !Number.isFinite(stroke.density) || stroke.density < 1 || stroke.density > 100) {
+        throw new TypeError("Liquify strokes exceed their bounded contract");
+      }
+      return { ...stroke, from, to };
+    });
+    const strokes = this.#alloc(normalized.length * LIQUIFY_STROKE_SIZE);
+    const value = this.#alloc(LIQUIFY_INPUT_SIZE);
+    try {
+      const strokeView = this.#view(strokes, normalized.length * LIQUIFY_STROKE_SIZE);
+      normalized.forEach((stroke, index) => {
+        const offset = index * LIQUIFY_STROKE_SIZE;
+        strokeView.setUint32(offset, stroke.tool, true);
+        strokeView.setUint32(offset + 4, 0, true);
+        strokeView.setFloat64(offset + 8, stroke.from[0], true);
+        strokeView.setFloat64(offset + 16, stroke.from[1], true);
+        strokeView.setFloat64(offset + 24, stroke.to[0], true);
+        strokeView.setFloat64(offset + 32, stroke.to[1], true);
+        strokeView.setFloat64(offset + 40, stroke.size, true);
+        strokeView.setFloat64(offset + 48, stroke.pressure, true);
+        strokeView.setFloat64(offset + 56, stroke.density, true);
+      });
+      const view = this.#view(value, LIQUIFY_INPUT_SIZE);
+      view.setUint32(0, LIQUIFY_INPUT_SIZE, true); view.setUint32(4, 0, true);
+      view.setBigUint64(8, input.layerId, true);
+      view.setUint32(16, strokes, true); view.setUint32(20, normalized.length, true);
+      return { input: value, strokes };
+    } catch (error) {
+      this.#module._free(strokes); this.#module._free(value); throw error;
+    }
   }
 
   #bufferCall(call) {

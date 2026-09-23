@@ -62,6 +62,10 @@ let moveDraft = null;
 let transformDraft = null;
 let transformDialogDraft = null;
 let warpDialogDraft = null;
+let liquifyDraft = null;
+let liquifyPreviewGeneration = 0;
+let liquifyPreviewTimer = 0;
+let liquifyPreviewCancellation = null;
 let transformPreviewPending = null;
 let transformPreviewInFlight = false;
 let transformPreviewGeneration = 0;
@@ -378,6 +382,8 @@ function updateControls() {
   $("removeLayerButton").disabled = busy || !layers.length;
   $("invertLayerButton").disabled = busy || !single || layer?.kind !== 0;
   $("filterLayerButton").disabled = busy || !single || layer?.kind !== 0;
+  $("liquifyLayerButton").disabled = busy || !single || layer?.kind !== 0 ||
+    !layer?.bounds || layer.bounds.width <= 0 || layer.bounds.height <= 0;
   $("textLayerButton").disabled = busy || !snapshot;
   localizer.setText($("textLayerButton"), single && layer?.kind === 3 ? "Edit text" : "Add text");
   $("layerTransformButton").disabled = busy || !transformSelection();
@@ -3281,6 +3287,163 @@ async function commitLayerWarp() {
     expectedStateId: draft.stateId, expectedRevision: draft.revision }));
 }
 
+function liquifyControls() {
+  const tool = Number($("liquifyToolInput").value);
+  const size = Number($("liquifySizeInput").value);
+  const pressure = Number($("liquifyPressureInput").value);
+  const density = Number($("liquifyDensityInput").value);
+  if (!Number.isInteger(tool) || tool < 0 || tool > 8 ||
+      !Number.isFinite(size) || size < 1 || size > 4096 ||
+      !Number.isFinite(pressure) || pressure < 1 || pressure > 100 ||
+      !Number.isFinite(density) || density < 1 || density > 100) return null;
+  return { tool, size, pressure, density };
+}
+
+function liquifyPoint(event) {
+  const target = $("liquifyCanvas");
+  const rect = target.getBoundingClientRect();
+  const bounds = liquifyDraft.layer.bounds;
+  return {
+    x: bounds.x + Math.max(0, Math.min(target.width,
+      (event.clientX - rect.left) * target.width / rect.width)),
+    y: bounds.y + Math.max(0, Math.min(target.height,
+      (event.clientY - rect.top) * target.height / rect.height)),
+  };
+}
+
+function drawLiquifySource() {
+  if (!liquifyDraft) return;
+  const target = $("liquifyCanvas");
+  const mask = $("liquifyMaskCanvas");
+  const bounds = liquifyDraft.layer.bounds;
+  target.width = mask.width = bounds.width;
+  target.height = mask.height = bounds.height;
+  const output = target.getContext("2d");
+  output.clearRect(0, 0, target.width, target.height);
+  const left = Math.max(0, bounds.x); const top = Math.max(0, bounds.y);
+  const right = Math.min(snapshot.width, bounds.x + bounds.width);
+  const bottom = Math.min(snapshot.height, bounds.y + bounds.height);
+  if (right > left && bottom > top) {
+    output.drawImage(canvas, left, top, right - left, bottom - top,
+      left - bounds.x, top - bounds.y, right - left, bottom - top);
+  }
+  renderLiquifyMask();
+}
+
+function renderLiquifyMask() {
+  const overlay = $("liquifyMaskCanvas");
+  const output = overlay.getContext("2d");
+  output.clearRect(0, 0, overlay.width, overlay.height);
+  if (!liquifyDraft) return;
+  const bounds = liquifyDraft.layer.bounds;
+  if ($("liquifyShowMaskInput").checked) {
+    for (const stroke of liquifyDraft.strokes) {
+      if (stroke.tool !== 7 && stroke.tool !== 8) continue;
+      output.save();
+      output.globalCompositeOperation = stroke.tool === 8 ? "destination-out" : "source-over";
+      output.globalAlpha = Math.max(.08, stroke.density / 100 * .58);
+      output.strokeStyle = "#36a8ff"; output.fillStyle = "#36a8ff";
+      output.lineCap = "round"; output.lineJoin = "round"; output.lineWidth = stroke.size;
+      output.beginPath();
+      output.moveTo(stroke.from[0] - bounds.x, stroke.from[1] - bounds.y);
+      output.lineTo(stroke.to[0] - bounds.x, stroke.to[1] - bounds.y);
+      output.stroke();
+      output.beginPath();
+      output.arc(stroke.to[0] - bounds.x, stroke.to[1] - bounds.y,
+        stroke.size / 2, 0, Math.PI * 2);
+      output.fill();
+      output.restore();
+    }
+  }
+  const controls = liquifyControls();
+  if (liquifyDraft.hover && controls) {
+    output.save(); output.globalAlpha = .92; output.strokeStyle = "#ffffff";
+    output.lineWidth = 1.5;
+    output.setLineDash([4, 3]); output.beginPath();
+    output.arc(liquifyDraft.hover.x - bounds.x, liquifyDraft.hover.y - bounds.y,
+      controls.size / 2, 0, Math.PI * 2); output.stroke(); output.restore();
+  }
+}
+
+function clearLiquifyPreview() {
+  ++liquifyPreviewGeneration;
+  if (liquifyPreviewTimer) clearTimeout(liquifyPreviewTimer);
+  liquifyPreviewTimer = 0;
+  if (liquifyPreviewCancellation) Atomics.store(liquifyPreviewCancellation, 0, 1);
+  liquifyPreviewCancellation = null;
+}
+
+async function runLiquifyPreview(generation) {
+  liquifyPreviewTimer = 0;
+  if (!liquifyDraft?.strokes.length) return;
+  const draft = liquifyDraft;
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  liquifyPreviewCancellation = cancellation;
+  try {
+    const preview = await client.previewLiquify({ layerId: draft.layer.id,
+      strokes: draft.strokes.map((stroke) => ({ ...stroke, from: [...stroke.from], to: [...stroke.to] })),
+      expectedStateId: draft.stateId, expectedRevision: draft.revision, cancellation });
+    if (generation !== liquifyPreviewGeneration || liquifyDraft !== draft ||
+        !$("liquifyDialog").open) return;
+    drawLiquifySource();
+    if (preview.region.width > 0 && preview.region.height > 0) {
+      const pixels = new ImageData(new Uint8ClampedArray(preview.rgba),
+        preview.region.width, preview.region.height);
+      $("liquifyCanvas").getContext("2d").putImageData(pixels,
+        preview.region.x - draft.layer.bounds.x,
+        preview.region.y - draft.layer.bounds.y);
+    }
+    renderLiquifyMask();
+    $("liquifyStatus").textContent =
+      `Live engine preview · ${draft.strokes.length} stroke${draft.strokes.length === 1 ? "" : "s"}`;
+  } catch (error) {
+    if (generation !== liquifyPreviewGeneration || error.code === 7) return;
+    $("liquifyStatus").textContent = error.message;
+  } finally {
+    if (liquifyPreviewCancellation === cancellation) liquifyPreviewCancellation = null;
+  }
+}
+
+function scheduleLiquifyPreview({ immediate = false } = {}) {
+  if (!liquifyDraft) return;
+  const generation = ++liquifyPreviewGeneration;
+  if (liquifyPreviewTimer) clearTimeout(liquifyPreviewTimer);
+  if (liquifyPreviewCancellation) Atomics.store(liquifyPreviewCancellation, 0, 1);
+  liquifyPreviewCancellation = null;
+  $("commitLiquifyButton").disabled = !liquifyDraft.strokes.length;
+  $("restoreLiquifyButton").disabled = !liquifyDraft.strokes.length;
+  if (!liquifyDraft.strokes.length) return;
+  $("liquifyStatus").textContent = "Rendering engine preview…";
+  liquifyPreviewTimer = setTimeout(() => runLiquifyPreview(generation), immediate ? 0 : 55);
+}
+
+function openLiquifyDialog() {
+  const layer = selectedLayer();
+  if (busy || layer?.kind !== 0 || !layer.bounds ||
+      layer.bounds.width <= 0 || layer.bounds.height <= 0) return;
+  liquifyDraft = { layer, stateId: snapshot.stateId, revision: snapshot.revision,
+    strokes: [], active: null, hover: null };
+  $("liquifyToolInput").value = "0";
+  $("liquifySizeInput").value = String(Math.max(8, Math.min(4096,
+    Math.round(Math.min(layer.bounds.width, layer.bounds.height) / 4))));
+  $("liquifyPressureInput").value = "50"; $("liquifyDensityInput").value = "50";
+  $("liquifyShowMaskInput").checked = true;
+  $("commitLiquifyButton").disabled = true; $("restoreLiquifyButton").disabled = true;
+  $("liquifyStatus").textContent = "Drag over the preview. Cancel leaves pixels and history unchanged.";
+  $("liquifyDialog").showModal();
+  drawLiquifySource();
+}
+
+async function commitLiquify() {
+  const draft = liquifyDraft;
+  if (!draft?.strokes.length || !liquifyControls()) return;
+  const input = { layerId: draft.layer.id,
+    strokes: draft.strokes.map((stroke) => ({ ...stroke, from: [...stroke.from], to: [...stroke.to] })),
+    expectedStateId: draft.stateId, expectedRevision: draft.revision };
+  clearLiquifyPreview(); liquifyDraft = null; $("liquifyDialog").close();
+  await mutate("Applying Liquify", () => client.applyLiquify(input));
+}
+
 const layerCornerInputIds = ["layerTlXInput", "layerTlYInput", "layerTrXInput", "layerTrYInput",
   "layerBrXInput", "layerBrYInput", "layerBlXInput", "layerBlYInput"];
 
@@ -3556,6 +3719,8 @@ registerCommand("layer.openSmartObject", "openSmartObjectButton", openSmartObjec
   () => !busy && Boolean(selectedLayer()?.smartObject?.contentsEditable));
 registerCommand("layer.filter", "filterLayerButton", openFilterDialog,
   () => !busy && selectedLayer()?.kind === 0);
+registerCommand("layer.liquify", "liquifyLayerButton", openLiquifyDialog,
+  () => !busy && selectedLayer()?.kind === 0);
 registerCommand("document.export", "exportButton", exportDocument, () => !busy && Boolean(snapshot));
 registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
 registerCommand("document.pastePixels", "pastePixelsButton", pastePixels, () => !busy && Boolean(snapshot) &&
@@ -3706,6 +3871,55 @@ for (const id of ["layerWarpStyleInput", "layerWarpBendInput", "layerWarpHorizon
 $("layerWarpDialog").addEventListener("close", () => {
   if (warpDialogDraft) { warpDialogDraft = null; clearTransformPreview(); }
 });
+$("commitLiquifyButton").addEventListener("click", commitLiquify);
+$("restoreLiquifyButton").addEventListener("click", () => {
+  if (!liquifyDraft) return;
+  liquifyDraft.strokes = []; liquifyDraft.active = null; clearLiquifyPreview();
+  drawLiquifySource();
+  $("commitLiquifyButton").disabled = true; $("restoreLiquifyButton").disabled = true;
+  $("liquifyStatus").textContent = "All Liquify strokes restored.";
+});
+$("liquifyShowMaskInput").addEventListener("change", renderLiquifyMask);
+$("liquifyDialog").addEventListener("close", () => {
+  clearLiquifyPreview(); liquifyDraft = null;
+});
+$("liquifyCanvas").addEventListener("pointerdown", (event) => {
+  if (!liquifyDraft || event.button !== 0) return;
+  const controls = liquifyControls();
+  if (!controls) {
+    $("liquifyStatus").textContent = "Use bounded brush controls.";
+    return;
+  }
+  event.preventDefault();
+  $("liquifyCanvas").setPointerCapture(event.pointerId);
+  const point = liquifyPoint(event);
+  liquifyDraft.hover = point;
+  liquifyDraft.active = { pointerId: event.pointerId, last: point };
+  liquifyDraft.strokes.push({ ...controls, from: [point.x, point.y], to: [point.x, point.y] });
+  scheduleLiquifyPreview(); renderLiquifyMask();
+});
+$("liquifyCanvas").addEventListener("pointermove", (event) => {
+  if (!liquifyDraft) return;
+  const point = liquifyPoint(event); liquifyDraft.hover = point; renderLiquifyMask();
+  const active = liquifyDraft.active;
+  if (!active || active.pointerId !== event.pointerId || liquifyDraft.strokes.length >= 4096) return;
+  const controls = liquifyControls(); if (!controls) return;
+  if (Math.hypot(point.x - active.last.x, point.y - active.last.y) < .35) return;
+  liquifyDraft.strokes.push({ ...controls,
+    from: [active.last.x, active.last.y], to: [point.x, point.y] });
+  active.last = point; scheduleLiquifyPreview(); renderLiquifyMask();
+});
+$("liquifyCanvas").addEventListener("pointerleave", () => {
+  if (liquifyDraft && !liquifyDraft.active) {
+    liquifyDraft.hover = null; renderLiquifyMask();
+  }
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  $("liquifyCanvas").addEventListener(type, (event) => {
+    if (liquifyDraft?.active?.pointerId !== event.pointerId) return;
+    liquifyDraft.active = null; scheduleLiquifyPreview({ immediate: true });
+  });
+}
 for (const id of ["layerXInput", "layerYInput", "layerWidthInput", "layerHeightInput",
   "layerAngleInput", "layerFlipXInput", "layerFlipYInput", "layerTransformModeInput",
   ...layerCornerInputIds]) $(id).addEventListener("input", updateTransformDialogPreview);

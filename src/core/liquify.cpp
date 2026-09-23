@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 
 namespace patchy {
 
@@ -16,6 +18,16 @@ namespace {
 constexpr std::int64_t kFieldScale = 256;
 constexpr std::int64_t kGridScale = 65536;
 constexpr double kPi = 3.14159265358979323846;
+constexpr std::size_t kMaximumLiquifyStrokes = 4096;
+constexpr double kMaximumLiquifyBrushSize = 4096.0;
+constexpr std::uint64_t kMaximumLiquifyBytes = 512ULL * 1024ULL * 1024ULL;
+
+bool fail(std::string* error, std::string_view message) {
+  if (error != nullptr) {
+    *error = std::string(message);
+  }
+  return false;
+}
 
 std::int32_t clamp_field_value(std::int64_t value) {
   constexpr auto kLimit = static_cast<std::int64_t>(
@@ -95,6 +107,27 @@ std::uint8_t bilinear_mask(const std::vector<std::uint8_t>& values,
                         values[index(x0 + 1, y0 + 1)] * fx;
   return static_cast<std::uint8_t>(
       std::clamp(std::lround(top * (1.0 - fy) + bottom * fy), 0L, 255L));
+}
+
+double selection_coverage(const LiquifyRequest& request, std::int32_t x,
+                          std::int32_t y) {
+  if (request.selection_mask.has_value()) {
+    const auto local_x = x - request.selection_mask_bounds.x;
+    const auto local_y = y - request.selection_mask_bounds.y;
+    if (local_x < 0 || local_y < 0 ||
+        local_x >= request.selection_mask->width() ||
+        local_y >= request.selection_mask->height()) {
+      return 0.0;
+    }
+    return request.selection_mask->pixel(local_x, local_y)[0] / 255.0;
+  }
+  if (request.selection.empty()) {
+    return 1.0;
+  }
+  return std::any_of(request.selection.begin(), request.selection.end(),
+                     [x, y](const Rect& rect) { return rect.contains(x, y); })
+             ? 1.0
+             : 0.0;
 }
 
 }  // namespace
@@ -388,6 +421,105 @@ std::optional<PixelBuffer> LiquifyMesh::render(
     return std::nullopt;
   }
   return output;
+}
+
+bool liquify_layer(Document& document, LayerId layer_id,
+                    const LiquifyRequest& request, LiquifyResult* result,
+                    std::string* error) {
+  auto* layer = document.find_layer(layer_id);
+  if (layer == nullptr || layer->kind() != LayerKind::Pixel ||
+      layer->pixels().empty() || layer->bounds().empty() ||
+      layer->pixels().format() != PixelFormat::rgba8()) {
+    return fail(error, "Liquify requires a non-empty RGBA8 pixel layer");
+  }
+  if ((layer->lock_flags() & kLayerLockImagePixels) != 0U) {
+    return fail(error, "Liquify target pixels are locked");
+  }
+  if (request.strokes.empty() ||
+      request.strokes.size() > kMaximumLiquifyStrokes) {
+    return fail(error, "Liquify requires 1-4096 bounded strokes");
+  }
+  if (request.selection_mask.has_value() &&
+      (request.selection_mask->format() != PixelFormat::gray8() ||
+       request.selection_mask->width() != request.selection_mask_bounds.width ||
+       request.selection_mask->height() != request.selection_mask_bounds.height)) {
+    return fail(error, "Liquify selection mask must be bounded Gray8 data");
+  }
+  const auto retained_bytes = static_cast<std::uint64_t>(layer->pixels().width()) *
+                              layer->pixels().height() * 8ULL;
+  if (retained_bytes > kMaximumLiquifyBytes) {
+    return fail(error, "Liquify source and output exceed the 512 MiB budget");
+  }
+  for (const auto& stroke : request.strokes) {
+    const auto tool = static_cast<std::uint32_t>(stroke.tool);
+    if (tool > static_cast<std::uint32_t>(LiquifyTool::ThawMask) ||
+        !std::isfinite(stroke.from_x) || !std::isfinite(stroke.from_y) ||
+        !std::isfinite(stroke.to_x) || !std::isfinite(stroke.to_y) ||
+        !std::isfinite(stroke.size) || !std::isfinite(stroke.pressure) ||
+        !std::isfinite(stroke.density) || stroke.size < 1.0 ||
+        stroke.size > kMaximumLiquifyBrushSize || stroke.pressure < 1.0 ||
+        stroke.pressure > 100.0 || stroke.density < 1.0 ||
+        stroke.density > 100.0) {
+      return fail(error, "Liquify stroke controls exceed their bounded contract");
+    }
+  }
+
+  const auto source = layer->pixels();
+  const auto bounds = layer->bounds();
+  LiquifyMesh mesh(source.width(), source.height());
+  const int total = static_cast<int>(request.strokes.size()) + source.height();
+  for (std::size_t index = 0; index < request.strokes.size(); ++index) {
+    if (request.progress &&
+        !request.progress(static_cast<int>(index), total)) {
+      return fail(error, "Liquify was cancelled");
+    }
+    const auto& stroke = request.strokes[index];
+    mesh.apply_stroke(stroke.tool, stroke.from_x - bounds.x,
+                      stroke.from_y - bounds.y, stroke.to_x - bounds.x,
+                      stroke.to_y - bounds.y, stroke.size, stroke.pressure,
+                      stroke.density);
+  }
+  if (mesh.is_identity()) {
+    return fail(error, "Liquify did not affect the target layer");
+  }
+  auto rendered = mesh.render(
+      source, [&](int completed, int) {
+        return !request.progress || request.progress(
+            static_cast<int>(request.strokes.size()) + completed, total);
+      });
+  if (!rendered.has_value()) {
+    return fail(error, "Liquify was cancelled");
+  }
+
+  for (int y = 0; y < rendered->height(); ++y) {
+    for (int x = 0; x < rendered->width(); ++x) {
+      const double coverage = selection_coverage(
+          request, bounds.x + x, bounds.y + y);
+      if (coverage >= 1.0) {
+        continue;
+      }
+      auto* output = rendered->pixel(x, y);
+      const auto* original = source.pixel(x, y);
+      for (int channel = 0; channel < 4; ++channel) {
+        output[channel] = static_cast<std::uint8_t>(std::clamp(
+            std::lround(original[channel] * (1.0 - coverage) +
+                        output[channel] * coverage),
+            0L, 255L));
+      }
+    }
+  }
+  if (std::equal(rendered->data().begin(), rendered->data().end(),
+                 source.data().begin())) {
+    return fail(error, "Liquify did not affect the target layer");
+  }
+  layer->set_pixels(std::move(*rendered));
+  if (result != nullptr) {
+    result->affected_region = bounds;
+  }
+  if (error != nullptr) {
+    error->clear();
+  }
+  return true;
 }
 
 }  // namespace patchy

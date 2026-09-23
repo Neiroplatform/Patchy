@@ -2374,6 +2374,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             case PreparedDocumentMutationKind::RasterStroke:
             case PreparedDocumentMutationKind::RasterFill:
             case PreparedDocumentMutationKind::LayerWarp:
+            case PreparedDocumentMutationKind::Liquify:
               break;
             default:
               error = make_error(SessionErrorCode::InvalidArgument,

@@ -167,6 +167,7 @@
             <button type="button" id="removeLayerButton" disabled>Delete</button>
             <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
             <button type="button" id="filterLayerButton" disabled>Filters</button>
+            <button type="button" id="liquifyLayerButton" disabled>Liquify…</button>
             <button type="button" id="textLayerButton" disabled>Add text</button>
             <button type="button" id="shapeLayerButton" disabled>Add shape</button>
             <button type="button" id="adjustmentLayerButton" disabled>Add adjustment</button>
@@ -493,6 +494,35 @@
           </div>
           <p class="dialog-note">Preview and final pixels use the same bounded engine warp. Smart Objects retain editable preset metadata.</p>
           <div class="dialog-actions"><button class="button button-primary" id="commitLayerWarpButton" type="button">Apply warp</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog liquify-dialog" id="liquifyDialog" aria-labelledby="liquifyTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">LAYER</p><h2 id="liquifyTitle">Liquify</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section class="liquify-workspace">
+          <div class="liquify-preview" id="liquifyPreview">
+            <canvas id="liquifyCanvas" tabindex="0" aria-label="Liquify layer preview. Drag to apply the selected tool."></canvas>
+            <canvas id="liquifyMaskCanvas" aria-hidden="true"></canvas>
+          </div>
+          <div class="liquify-controls">
+            <label class="dialog-field"><span>Tool</span><select id="liquifyToolInput">
+              <option value="0">Forward Warp</option><option value="1">Reconstruct</option>
+              <option value="2">Smooth</option><option value="3">Twirl clockwise</option>
+              <option value="4">Twirl counter-clockwise</option><option value="5">Pucker</option>
+              <option value="6">Bloat</option><option value="7">Freeze mask</option>
+              <option value="8">Thaw mask</option>
+            </select></label>
+            <label class="dialog-field"><span>Brush size</span><input id="liquifySizeInput" type="number" min="1" max="4096" step="1" value="120"></label>
+            <label class="dialog-field"><span>Pressure %</span><input id="liquifyPressureInput" type="number" min="1" max="100" step="1" value="50"></label>
+            <label class="dialog-field"><span>Density %</span><input id="liquifyDensityInput" type="number" min="1" max="100" step="1" value="50"></label>
+            <label class="check-field"><input id="liquifyShowMaskInput" type="checkbox" checked><span>Show freeze mask</span></label>
+            <button class="button" id="restoreLiquifyButton" type="button" disabled>Restore all</button>
+          </div>
+        </section>
+        <section>
+          <p class="dialog-note" id="liquifyStatus" aria-live="polite">Drag over the preview. Cancel leaves pixels and history unchanged.</p>
+          <div class="dialog-actions"><button class="button button-primary" id="commitLiquifyButton" type="button" disabled>Apply Liquify</button></div>
         </section>
       </form>
     </dialog>

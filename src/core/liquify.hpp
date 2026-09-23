@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/pixel_buffer.hpp"
+#include "core/document.hpp"
 
 #include <array>
 #include <cstdint>
@@ -22,6 +22,29 @@ enum class LiquifyTool {
   Bloat,
   FreezeMask,
   ThawMask,
+};
+
+struct LiquifyStroke {
+  LiquifyTool tool{LiquifyTool::ForwardWarp};
+  double from_x{0.0};
+  double from_y{0.0};
+  double to_x{0.0};
+  double to_y{0.0};
+  double size{1.0};
+  double pressure{50.0};
+  double density{50.0};
+};
+
+struct LiquifyRequest {
+  std::vector<LiquifyStroke> strokes{};
+  std::vector<Rect> selection{};
+  Rect selection_mask_bounds{};
+  std::optional<PixelBuffer> selection_mask{};
+  std::function<bool(int completed, int total)> progress{};
+};
+
+struct LiquifyResult {
+  Rect affected_region{};
 };
 
 // A bounded inverse-displacement field. Nodes use signed 24.8 fixed-point
@@ -71,5 +94,12 @@ private:
   std::vector<std::int32_t> displacement_y_256_;
   std::vector<std::uint8_t> freeze_mask_;
 };
+
+// Applies one bounded manual Liquify session to a pixel layer. Strokes use
+// document-space coordinates; the deterministic mesh and rendered pixels stay
+// local to this call until the complete result is ready to publish.
+[[nodiscard]] bool liquify_layer(Document& document, LayerId layer_id,
+                                 const LiquifyRequest& request,
+                                 LiquifyResult* result, std::string* error);
 
 }  // namespace patchy

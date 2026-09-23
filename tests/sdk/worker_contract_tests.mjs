@@ -46,7 +46,7 @@ test("public capability names stay in exact parity with the C ABI", async () => 
   const header = await readFile(new URL("../../src/engine/host_protocol.h", import.meta.url), "utf8");
   const entries = [...header.matchAll(
     /PATCHY_ENGINE_CAP_([A-Z0-9_]+) = UINT64_C\(1\) << (\d+)/g)];
-  assert.equal(entries.length, 41);
+  assert.equal(entries.length, 42);
   const expected = Object.fromEntries(entries.map(([, cName, bit]) => {
     const name = cName.toLowerCase().replace(/_([a-z0-9])/g, (_, value) => value.toUpperCase());
     return [name, 1n << BigInt(bit)];
@@ -68,6 +68,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "paintTargetSelect", "linkMaskButton",
     "importLayerButton", "groupLayerButton", "removeLayerButton", "layerNameInput",
     "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
+    "liquifyLayerButton", "liquifyDialog", "liquifyCanvas", "liquifyMaskCanvas",
+    "liquifyToolInput", "liquifySizeInput", "liquifyPressureInput", "liquifyDensityInput",
+    "liquifyShowMaskInput", "restoreLiquifyButton", "commitLiquifyButton",
     "documentDialog", "resizeImageButton", "resizeCanvasButton", "resizeConstrainInput",
     "canvasWidthInput", "canvasHeightInput", "canvasAnchorInput", "geometryColorInput",
     "geometryTransparentInput", "rotateLeftButton", "rotateRightButton",
@@ -138,6 +141,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.previewLayerMaskStroke", "client.applyLayerMaskStroke",
     "client.previewRasterFill", "client.applyRasterFill",
     "client.previewLayerWarp", "client.warpLayer",
+    "client.previewLiquify", "client.applyLiquify",
     "client.addTextLayer",
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
     "client.updateVectorShape",
@@ -398,7 +402,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_get_protocol_info(info) {
       assert.equal(view.getUint32(info, true), 16);
       view.setUint32(info + 4, 1, true);
-      view.setBigUint64(info + 8, (1n << 41n) - 1n, true);
+      view.setBigUint64(info + 8, (1n << 42n) - 1n, true);
       return 1;
     },
     _patchy_engine_runtime_create() { return 11; },
@@ -883,7 +887,7 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
     _patchy_engine_session_redo() { return 1; },
   };
   const engine = new EmscriptenPatchyEngine(module);
-  assert.equal(engine.capabilities, (1n << 41n) - 1n);
+  assert.equal(engine.capabilities, (1n << 42n) - 1n);
   const session = engine.create(3, 2);
   const snapshot = engine.snapshot(session);
   assert.equal(snapshot.layers[0].name, "Layer");
@@ -1123,6 +1127,64 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   assert.equal(released, 14);
   engine.dispose();
   assert.equal(destroyed, 2);
+});
+
+test("Emscripten adapter packs bounded Liquify strokes and owns preview bytes", () => {
+  const memory = new ArrayBuffer(16384); const heap = new Uint8Array(memory);
+  const view = new DataView(memory); let next = 512; let callback = null; let releases = 0;
+  const alloc = (size) => { const at = next; next += (size + 7) & ~7; return at; };
+  const inspect = (input) => {
+    assert.equal(view.getUint32(input, true), 24);
+    assert.equal(view.getUint32(input + 4, true), 0);
+    assert.equal(view.getBigUint64(input + 8, true), 7n);
+    const strokes = view.getUint32(input + 16, true);
+    assert.equal(view.getUint32(input + 20, true), 2);
+    assert.deepEqual([view.getUint32(strokes, true), view.getUint32(strokes + 64, true)], [7, 0]);
+    assert.equal(view.getUint32(strokes + 4, true), 0);
+    assert.deepEqual([view.getFloat64(strokes + 8, true), view.getFloat64(strokes + 16, true),
+      view.getFloat64(strokes + 24, true), view.getFloat64(strokes + 32, true)], [2, 3, 2, 3]);
+    assert.deepEqual([view.getFloat64(strokes + 64 + 40, true),
+      view.getFloat64(strokes + 64 + 48, true), view.getFloat64(strokes + 64 + 56, true)],
+    [6, 70, 50]);
+  };
+  const module = {
+    HEAPU8: heap, _malloc: alloc, _free() {},
+    _patchy_engine_get_protocol_info(info) {
+      view.setUint32(info + 4, 1, true); view.setBigUint64(info + 8, 1n << 41n, true); return 1;
+    },
+    _patchy_engine_runtime_create() { return 11; }, _patchy_engine_runtime_destroy() {},
+    addFunction(value, signature) { assert.equal(signature, "iiii"); callback = value; return 71; },
+    removeFunction(pointer) { assert.equal(pointer, 71); callback = null; },
+    _patchy_engine_session_preview_liquify(session, state, revision, input, progress,
+        progressUserData, region, output) {
+      assert.deepEqual([session, state, revision, progress, progressUserData], [22, 9n, 4n, 71, 0]);
+      inspect(input); assert.equal(callback(0, 2, 0), 1);
+      view.setInt32(region, 1, true); view.setInt32(region + 4, 2, true);
+      view.setInt32(region + 8, 2, true); view.setInt32(region + 12, 1, true);
+      const data = alloc(8); heap.set([1, 2, 3, 255, 4, 5, 6, 255], data);
+      view.setUint32(output, data, true); view.setUint32(output + 4, 8, true); return 1;
+    },
+    _patchy_engine_session_apply_liquify(session, state, revision, input, event) {
+      assert.deepEqual([session, state, revision], [22, 9n, 4n]); inspect(input);
+      view.setBigUint64(event + 16, 5n, true); view.setBigUint64(event + 24, 10n, true);
+      view.setBigUint64(event + 32, 7n, true); heap[event + 40] = 1; heap[event + 41] = 1;
+      return 1;
+    },
+    _patchy_engine_buffer_release() { releases++; },
+  };
+  const engine = new EmscriptenPatchyEngine(module);
+  const snapshot = { stateId: 9n, revision: 4n };
+  const strokes = [{ tool: 7, from: [2, 3], to: [2, 3], size: 4,
+    pressure: 100, density: 100 }, { tool: 0, from: [4, 3], to: [6, 3],
+    size: 6, pressure: 70, density: 50 }];
+  const preview = engine.previewLiquify(22, snapshot, { layerId: 7n, strokes });
+  assert.deepEqual(preview.region, { x: 1, y: 2, width: 2, height: 1 });
+  assert.deepEqual(Array.from(preview.rgba), [1, 2, 3, 255, 4, 5, 6, 255]);
+  assert.deepEqual(engine.applyLiquify(22, snapshot, { layerId: 7n, strokes }),
+    { revision: 5n, stateId: 10n, affectedLayerId: 7n, changed: true, dirty: true });
+  assert.throws(() => engine.applyLiquify(22, snapshot,
+    { layerId: 7n, strokes: [{ ...strokes[0], size: 0 }] }), /bounded contract/);
+  assert.equal(releases, 1); engine.dispose();
 });
 
 test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsupported PSB", () => {
@@ -1819,6 +1881,42 @@ test("worker previews and commits one exact-state layer warp", async () => {
   await assert.rejects(host.dispatch({ method: "warpLayer", ...message }),
     (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
+  host.dispose();
+});
+
+test("worker previews and commits one exact-state Liquify session", async () => {
+  let revision = 4n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 41n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision }; },
+    previewLiquify(session, before, input, cancellation) {
+      calls.push(["preview", session, before.revision, input, cancellation]);
+      return { region: { x: 1, y: 2, width: 6, height: 4 }, rgba: new Uint8Array(96) };
+    },
+    applyLiquify(session, before, input) {
+      calls.push(["commit", session, before.revision, input]); revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 8, height: 6, name: "Liquify.psd" });
+  const strokes = [{ tool: 7, from: [2, 3], to: [2, 3], size: 4,
+    pressure: 100, density: 100 }, { tool: 0, from: [4, 3], to: [6, 3],
+    size: 6, pressure: 70, density: 50 }];
+  const message = { layerId: "7", strokes,
+    expectedStateId: "4", expectedRevision: "4" };
+  const preview = await host.dispatch({ method: "previewLiquify", ...message,
+    cancellation: new SharedArrayBuffer(4) });
+  assert.equal(preview.rgba.byteLength, 96); assert.equal(revision, 4n);
+  assert.ok(calls[0][4] instanceof Int32Array);
+  const committed = await host.dispatch({ method: "applyLiquify", ...message });
+  assert.equal(committed.revision, 5n);
+  await assert.rejects(host.dispatch({ method: "applyLiquify", ...message }),
+    (error) => error.name === "PatchyEngineError" && error.code === 6);
+  assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
+  assert.deepEqual(calls[1][3].strokes, strokes);
   host.dispose();
 });
 

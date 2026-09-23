@@ -74,10 +74,14 @@ skips the crash-stack reporter (no `execinfo.h`; node prints trap stacks).
 authors layers/text, renders and downloads layered PSD or flattened
 PNG/JPEG/WebP/SVG. One toolbar/key registry covers
 geometry, zoom/pan, marquee/freehand/polygon/magic/Quick Select/Magnetic Lasso,
-Quick Mask, soft-mask refinement, move/transform, paint and text. The inspector authors masks,
-shapes, adjustments, Smart Objects/Filters, channels/paths, rasterize and
-merge, while built-in style, gradient, pattern and font presets cover common
-appearance work without remote assets. Raster images and SVG decode locally,
+Quick Mask, soft-mask refinement, move/transform, paint and text. A bounded
+Liquify dialog sends disposable Warp/Reconstruct/Smooth/Twirl/Pucker/Bloat/
+Freeze/Thaw stroke batches to the same engine for cancellable preview and one
+exact-state commit; the browser never authors canonical deformed pixels. The
+inspector authors masks, shapes, adjustments, Smart Objects/Filters,
+channels/paths, rasterize and merge, while built-in style, gradient, pattern
+and font presets cover common appearance work without remote assets. Raster
+images and SVG decode locally,
 can be dropped into an active document or create a new document. One Worker
 owns up to 16 isolated engine sessions; tabs activate/close them while each
 keeps independent revision/history/document state. Rendered selection pixels
@@ -112,11 +116,14 @@ regression separately pins preservation of
 stacked instances and unrelated imported effect families.
 
 `tests/sdk/wasm_drawing_shapes_smoke.html` also pins the 64-byte custom-fill
-input through real pthread WASM. It authors a local-style two-colour gradient,
-then continues through Warp, editable Smart Object transform, text Warp,
-paths/shapes, undo/redo and layered PSD save/reopen. The staged editor gate
-separately creates a local gradient in the Assets dialog and proves that its
-validated OPFS generation is restored after page reload.
+and 64-byte Liquify-stroke inputs through real pthread WASM. It authors a
+local-style two-colour gradient, proves cancellable preview and one Liquify
+revision, then continues through Warp, editable Smart Object transform, text
+Warp, paths/shapes, undo/redo and layered PSD save/reopen.
+`tests/sdk/wasm_liquify_ui_smoke.html` drives the production dialog through
+preview, Restore, Cancel, freeze-mask visibility, commit, undo and redo. The
+staged editor gate separately creates a local gradient in the Assets dialog
+and proves that its validated OPFS generation is restored after page reload.
 
 ## wasm-core preset decisions (all in CMakePresets.json)
 

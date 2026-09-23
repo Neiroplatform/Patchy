@@ -266,6 +266,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .recovery-dialog { width: min(680px, calc(100vw - 28px)); }
 .layer-style-dialog { width: min(820px, calc(100vw - 28px)); }
 .selection-refinement-dialog { width: min(620px, calc(100vw - 28px)); }
+.liquify-dialog { width: min(1040px, calc(100vw - 28px)); }
+.liquify-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 14px; align-items: start; }
+.liquify-preview {
+  position: relative; display: grid; min-height: 280px; max-height: 58vh; overflow: auto;
+  place-items: center; border: 1px solid var(--line); border-radius: var(--radius);
+  background-color: #171a1d;
+  background-image: linear-gradient(45deg, #22272b 25%, transparent 25%), linear-gradient(-45deg, #22272b 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #22272b 75%), linear-gradient(-45deg, transparent 75%, #22272b 75%);
+  background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+#liquifyCanvas, #liquifyMaskCanvas { grid-area: 1 / 1; display: block; max-width: 100%; max-height: 56vh; width: auto; height: auto; }
+#liquifyCanvas { position: relative; z-index: 0; cursor: crosshair; touch-action: none; }
+#liquifyMaskCanvas { position: relative; z-index: 1; pointer-events: none; }
+.liquify-controls { display: grid; gap: 10px; }
+.liquify-controls .dialog-field { margin: 0; }
 .refinement-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
 .recovery-list { display: grid; gap: 8px; margin-block: 13px; }
 .recovery-empty { padding: 18px; color: var(--text-faint); text-align: center; border: 1px dashed var(--line); border-radius: 7px; font-size: 11px; }
@@ -325,6 +339,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .tool-options label { flex: 0 0 auto; }
   .document-dialog { max-height: calc(100vh - 16px); overflow: auto; }
   .field-row-four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .liquify-workspace { grid-template-columns: 1fr; }
+  .liquify-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .liquify-controls .check-field, .liquify-controls .button { grid-column: 1 / -1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
