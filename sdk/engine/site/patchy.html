@@ -101,8 +101,8 @@
           <span id="documentMetrics"></span>
         </div>
         <div class="canvas-viewport" id="canvasViewport" role="region" aria-label="Document canvas" tabindex="0">
-          <span class="ruler ruler-horizontal" aria-hidden="true"></span>
-          <span class="ruler ruler-vertical" aria-hidden="true"></span>
+          <canvas class="ruler ruler-horizontal" id="horizontalRuler" aria-hidden="true"></canvas>
+          <canvas class="ruler ruler-vertical" id="verticalRuler" aria-hidden="true"></canvas>
           <div class="canvas-frame" id="canvasFrame">
             <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
             <canvas id="gestureCanvas" aria-hidden="true"></canvas>
@@ -138,7 +138,7 @@
           </div>
         </div>
         <footer class="stage-footer">
-          <span class="zoom-controls"><button id="zoomOutButton" type="button" aria-label="Zoom out">−</button><button id="zoomFitButton" type="button">Fit</button><button id="zoomInButton" type="button" aria-label="Zoom in">+</button><output id="zoomLabel">Fit</output></span>
+          <span class="zoom-controls" aria-label="Canvas navigation"><button id="zoomOutButton" type="button" aria-label="Zoom out">−</button><button id="zoomFitButton" type="button">Fit</button><button id="zoomActualButton" type="button" aria-label="Actual pixels">100%</button><button id="zoomInButton" type="button" aria-label="Zoom in">+</button><output id="zoomLabel" aria-live="polite">Fit</output></span>
           <span class="guide-controls" aria-label="Guides and snapping"><button id="addVerticalGuideButton" type="button" aria-label="Add vertical guide at document center">+V</button><button id="addHorizontalGuideButton" type="button" aria-label="Add horizontal guide at document center">+H</button><button id="toggleGuidesButton" type="button" aria-pressed="true">Guides</button><button id="toggleSnapButton" type="button" aria-pressed="true">Snap</button><button id="clearGuidesButton" type="button">Clear</button></span>
           <span class="privacy-label"><b></b>Local session</span>
           <span id="recoveryLabel" aria-live="polite">Recovery starting</span>

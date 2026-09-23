@@ -9,6 +9,8 @@ import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
 import { normalizeGuides, snapTranslatedQuad } from "./guide-model.mjs";
+import { anchoredScrollDelta, clampScrollPosition, clampZoom, fitZoom,
+  rulerTicks } from "./viewport-model.mjs";
 import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
 import { chooseRovingLayerId, createLocalizer, installDialogFocusReturn, installRovingToolbar,
   isEditableTarget } from "./shell-ui.mjs";
@@ -39,6 +41,13 @@ let cancelActiveOperation = null;
 let canvasTool = "marquee";
 let zoomMode = "fit";
 let zoom = 1;
+const documentViewports = new Map();
+let pendingViewportFrame = 0;
+let pendingViewportAnchor = null;
+let pendingPan = null;
+let spacePanActive = false;
+const viewportDiagnostics = { updates: 0, renderRequests: 0, samples: [], lastReason: "startup" };
+globalThis.__patchyViewportDiagnostics = viewportDiagnostics;
 let guidesVisible = true;
 let snappingEnabled = true;
 const documentGuides = new Map();
@@ -1373,6 +1382,7 @@ async function renderDocument() {
   if (!region) {
     applyViewport(); renderSelection(); renderTransformOverlay(); return;
   }
+  viewportDiagnostics.renderRequests++;
   const frame = await client.renderFrame(region);
   const expected = region.width * region.height * 4;
   if (frame.width !== region.width || frame.height !== region.height) {
@@ -1413,14 +1423,96 @@ function applyViewport() {
   if (!snapshot) return;
   const viewport = $("canvasViewport");
   if (zoomMode === "fit") {
-    zoom = Math.min(1, Math.max(0.02,
-      Math.min((viewport.clientWidth - 80) / snapshot.width,
-        (viewport.clientHeight - 80) / snapshot.height)));
+    zoom = fitZoom(snapshot, { width: viewport.clientWidth, height: viewport.clientHeight }, 40);
   }
   $("canvasFrame").style.width = `${Math.max(1, snapshot.width * zoom)}px`;
   $("canvasFrame").style.height = `${Math.max(1, snapshot.height * zoom)}px`;
   $("zoomLabel").textContent = zoomMode === "fit" ? `Fit · ${Math.round(zoom * 100)}%` : `${Math.round(zoom * 100)}%`;
   renderGuides();
+  renderRulers();
+}
+
+function drawRuler(target, horizontal, viewportRect, frameRect) {
+  const width = horizontal ? Math.max(1, Math.floor(viewportRect.width - 18)) : 18;
+  const height = horizontal ? 18 : Math.max(1, Math.floor(viewportRect.height - 18));
+  const ratio = Math.min(2, Math.max(1, globalThis.devicePixelRatio || 1));
+  target.style.width = `${width}px`; target.style.height = `${height}px`;
+  target.width = Math.ceil(width * ratio); target.height = Math.ceil(height * ratio);
+  const ruler = target.getContext("2d");
+  ruler.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ruler.clearRect(0, 0, width, height);
+  if (!snapshot || frameRect.width <= 0 || frameRect.height <= 0) return;
+  const frameStart = horizontal ? frameRect.left : frameRect.top;
+  const viewportStart = horizontal ? viewportRect.left : viewportRect.top;
+  const viewportLength = horizontal ? viewportRect.width : viewportRect.height;
+  const documentLength = horizontal ? snapshot.width : snapshot.height;
+  const start = Math.max(0, (viewportStart - frameStart) / zoom);
+  const end = Math.min(documentLength, (viewportStart + viewportLength - frameStart) / zoom);
+  const origin = frameStart - viewportStart + start * zoom - (horizontal ? 18 : 18);
+  const ticks = rulerTicks({ start, end, zoom, screenOrigin: origin });
+  ruler.strokeStyle = "#7f8992"; ruler.fillStyle = "#aeb6bd";
+  ruler.lineWidth = 1; ruler.font = "8px system-ui, sans-serif";
+  ruler.beginPath();
+  for (const tick of ticks) {
+    const position = Math.round(tick.screen) + .5;
+    if (horizontal) {
+      ruler.moveTo(position, height); ruler.lineTo(position, 8);
+      ruler.fillText(String(tick.value), position + 2, 8);
+    } else {
+      ruler.moveTo(width, position); ruler.lineTo(8, position);
+      ruler.save(); ruler.translate(7, position + 2); ruler.rotate(-Math.PI / 2);
+      ruler.fillText(String(tick.value), 0, 0); ruler.restore();
+    }
+  }
+  ruler.stroke();
+}
+
+function renderRulers() {
+  const viewport = $("canvasViewport");
+  const viewportRect = viewport.getBoundingClientRect();
+  const frameRect = $("canvasFrame").getBoundingClientRect();
+  drawRuler($("horizontalRuler"), true, viewportRect, frameRect);
+  drawRuler($("verticalRuler"), false, viewportRect, frameRect);
+}
+
+function rememberViewport() {
+  if (!snapshot) return;
+  const viewport = $("canvasViewport");
+  documentViewports.set(snapshot.documentId, {
+    mode: zoomMode, zoom, left: viewport.scrollLeft, top: viewport.scrollTop,
+  });
+}
+
+function flushViewportUpdate() {
+  pendingViewportFrame = 0;
+  const started = performance.now();
+  const viewport = $("canvasViewport");
+  const anchor = pendingViewportAnchor;
+  pendingViewportAnchor = null;
+  const before = anchor ? canvas.getBoundingClientRect() : null;
+  applyViewport();
+  if (anchor && before?.width > 0 && before?.height > 0) {
+    const delta = anchoredScrollDelta(before, canvas.getBoundingClientRect(), anchor);
+    viewport.scrollLeft += delta.x; viewport.scrollTop += delta.y;
+  }
+  if (pendingPan) {
+    const bounded = clampScrollPosition(
+      { x: pendingPan.left, y: pendingPan.top },
+      { width: viewport.scrollWidth, height: viewport.scrollHeight },
+      { width: viewport.clientWidth, height: viewport.clientHeight });
+    viewport.scrollLeft = bounded.x; viewport.scrollTop = bounded.y;
+    pendingPan = null;
+  }
+  renderRulers(); rememberViewport();
+  viewportDiagnostics.updates++;
+  viewportDiagnostics.samples.push(performance.now() - started);
+  if (viewportDiagnostics.samples.length > 512) viewportDiagnostics.samples.shift();
+}
+
+function scheduleViewportUpdate(reason, anchor = null) {
+  viewportDiagnostics.lastReason = reason;
+  if (anchor) pendingViewportAnchor = anchor;
+  if (!pendingViewportFrame) pendingViewportFrame = requestAnimationFrame(flushViewportUpdate);
 }
 
 function activeGuides(create = false) {
@@ -1887,10 +1979,14 @@ function scheduleWarpPreview() {
   drainTransformPreview();
 }
 
-function setZoom(next) {
+function setZoom(next, anchor = null) {
   zoomMode = next === "fit" ? "fit" : "manual";
-  if (next !== "fit") zoom = Math.min(8, Math.max(0.05, next));
-  applyViewport();
+  if (next !== "fit") zoom = clampZoom(next);
+  const viewport = $("canvasViewport");
+  scheduleViewportUpdate("zoom", anchor || {
+    x: viewport.getBoundingClientRect().left + viewport.clientWidth / 2,
+    y: viewport.getBoundingClientRect().top + viewport.clientHeight / 2,
+  });
 }
 
 function canvasPoint(event) {
@@ -1917,7 +2013,15 @@ async function acceptSnapshot(next, rerender = true) {
     renderRecoveryStatus();
     return;
   }
+  const previousDocumentId = snapshot?.documentId;
+  if (previousDocumentId && previousDocumentId !== next.documentId) rememberViewport();
   snapshot = next;
+  const restoredViewport = previousDocumentId !== next.documentId
+    ? documentViewports.get(next.documentId) : null;
+  if (previousDocumentId !== next.documentId) {
+    zoomMode = restoredViewport?.mode === "manual" ? "manual" : "fit";
+    zoom = clampZoom(restoredViewport?.zoom ?? 1);
+  }
   documentName = snapshot.documentName || documentName;
   if (!documentSaveFormats.has(snapshot.documentId)) {
     documentSaveFormats.set(snapshot.documentId,
@@ -1946,6 +2050,15 @@ async function acceptSnapshot(next, rerender = true) {
   renderHistory();
   renderRecoveryStatus(snapshot.documentId);
   if (rerender) await renderDocument();
+  if (restoredViewport) {
+    const viewport = $("canvasViewport");
+    const bounded = clampScrollPosition(
+      { x: restoredViewport.left, y: restoredViewport.top },
+      { width: viewport.scrollWidth, height: viewport.scrollHeight },
+      { width: viewport.clientWidth, height: viewport.clientHeight });
+    viewport.scrollLeft = bounded.x; viewport.scrollTop = bounded.y;
+    renderRulers();
+  }
 }
 
 async function activateDocumentTab(documentId) {
@@ -1977,6 +2090,7 @@ async function closeDocumentTab(documentTab) {
     checkpointQueues.delete(documentTab.id);
     documentHistoryLabels.delete(documentTab.id);
     documentGuides.delete(documentTab.id);
+    documentViewports.delete(documentTab.id);
     await acceptSnapshot(next);
   } catch (error) { showError("Could not close document", error); }
   finally { setBusy(false); }
@@ -3308,6 +3422,7 @@ registerCommand("selection.clear", "clearSelectionButton", () => mutate("Clearin
 registerCommand("view.zoomOut", "zoomOutButton", () => setZoom(zoom / 1.25), () => Boolean(snapshot));
 registerCommand("view.zoomIn", "zoomInButton", () => setZoom(zoom * 1.25), () => Boolean(snapshot));
 registerCommand("view.fit", "zoomFitButton", () => setZoom("fit"), () => Boolean(snapshot));
+registerCommand("view.actualPixels", "zoomActualButton", () => setZoom(1), () => Boolean(snapshot));
 registerCommand("view.guide.vertical", "addVerticalGuideButton", () => addCenteredGuide("vertical"),
   () => !busy && Boolean(snapshot));
 registerCommand("view.guide.horizontal", "addHorizontalGuideButton", () => addCenteredGuide("horizontal"),
@@ -3751,6 +3866,7 @@ $("clearGuidesButton").addEventListener("click", () => setActiveGuides([]));
 
 canvas.addEventListener("pointerdown", (event) => {
   if (busy || !snapshot || event.button !== 0) return;
+  if (spacePanActive) return;
   if (["brush", "eraser", "clone", "heal"].includes(canvasTool)) { beginPaint(event); return; }
   if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "text") { openTextDialog(); return; }
@@ -3950,17 +4066,19 @@ canvas.addEventListener("dblclick", (event) => {
 });
 
 $("canvasViewport").addEventListener("pointerdown", (event) => {
-  if (canvasTool !== "pan" || event.button !== 0) return;
+  if ((canvasTool !== "pan" && !spacePanActive) || event.button !== 0) return;
   const viewport = $("canvasViewport");
+  event.preventDefault();
   viewport.setPointerCapture(event.pointerId);
   viewport.dataset.panning = "true";
-  panStart = { x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+  panStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+    left: viewport.scrollLeft, top: viewport.scrollTop };
 });
 $("canvasViewport").addEventListener("pointermove", (event) => {
-  if (!panStart) return;
-  const viewport = $("canvasViewport");
-  viewport.scrollLeft = panStart.left - (event.clientX - panStart.x);
-  viewport.scrollTop = panStart.top - (event.clientY - panStart.y);
+  if (!panStart || panStart.pointerId !== event.pointerId) return;
+  pendingPan = { left: panStart.left - (event.clientX - panStart.x),
+    top: panStart.top - (event.clientY - panStart.y) };
+  scheduleViewportUpdate("pointer-pan");
 });
 for (const type of ["pointerup", "pointercancel"]) {
   $("canvasViewport").addEventListener(type, () => {
@@ -3970,9 +4088,10 @@ for (const type of ["pointerup", "pointercancel"]) {
 $("canvasViewport").addEventListener("wheel", (event) => {
   if (!snapshot || !(event.ctrlKey || event.metaKey)) return;
   event.preventDefault();
-  setZoom(zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15));
+  setZoom(zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15), { x: event.clientX, y: event.clientY });
 }, { passive: false });
-window.addEventListener("resize", applyViewport);
+$("canvasViewport").addEventListener("scroll", () => scheduleViewportUpdate("scroll"), { passive: true });
+window.addEventListener("resize", () => scheduleViewportUpdate("resize"));
 $("layerList").addEventListener("scroll", scheduleLayerWindowRender, { passive: true });
 window.addEventListener("beforeunload", (event) => {
   if ([...checkpointStates.values()].some((state) => state === "pending")) event.preventDefault();
@@ -4049,6 +4168,30 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || isEditableTarget(event)) return;
+  const viewport = $("canvasViewport");
+  const viewportFocused = event.target === viewport || viewport.contains(event.target);
+  if (snapshot && viewportFocused && event.key === " ") {
+    event.preventDefault(); spacePanActive = true; viewport.dataset.spacePan = "true";
+  }
+  if (snapshot && viewportFocused && ["+", "="].includes(event.key)) {
+    event.preventDefault(); setZoom(zoom * 1.25);
+  }
+  if (snapshot && viewportFocused && event.key === "-") {
+    event.preventDefault(); setZoom(zoom / 1.25);
+  }
+  if (snapshot && viewportFocused && event.key === "0") {
+    event.preventDefault(); setZoom("fit");
+  }
+  if (snapshot && viewportFocused && event.key === "1") {
+    event.preventDefault(); setZoom(1);
+  }
+  if (snapshot && viewportFocused && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+    event.preventDefault();
+    const amount = event.shiftKey ? 80 : 24;
+    pendingPan = { left: viewport.scrollLeft + (event.key === "ArrowRight" ? amount : event.key === "ArrowLeft" ? -amount : 0),
+      top: viewport.scrollTop + (event.key === "ArrowDown" ? amount : event.key === "ArrowUp" ? -amount : 0) };
+    scheduleViewportUpdate("keyboard-pan");
+  }
   if (event.key.toLowerCase() === "m") executeCommand("tool.marquee");
   if (event.key.toLowerCase() === "l") executeCommand(event.shiftKey ? "tool.magnetic" : "tool.lasso");
   if (event.key.toLowerCase() === "w") executeCommand(event.shiftKey ? "tool.quickSelect" : "tool.magic");
@@ -4079,6 +4222,14 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && magneticDraft) { magneticDraft = null; previewPolygon([]); }
   if (event.key === "Enter" && penDraft) commitPenPath();
   if (event.key === "Escape" && penDraft) { penDraft = null; previewPolygon([]); }
+});
+
+window.addEventListener("keyup", (event) => {
+  if (event.key !== " ") return;
+  spacePanActive = false; delete $("canvasViewport").dataset.spacePan;
+});
+window.addEventListener("blur", () => {
+  spacePanActive = false; delete $("canvasViewport").dataset.spacePan;
 });
 
 for (const type of ["dragenter", "dragover"]) {

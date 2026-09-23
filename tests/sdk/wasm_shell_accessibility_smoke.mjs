@@ -150,6 +150,90 @@ try {
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
   "snapped Move did not commit exactly one document revision");
 
+  const viewport = byId("canvasViewport");
+  const viewportDiagnostics = frame.contentWindow.__patchyViewportDiagnostics;
+  check(viewportDiagnostics && Number.isInteger(viewportDiagnostics.renderRequests),
+    "viewport diagnostics are unavailable");
+  const rendersBeforeNavigation = viewportDiagnostics.renderRequests;
+  byId("zoomActualButton").click(); await delay(50);
+  check(byId("zoomLabel").textContent.includes("100%"), "Actual Pixels did not select 100% zoom");
+  let actualFrame = byId("canvasFrame").getBoundingClientRect();
+  check(Math.abs(actualFrame.width - 1600) < 1 && Math.abs(actualFrame.height - 1000) < 1,
+    "100% view does not match document pixels");
+  const checker = frame.contentWindow.getComputedStyle(byId("canvasFrame"), "::before");
+  check(checker.backgroundImage !== "none", "transparent canvas checkerboard is missing");
+  const horizontalRuler = byId("horizontalRuler");
+  const verticalRuler = byId("verticalRuler");
+  check(horizontalRuler.width > 0 && verticalRuler.height > 0,
+    "pixel rulers did not allocate their viewport backing stores");
+
+  byId("panToolButton").click();
+  viewport.setPointerCapture = () => {};
+  const panRect = viewport.getBoundingClientRect();
+  const panBefore = { left: viewport.scrollLeft, top: viewport.scrollTop };
+  const panPointer = (type, x, y, buttons) => new frame.contentWindow.PointerEvent(type, {
+    pointerId: 72, pointerType: "mouse", button: 0, buttons, bubbles: true, cancelable: true,
+    clientX: panRect.left + x, clientY: panRect.top + y,
+  });
+  viewport.dispatchEvent(panPointer("pointerdown", 280, 220, 1));
+  viewport.dispatchEvent(panPointer("pointermove", 232, 188, 1));
+  viewport.dispatchEvent(panPointer("pointerup", 232, 188, 0));
+  await delay(50);
+  check(viewport.scrollLeft > panBefore.left && viewport.scrollTop > panBefore.top,
+    "pointer pan did not move the document viewport");
+  byId("moveToolButton").click();
+  actualFrame = byId("canvasFrame").getBoundingClientRect();
+
+  const zoomAnchor = { x: actualFrame.left + Math.min(actualFrame.width - 1, 240),
+    y: actualFrame.top + Math.min(actualFrame.height - 1, 180) };
+  const pointAt = (rect) => ({ x: (zoomAnchor.x - rect.left) / rect.width * 1600,
+    y: (zoomAnchor.y - rect.top) / rect.height * 1000 });
+  const pointBeforeZoom = pointAt(actualFrame);
+  viewport.dispatchEvent(new frame.contentWindow.WheelEvent("wheel", {
+    deltaY: -100, ctrlKey: true, clientX: zoomAnchor.x, clientY: zoomAnchor.y,
+    bubbles: true, cancelable: true,
+  }));
+  await delay(50);
+  const pointAfterZoom = pointAt(byId("canvasFrame").getBoundingClientRect());
+  check(Math.abs(pointBeforeZoom.x - pointAfterZoom.x) < 1 &&
+    Math.abs(pointBeforeZoom.y - pointAfterZoom.y) < 1,
+  "cursor-anchored zoom moved the document point under the pointer");
+
+  viewport.focus();
+  viewport.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "0", bubbles: true, cancelable: true,
+  }));
+  await delay(50);
+  check(["Fit", "Вписать"].some((label) => byId("zoomLabel").textContent.startsWith(label)),
+    "keyboard Fit shortcut did not apply");
+  viewport.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "1", bubbles: true, cancelable: true,
+  }));
+  await delay(50);
+  const longTasks = [];
+  const longTaskObserver = "PerformanceObserver" in frame.contentWindow
+    ? new frame.contentWindow.PerformanceObserver((list) => longTasks.push(...list.getEntries())) : null;
+  longTaskObserver?.observe({ type: "longtask", buffered: false });
+  const updatesBeforeBurst = viewportDiagnostics.updates;
+  for (let index = 0; index < 120; ++index) {
+    viewport.dispatchEvent(new frame.contentWindow.WheelEvent("wheel", {
+      deltaY: index % 2 ? 40 : -40, ctrlKey: true,
+      clientX: zoomAnchor.x, clientY: zoomAnchor.y, bubbles: true, cancelable: true,
+    }));
+  }
+  await delay(80);
+  longTaskObserver?.disconnect();
+  const burstUpdates = viewportDiagnostics.updates - updatesBeforeBurst;
+  check(burstUpdates >= 1 && burstUpdates <= 4,
+    `navigation burst was not animation-frame coalesced (${burstUpdates} updates)`);
+  check(longTasks.length === 0, `navigation burst produced ${longTasks.length} long tasks`);
+  check(viewportDiagnostics.renderRequests === rendersBeforeNavigation,
+    "pan/zoom navigation requested an engine recomposite");
+  const navigationSamples = viewportDiagnostics.samples.slice(-Math.max(1, burstUpdates)).sort((a, b) => a - b);
+  const navigationP95 = navigationSamples[Math.ceil(navigationSamples.length * .95) - 1];
+  check(navigationP95 <= 16.67,
+    `navigation p95 ${navigationP95.toFixed(2)}ms exceeds the 60 fps frame budget`);
+
   const selected = byId("layerList").querySelector('.layer-row[data-active="true"] .layer-select-button');
   selected.focus(); const beforeLayer = selected.closest(".layer-row").dataset.layerId;
   const layerRows = [...byId("layerList").querySelectorAll(".layer-row")];
@@ -214,10 +298,15 @@ try {
     "Escape did not close dialog and return focus");
   check(byId("detailRevision").textContent === transformRevision, "dialog Escape committed document state");
 
+  byId("zoomActualButton").click(); await delay(50);
+  viewport.scrollLeft = 137; viewport.scrollTop = 91; await delay(50);
+  const firstViewportState = { left: viewport.scrollLeft, top: viewport.scrollTop };
   byId("newButton").click();
   await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length === 2 &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
   "second document tab was not created");
+  check(["Fit", "Вписать"].some((label) => byId("zoomLabel").textContent.startsWith(label)),
+    "new document inherited another document's manual viewport state");
   check(byId("documentTabs").querySelectorAll('[role="tab"][tabindex="0"]').length === 1,
     "document tablist exposed more than one sequential tab stop");
   check([...byId("documentTabs").querySelectorAll('.document-tab > button[aria-hidden="true"]')]
@@ -234,6 +323,10 @@ try {
       [...byId("documentTabs").querySelectorAll('[role="tab"]')].indexOf(selectedTab) !== priorTabIndex &&
       doc.activeElement === selectedTab;
   }, "document-tab activation did not retain focus on the newly active tab");
+  check(byId("zoomLabel").textContent.includes("100%") &&
+    Math.abs(viewport.scrollLeft - firstViewportState.left) < 1 &&
+    Math.abs(viewport.scrollTop - firstViewportState.top) < 1,
+  "document-tab activation did not restore its independent viewport state");
 
   const errorReturn = doc.activeElement;
   const unsupported = new frame.contentWindow.File(["x"], "unsupported.txt", { type: "text/plain" });

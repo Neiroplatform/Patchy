@@ -95,6 +95,8 @@ const RU = new Map(Object.entries({
   "Zoom out": "Уменьшить масштаб",
   "Zoom in": "Увеличить масштаб",
   "Fit": "Вписать",
+  "Actual pixels": "Реальный размер",
+  "Canvas navigation": "Навигация по холсту",
   "Local session": "Локальная сессия",
   "Recovery starting": "Запуск восстановления",
   "Recovery unavailable": "Восстановление недоступно",
