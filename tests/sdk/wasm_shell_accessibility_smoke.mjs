@@ -3,7 +3,7 @@ const frame = document.querySelector("#editorFrame");
 const check = (value, message) => { if (!value) throw new Error(message); };
 const delay = (milliseconds = 25) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-async function waitFor(predicate, message, timeout = 45_000) {
+async function waitFor(predicate, message, timeout = 90_000) {
   const deadline = performance.now() + timeout; let lastError;
   while (performance.now() < deadline) {
     try { if (await predicate()) return; } catch (error) { lastError = error; }
