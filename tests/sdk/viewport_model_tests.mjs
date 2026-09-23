@@ -55,6 +55,7 @@ test("production viewport contract is staged and navigation is render-free", asy
   assert.match(html, /id="horizontalRuler"/);
   assert.match(html, /id="zoomActualButton"/);
   assert.match(editor, /__patchyViewportDiagnostics/);
+  assert.match(editor, /documentViewports\.clear\(\)/);
   assert.match(editor, /scheduleViewportUpdate/);
   assert.match(css, /canvas-frame::before/);
 });

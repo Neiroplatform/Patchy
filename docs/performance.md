@@ -40,25 +40,8 @@ Layer's mutable accessors bump render/content revisions on ACCESS, so read-only 
 
 The move-drag proxy/base machinery, the display-resolution preview-scaled document, cache retention across drags, and the free-transform preview live in [interactive-previews.md](interactive-previews.md); read it before touching those paths. The universal rule stays here: a drag handler must never synchronously recomposite the document - previews render from bounded caches and full invalidations belong to the post-release async refresh. Commit-path bytes are untouched by the preview machinery by design (corpus digests and the transform-commit suites pin it), and the stress move matrix (steps 29-33) plus step `61_transform_drag_proxy` pin the latch counters.
 
-## Browser SDK viewport navigation
-
-The Qt-free browser editor treats zoom and pan as document-local view state.
-`viewport-model.mjs` owns finite zoom bounds, Fit calculation, cursor anchoring
-and deterministic 1/2/5 ruler steps. `editor.mjs` coalesces wheel, pointer,
-keyboard, scroll and resize work through one animation-frame update. Those
-updates resize and reposition the already committed canvas frame, guides,
-selection, transform overlay and rulers. They must not call `renderFrame`,
-mutate the engine snapshot or create history. The privacy-safe
-`__patchyViewportDiagnostics` counters are the production assertion surface
-for that no-recomposite contract and retain only timings and counts.
-
-`wasm_shell_accessibility_smoke.html` drives the staged pthread-WASM editor in
-a real browser. It checks pointer and keyboard navigation, cursor-anchored
-zoom, independent state across document tabs, checkerboard/ruler presence,
-animation-frame coalescing, zero render requests and a navigation p95 no
-greater than 16.67 ms. Keep the performance assertion on the staged build;
-Node viewport tests cover math and staging contracts but cannot replace DOM
-layout and input evidence.
+The Qt-free browser viewport's no-recomposite and actual-browser frame-budget
+contract lives in [Browser SDK viewport navigation](browser-viewport.md).
 
 ## Text edit sessions (August 2026)
 

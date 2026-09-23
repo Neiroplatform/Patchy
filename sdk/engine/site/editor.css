@@ -127,10 +127,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .transform-corners { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .transform-corners label { display: grid; gap: 4px; color: var(--text-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 .transform-corners input { width: 100%; }
-.ruler { position: sticky; z-index: 5; pointer-events: none; opacity: 0; transition: opacity 120ms var(--ease); background: #171a1df2; }
+.ruler { position: absolute; z-index: 5; pointer-events: none; opacity: 0; transition: opacity 120ms var(--ease); background: #171a1df2; }
 [data-state="document"] .ruler { opacity: .8; }
-.ruler-horizontal { top: 0; left: 18px; width: calc(100% - 18px); height: 18px; margin-bottom: -18px; justify-self: stretch; align-self: start; border-bottom: 1px solid var(--line); }
-.ruler-vertical { top: 18px; left: 0; width: 18px; height: calc(100% - 18px); margin-right: -18px; justify-self: start; align-self: stretch; border-right: 1px solid var(--line); }
+.ruler-horizontal { top: 0; left: 18px; height: 18px; border-bottom: 1px solid var(--line); }
+.ruler-vertical { top: 18px; left: 0; width: 18px; border-right: 1px solid var(--line); }
 .guide-controls { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
 .guide-controls button { min-height: 26px; padding: 0 7px; }
 .guide-controls button[aria-pressed="false"] { color: var(--text-faint); text-decoration: line-through; }

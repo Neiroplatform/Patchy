@@ -46,7 +46,8 @@ let pendingViewportFrame = 0;
 let pendingViewportAnchor = null;
 let pendingPan = null;
 let spacePanActive = false;
-const viewportDiagnostics = { updates: 0, renderRequests: 0, samples: [], lastReason: "startup" };
+const viewportDiagnostics = { updates: 0, renderRequests: 0, samples: [],
+  lastReason: "startup", trackedDocuments: 0 };
 globalThis.__patchyViewportDiagnostics = viewportDiagnostics;
 let guidesVisible = true;
 let snappingEnabled = true;
@@ -752,6 +753,7 @@ async function recoverEngineAfterCrash() {
       await client.setMemoryBudget(historyBytes, Math.min(3 * 1024 * MIB, historyBytes * 3));
       workspaceIds.clear(); checkpointStates.clear(); checkpointQueues.clear();
       documentHistoryLabels.clear(); documentSaveFormats.clear();
+      documentViewports.clear(); viewportDiagnostics.trackedDocuments = 0;
       for (const item of result.restored) {
         workspaceIds.set(item.documentId, item.workspaceId);
         checkpointStates.set(item.documentId, "confirmed");
@@ -759,7 +761,7 @@ async function recoverEngineAfterCrash() {
       }
       clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
       layerClipboard = null; draggedLayer = null;
-      await acceptSnapshot(result.activeSnapshot);
+      await acceptSnapshot(result.activeSnapshot, true, false);
       automaticRecoveryEnabled = true;
       const reverted = result.restored.filter((item) => !item.confirmedAtCrash);
       diagnostics.recordRecovery(result.failed.length || reverted.length ? "partial" : "succeeded", {
@@ -1471,6 +1473,9 @@ function renderRulers() {
   const viewport = $("canvasViewport");
   const viewportRect = viewport.getBoundingClientRect();
   const frameRect = $("canvasFrame").getBoundingClientRect();
+  const offset = `translate(${viewport.scrollLeft}px, ${viewport.scrollTop}px)`;
+  $("horizontalRuler").style.transform = offset;
+  $("verticalRuler").style.transform = offset;
   drawRuler($("horizontalRuler"), true, viewportRect, frameRect);
   drawRuler($("verticalRuler"), false, viewportRect, frameRect);
 }
@@ -1481,6 +1486,7 @@ function rememberViewport() {
   documentViewports.set(snapshot.documentId, {
     mode: zoomMode, zoom, left: viewport.scrollLeft, top: viewport.scrollTop,
   });
+  viewportDiagnostics.trackedDocuments = documentViewports.size;
 }
 
 function flushViewportUpdate() {
@@ -2003,7 +2009,7 @@ function canvasPointUnclamped(event) {
     y: (event.clientY - bounds.top) / bounds.height * snapshot.height };
 }
 
-async function acceptSnapshot(next, rerender = true) {
+async function acceptSnapshot(next, rerender = true, rememberPrevious = true) {
   if (!next) {
     diagnostics.setDocument(null);
     snapshot = null; clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
@@ -2014,7 +2020,7 @@ async function acceptSnapshot(next, rerender = true) {
     return;
   }
   const previousDocumentId = snapshot?.documentId;
-  if (previousDocumentId && previousDocumentId !== next.documentId) rememberViewport();
+  if (rememberPrevious && previousDocumentId && previousDocumentId !== next.documentId) rememberViewport();
   snapshot = next;
   const restoredViewport = previousDocumentId !== next.documentId
     ? documentViewports.get(next.documentId) : null;
@@ -2080,7 +2086,8 @@ async function closeDocumentTab(documentTab) {
   if (documentTab.dirty && !confirm(`${localizer.text("Close")} ${documentTab.name}? ${recoveryWarning}`)) return;
   clearError(); setBusy(true, "Closing document", "Releasing its canonical Worker session");
   try {
-    if (snapshot?.documentId === documentTab.id) {
+    const closingActiveDocument = snapshot?.documentId === documentTab.id;
+    if (closingActiveDocument) {
       clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     }
     await checkpointQueues.get(documentTab.id)?.whenIdle();
@@ -2090,8 +2097,9 @@ async function closeDocumentTab(documentTab) {
     checkpointQueues.delete(documentTab.id);
     documentHistoryLabels.delete(documentTab.id);
     documentGuides.delete(documentTab.id);
+    await acceptSnapshot(next, true, !closingActiveDocument);
     documentViewports.delete(documentTab.id);
-    await acceptSnapshot(next);
+    viewportDiagnostics.trackedDocuments = documentViewports.size;
   } catch (error) { showError("Could not close document", error); }
   finally { setBusy(false); }
 }

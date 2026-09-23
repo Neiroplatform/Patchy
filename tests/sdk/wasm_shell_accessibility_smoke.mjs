@@ -166,6 +166,14 @@ try {
   const verticalRuler = byId("verticalRuler");
   check(horizontalRuler.width > 0 && verticalRuler.height > 0,
     "pixel rulers did not allocate their viewport backing stores");
+  const horizontalRulerRect = horizontalRuler.getBoundingClientRect();
+  const verticalRulerRect = verticalRuler.getBoundingClientRect();
+  const viewportRect = viewport.getBoundingClientRect();
+  check(Math.abs(horizontalRulerRect.left - viewportRect.left - 18) < 1 &&
+    Math.abs(horizontalRulerRect.top - viewportRect.top) < 1 &&
+    Math.abs(verticalRulerRect.left - viewportRect.left) < 1 &&
+    Math.abs(verticalRulerRect.top - viewportRect.top - 18) < 1,
+  "pixel rulers are not overlaid on the viewport edges");
 
   byId("panToolButton").click();
   viewport.setPointerCapture = () => {};
@@ -222,17 +230,38 @@ try {
     }));
   }
   await delay(80);
-  longTaskObserver?.disconnect();
   const burstUpdates = viewportDiagnostics.updates - updatesBeforeBurst;
   check(burstUpdates >= 1 && burstUpdates <= 4,
     `navigation burst was not animation-frame coalesced (${burstUpdates} updates)`);
-  check(longTasks.length === 0, `navigation burst produced ${longTasks.length} long tasks`);
   check(viewportDiagnostics.renderRequests === rendersBeforeNavigation,
     "pan/zoom navigation requested an engine recomposite");
-  const navigationSamples = viewportDiagnostics.samples.slice(-Math.max(1, burstUpdates)).sort((a, b) => a - b);
-  const navigationP95 = navigationSamples[Math.ceil(navigationSamples.length * .95) - 1];
+  const navigationSamples = [];
+  await new Promise((resolve) => {
+    let remaining = 60; let previous = null;
+    const navigate = (timestamp) => {
+      if (previous != null) navigationSamples.push(timestamp - previous);
+      previous = timestamp;
+      viewport.dispatchEvent(new frame.contentWindow.WheelEvent("wheel", {
+        deltaY: remaining % 2 ? 40 : -40, ctrlKey: true,
+        clientX: zoomAnchor.x, clientY: zoomAnchor.y, bubbles: true, cancelable: true,
+      }));
+      remaining--;
+      if (remaining > 0) frame.contentWindow.requestAnimationFrame(navigate);
+      else frame.contentWindow.requestAnimationFrame((finalTimestamp) => {
+        navigationSamples.push(finalTimestamp - previous); resolve();
+      });
+    };
+    frame.contentWindow.requestAnimationFrame(navigate);
+  });
+  longTaskObserver?.disconnect();
+  check(longTasks.length === 0, `navigation burst produced ${longTasks.length} long tasks`);
+  navigationSamples.sort((a, b) => a - b);
+  const navigationP95 = Number(
+    navigationSamples[Math.ceil(navigationSamples.length * .95) - 1].toFixed(2));
   check(navigationP95 <= 16.67,
     `navigation p95 ${navigationP95.toFixed(2)}ms exceeds the 60 fps frame budget`);
+  check(viewportDiagnostics.renderRequests === rendersBeforeNavigation,
+    "frame-paced navigation requested an engine recomposite");
 
   const selected = byId("layerList").querySelector('.layer-row[data-active="true"] .layer-select-button');
   selected.focus(); const beforeLayer = selected.closest(".layer-row").dataset.layerId;
@@ -327,6 +356,20 @@ try {
     Math.abs(viewport.scrollLeft - firstViewportState.left) < 1 &&
     Math.abs(viewport.scrollTop - firstViewportState.top) < 1,
   "document-tab activation did not restore its independent viewport state");
+  const secondTab = [...byId("documentTabs").querySelectorAll(".document-tab")]
+    .find((tab) => tab.dataset.active !== "true");
+  const secondTabTitle = secondTab.querySelector('[role="tab"]').title;
+  secondTab.querySelector('[role="tab"]').click();
+  await waitFor(() => byId("documentTabs").querySelector('[role="tab"][aria-selected="true"]')?.title ===
+    secondTabTitle &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "second document did not reactivate for close cleanup");
+  byId("documentTabs").querySelector('.document-tab[data-active="true"] button[aria-hidden="true"]').click();
+  await waitFor(() => byId("documentTabs").querySelectorAll('[role="tab"]').length === 1 &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "active document did not close back to the retained tab");
+  check(viewportDiagnostics.trackedDocuments === 1,
+    "closing an active document retained its viewport state");
 
   const errorReturn = doc.activeElement;
   const unsupported = new frame.contentWindow.File(["x"], "unsupported.txt", { type: "text/plain" });
@@ -435,7 +478,8 @@ try {
     !/[\u0400-\u04ff]/.test(byId("sessionIndicator").textContent),
   "switching back to English did not restore canonical static and dynamic strings");
   body.dataset.result = "PASS"; body.dataset.p95 = p95.toFixed(2);
-  body.textContent = `PASS locale=ru-persisted keyboard=toolbar,layers,history,dialog diagnostics=private narrow=520 p95=${p95.toFixed(2)}ms`;
+  body.dataset.navigationP95 = navigationP95.toFixed(2);
+  body.textContent = `PASS locale=ru-persisted keyboard=toolbar,layers,history,dialog diagnostics=private narrow=520 navigation-p95=${navigationP95.toFixed(2)}ms p95=${p95.toFixed(2)}ms`;
 } catch (error) {
   body.dataset.result = "FAIL"; body.dataset.error = String(error?.stack || error);
   const failure = document.createElement("pre"); failure.textContent = body.dataset.error;
