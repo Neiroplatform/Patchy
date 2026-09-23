@@ -19,6 +19,9 @@ class MemoryFileHandle {
       },
       close: async () => {
         if (this.failures.close === this.name) throw new Error(`close failed: ${this.name}`);
+        if (this.failures.corruptOnClose === this.name && pending.byteLength) {
+          pending[pending.byteLength - 1] ^= 0xff;
+        }
         this.files.set(this.name, pending);
       },
       abort: async () => {},
@@ -347,6 +350,19 @@ test("torn and corrupt local versions remain invisible without hiding valid vers
   await store.pruneVersions({ id: "workspace", keepNewest: 20 });
   const remainingFiles = [...versions.files.keys()].sort();
   assert.deepEqual(remainingFiles, ["valid.json", "valid.layered"]);
+});
+
+test("same-size write corruption cannot publish a local version manifest", async () => {
+  const failures = { corruptOnClose: "corrupt.layered" };
+  const { root, store } = fixture();
+  root.failures = failures;
+  await assert.rejects(store.createVersion({ id: "workspace", versionId: "corrupt",
+    label: "Corrupt", name: "Corrupt.psd", revision: 1n, bytes: layeredBytes(4) }),
+  /payload verification/);
+  assert.deepEqual(await store.listVersions("workspace"), []);
+  const base = await root.getDirectoryHandle("patchy-versions-v1");
+  const versions = await base.getDirectoryHandle("workspace");
+  assert.equal(versions.files.has("corrupt.json"), false);
 });
 
 test("local version retention prunes oldest valid entries and deletion is isolated", async () => {

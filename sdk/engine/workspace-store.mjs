@@ -193,25 +193,29 @@ export class PatchyWorkspaceStore {
     const payloadName = versionFilename(versionId, "layered");
     const selectionName = versionFilename(versionId, "selection");
     const selectionState = normalizeSelection(selection);
+    const payloadSha256 = await sha256(bytes);
     await this.#hooks.beforeVersionPayloadWrite?.({ id, versionId });
     await writeFile(versions, payloadName, bytes);
     const storedBytes = await readBytes(versions, payloadName);
-    if (storedBytes.byteLength !== bytes.byteLength) throw new Error("Local version size verification failed");
+    if (storedBytes.byteLength !== bytes.byteLength || await sha256(storedBytes) !== payloadSha256) {
+      throw new Error("Local version payload verification failed");
+    }
     let storedSelection = null;
     if (selectionState) {
+      const selectionSha256 = await sha256(selectionState.gray);
       await writeFile(versions, selectionName, selectionState.gray);
       const gray = await readBytes(versions, selectionName);
-      if (gray.byteLength !== selectionState.gray.byteLength) {
-        throw new Error("Local version selection size verification failed");
+      if (gray.byteLength !== selectionState.gray.byteLength || await sha256(gray) !== selectionSha256) {
+        throw new Error("Local version selection verification failed");
       }
       storedSelection = { bounds: selectionState.bounds, size: gray.byteLength,
-        sha256: await sha256(gray) };
+        sha256: selectionSha256 };
     }
     const manifest = {
       version: VERSION_MANIFEST_VERSION, workspaceId: id, versionId,
       label: normalizedLabel, name: normalizedName, format: encodedFormat,
       revision: normalizedRevision, payloadSize: storedBytes.byteLength,
-      payloadSha256: await sha256(storedBytes),
+      payloadSha256,
       ...(storedSelection ? { selection: storedSelection } : {}), createdAt: this.#clock(),
     };
     await this.#hooks.beforeVersionManifestWrite?.({ ...manifest });
