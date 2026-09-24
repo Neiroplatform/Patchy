@@ -8,6 +8,7 @@
 #include "core/style_contour.hpp"
 
 #include "render/layer_style_mask_ops.hpp"
+#include "render/layer_compositor_workspace.hpp"
 #include "render/raster_view_context.hpp"
 #include "support/translate_noop.hpp"
 
@@ -658,21 +659,6 @@ inline void composite_effect_color(Target& destination, std::int32_t x, std::int
   }
   return composite_blended_rgb({color.red, color.green, color.blue}, destination, mode, alpha, 1.0F);
 }
-
-// One resolved interior overlay (Pattern, Gradient or Color), ready to fold into
-// a layer's straight RGB per pixel. Kept in Photoshop's interior order: pattern
-// under gradient under color.
-struct PreparedInteriorOverlay {
-  enum class Kind : std::uint8_t { Pattern, Gradient, Color };
-
-  Kind kind{Kind::Color};
-  BlendMode blend_mode{BlendMode::Normal};
-  float opacity{1.0F};
-  RgbColor color{};                                 // Color overlay
-  std::optional<PatternTileSampler> pattern{};      // Pattern overlay
-  const LayerStyleGradient* gradient{nullptr};      // Gradient overlay
-  Rect gradient_bounds{};
-};
 
 // Resolves the interior overlays a layer will fold into its own color. An
 // unresolvable pattern is dropped here, which renders nothing - the same

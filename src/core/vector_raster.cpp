@@ -1,5 +1,6 @@
 #include "core/vector_raster.hpp"
 #include "core/vector_compound.hpp"
+#include "core/vector_raster_workspace.hpp"
 
 #include "core/blend_math.hpp"
 #include "core/pattern_sampler.hpp"
@@ -809,18 +810,14 @@ CoverageBuffer rasterize_vector_path(const VectorPath& path, const VectorRasterO
   }
 
   // Split subpaths into shape groups (consecutive runs of equal shape_group).
-  struct Group {
-    std::size_t first{0};
-    std::size_t end{0};
-    PathCombineOp op{PathCombineOp::Add};
-  };
-  std::vector<Group> groups;
+  std::vector<vector_raster_detail::PathGroup> groups;
   for (std::size_t i = 0; i < path.subpaths.size();) {
     std::size_t j = i + 1;
     while (j < path.subpaths.size() && path.subpaths[j].shape_group == path.subpaths[i].shape_group) {
       ++j;
     }
-    groups.push_back(Group{i, j, path.subpaths[i].op});
+    groups.push_back(
+        vector_raster_detail::PathGroup{i, j, path.subpaths[i].op});
     i = j;
   }
 

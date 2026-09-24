@@ -202,23 +202,36 @@ The allocation-free census also derives a geometry envelope from every source
 path. Straight segments contribute one edge and cubic segments conservatively
 contribute the rasterizer's maximum 256 flattened edges. The envelope includes
 polyline/dash-run points, direction arrays, outline edges, edge bucket tables,
-and the 262144-boundary-per-subpath dash fallback. Join and cap factors mirror
-the rasterizer's bevel/miter/round fan limits. This geometry term is added both
-to normalization scratch for every generated paint and to renderer scratch for
-every vector shape/mask, so a tiny canvas with hostile anchor or dash complexity
-cannot pass a canvas-only reservation. Multi-paint shapes also reserve each
-recursive single-part model copy and the retained part rasters.
+the 262144-boundary-per-subpath dash fallback, and the platform-sized group-run
+owner allocated even for one-anchor subpaths that produce no edges. Join and cap
+factors mirror the rasterizer's bevel/miter/round fan limits. This geometry term
+is added both to normalization scratch for every generated paint and to renderer
+scratch for every vector shape/mask, so a tiny canvas with hostile anchor, group,
+or dash complexity cannot pass a canvas-only reservation. Multi-paint shapes
+also reserve each recursive single-part model copy and the retained part rasters.
 
 Before the sequential save compositor allocates, the same census reserves a
 document-derived renderer envelope. It sums nesting-sensitive group targets,
 clipping planes, raster/vector masks, vector raster/paint/stroke workspaces,
-Blend-If/adjustment snapshots, and 192 bytes per canvas pixel for every enabled
-distance/blur/stroke/bevel/satin effect. Summing enabled effects is intentionally
-conservative even though the current renderer normally evaluates them
-sequentially; this keeps the contract safe if prepared masks later overlap. The
-existing exact five-byte-per-pixel target/alpha envelope remains separate. Both
-reservations precede the covered allocations and unwind through the private
-budget signal on every exit.
+Blend-If/adjustment snapshots, Curves model/LUT scratch, and 192 bytes per canvas
+pixel for every enabled distance/blur/stroke/bevel/satin effect. Curves reserves
+three complete four-channel owner sets at the public nineteen-point-per-channel
+limit; that covers metadata decode/return/copy overlap and dominates the
+normalized points plus two double-vector workspaces used by one LUT build.
+Interior layer effects reserve one exact platform-sized prepared value for every
+source Pattern, Gradient, or Color overlay before the renderer filters disabled
+or unresolved entries, so overlay cardinality is not hidden behind canvas area.
+Summing enabled effects is intentionally conservative even though the current
+renderer normally evaluates them sequentially; this keeps the contract safe if
+prepared masks later overlap. The existing exact five-byte-per-pixel target/alpha
+envelope remains separate. Both reservations precede the covered allocations and
+unwind through the private budget signal on every exit.
+
+A layer-empty layered save is another retained-clone path: the writer copies the
+document, inserts one synthetic 1x1 RGBA layer, and recursively serializes it.
+The first call therefore reserves the value-owned document clone plus the
+synthetic `Layer` and four-byte pixel owner, retaining that reservation through
+the recursive write just like a vector-normalization clone.
 
 ## Explicit exclusions and completed DP-008B boundary
 
@@ -287,8 +300,9 @@ DP-008B3a pins the 20-byte unchanged `FEid` payload at FNV-1a
 and the 3-byte original-payload copy at `160a9e188e7e3df9`. Direct exact,
 one-short, zero, staged-overlap, malformed-unwind, and public byte-equivalence
 checks accompany a two-block layered fixture. Its 4096-byte `FEid` and 2048-byte
-`FXid` copies produce a 12556-byte tracked peak and prove exact, one-short, and
-typed pre-copy rejection while both eager owners remain live.
+`FXid` copies produce a 13384-byte tracked peak after the retained synthetic-
+layer clone reservation and prove exact, one-short, and typed pre-copy rejection
+while both eager owners remain live.
 DP-008B3b pins opaque, transparent, two-record, Unicode, and 4097-pixel chunk
 payloads at 244, 272, 488, 248, and 12532 bytes, with direct exact/N-1/zero,
 staged/concurrent ownership, invalid-skip, and unwind checks. Minimal authored and
@@ -306,7 +320,8 @@ sharing that same embedded owner peak at 516, proving no pointer-identity
 deduplication. A foreign-wrapper rebuild peaks at 254 and retains its trailer.
 A two-link plus `FEid`
 public fixture is 1070 bytes/FNV-1a `9a03676658d006f7` and pins the complete
-eager owner/global-copy peak at 1680 bytes. Direct and public exact/N-1/zero,
+eager owner/global-copy peak at 3364 bytes after the retained synthetic-layer
+clone reservation. Direct and public exact/N-1/zero,
 owner-release, typed unwind, allocation-free invalid/already-compliant
 normalization, and Smart Object semantic wrapper tests cover the slice.
 DP-008B4a pins fresh `levl`, `curv`, `hue2`, `post`, `thrs`, `brit`, `CgEd`,
@@ -340,7 +355,7 @@ On non-Windows hosts its PSD canary is 11440 bytes/FNV-1a
 Windows resolves the authored Arial run to the system PostScript name `ArialMT`,
 so its deterministic native canaries are 11448 bytes/FNV-1a
 `e3f3e0d4d890c0dc` for PSD and 12432 bytes/FNV-1a `06509563506089eb`
-for PSB. All four cases have the same 415648-byte tracked peak after the S2
+for PSB. All four cases have the same 417600-byte tracked peak after the S2
 geometry census and require exact
 success, byte-identical repeat serialization, typed N-1/zero rejection, and
 zero current usage after success or unwind. Existing text, vector, Smart Object,
@@ -356,8 +371,8 @@ The S2 whole-gate fixture combines nested groups, a clipping chain, raster and
 vector masks, compound vectors, an open multi-subpath live vector stroke that
 normalizes to native children, and concurrent drop-shadow, large outer-glow,
 stroke, bevel, and satin families. Its clone/geometry-complete census pins
-290972 owner bytes, 949088 normalization-scratch bytes, 2560496
-pre-normalization renderer bytes, and a 3268540-byte public peak after
+290972 owner bytes, 949424 normalization-scratch bytes, 2560664
+pre-normalization renderer bytes, and a 3268708-byte public peak after
 normalization changes the effective graph. Sequential normalized rendering pins
 FNV-1a `501ebd773ac1f3bc`; reopened rendering pins `47648a1ddc27a07b`.
 The PSD is 11720 bytes/FNV-1a `a90e17b0e1df7606`; the PSB is 12660 bytes/FNV-1a
@@ -370,6 +385,12 @@ that dash fallback increases both envelopes, and requires exact/N-1/unwind
 behavior through the public writer. Its companion marked-group fixture carries
 large raw image-resource, blending-range, and unknown-block payloads and proves
 that their value-owned clone bytes are admitted before normalization allocation.
+The same hostile fixture puts four maximum nineteen-point curves on a one-pixel
+document, pins the fixed model scratch independently of canvas area, and repeats
+the public exact/N-1/unwind proof. It also combines 128 one-anchor shape-group
+runs with 128 enabled Color overlays on a one-pixel canvas and proves both
+platform-sized owner terms. A layer-empty document with a large raw image-
+resource vector independently covers the retained synthetic-layer clone path.
 
 Every later save-workspace accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero
