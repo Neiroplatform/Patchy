@@ -1741,6 +1741,7 @@ if(PATCHY_BUILD_TESTS)
     target_include_directories(patchy_single_instance_ipc_tests PRIVATE tests)
     target_link_libraries(patchy_single_instance_ipc_tests PRIVATE patchy_single_instance_ipc)
     patchy_configure_target(patchy_single_instance_ipc_tests)
+    patchy_copy_qt_runtime(patchy_single_instance_ipc_tests)
     add_test(NAME patchy_single_instance_ipc_tests COMMAND patchy_single_instance_ipc_tests)
 
     # One binary; per-group TUs live in tests/ui/ (tests/ui/ui_test_groups.hpp lists
