@@ -651,7 +651,8 @@ void psd_save_filter_effects_global_copy_reaches_public_budget() {
   baseline_options.usage = &baseline_usage;
   (void)patchy::psd::DocumentIo::write_layered_rgb8(baseline_document,
                                                      baseline_options);
-  CHECK(baseline_usage.tracked_live_bytes_high_water == 1142U);
+  const auto baseline_peak = baseline_usage.tracked_live_bytes_high_water;
+  CHECK(baseline_peak > sizeof(patchy::Layer));
 
   patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
   patchy::SmartFilterEffectsBlock block;
@@ -676,18 +677,20 @@ void psd_save_filter_effects_global_copy_reaches_public_budget() {
   CHECK(patchy::test::fnv1a_hash_bytes(baseline) ==
         0x39ef3ca4deed6e01ULL);
   CHECK(measured_usage.tracked_live_bytes == 0U);
-  CHECK(measured_usage.tracked_live_bytes_high_water == 13384U);
+  const auto measured_peak = measured_usage.tracked_live_bytes_high_water;
+  CHECK(measured_peak > baseline_peak);
 
   patchy::psd::SaveUsage exact_usage;
   auto exact_options = measured_options;
-  exact_options.budget.max_tracked_live_bytes = 13384U;
+  exact_options.budget.max_tracked_live_bytes = measured_peak;
   exact_options.usage = &exact_usage;
   CHECK(patchy::psd::DocumentIo::write_layered_rgb8(document, exact_options) ==
         baseline);
   CHECK(exact_usage.tracked_live_bytes == 0U);
-  CHECK(exact_usage.tracked_live_bytes_high_water == 13384U);
+  CHECK(exact_usage.tracked_live_bytes_high_water == measured_peak);
 
-  for (const auto limit : std::array<std::uint64_t, 2>{13383U, 4095U}) {
+  for (const auto limit :
+       std::array<std::uint64_t, 2>{measured_peak - 1U, 0U}) {
     patchy::psd::SaveUsage rejected_usage;
     auto rejected_options = measured_options;
     rejected_options.budget.max_tracked_live_bytes = limit;
@@ -1478,19 +1481,21 @@ void psd_save_link_globals_reach_the_public_live_budget() {
   CHECK(patchy::test::fnv1a_hash_bytes(baseline) ==
         0x9a03676658d006f7ULL);
   CHECK(measured_usage.tracked_live_bytes == 0U);
-  CHECK(measured_usage.tracked_live_bytes_high_water == 3364U);
+  const auto measured_peak = measured_usage.tracked_live_bytes_high_water;
+  CHECK(measured_peak > baseline.size());
 
   patchy::psd::SaveUsage exact_usage;
   auto exact_options = measured_options;
-  exact_options.budget.max_tracked_live_bytes = 3364U;
+  exact_options.budget.max_tracked_live_bytes = measured_peak;
   exact_options.usage = &exact_usage;
   CHECK(patchy::psd::DocumentIo::write_layered_rgb8(document,
                                                      exact_options) ==
         baseline);
   CHECK(exact_usage.tracked_live_bytes == 0U);
-  CHECK(exact_usage.tracked_live_bytes_high_water == 3364U);
+  CHECK(exact_usage.tracked_live_bytes_high_water == measured_peak);
 
-  for (const auto limit : std::array<std::uint64_t, 2>{3363U, 0U}) {
+  for (const auto limit :
+       std::array<std::uint64_t, 2>{measured_peak - 1U, 0U}) {
     patchy::psd::SaveUsage rejected_usage;
     auto rejected_options = measured_options;
     rejected_options.budget.max_tracked_live_bytes = limit;
@@ -2861,7 +2866,7 @@ void psd_save_s2_normalization_and_renderer_workspace_whole_gate() {
   // same admission contract through structural and exact/N-1 assertions.
   if (census.normalization_owner_bytes != 290972U ||
       census.normalization_scratch_bytes != 949424U ||
-      census.renderer_scratch_bytes != 2560664U) {
+      census.renderer_scratch_bytes != 6565056U) {
     throw std::runtime_error(
         "S2 workspace census mismatch: owner=" +
         std::to_string(census.normalization_owner_bytes) +
@@ -2872,7 +2877,7 @@ void psd_save_s2_normalization_and_renderer_workspace_whole_gate() {
   }
   CHECK(census.normalization_owner_bytes == 290972U);
   CHECK(census.normalization_scratch_bytes == 949424U);
-  CHECK(census.renderer_scratch_bytes == 2560664U);
+  CHECK(census.renderer_scratch_bytes == 6565056U);
 #else
   CHECK(census.normalization_owner_bytes > 0U);
   CHECK(census.normalization_scratch_bytes >
@@ -2901,11 +2906,11 @@ void psd_save_s2_normalization_and_renderer_workspace_whole_gate() {
     CHECK(measured.tracked_live_bytes == 0U);
     const auto peak = measured.tracked_live_bytes_high_water;
 #ifdef __APPLE__
-    if (peak != 3268708U) {
+    if (peak != 7273100U) {
       throw std::runtime_error("S2 public peak mismatch: " +
                                std::to_string(peak));
     }
-    CHECK(peak == 3268708U);
+    CHECK(peak == 7273100U);
 #else
     CHECK(peak > census.normalization_owner_bytes);
     CHECK(peak > census.normalization_scratch_bytes);
@@ -3258,6 +3263,10 @@ void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
         static_cast<std::uint8_t>(index),
         static_cast<std::uint8_t>(255U - index), 90U};
     overlay_layer.layer_style().color_overlays.push_back(overlay);
+    patchy::LayerSatin disabled_satin;
+    disabled_satin.enabled = false;
+    disabled_satin.opacity = 0.0F;
+    overlay_layer.layer_style().satins.push_back(disabled_satin);
   }
   cardinality_document.add_layer(std::move(overlay_layer));
 
@@ -3287,8 +3296,12 @@ void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
   const auto expected_overlay_owner =
       kHostileCardinality *
       sizeof(patchy::render_detail::PreparedInteriorOverlay);
+  const auto expected_satin_owner =
+      kHostileCardinality *
+      sizeof(patchy::render_detail::PreparedSatin);
   CHECK(cardinality_census.renderer_scratch_bytes ==
-        64U + expected_group_owner + expected_overlay_owner);
+        64U + expected_group_owner + expected_overlay_owner +
+            expected_satin_owner);
   verify_targeted_reservation(
       cardinality_document,
       kOnePixelCompositorPrefix + cardinality_census.renderer_scratch_bytes,
@@ -3296,6 +3309,45 @@ void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
   const auto cardinality_peak =
       verify_public_exact_n_minus_one(cardinality_document);
   CHECK(cardinality_peak >= cardinality_census.renderer_scratch_bytes);
+
+  patchy::Document expanded_effect_document(
+      1, 1, patchy::PixelFormat::rgb8());
+  auto& expanded_effect_layer = expanded_effect_document.add_pixel_layer(
+      "Expanded effect domain",
+      patchy::test::solid_rgba(1, 1, 160U, 80U, 40U, 255U));
+  patchy::LayerOuterGlow hostile_glow;
+  hostile_glow.enabled = true;
+  hostile_glow.opacity = 1.0F;
+  hostile_glow.size = 100.0F;
+  expanded_effect_layer.layer_style().outer_glows.push_back(hostile_glow);
+
+  const auto expanded_effect_census =
+      patchy::psd::save_workspace_census(expanded_effect_document);
+  constexpr std::uint64_t kExpandedEffectWidth = 1U + 2U * (100U + 2U);
+  constexpr std::uint64_t kExpandedEffectScratch =
+      kExpandedEffectWidth * kExpandedEffectWidth * 192U;
+  CHECK(expanded_effect_census.renderer_scratch_bytes ==
+        kExpandedEffectScratch);
+  CHECK(expanded_effect_census.renderer_scratch_bytes > 1U * 192U);
+  verify_targeted_reservation(
+      expanded_effect_document,
+      kOnePixelCompositorPrefix +
+          expanded_effect_census.renderer_scratch_bytes,
+      kOnePixelCompositorPrefix);
+  const auto expanded_effect_peak =
+      verify_public_exact_n_minus_one(expanded_effect_document);
+  CHECK(expanded_effect_peak >=
+        expanded_effect_census.renderer_scratch_bytes);
+
+  auto saturated_effect_document = expanded_effect_document;
+  saturated_effect_document.layers()
+      .front()
+      .layer_style()
+      .outer_glows.front()
+      .size = std::numeric_limits<float>::infinity();
+  CHECK(patchy::psd::save_workspace_census(saturated_effect_document)
+            .renderer_scratch_bytes ==
+        std::numeric_limits<std::uint64_t>::max());
 }
 
 }  // namespace

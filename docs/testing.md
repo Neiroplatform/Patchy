@@ -166,8 +166,9 @@ all generated/copied resource and path/clipping payloads before allocation,
 eliminates avoidable byte scratch, and validates deleted paths without allocating.
 Peaks are 44 minimal, 72 parsed replacement, 400 all resource families, 187
 path/clipping, and 160 clean relocation. N-1, staged, zero, malformed, byte, and
-unwind checks apply. DP-008B3a tracks global FEid/FXid payloads and pins a
-13384-byte public peak after the retained empty-document clone census. DP-008B3b streams generated Patt payloads without heap
+unwind checks apply. DP-008B3a tracks global FEid/FXid payloads and requires a
+measured-platform exact/N-1/zero public peak after the retained empty-document
+clone census (13384 bytes on the macOS Release libc++ ABI). DP-008B3b streams generated Patt payloads without heap
 plane scratch; direct opaque/alpha/multi/Unicode/chunk cases, invalid and unwind
 paths, placeholders, and raw Patt/Pat2/Pat3 malformed-prefix dedupe are pinned.
 Public peaks are 1592 authored, 1652 placeholder, and 2044 multi-block bytes.
@@ -176,8 +177,9 @@ normalization. It pins the 64/74-byte normalized mini-PSD/PSB, 184-byte authored
 `liFD`, 496-byte external `liFE`, and unchanged seven-byte raw block. The
 authored direct peak is 258 bytes, a shared embedded owner counted twice peaks
 at 516, and the foreign-wrapper rebuild peaks at 254. The two-link plus `FEid`
-public file is 1070 bytes and peaks at 3364 tracked bytes after the retained
-empty-document clone census. Exact/N-1/zero,
+public file is 1070 bytes and uses the measured platform peak after the retained
+empty-document clone census (3364 tracked bytes on the macOS Release libc++
+ABI). Exact/N-1/zero,
 owner lifetime, invalid/compliant allocation-free normalization, typed public
 rejection, byte hashes, and the existing wrapper/pixel semantic tests are
 mandatory.

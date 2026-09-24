@@ -5,11 +5,14 @@
 #include "core/vector_compound.hpp"
 #include "core/vector_raster_workspace.hpp"
 #include "render/layer_compositor_workspace.hpp"
+#include "render/layer_style_mask_ops.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace patchy::psd {
@@ -39,6 +42,36 @@ inline std::uint64_t multiply_saturated(std::uint64_t lhs,
     return std::numeric_limits<std::uint64_t>::max();
   }
   return lhs * rhs;
+}
+
+inline std::uint64_t nonnegative_ceil_saturated(
+    long double value) noexcept {
+  if (!(value > 0.0L)) {
+    return 0U;
+  }
+  if (!std::isfinite(value) ||
+      value >= static_cast<long double>(
+                   std::numeric_limits<std::uint64_t>::max())) {
+    return std::numeric_limits<std::uint64_t>::max();
+  }
+  return static_cast<std::uint64_t>(std::ceil(value));
+}
+
+inline std::uint64_t expanded_pixel_count(std::uint64_t width,
+                                          std::uint64_t height,
+                                          std::uint64_t padding) noexcept {
+  const auto doubled_padding = multiply_saturated(padding, 2U);
+  add_saturated(width, doubled_padding);
+  add_saturated(height, doubled_padding);
+  return multiply_saturated(width, height);
+}
+
+inline std::uint64_t size_padding(float value,
+                                  std::uint64_t apron) noexcept {
+  auto padding = nonnegative_ceil_saturated(
+      static_cast<long double>(value));
+  add_saturated(padding, apron);
+  return padding;
 }
 
 template <typename T>
@@ -360,21 +393,258 @@ inline void add_source_pixels(const Layer& layer,
   }
 }
 
-inline std::uint64_t enabled_effect_count(const LayerStyle& style) noexcept {
-  const auto enabled = [](const auto& effect) { return effect.enabled; };
-  std::uint64_t count = 0U;
-  const auto add = [&](const auto& effects) {
-    add_saturated(count, static_cast<std::uint64_t>(
-                             std::count_if(effects.begin(), effects.end(), enabled)));
+inline std::uint64_t style_outer_padding(const LayerStyle& style) noexcept {
+  if (!style.effects_visible) {
+    return 0U;
+  }
+  std::uint64_t result = 0U;
+  const auto include = [&](std::uint64_t value) {
+    result = std::max(result, value);
   };
-  add(style.drop_shadows);
-  add(style.inner_shadows);
-  add(style.outer_glows);
-  add(style.inner_glows);
-  add(style.strokes);
-  add(style.bevels);
-  add(style.satins);
-  return count;
+  for (const auto& shadow : style.drop_shadows) {
+    if (!shadow.enabled) {
+      continue;
+    }
+    auto padding = size_padding(shadow.size, 2U);
+    add_saturated(
+        padding,
+        multiply_saturated(
+            nonnegative_ceil_saturated(std::abs(
+                static_cast<long double>(shadow.distance))),
+            2U));
+    include(padding);
+  }
+  for (const auto& shadow : style.inner_shadows) {
+    if (shadow.enabled) {
+      include(size_padding(shadow.size, 3U));
+    }
+  }
+  for (const auto& glow : style.outer_glows) {
+    if (glow.enabled) {
+      include(size_padding(glow.size, 2U));
+    }
+  }
+  for (const auto& glow : style.inner_glows) {
+    if (glow.enabled) {
+      include(size_padding(glow.size, 3U));
+    }
+  }
+  std::uint64_t stroke_padding = 0U;
+  for (const auto& stroke : style.strokes) {
+    if (stroke.enabled) {
+      stroke_padding =
+          std::max(stroke_padding, size_padding(stroke.size, 1U));
+    }
+  }
+  include(stroke_padding);
+  for (const auto& bevel : style.bevels) {
+    if (!bevel.enabled) {
+      continue;
+    }
+    auto padding = nonnegative_ceil_saturated(
+        static_cast<long double>(bevel.size) +
+        static_cast<long double>(bevel.soften));
+    add_saturated(padding, stroke_padding);
+    add_saturated(padding, 3U);
+    include(padding);
+  }
+  for (const auto& satin : style.satins) {
+    if (satin.enabled) {
+      include(size_padding(satin.size, 1U));
+    }
+  }
+  return result;
+}
+
+struct SafeRenderEnvelope {
+  std::int64_t left{0};
+  std::int64_t top{0};
+  std::int64_t right{0};
+  std::int64_t bottom{0};
+  bool empty{true};
+  bool saturated{false};
+};
+
+inline SafeRenderEnvelope raw_layer_envelope(const Layer& layer) noexcept {
+  auto bounds = layer.bounds();
+  if (bounds.empty()) {
+    bounds = Rect::from_size(layer.pixels().width(), layer.pixels().height());
+  }
+  if (bounds.empty()) {
+    return {};
+  }
+  const auto x0 = static_cast<std::int64_t>(bounds.x);
+  const auto y0 = static_cast<std::int64_t>(bounds.y);
+  const auto x1 = x0 + static_cast<std::int64_t>(bounds.width);
+  const auto y1 = y0 + static_cast<std::int64_t>(bounds.height);
+  return {std::min(x0, x1), std::min(y0, y1), std::max(x0, x1),
+          std::max(y0, y1), false, false};
+}
+
+inline void unite_safe_envelope(SafeRenderEnvelope& target,
+                                const SafeRenderEnvelope& source) noexcept {
+  if (source.saturated) {
+    target.saturated = true;
+    target.empty = false;
+    return;
+  }
+  if (source.empty) {
+    return;
+  }
+  if (target.empty) {
+    target = source;
+    return;
+  }
+  target.left = std::min(target.left, source.left);
+  target.top = std::min(target.top, source.top);
+  target.right = std::max(target.right, source.right);
+  target.bottom = std::max(target.bottom, source.bottom);
+}
+
+inline void outset_safe_envelope(SafeRenderEnvelope& bounds,
+                                 std::uint64_t padding) noexcept {
+  if (bounds.empty || bounds.saturated || padding == 0U) {
+    return;
+  }
+  constexpr auto kSignedMaximum =
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+  if (padding > kSignedMaximum) {
+    bounds.saturated = true;
+    return;
+  }
+  const auto signed_padding = static_cast<std::int64_t>(padding);
+  if (bounds.left < std::numeric_limits<std::int64_t>::min() +
+                        signed_padding ||
+      bounds.top < std::numeric_limits<std::int64_t>::min() +
+                       signed_padding ||
+      bounds.right > std::numeric_limits<std::int64_t>::max() -
+                         signed_padding ||
+      bounds.bottom > std::numeric_limits<std::int64_t>::max() -
+                          signed_padding) {
+    bounds.saturated = true;
+    return;
+  }
+  bounds.left -= signed_padding;
+  bounds.top -= signed_padding;
+  bounds.right += signed_padding;
+  bounds.bottom += signed_padding;
+}
+
+inline SafeRenderEnvelope safe_render_envelope(const Layer& layer) noexcept {
+  SafeRenderEnvelope result;
+  if (layer.kind() == LayerKind::Group) {
+    for (const auto& child : layer.children()) {
+      unite_safe_envelope(result, safe_render_envelope(child));
+    }
+  } else {
+    result = raw_layer_envelope(layer);
+  }
+  outset_safe_envelope(result, style_outer_padding(layer.layer_style()));
+  return result;
+}
+
+inline std::pair<std::uint64_t, std::uint64_t> effect_base_dimensions(
+    const Layer& layer, std::uint64_t canvas_width,
+    std::uint64_t canvas_height) noexcept {
+  const auto bounds = layer.kind() == LayerKind::Group
+                          ? safe_render_envelope(layer)
+                          : raw_layer_envelope(layer);
+  if (bounds.saturated) {
+    return {std::numeric_limits<std::uint64_t>::max(),
+            std::numeric_limits<std::uint64_t>::max()};
+  }
+  if (bounds.empty) {
+    return {canvas_width, canvas_height};
+  }
+  const auto width = static_cast<std::uint64_t>(bounds.right) -
+                     static_cast<std::uint64_t>(bounds.left);
+  const auto height = static_cast<std::uint64_t>(bounds.bottom) -
+                      static_cast<std::uint64_t>(bounds.top);
+  return {std::max(canvas_width, width), std::max(canvas_height, height)};
+}
+
+inline std::uint64_t layer_effect_domain_bytes(
+    const Layer& layer, std::uint64_t canvas_width,
+    std::uint64_t canvas_height) noexcept {
+  const auto& style = layer.layer_style();
+  if (!style.effects_visible) {
+    return 0U;
+  }
+  const auto [base_width, base_height] =
+      effect_base_dimensions(layer, canvas_width, canvas_height);
+  std::uint64_t total = 0U;
+  const auto add_domain = [&](std::uint64_t padding) {
+    add_saturated(total,
+                  multiply_saturated(
+                      expanded_pixel_count(base_width, base_height, padding),
+                      192U));
+  };
+  for (const auto& shadow : style.drop_shadows) {
+    if (shadow.enabled) {
+      add_domain(size_padding(shadow.size, 2U));
+    }
+  }
+  for (const auto& shadow : style.inner_shadows) {
+    if (!shadow.enabled) {
+      continue;
+    }
+    auto padding = nonnegative_ceil_saturated(
+        static_cast<long double>(shadow.size));
+    add_saturated(padding, nonnegative_ceil_saturated(
+                                  std::abs(static_cast<long double>(
+                                      shadow.distance))));
+    add_saturated(padding, 3U);
+    add_domain(padding);
+  }
+  for (const auto& glow : style.outer_glows) {
+    if (glow.enabled) {
+      add_domain(size_padding(glow.size, 2U));
+    }
+  }
+  for (const auto& glow : style.inner_glows) {
+    if (!glow.enabled) {
+      continue;
+    }
+    // Precise inner glow can retain three box-blur radii plus the choke
+    // expansion. Three full requested sizes dominate every technique/choke
+    // split without mirroring renderer allocations during this census.
+    auto padding = multiply_saturated(
+        nonnegative_ceil_saturated(static_cast<long double>(glow.size)), 3U);
+    add_saturated(padding, 3U);
+    add_domain(padding);
+  }
+  for (const auto& stroke : style.strokes) {
+    if (stroke.enabled) {
+      add_domain(size_padding(stroke.size, 1U));
+    }
+  }
+
+  std::uint64_t stroke_emboss_padding = 0U;
+  for (const auto& stroke : style.strokes) {
+    if (!stroke.enabled) {
+      continue;
+    }
+    stroke_emboss_padding =
+        std::max(stroke_emboss_padding, size_padding(stroke.size, 1U));
+  }
+  for (const auto& bevel : style.bevels) {
+    if (!bevel.enabled) {
+      continue;
+    }
+    auto padding = nonnegative_ceil_saturated(
+        static_cast<long double>(bevel.size) +
+        static_cast<long double>(bevel.soften));
+    add_saturated(padding, stroke_emboss_padding);
+    // effect_padding + the renderer's one-pixel sampling apron.
+    add_saturated(padding, 3U);
+    add_domain(padding);
+  }
+  for (const auto& satin : style.satins) {
+    if (satin.enabled) {
+      add_domain(size_padding(satin.size, 1U));
+    }
+  }
+  return total;
 }
 
 inline std::uint64_t interior_overlay_owner_bytes(
@@ -391,6 +661,13 @@ inline std::uint64_t interior_overlay_owner_bytes(
                  sizeof(render_detail::PreparedInteriorOverlay)));
 }
 
+inline std::uint64_t prepared_satin_owner_bytes(
+    const LayerStyle& style) noexcept {
+  return multiply_saturated(
+      static_cast<std::uint64_t>(style.satins.size()),
+      static_cast<std::uint64_t>(sizeof(render_detail::PreparedSatin)));
+}
+
 struct LayerCensus {
   std::uint64_t generated_vector_layers{0U};
   std::uint64_t generated_vector_owner_bytes{0U};
@@ -400,7 +677,9 @@ struct LayerCensus {
   bool normalization_needed{false};
 };
 
-inline void inspect_layer(const Layer& layer, LayerCensus& census) noexcept {
+inline void inspect_layer(const Layer& layer, LayerCensus& census,
+                          std::uint64_t canvas_width,
+                          std::uint64_t canvas_height) noexcept {
   // Group targets retain RGB/alpha/clipping planes while a child is rendered;
   // snapshots and knockout silhouettes share this conservative 32-byte plane.
   if (layer.kind() == LayerKind::Group) {
@@ -440,16 +719,21 @@ inline void inspect_layer(const Layer& layer, LayerCensus& census) noexcept {
     add_saturated(census.renderer_geometry_bytes,
                   adjustment_model_scratch());
   }
-  // One enabled distance/blur/stroke/bevel effect gets a 192-byte-per-pixel
-  // envelope. Effects are normally sequential; summing them intentionally
-  // remains safe if a future renderer retains more than one prepared mask.
-  add_saturated(
-      census.renderer_bytes_per_canvas_pixel,
-      multiply_saturated(enabled_effect_count(layer.layer_style()), 192U));
+  // Style-mask caches use the effect's expanded domain, which can be much
+  // larger than the canvas for a tiny layer with a large radius. Sum a
+  // conservative 192-byte envelope for every enabled effect's own domain;
+  // masks can remain cached together for the lifetime of the save render.
+  add_saturated(census.renderer_geometry_bytes,
+                layer_effect_domain_bytes(layer, canvas_width,
+                                          canvas_height));
   // prepare_interior_overlays reserves one platform-sized value slot for every
   // source overlay before filtering disabled/unresolved entries.
   add_saturated(census.renderer_geometry_bytes,
                 interior_overlay_owner_bytes(layer.layer_style()));
+  // composite_pixel_layer reserves capacity for every source satin before it
+  // filters disabled/transparent entries.
+  add_saturated(census.renderer_geometry_bytes,
+                prepared_satin_owner_bytes(layer.layer_style()));
 
   std::uint64_t generated_here = 0U;
   if (layer_is_compound_vector(layer)) {
@@ -502,7 +786,7 @@ inline void inspect_layer(const Layer& layer, LayerCensus& census) noexcept {
     census.normalization_needed = true;
   }
   for (const auto& child : layer.children()) {
-    inspect_layer(child, census);
+    inspect_layer(child, census, canvas_width, canvas_height);
   }
 }
 
@@ -513,17 +797,19 @@ inline void inspect_layer(const Layer& layer, LayerCensus& census) noexcept {
   using namespace save_workspace_detail;
   LayerCensus layers;
   std::uint64_t source_bytes = 0U;
+  const auto canvas_width =
+      static_cast<std::uint64_t>(std::max(0, document.width()));
+  const auto canvas_height =
+      static_cast<std::uint64_t>(std::max(0, document.height()));
   for (const auto& layer : document.layers()) {
-    inspect_layer(layer, layers);
+    inspect_layer(layer, layers, canvas_width, canvas_height);
     add_source_pixels(layer, source_bytes);
   }
   for (const auto& channel : document.channels()) {
     add_saturated(source_bytes,
                   static_cast<std::uint64_t>(channel.pixels().byte_size()));
   }
-  const auto canvas_pixels = multiply_saturated(
-      static_cast<std::uint64_t>(std::max(0, document.width())),
-      static_cast<std::uint64_t>(std::max(0, document.height())));
+  const auto canvas_pixels = multiply_saturated(canvas_width, canvas_height);
 
   SaveWorkspaceCensus result;
   result.renderer_scratch_bytes = multiply_saturated(
