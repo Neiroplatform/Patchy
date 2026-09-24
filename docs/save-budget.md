@@ -213,14 +213,22 @@ also reserve each recursive single-part model copy and the retained part rasters
 Before the sequential save compositor allocates, the same census reserves a
 document-derived renderer envelope. It sums nesting-sensitive group targets,
 clipping planes, raster/vector masks, vector raster/paint/stroke workspaces,
-Blend-If/adjustment snapshots, Curves model/LUT scratch, and 192 bytes per canvas
-pixel for every enabled distance/blur/stroke/bevel/satin effect. Curves reserves
+Blend-If/adjustment snapshots, Curves model/LUT scratch, and 192 bytes for every
+pixel in each enabled distance/blur/stroke/bevel/satin effect's expanded mask
+domain. Each domain starts at the larger of the canvas or source/render bounds
+and adds the exact/conservative family apron (radius, offset, choke, stroke,
+soften, or Satin tent support), so a 1x1 document with a size-100 Outer Glow
+reserves its 205x205 domain rather than 192 bytes. Saturating dimension math
+rejects an unrepresentable envelope before renderer allocation. Curves reserves
 three complete four-channel owner sets at the public nineteen-point-per-channel
 limit; that covers metadata decode/return/copy overlap and dominates the
 normalized points plus two double-vector workspaces used by one LUT build.
 Interior layer effects reserve one exact platform-sized prepared value for every
 source Pattern, Gradient, or Color overlay before the renderer filters disabled
 or unresolved entries, so overlay cardinality is not hidden behind canvas area.
+The same rule covers every source Satin slot reserved by
+`prepared_satins.reserve`, including disabled/transparent entries; this owner is
+the exact platform `PreparedSatin` size and is separate from enabled mask domains.
 Summing enabled effects is intentionally conservative even though the current
 renderer normally evaluates them sequentially; this keeps the contract safe if
 prepared masks later overlap. The existing exact five-byte-per-pixel target/alpha
@@ -374,7 +382,7 @@ vector masks, compound vectors, an open multi-subpath live vector stroke that
 normalizes to native children, and concurrent drop-shadow, large outer-glow,
 stroke, bevel, and satin families. On the macOS Release libc++ ABI its clone/
 geometry-complete census pins 290972 owner bytes, 949424 normalization-scratch
-bytes, 2560664 pre-normalization renderer bytes, and a 3268708-byte public peak
+bytes, 6565056 pre-normalization renderer bytes, and a 7273100-byte public peak
 after normalization changes the effective graph. Windows and WASM retain exact
 success/N-1 admission but report their ABI-derived logical owner sizes instead
 of pretending libc++ container value sizes are portable. Sequential normalized rendering pins
@@ -393,8 +401,10 @@ The same hostile fixture puts four maximum nineteen-point curves on a one-pixel
 document, pins the fixed model scratch independently of canvas area, and repeats
 the public exact/N-1/zero/unwind proof plus a targeted compositor-prefix +
 renderer-reservation exact/N-1/zero boundary. It also combines 128 one-anchor shape-group
-runs with 128 enabled Color overlays on a one-pixel canvas and proves both
-platform-sized owner terms at the same targeted boundary. A layer-empty document
+runs with 128 enabled Color overlays and 128 disabled Satins on a one-pixel
+canvas and proves all three platform-sized owner terms at the same targeted
+boundary. A separate size-100 Outer Glow pins the 205x205 expanded domain and
+its targeted/public exact/N-1/zero admission. A layer-empty document
 with a large raw image-resource vector independently covers the retained
 synthetic-layer clone path at its owner-reservation exact/N-1/zero boundary.
 
