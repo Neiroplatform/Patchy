@@ -2979,23 +2979,65 @@ void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
     CHECK(exact.tracked_live_bytes == 0U);
     CHECK(exact.tracked_live_bytes_high_water == peak);
 
-    patchy::psd::SaveUsage one_short;
-    auto one_short_options = options;
-    one_short_options.budget.max_tracked_live_bytes = peak - 1U;
-    one_short_options.usage = &one_short;
-    bool did_reject = false;
+    for (const auto limit : std::array<std::uint64_t, 2>{peak - 1U, 0U}) {
+      patchy::psd::SaveUsage rejected_usage;
+      auto rejected_options = options;
+      rejected_options.budget.max_tracked_live_bytes = limit;
+      rejected_options.usage = &rejected_usage;
+      bool did_reject = false;
+      try {
+        (void)patchy::psd::DocumentIo::write_layered_rgb8(
+            source, rejected_options);
+      } catch (const patchy::psd::SaveBudgetExceeded& error) {
+        did_reject = true;
+        CHECK(error.dimension() ==
+              patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+      }
+      CHECK(did_reject);
+      CHECK(rejected_usage.tracked_live_bytes == 0U);
+      CHECK(rejected_usage.tracked_live_bytes_high_water <= limit);
+    }
+    return peak;
+  };
+  const auto verify_targeted_reservation = [](
+                                               const patchy::Document& source,
+                                               std::uint64_t exact_limit,
+                                               std::uint64_t admitted_prefix) {
+    CHECK(exact_limit > 0U);
+    patchy::psd::SaveUsage exact_usage;
+    patchy::psd::WriteOptions exact_options;
+    exact_options.budget.max_tracked_live_bytes = exact_limit;
+    exact_options.usage = &exact_usage;
     try {
-      (void)patchy::psd::DocumentIo::write_layered_rgb8(
-          source, one_short_options);
+      (void)patchy::psd::DocumentIo::write_layered_rgb8(source,
+                                                         exact_options);
     } catch (const patchy::psd::SaveBudgetExceeded& error) {
-      did_reject = true;
       CHECK(error.dimension() ==
             patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
     }
-    CHECK(did_reject);
-    CHECK(one_short.tracked_live_bytes == 0U);
-    CHECK(one_short.tracked_live_bytes_high_water <= peak - 1U);
-    return peak;
+    CHECK(exact_usage.tracked_live_bytes == 0U);
+    CHECK(exact_usage.tracked_live_bytes_high_water == exact_limit);
+
+    for (const auto limit :
+         std::array<std::uint64_t, 2>{exact_limit - 1U, 0U}) {
+      patchy::psd::SaveUsage rejected_usage;
+      patchy::psd::WriteOptions rejected_options;
+      rejected_options.budget.max_tracked_live_bytes = limit;
+      rejected_options.usage = &rejected_usage;
+      bool did_reject = false;
+      try {
+        (void)patchy::psd::DocumentIo::write_layered_rgb8(
+            source, rejected_options);
+      } catch (const patchy::psd::SaveBudgetExceeded& error) {
+        did_reject = true;
+        CHECK(error.dimension() ==
+              patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+      }
+      CHECK(did_reject);
+      CHECK(rejected_usage.tracked_live_bytes == 0U);
+      CHECK(rejected_usage.tracked_live_bytes_high_water ==
+            (limit == 0U ? 0U : admitted_prefix));
+    }
   };
 
   patchy::Document clone_document(2, 2, patchy::PixelFormat::rgb8());
@@ -3039,6 +3081,8 @@ void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
       patchy::psd::save_workspace_census(empty_document);
   CHECK(empty_census.normalization_owner_bytes >=
         131072U + sizeof(patchy::Layer) + 4U);
+  verify_targeted_reservation(empty_document,
+                              empty_census.normalization_owner_bytes, 0U);
   const auto empty_peak = verify_public_exact_n_minus_one(empty_document);
   CHECK(empty_peak >= empty_census.normalization_owner_bytes);
 
@@ -3153,6 +3197,11 @@ void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
       3U * 4U * 19U * sizeof(patchy::CurveControlPoint);
   CHECK(adjustment_census.renderer_scratch_bytes ==
         16U + kAdjustmentModelScratch);
+  constexpr std::uint64_t kOnePixelCompositorPrefix = 3U + 1U + 5U;
+  verify_targeted_reservation(
+      adjustment_document,
+      kOnePixelCompositorPrefix + adjustment_census.renderer_scratch_bytes,
+      kOnePixelCompositorPrefix);
 
   patchy::psd::SaveUsage adjustment_measured;
   patchy::psd::WriteOptions adjustment_options;
@@ -3240,6 +3289,10 @@ void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
       sizeof(patchy::render_detail::PreparedInteriorOverlay);
   CHECK(cardinality_census.renderer_scratch_bytes ==
         64U + expected_group_owner + expected_overlay_owner);
+  verify_targeted_reservation(
+      cardinality_document,
+      kOnePixelCompositorPrefix + cardinality_census.renderer_scratch_bytes,
+      kOnePixelCompositorPrefix);
   const auto cardinality_peak =
       verify_public_exact_n_minus_one(cardinality_document);
   CHECK(cardinality_peak >= cardinality_census.renderer_scratch_bytes);

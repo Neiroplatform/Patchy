@@ -391,10 +391,12 @@ large raw image-resource, blending-range, and unknown-block payloads and proves
 that their value-owned clone bytes are admitted before normalization allocation.
 The same hostile fixture puts four maximum nineteen-point curves on a one-pixel
 document, pins the fixed model scratch independently of canvas area, and repeats
-the public exact/N-1/unwind proof. It also combines 128 one-anchor shape-group
+the public exact/N-1/zero/unwind proof plus a targeted compositor-prefix +
+renderer-reservation exact/N-1/zero boundary. It also combines 128 one-anchor shape-group
 runs with 128 enabled Color overlays on a one-pixel canvas and proves both
-platform-sized owner terms. A layer-empty document with a large raw image-
-resource vector independently covers the retained synthetic-layer clone path.
+platform-sized owner terms at the same targeted boundary. A layer-empty document
+with a large raw image-resource vector independently covers the retained
+synthetic-layer clone path at its owner-reservation exact/N-1/zero boundary.
 
 Every later save-workspace accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero
