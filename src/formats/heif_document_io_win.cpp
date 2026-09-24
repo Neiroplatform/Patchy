@@ -36,13 +36,16 @@ namespace {
 constexpr HRESULT kMfTopoCodecNotFound = static_cast<HRESULT>(0xC00D5212);
 
 [[noreturn]] void throw_decode_error(HRESULT hr, bool container_opened) {
-  if (hr == WINCODEC_ERR_COMPONENTNOTFOUND && !container_opened) {
+  const auto component_unavailable =
+      hr == WINCODEC_ERR_COMPONENTNOTFOUND ||
+      hr == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE;
+  if (component_unavailable && !container_opened) {
     throw std::runtime_error(std::string(kHeifPackageMissingMarker) +
                              " Opening HEIC images uses Windows' HEIF codec, which is not installed. "
                              "Install the free 'HEIF Image Extensions' package from the Microsoft Store "
                              "and try again.");
   }
-  if (hr == kMfTopoCodecNotFound || hr == WINCODEC_ERR_COMPONENTNOTFOUND) {
+  if (hr == kMfTopoCodecNotFound || component_unavailable) {
     // The container parsed but the HEVC bitstream decoder is missing.
     throw std::runtime_error(std::string(kHevcPackageMissingMarker) +
                              " Opening HEIC images uses Windows' HEVC codec, which is not installed. "
