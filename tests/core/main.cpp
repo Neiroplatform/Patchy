@@ -159,6 +159,7 @@ int main(int argc, char** argv) {
            psd_text_tests,
            layer_metadata_tests,
            brush_engine_tests,
+           advanced_paint_tests,
            pat_asl_abr_tests,
            pixel_tools_tests,
            palette_tests,

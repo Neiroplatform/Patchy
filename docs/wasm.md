@@ -145,6 +145,15 @@ from an immutable stroke-start layer snapshot; Smudge alone carries bounded
 running pickup state along the supplied path. Neither path may introduce
 pixel-content-driven footprint or source selection.
 
+`tests/sdk/wasm_advanced_paint_smoke.html` exercises the bounded Mixer Brush
+and Pattern Stamp Worker contract through one exact revision, undo/redo,
+stale/cancellation guards and PSD/PSB/recovery reopen. Its companion
+`wasm_advanced_paint_ui_smoke.html` drives both production tools and proves a
+validated local pattern asset is available to Pattern Stamp. Mixer Brush is
+limited to one running canvas-derived premultiplied average; Pattern Stamp is
+a direct static checker/dot tile lookup. These tests must not grow either path
+into per-bristle/fluid state or destination-adaptive pattern synthesis.
+
 ## wasm-core preset decisions (all in CMakePresets.json)
 
 - `-fwasm-exceptions`: format readers throw `std::runtime_error` and the

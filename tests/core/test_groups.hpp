@@ -28,6 +28,7 @@ std::vector<patchy::test::TestCase> psd_structure_tests();
 std::vector<patchy::test::TestCase> psd_text_tests();
 std::vector<patchy::test::TestCase> layer_metadata_tests();
 std::vector<patchy::test::TestCase> brush_engine_tests();
+std::vector<patchy::test::TestCase> advanced_paint_tests();
 std::vector<patchy::test::TestCase> pat_asl_abr_tests();
 std::vector<patchy::test::TestCase> pixel_tools_tests();
 std::vector<patchy::test::TestCase> palette_tests();

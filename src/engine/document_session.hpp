@@ -426,6 +426,7 @@ enum class PreparedDocumentMutationKind : std::uint8_t {
   Liquify,
   RetouchRepair,
   LocalAdjustmentBrush,
+  AdvancedPaintStroke,
 };
 
 struct CommitPreparedDocumentState {

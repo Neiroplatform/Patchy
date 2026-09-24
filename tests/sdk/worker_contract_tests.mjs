@@ -46,7 +46,7 @@ test("public capability names stay in exact parity with the C ABI", async () => 
   const header = await readFile(new URL("../../src/engine/host_protocol.h", import.meta.url), "utf8");
   const entries = [...header.matchAll(
     /PATCHY_ENGINE_CAP_([A-Z0-9_]+) = UINT64_C\(1\) << (\d+)/g)];
-  assert.equal(entries.length, 44);
+  assert.equal(entries.length, 45);
   const expected = Object.fromEntries(entries.map(([, cName, bit]) => {
     const name = cName.toLowerCase().replace(/_([a-z0-9])/g, (_, value) => value.toUpperCase());
     return [name, 1n << BigInt(bit)];
@@ -66,6 +66,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
     "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "pastePixelsButton", "paintPresetSelect",
     "paintTargetSelect", "linkMaskButton", "spotHealingToolButton", "patchToolButton",
+    "mixerToolButton", "patternStampToolButton", "advancedPaintSoftnessInput",
+    "advancedPaintFlowInput", "mixerWetInput", "mixerLoadInput", "mixerMixInput",
+    "mixerSampleAllInput", "advancedPatternInput", "advancedPatternSizeInput",
+    "advancedPatternSecondaryInput", "advancedPatternAlignedInput",
     "retouchSoftnessInput", "retouchSampleAllInput", "patchModeInput", "patchTransparentInput",
     "smudgeToolButton", "dodgeToolButton", "burnToolButton", "spongeToolButton",
     "blurToolButton", "sharpenToolButton", "localBrushSoftnessInput",
@@ -147,7 +151,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.previewRasterFill", "client.applyRasterFill",
     "client.previewLayerWarp", "client.warpLayer",
     "client.previewLiquify", "client.applyLiquify", "client.applyRetouchRepair",
-    "client.applyLocalAdjustmentBrush",
+    "client.applyLocalAdjustmentBrush", "client.applyAdvancedPaintStroke",
     "client.addTextLayer",
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
     "client.updateVectorShape",
@@ -245,12 +249,13 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /Select an area before using Patch Tool/);
   assert.match(script, /client\.applyRetouchRepair/);
   assert.match(script, /client\.applyLocalAdjustmentBrush/);
+  assert.match(script, /client\.applyAdvancedPaintStroke/);
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
     "quickSelect(", "magneticLasso(", "previewSelectionRefinement(", "refineSelection(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel(",
     "editLayers(", "moveLayers(", "groupLayers(", "removeLayers(", "copyLayersToDocument(",
-    "applyRetouchRepair(", "TextStyleRun", "TextParagraphRun"]) {
+    "applyRetouchRepair(", "applyAdvancedPaintStroke(", "TextStyleRun", "TextParagraphRun"]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
   assert.match(types, /addStateListener\(listener:/);
@@ -1305,6 +1310,63 @@ test("Emscripten adapter packs cancellable local-adjustment brush requests", () 
   engine.dispose();
 });
 
+test("Emscripten adapter packs bounded advanced-paint strokes", () => {
+  const memory = new ArrayBuffer(8192); const heap = new Uint8Array(memory);
+  const view = new DataView(memory); let next = 512; let callback = null;
+  const alloc = (size) => { const at = next; next += (size + 7) & ~7; return at; };
+  const seen = [];
+  const module = {
+    HEAPU8: heap, _malloc: alloc, _free() {},
+    _patchy_engine_get_protocol_info(info) {
+      view.setUint32(info + 4, 1, true); view.setBigUint64(info + 8, 1n << 44n, true); return 1;
+    },
+    _patchy_engine_runtime_create() { return 11; }, _patchy_engine_runtime_destroy() {},
+    addFunction(value, signature) { assert.equal(signature, "iiii"); callback = value; return 83; },
+    removeFunction(pointer) { assert.equal(pointer, 83); callback = null; },
+    _patchy_engine_session_apply_advanced_paint_stroke(session, state, revision, input,
+        progress, progressUserData, event) {
+      assert.deepEqual([session, state, revision, progress, progressUserData],
+        [22, 9n, 4n, 83, 0]);
+      const points = view.getUint32(input + 16, true);
+      seen.push({ mode: view.getUint32(input + 4, true), layerId: view.getBigUint64(input + 8, true),
+        count: view.getUint32(input + 20, true), brushSize: view.getInt32(input + 24, true),
+        softness: view.getInt32(input + 28, true), flow: view.getInt32(input + 32, true),
+        wet: view.getInt32(input + 36, true), load: view.getInt32(input + 40, true),
+        mix: view.getInt32(input + 44, true), pattern: view.getUint32(input + 48, true),
+        patternSize: view.getInt32(input + 52, true),
+        primary: Array.from(heap.subarray(input + 56, input + 60)),
+        secondary: Array.from(heap.subarray(input + 60, input + 64)),
+        anchor: [view.getInt32(input + 64, true), view.getInt32(input + 68, true)],
+        sampleAllLayers: heap[input + 72], aligned: heap[input + 73],
+        firstPoint: [view.getFloat64(points, true), view.getFloat64(points + 8, true)],
+        continued: callback(0, 0, 0) });
+      view.setBigUint64(event + 16, 5n, true); view.setBigUint64(event + 24, 10n, true);
+      view.setBigUint64(event + 32, 7n, true); heap[event + 40] = 1; heap[event + 41] = 1;
+      return 1;
+    },
+  };
+  const engine = new EmscriptenPatchyEngine(module);
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  engine.applyAdvancedPaintStroke(22, { stateId: 9n, revision: 4n }, {
+    layerId: 7n, mode: 1, points: [[2.5, 3.5], [4, 3.5]], brushSize: 17,
+    softness: 65, flow: 70, wet: 20, load: 80, mix: 40, pattern: 1,
+    patternSize: 12, color: [10, 20, 30, 255], secondaryColor: [40, 50, 60, 128],
+    patternAnchor: [-3, 5], sampleAllLayers: true, patternAligned: false,
+  }, cancellation);
+  assert.deepEqual(seen, [{ mode: 1, layerId: 7n, count: 2, brushSize: 17,
+    softness: 65, flow: 70, wet: 20, load: 80, mix: 40, pattern: 1,
+    patternSize: 12, primary: [10, 20, 30, 255], secondary: [40, 50, 60, 128],
+    anchor: [-3, 5], sampleAllLayers: 1, aligned: 0,
+    firstPoint: [2.5, 3.5], continued: 1 }]);
+  assert.throws(() => engine.applyAdvancedPaintStroke(22, { stateId: 9n, revision: 4n },
+    { layerId: 7n, mode: 1, points: [[1, 1]], brushSize: 5, softness: 0,
+      flow: 50, patternSize: 129 }, cancellation), /bounded contract/);
+  assert.throws(() => engine.applyAdvancedPaintStroke(22, { stateId: 9n, revision: 4n },
+    { layerId: 7n, mode: 0, points: [[1e300, 1]], brushSize: 5, softness: 0,
+      flow: 50 }, cancellation), /bounded contract/);
+  engine.dispose();
+});
+
 test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsupported PSB", () => {
   const memory = new ArrayBuffer(4096); const heap = new Uint8Array(memory);
   const view = new DataView(memory); let next = 512; let releases = 0;
@@ -2088,6 +2150,34 @@ test("worker commits one cancellable exact-state local-adjustment brush", async 
   assert.ok(calls[0][3] instanceof Int32Array);
   assert.equal(calls[0][2].layerId, 7n);
   await assert.rejects(host.dispatch({ method: "applyLocalAdjustmentBrush", ...message }),
+    (error) => error.name === "PatchyEngineError" && error.code === 6);
+  host.dispose();
+});
+
+test("worker commits one cancellable exact-state advanced-paint stroke", async () => {
+  let revision = 4n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 44n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision }; },
+    applyAdvancedPaintStroke(session, before, input, cancellation) {
+      calls.push([session, before.revision, input, cancellation]); revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 8, height: 6, name: "Advanced.psd" });
+  const cancellation = new SharedArrayBuffer(4);
+  const message = { layerId: "7", mode: 0, points: [[2, 3], [5, 3]],
+    brushSize: 9, softness: 50, flow: 70, wet: 40, load: 60, mix: 50,
+    color: [10, 20, 30, 255], cancellation,
+    expectedStateId: "4", expectedRevision: "4" };
+  const committed = await host.dispatch({ method: "applyAdvancedPaintStroke", ...message });
+  assert.equal(committed.revision, 5n);
+  assert.ok(calls[0][3] instanceof Int32Array);
+  assert.equal(calls[0][2].layerId, 7n);
+  await assert.rejects(host.dispatch({ method: "applyAdvancedPaintStroke", ...message }),
     (error) => error.name === "PatchyEngineError" && error.code === 6);
   host.dispose();
 });

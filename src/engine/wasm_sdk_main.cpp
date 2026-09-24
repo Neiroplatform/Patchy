@@ -101,6 +101,13 @@ static_assert(sizeof(patchy_engine_local_adjustment_brush) == 48);
 static_assert(offsetof(patchy_engine_local_adjustment_brush, points) == 16);
 static_assert(offsetof(patchy_engine_local_adjustment_brush, brush_size) == 24);
 static_assert(offsetof(patchy_engine_local_adjustment_brush, protect_tones) == 40);
+static_assert(sizeof(patchy_engine_advanced_paint_stroke) == 80);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, points) == 16);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, brush_size) == 24);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, pattern) == 48);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, primary_red) == 56);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, pattern_anchor_x) == 64);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, sample_all_layers) == 72);
 static_assert(sizeof(patchy_engine_essential_layer_style_projection) == 296);
 static_assert(offsetof(patchy_engine_essential_layer_style_projection,
                        inner_shadow_count) == 128);

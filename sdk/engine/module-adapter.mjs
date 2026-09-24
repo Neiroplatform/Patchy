@@ -46,6 +46,7 @@ const LIQUIFY_INPUT_SIZE = 24;
 const LIQUIFY_STROKE_SIZE = 64;
 const RETOUCH_REPAIR_SIZE = 48;
 const LOCAL_ADJUSTMENT_BRUSH_SIZE = 48;
+const ADVANCED_PAINT_STROKE_SIZE = 80;
 const LAYER_BATCH_SIZE = 32;
 const LAYER_BATCH_EDIT_SIZE = 40;
 const LAYER_BATCH_TRANSFORM_SIZE = 96;
@@ -62,6 +63,7 @@ const CAP_SELECTION_REFINEMENT = 1n << 40n;
 const CAP_LIQUIFY_AUTHORING = 1n << 41n;
 const CAP_RETOUCH_REPAIR = 1n << 42n;
 const CAP_LOCAL_ADJUSTMENT_BRUSH = 1n << 43n;
+const CAP_ADVANCED_PAINT_STROKE = 1n << 44n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -1119,6 +1121,29 @@ export class EmscriptenPatchyEngine {
         () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
       return this.#mutation((event, error) =>
         this.#module._patchy_engine_session_apply_local_adjustment_brush(
+          session, snapshot.stateId, snapshot.revision, value.input,
+          callback, 0, event, error));
+    } finally {
+      if (callback) this.#module.removeFunction(callback);
+      this.#module._free(value.points);
+      this.#module._free(value.input);
+    }
+  }
+
+  applyAdvancedPaintStroke(session, snapshot, input,
+                           cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    if (!(this.#capabilities & CAP_ADVANCED_PAINT_STROKE) ||
+        typeof this.#module._patchy_engine_session_apply_advanced_paint_stroke !== "function") {
+      throw new PatchyEngineError(2, "Patchy engine does not support advanced painting");
+    }
+    this.#cancellation(cancellation, "Advanced-paint stroke");
+    const value = this.#advancedPaintStroke(input);
+    let callback = 0;
+    try {
+      callback = this.#module.addFunction(
+        () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_apply_advanced_paint_stroke(
           session, snapshot.stateId, snapshot.revision, value.input,
           callback, 0, event, error));
     } finally {
@@ -2737,6 +2762,72 @@ export class EmscriptenPatchyEngine {
       view.setUint8(40, input.protectTones === false ? 0 : 1);
       view.setUint8(41, input.spongeSaturate ? 1 : 0);
       view.setUint8(42, input.spongeVibrance === false ? 0 : 1);
+      return { input: value, points };
+    } catch (error) {
+      if (points) this.#module._free(points);
+      if (value) this.#module._free(value);
+      throw error;
+    }
+  }
+
+  #advancedPaintStroke(input) {
+    const pointsInput = input.points ?? [];
+    const primary = this.#color(input.color ?? [0, 0, 0, 255]);
+    const secondary = this.#color(input.secondaryColor ?? [255, 255, 255, 255]);
+    const anchor = input.patternAnchor ?? [0, 0];
+    if (typeof input.layerId !== "bigint" || input.layerId <= 0n ||
+        input.layerId > UINT64_MAX || ![0, 1].includes(input.mode) ||
+        !Array.isArray(pointsInput) || pointsInput.length < 1 ||
+        pointsInput.length > 4096 ||
+        pointsInput.some((point) => !Array.isArray(point) || point.length !== 2 ||
+          !point.every((coordinate) => Number.isFinite(coordinate) &&
+            coordinate >= 0 && coordinate <= 0x7fffffff)) ||
+        !Number.isInteger(input.brushSize) || input.brushSize < 1 ||
+        input.brushSize > 4096 || !Number.isInteger(input.softness) ||
+        input.softness < 0 || input.softness > 100 ||
+        !Number.isInteger(input.flow) || input.flow < 1 || input.flow > 100 ||
+        !Number.isInteger(input.wet ?? 50) || input.wet < 0 || input.wet > 100 ||
+        !Number.isInteger(input.load ?? 50) || input.load < 1 || input.load > 100 ||
+        !Number.isInteger(input.mix ?? 50) || input.mix < 0 || input.mix > 100 ||
+        !Number.isInteger(input.pattern ?? 0) || input.pattern < 0 || input.pattern > 1 ||
+        !Number.isInteger(input.patternSize ?? 8) || input.patternSize < 1 ||
+        input.patternSize > 128 || !Array.isArray(anchor) || anchor.length !== 2 ||
+        !anchor.every((coordinate) => Number.isInteger(coordinate) &&
+          coordinate >= -0x80000000 && coordinate <= 0x7fffffff) ||
+        (input.sampleAllLayers !== undefined && typeof input.sampleAllLayers !== "boolean") ||
+        (input.patternAligned !== undefined && typeof input.patternAligned !== "boolean")) {
+      throw new TypeError("Advanced-paint stroke exceeds its bounded contract");
+    }
+    let points = 0;
+    let value = 0;
+    try {
+      points = this.#alloc(pointsInput.length * 16);
+      value = this.#alloc(ADVANCED_PAINT_STROKE_SIZE);
+      const pointView = this.#view(points, pointsInput.length * 16);
+      pointsInput.forEach((point, index) => {
+        pointView.setFloat64(index * 16, point[0], true);
+        pointView.setFloat64(index * 16 + 8, point[1], true);
+      });
+      const view = this.#view(value, ADVANCED_PAINT_STROKE_SIZE);
+      view.setUint32(0, ADVANCED_PAINT_STROKE_SIZE, true);
+      view.setUint32(4, input.mode, true);
+      view.setBigUint64(8, input.layerId, true);
+      view.setUint32(16, points, true);
+      view.setUint32(20, pointsInput.length, true);
+      view.setInt32(24, input.brushSize, true);
+      view.setInt32(28, input.softness, true);
+      view.setInt32(32, input.flow, true);
+      view.setInt32(36, input.wet ?? 50, true);
+      view.setInt32(40, input.load ?? 50, true);
+      view.setInt32(44, input.mix ?? 50, true);
+      view.setUint32(48, input.pattern ?? 0, true);
+      view.setInt32(52, input.patternSize ?? 8, true);
+      primary.forEach((component, index) => view.setUint8(56 + index, component));
+      secondary.forEach((component, index) => view.setUint8(60 + index, component));
+      view.setInt32(64, anchor[0], true);
+      view.setInt32(68, anchor[1], true);
+      view.setUint8(72, input.sampleAllLayers ? 1 : 0);
+      view.setUint8(73, input.patternAligned === false ? 0 : 1);
       return { input: value, points };
     } catch (error) {
       if (points) this.#module._free(points);

@@ -74,6 +74,7 @@ let transformPreviewCancellation = null;
 let paintDraft = null;
 let retouchDraft = null;
 let localBrushDraft = null;
+let advancedPaintDraft = null;
 let rasterPreviewPending = null;
 let rasterPreviewInFlight = false;
 let rasterPreviewGeneration = 0;
@@ -626,6 +627,17 @@ function renderAssetLibrary() {
     option.dataset.localAsset = "true";
     option.textContent = `${assetLibrary.gradients.includes(asset) ? "Gradient" : "Pattern"}: ${asset.name}`;
     select.append(option);
+  }
+  const advancedPattern = $("advancedPatternInput");
+  const selectedAdvancedPattern = advancedPattern.value;
+  for (const option of [...advancedPattern.querySelectorAll('option[data-local-asset="true"]')]) option.remove();
+  for (const asset of assetLibrary.patterns) {
+    const option = document.createElement("option"); option.value = `asset:${asset.id}`;
+    option.dataset.localAsset = "true"; option.textContent = `Pattern: ${asset.name}`;
+    advancedPattern.append(option);
+  }
+  if ([...advancedPattern.options].some((option) => option.value === selectedAdvancedPattern)) {
+    advancedPattern.value = selectedAdvancedPattern;
   }
   const fonts = $("fontPresetList");
   for (const option of [...fonts.querySelectorAll('option[data-local-asset="true"]')]) option.remove();
@@ -1779,6 +1791,7 @@ function setCanvasTool(tool) {
     ["quickSelectToolButton", "quickSelect"], ["magneticToolButton", "magnetic"],
     ["quickMaskToolButton", "quickMask"],
     ["panToolButton", "pan"], ["brushToolButton", "brush"],
+    ["mixerToolButton", "mixer"], ["patternStampToolButton", "patternStamp"],
     ["eraserToolButton", "eraser"], ["cloneToolButton", "clone"],
     ["healToolButton", "heal"], ["spotHealingToolButton", "spotHealing"],
     ["patchToolButton", "patch"], ["smudgeToolButton", "smudge"],
@@ -1809,6 +1822,13 @@ function setCanvasTool(tool) {
   for (const option of document.querySelectorAll(".local-sponge-option")) {
     option.hidden = tool !== "sponge";
   }
+  const advancedPaint = tool === "mixer" || tool === "patternStamp";
+  for (const option of document.querySelectorAll(".standard-paint-option")) {
+    option.hidden = advancedPaint || option.hidden;
+  }
+  for (const option of document.querySelectorAll(".advanced-paint-option")) option.hidden = !advancedPaint;
+  for (const option of document.querySelectorAll(".advanced-mixer-option")) option.hidden = tool !== "mixer";
+  for (const option of document.querySelectorAll(".advanced-pattern-option")) option.hidden = tool !== "patternStamp";
   if (tool === "quickMask") renderQuickMask();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   syncToolRoving(document.querySelector('.tool-rail [aria-pressed="true"]') || document.activeElement);
@@ -3922,6 +3942,108 @@ function finishLocalBrush(event, cancelled = false) {
   if (!cancelled && (draft.tool !== "smudge" || draft.points.length > 1)) commitLocalBrush(draft);
 }
 
+function advancedPaintControls(tool) {
+  const brushSize = Math.round(Number($("brushSizeInput").value));
+  const softness = Math.round(Number($("advancedPaintSoftnessInput").value));
+  const flow = Math.round(Number($("advancedPaintFlowInput").value));
+  const wet = Math.round(Number($("mixerWetInput").value));
+  const load = Math.round(Number($("mixerLoadInput").value));
+  const mix = Math.round(Number($("mixerMixInput").value));
+  const patternSize = Math.round(Number($("advancedPatternSizeInput").value));
+  if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > 4096 ||
+      !Number.isInteger(softness) || softness < 0 || softness > 100 ||
+      !Number.isInteger(flow) || flow < 1 || flow > 100 ||
+      !Number.isInteger(wet) || wet < 0 || wet > 100 ||
+      !Number.isInteger(load) || load < 1 || load > 100 ||
+      !Number.isInteger(mix) || mix < 0 || mix > 100 ||
+      !Number.isInteger(patternSize) || patternSize < 1 || patternSize > 128) return null;
+  const selectedPattern = $("advancedPatternInput").value;
+  const asset = selectedPattern.startsWith("asset:")
+    ? assetLibrary.patterns.find((item) => item.id === selectedPattern.slice(6)) : null;
+  const kind = asset?.kind ?? selectedPattern;
+  if (tool === "patternStamp" && !["checker", "dots"].includes(kind)) return null;
+  return { brushSize, softness, flow, wet, load, mix,
+    sampleAllLayers: $("mixerSampleAllInput").checked,
+    pattern: kind === "dots" ? 1 : 0,
+    patternSize: asset?.size ?? patternSize,
+    color: asset ? [...colorBytes(asset.foreground), 255]
+      : [...colorBytes($("brushColorInput").value), 255],
+    secondaryColor: asset ? [...colorBytes(asset.background), 255]
+      : [...colorBytes($("advancedPatternSecondaryInput").value), 255],
+    patternAligned: $("advancedPatternAlignedInput").checked };
+}
+
+function advancedPaintPoint(event) {
+  const point = canvasPoint(event);
+  return { x: Math.max(0, Math.min(snapshot.width - 1, point.x)),
+    y: Math.max(0, Math.min(snapshot.height - 1, point.y)) };
+}
+
+function drawAdvancedPaintFeedback(draft, from, to) {
+  const target = draft.overlay;
+  target.save(); target.lineCap = "round"; target.lineJoin = "round";
+  target.lineWidth = draft.brushSize;
+  target.strokeStyle = draft.tool === "mixer" ? "#ffb54742" : "#bd8cff42";
+  target.beginPath(); target.moveTo(from.x, from.y); target.lineTo(to.x, to.y); target.stroke();
+  target.lineWidth = 1 / Math.max(zoom, .01);
+  target.strokeStyle = draft.tool === "mixer" ? "#ffd7a3" : "#e5ceff";
+  target.beginPath(); target.arc(to.x, to.y, draft.brushSize / 2, 0, Math.PI * 2);
+  target.stroke(); target.restore();
+}
+
+function beginAdvancedPaint(event) {
+  const layer = selectedLayer(); const controls = advancedPaintControls(canvasTool);
+  if (busy || event.button !== 0 || layer?.kind !== 0 || !controls) return;
+  const point = advancedPaintPoint(event); canvas.setPointerCapture(event.pointerId);
+  advancedPaintDraft = { pointerId: event.pointerId, tool: canvasTool, layer,
+    stateId: snapshot.stateId, revision: snapshot.revision, points: [point], last: point,
+    patternAnchor: controls.patternAligned ? [0, 0] : [Math.floor(point.x), Math.floor(point.y)],
+    ...controls, overlay: $("gestureCanvas").getContext("2d") };
+  drawAdvancedPaintFeedback(advancedPaintDraft, point, point);
+}
+
+function moveAdvancedPaint(event) {
+  const draft = advancedPaintDraft;
+  if (!draft || draft.pointerId !== event.pointerId) return;
+  const point = advancedPaintPoint(event);
+  if (Math.hypot(point.x - draft.last.x, point.y - draft.last.y) < .5 ||
+      draft.points.length >= 4096) return;
+  drawAdvancedPaintFeedback(draft, draft.last, point);
+  draft.last = point; draft.points.push(point);
+}
+
+async function commitAdvancedPaint(draft) {
+  const title = draft.tool === "mixer" ? "Applying Mixer Brush" : "Applying Pattern Stamp";
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  clearError(); setBusy(true, title, "Committing one canonical engine revision");
+  $("cancelOperationButton").hidden = false; $("cancelOperationButton").disabled = false;
+  cancelActiveOperation = () => Atomics.store(cancellation, 0, 1);
+  try {
+    const before = snapshot;
+    const next = await client.applyAdvancedPaintStroke({ layerId: draft.layer.id,
+      mode: draft.tool === "mixer" ? 0 : 1,
+      points: draft.points.map(({ x, y }) => [x, y]), brushSize: draft.brushSize,
+      softness: draft.softness, flow: draft.flow, color: draft.color,
+      wet: draft.wet, load: draft.load, mix: draft.mix,
+      sampleAllLayers: draft.sampleAllLayers, pattern: draft.pattern,
+      patternSize: draft.patternSize, secondaryColor: draft.secondaryColor,
+      patternAnchor: draft.patternAnchor, patternAligned: draft.patternAligned,
+      cancellation, expectedStateId: draft.stateId, expectedRevision: draft.revision });
+    recordHistoryMutation(before, next, title); await acceptSnapshot(next); scheduleCheckpoint(next);
+  } catch (error) {
+    if (error?.code === 7) setSessionState("document", "Advanced paint cancelled");
+    else showError("Advanced paint failed", error);
+  } finally { setBusy(false); }
+}
+
+function finishAdvancedPaint(event, cancelled = false) {
+  const draft = advancedPaintDraft;
+  if (!draft || draft.pointerId !== event.pointerId) return;
+  advancedPaintDraft = null;
+  draft.overlay.clearRect(0, 0, canvas.width, canvas.height);
+  if (!cancelled) commitAdvancedPaint(draft);
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
 }
@@ -3970,6 +4092,10 @@ registerCommand("tool.magnetic", "magneticToolButton", () => setCanvasTool("magn
 registerCommand("tool.quickMask", "quickMaskToolButton", () => setCanvasTool("quickMask"));
 registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"));
 registerCommand("tool.brush", "brushToolButton", () => setCanvasTool("brush"));
+registerCommand("tool.mixer", "mixerToolButton", () => setCanvasTool("mixer"),
+  () => !busy && selectedLayer()?.kind === 0);
+registerCommand("tool.patternStamp", "patternStampToolButton", () => setCanvasTool("patternStamp"),
+  () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.eraser", "eraserToolButton", () => setCanvasTool("eraser"));
 registerCommand("tool.clone", "cloneToolButton", () => setCanvasTool("clone"));
 registerCommand("tool.heal", "healToolButton", () => setCanvasTool("heal"));
@@ -4217,6 +4343,16 @@ $("localBrushSoftnessInput").addEventListener("input", (event) => {
 $("localBrushStrengthInput").addEventListener("input", (event) => {
   $("localBrushStrengthOutput").textContent = `${event.currentTarget.value}%`;
 });
+for (const [input, output, suffix] of [
+  ["advancedPaintSoftnessInput", "advancedPaintSoftnessOutput", "%"],
+  ["advancedPaintFlowInput", "advancedPaintFlowOutput", "%"],
+  ["mixerWetInput", "mixerWetOutput", "%"],
+  ["mixerLoadInput", "mixerLoadOutput", "%"],
+  ["mixerMixInput", "mixerMixOutput", "%"],
+  ["advancedPatternSizeInput", "advancedPatternSizeOutput", " px"],
+]) {
+  $(input).addEventListener("input", (event) => { $(output).textContent = `${event.currentTarget.value}${suffix}`; });
+}
 $("brushColorInput").addEventListener("input", persistPreferences);
 $("paintTargetSelect").addEventListener("change", updateControls);
 $("paintPresetSelect").addEventListener("change", persistPreferences);
@@ -4507,6 +4643,9 @@ canvas.addEventListener("pointerdown", (event) => {
   if (["smudge", "dodge", "burn", "sponge", "blur", "sharpen"].includes(canvasTool)) {
     beginLocalBrush(event); return;
   }
+  if (canvasTool === "mixer" || canvasTool === "patternStamp") {
+    beginAdvancedPaint(event); return;
+  }
   if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "text") { openTextDialog(); return; }
   if (canvasTool === "pen") {
@@ -4624,6 +4763,7 @@ canvas.addEventListener("pointermove", (event) => {
   movePaint(event);
   moveRetouch(event);
   moveLocalBrush(event);
+  moveAdvancedPaint(event);
   if (lassoDraft?.pointerId === event.pointerId) {
     const point = canvasPoint(event); const last = lassoDraft.points.at(-1);
     if (Math.hypot(point.x - last.x, point.y - last.y) >= 1) lassoDraft.points.push(point);
@@ -4661,6 +4801,7 @@ canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
   finishRetouch(event);
   finishLocalBrush(event);
+  finishAdvancedPaint(event);
   finishGradient(event);
   if (lassoDraft?.pointerId === event.pointerId) {
     const draft = lassoDraft; lassoDraft = null; previewPolygon([]);

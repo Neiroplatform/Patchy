@@ -113,6 +113,7 @@ add_library(patchy_core
   src/core/layer_transform.cpp
   src/core/layer_warp.cpp
   src/core/local_adjustment_brush.cpp
+  src/core/advanced_paint_stroke.cpp
   src/core/liquify.cpp
   src/core/magnetic_lasso.cpp
   src/core/mask_outline.cpp
@@ -1665,6 +1666,7 @@ if(PATCHY_BUILD_TESTS)
     tests/core/adjustments_curves_tests.cpp
     tests/core/af_tests.cpp
     tests/core/brush_engine_tests.cpp
+    tests/core/advanced_paint_tests.cpp
     tests/core/composite_corpus_tests.cpp
     tests/core/compositor_blend_if_tests.cpp
     tests/core/compositor_layer_styles_tests.cpp

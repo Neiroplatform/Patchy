@@ -2377,6 +2377,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             case PreparedDocumentMutationKind::Liquify:
             case PreparedDocumentMutationKind::RetouchRepair:
             case PreparedDocumentMutationKind::LocalAdjustmentBrush:
+            case PreparedDocumentMutationKind::AdvancedPaintStroke:
               break;
             default:
               error = make_error(SessionErrorCode::InvalidArgument,

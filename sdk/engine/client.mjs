@@ -265,6 +265,17 @@ export class PatchyWorkerClient {
       expectedRevision: String(input.expectedRevision),
       cancellation: cancellation.buffer });
   }
+  applyAdvancedPaintStroke(input) {
+    const cancellation = input.cancellation instanceof Int32Array
+      ? input.cancellation : new Int32Array(new SharedArrayBuffer(4));
+    if (!(cancellation.buffer instanceof SharedArrayBuffer) || cancellation.length < 1) {
+      throw new TypeError("Advanced-paint stroke cancellation must use shared Int32 storage");
+    }
+    return this.#request("applyAdvancedPaintStroke", { ...input,
+      layerId: String(input.layerId), expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision),
+      cancellation: cancellation.buffer });
+  }
   closeDocument(documentId) { return this.#request("closeDocument", { documentId }); }
   setMemoryBudget(documentBytes, globalBytes) {
     return this.#request("setMemoryBudget", { documentBytes, globalBytes });

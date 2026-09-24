@@ -65,6 +65,8 @@
         <button class="tool-button" id="quickMaskToolButton" type="button" aria-label="Quick Mask" aria-pressed="false" title="Quick Mask (Q)">◐</button>
         <button class="tool-button" id="panToolButton" type="button" aria-label="Pan canvas" aria-pressed="false" title="Pan canvas (H)">✋</button>
         <button class="tool-button" id="brushToolButton" type="button" aria-label="Brush" aria-pressed="false" title="Brush (B)">●</button>
+        <button class="tool-button" id="mixerToolButton" type="button" aria-label="Mixer Brush" aria-pressed="false" title="Mixer Brush">◉</button>
+        <button class="tool-button" id="patternStampToolButton" type="button" aria-label="Pattern Stamp" aria-pressed="false" title="Pattern Stamp">▖</button>
         <button class="tool-button" id="eraserToolButton" type="button" aria-label="Eraser" aria-pressed="false" title="Eraser (E)">◇</button>
         <button class="tool-button" id="cloneToolButton" type="button" aria-label="Clone stamp" aria-pressed="false" title="Clone stamp (S)">♙</button>
         <button class="tool-button" id="healToolButton" type="button" aria-label="Healing brush" aria-pressed="false" title="Healing brush">✚</button>
@@ -94,19 +96,19 @@
           <span class="tool-options" id="toolOptions">
             <label>Size <input id="brushSizeInput" type="range" min="1" max="4096" value="24"><output id="brushSizeOutput">24 px</output></label>
             <label class="non-retouch-option">Color <input id="brushColorInput" type="color" value="#111111"></label>
-            <label class="non-retouch-option">Target <select id="paintTargetSelect" aria-label="Paint target">
+            <label class="non-retouch-option standard-paint-option">Target <select id="paintTargetSelect" aria-label="Paint target">
               <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
             </select></label>
-            <label class="non-retouch-option">Paint <select id="paintPresetSelect">
+            <label class="non-retouch-option standard-paint-option">Paint <select id="paintPresetSelect">
               <option value="foreground-transparent">Foreground → transparent</option>
               <option value="black-white">Black → white</option>
               <option value="sunset">Sunset</option><option value="ocean">Ocean</option>
               <option value="solid">Solid foreground</option>
               <option value="checker">Checker pattern</option><option value="dots">Dot pattern</option>
             </select></label>
-            <label class="non-retouch-option">Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
-            <label class="non-retouch-option">Edge <input id="edgeContrastInput" type="range" min="1" max="100" value="10"><output id="edgeContrastOutput">10%</output></label>
-            <label class="non-retouch-option"><input id="enhanceEdgeInput" type="checkbox"> Enhance edge</label>
+            <label class="non-retouch-option standard-paint-option">Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
+            <label class="non-retouch-option standard-paint-option">Edge <input id="edgeContrastInput" type="range" min="1" max="100" value="10"><output id="edgeContrastOutput">10%</output></label>
+            <label class="non-retouch-option standard-paint-option"><input id="enhanceEdgeInput" type="checkbox"> Enhance edge</label>
             <label class="retouch-option retouch-spot-option" hidden>Softness <input id="retouchSoftnessInput" type="range" min="0" max="100" value="50"><output id="retouchSoftnessOutput">50%</output></label>
             <label class="retouch-option retouch-patch-option" hidden>Patch <select id="patchModeInput"><option value="1">Source</option><option value="2">Destination</option></select></label>
             <label class="retouch-option" hidden><input id="retouchSampleAllInput" type="checkbox" checked> Sample all layers</label>
@@ -117,6 +119,16 @@
             <label class="local-brush-option local-tone-option" hidden><input id="localProtectTonesInput" type="checkbox" checked> Protect tones</label>
             <label class="local-brush-option local-sponge-option" hidden>Mode <select id="localSpongeModeInput"><option value="0">Desaturate</option><option value="1">Saturate</option></select></label>
             <label class="local-brush-option local-sponge-option" hidden><input id="localSpongeVibranceInput" type="checkbox" checked> Vibrance</label>
+            <label class="advanced-paint-option" hidden>Softness <input id="advancedPaintSoftnessInput" type="range" min="0" max="100" value="50"><output id="advancedPaintSoftnessOutput">50%</output></label>
+            <label class="advanced-paint-option" hidden>Flow <input id="advancedPaintFlowInput" type="range" min="1" max="100" value="100"><output id="advancedPaintFlowOutput">100%</output></label>
+            <label class="advanced-paint-option advanced-mixer-option" hidden>Wet <input id="mixerWetInput" type="range" min="0" max="100" value="50"><output id="mixerWetOutput">50%</output></label>
+            <label class="advanced-paint-option advanced-mixer-option" hidden>Load <input id="mixerLoadInput" type="range" min="1" max="100" value="50"><output id="mixerLoadOutput">50%</output></label>
+            <label class="advanced-paint-option advanced-mixer-option" hidden>Mix <input id="mixerMixInput" type="range" min="0" max="100" value="50"><output id="mixerMixOutput">50%</output></label>
+            <label class="advanced-paint-option advanced-mixer-option" hidden><input id="mixerSampleAllInput" type="checkbox"> Sample all layers</label>
+            <label class="advanced-paint-option advanced-pattern-option" hidden>Pattern <select id="advancedPatternInput"><option value="checker">Checker pattern</option><option value="dots">Dot pattern</option></select></label>
+            <label class="advanced-paint-option advanced-pattern-option" hidden>Pattern size <input id="advancedPatternSizeInput" type="range" min="1" max="128" value="8"><output id="advancedPatternSizeOutput">8 px</output></label>
+            <label class="advanced-paint-option advanced-pattern-option" hidden>Secondary <input id="advancedPatternSecondaryInput" type="color" value="#ffffff"></label>
+            <label class="advanced-paint-option advanced-pattern-option" hidden><input id="advancedPatternAlignedInput" type="checkbox" checked> Aligned</label>
           </span>
           <span id="documentMetrics"></span>
         </div>

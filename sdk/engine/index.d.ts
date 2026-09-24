@@ -27,7 +27,7 @@ export const PATCHY_ENGINE_CAPABILITIES: Readonly<{
   layerMaskStroke: bigint; richTextAuthoring: bigint; multiLayerAuthoring: bigint;
   multiLayerTransfer: bigint; multiLayerTransform: bigint; layerArrange: bigint;
   selectionRefinement: bigint; liquifyAuthoring: bigint; retouchRepair: bigint;
-  localAdjustmentBrush: bigint;
+  localAdjustmentBrush: bigint; advancedPaintStroke: bigint;
 }>;
 export interface PatchyWorkerFactoryOptions {
   WorkerConstructor?: typeof Worker;
@@ -221,6 +221,13 @@ export class PatchyWorkerClient {
     points: Array<[number, number]>; brushSize: number; softness: number;
     strength: number; toneRange?: 0 | 1 | 2; protectTones?: boolean;
     spongeSaturate?: boolean; spongeVibrance?: boolean; cancellation?: Int32Array;
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
+  applyAdvancedPaintStroke(input: { layerId: bigint; mode: 0 | 1;
+    points: Array<[number, number]>; brushSize: number; softness: number;
+    flow: number; color: number[]; wet?: number; load?: number; mix?: number;
+    sampleAllLayers?: boolean; pattern?: 0 | 1; patternSize?: number;
+    secondaryColor?: number[]; patternAnchor?: [number, number];
+    patternAligned?: boolean; cancellation?: Int32Array;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   closeDocument(documentId: number): Promise<DocumentProjection | null>;
   setMemoryBudget(documentBytes: number, globalBytes: number): Promise<DocumentProjection>;

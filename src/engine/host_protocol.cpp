@@ -11,6 +11,7 @@
 #include "core/raster_stroke.hpp"
 #include "core/retouch_repair.hpp"
 #include "core/local_adjustment_brush.hpp"
+#include "core/advanced_paint_stroke.hpp"
 #include "core/pattern_resource.hpp"
 #include "core/rect_utils.hpp"
 #include "core/smart_object.hpp"
@@ -159,6 +160,13 @@ static_assert(sizeof(patchy_engine_local_adjustment_brush) == 56U);
 static_assert(offsetof(patchy_engine_local_adjustment_brush, points) == 16U);
 static_assert(offsetof(patchy_engine_local_adjustment_brush, brush_size) == 32U);
 static_assert(offsetof(patchy_engine_local_adjustment_brush, protect_tones) == 48U);
+static_assert(sizeof(patchy_engine_advanced_paint_stroke) == 88U);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, points) == 16U);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, brush_size) == 32U);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, pattern) == 56U);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, primary_red) == 64U);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, pattern_anchor_x) == 72U);
+static_assert(offsetof(patchy_engine_advanced_paint_stroke, sample_all_layers) == 80U);
 #endif
 
 constexpr std::uint64_t kCapabilities =
@@ -203,7 +211,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_SELECTION_REFINEMENT |
     PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING |
     PATCHY_ENGINE_CAP_RETOUCH_REPAIR |
-    PATCHY_ENGINE_CAP_LOCAL_ADJUSTMENT_BRUSH;
+    PATCHY_ENGINE_CAP_LOCAL_ADJUSTMENT_BRUSH |
+    PATCHY_ENGINE_CAP_ADVANCED_PAINT_STROKE;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -1135,6 +1144,63 @@ local_adjustment_brush_request(
   request.protect_tones = input->protect_tones != 0U;
   request.sponge_saturate = input->sponge_saturate != 0U;
   request.sponge_vibrance = input->sponge_vibrance != 0U;
+  request.points.reserve(input->point_count);
+  for (std::size_t index = 0; index < input->point_count; ++index) {
+    request.points.push_back({input->points[index].x, input->points[index].y});
+  }
+  const auto& selection = session->value->selection();
+  request.selection = selection.selection;
+  if (!selection.mask_alpha.empty()) {
+    request.selection_mask_bounds = selection.mask_bounds;
+    request.selection_mask = selection.mask_alpha;
+  }
+  return request;
+}
+
+std::optional<patchy::AdvancedPaintStrokeRequest>
+advanced_paint_stroke_request(
+    const patchy_engine_session *session,
+    const patchy_engine_advanced_paint_stroke *input,
+    patchy_engine_error *error) {
+  const auto reserved_zero = input != nullptr &&
+      std::all_of(std::begin(input->reserved), std::end(input->reserved),
+                  [](std::uint8_t value) { return value == 0U; });
+  if (input == nullptr || input->struct_size != sizeof(*input) ||
+      input->layer_id == 0 || input->points == nullptr ||
+      input->point_count == 0U || input->point_count > 4096U ||
+      input->mode > PATCHY_ENGINE_ADVANCED_PAINT_PATTERN_STAMP ||
+      input->brush_size < 1 || input->brush_size > 4096 ||
+      input->softness < 0 || input->softness > 100 ||
+      input->flow < 1 || input->flow > 100 || input->wet < 0 ||
+      input->wet > 100 || input->load < 1 || input->load > 100 ||
+      input->mix < 0 || input->mix > 100 ||
+      input->pattern > PATCHY_ENGINE_ADVANCED_PATTERN_DOTS ||
+      input->pattern_size < 1 || input->pattern_size > 128 ||
+      input->sample_all_layers > 1U || input->pattern_aligned > 1U ||
+      !reserved_zero) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "a bounded versioned advanced-paint stroke request is required");
+    return std::nullopt;
+  }
+  patchy::AdvancedPaintStrokeRequest request;
+  request.mode = static_cast<patchy::AdvancedPaintMode>(input->mode);
+  request.brush_size = input->brush_size;
+  request.softness = input->softness;
+  request.flow = input->flow;
+  request.wet = input->wet;
+  request.load = input->load;
+  request.mix = input->mix;
+  request.sample_all_layers = input->sample_all_layers != 0U;
+  request.pattern = static_cast<patchy::AdvancedPaintPattern>(input->pattern);
+  request.pattern_size = input->pattern_size;
+  request.color = {input->primary_red, input->primary_green,
+                   input->primary_blue, input->primary_alpha};
+  request.secondary_color = {
+      input->secondary_red, input->secondary_green,
+      input->secondary_blue, input->secondary_alpha};
+  request.pattern_anchor_x = input->pattern_anchor_x;
+  request.pattern_anchor_y = input->pattern_anchor_y;
+  request.pattern_aligned = input->pattern_aligned != 0U;
   request.points.reserve(input->point_count);
   for (std::size_t index = 0; index < input->point_count; ++index) {
     request.points.push_back({input->points[index].x, input->points[index].y});
@@ -5971,6 +6037,60 @@ int patchy_engine_session_apply_local_adjustment_brush(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown local-adjustment brush failure");
+  }
+}
+
+int patchy_engine_session_apply_advanced_paint_stroke(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision,
+    const patchy_engine_advanced_paint_stroke *stroke,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  auto request = advanced_paint_stroke_request(session, stroke, error);
+  if (!request.has_value()) return 0;
+  std::int32_t completed_steps = 0;
+  request->continue_operation = [progress, progress_user_data,
+                                 &completed_steps]() {
+    ++completed_steps;
+    return progress == nullptr ||
+           progress(completed_steps, 0, progress_user_data) != 0;
+  };
+  try {
+    auto prepared = session->value->document();
+    patchy::AdvancedPaintStrokeResult painted;
+    std::string stroke_error;
+    if (!patchy::apply_advanced_paint_stroke(
+            prepared, stroke->layer_id, *request, &painted, &stroke_error)) {
+      return fail(error,
+                  stroke_error == "advanced-paint stroke was cancelled"
+                      ? PATCHY_ENGINE_ERROR_CANCELLED
+                      : PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  stroke_error.c_str());
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::AdvancedPaintStroke,
+            expected_state_id, std::move(prepared), painted.affected_region});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = stroke->layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc&) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate advanced-paint stroke result");
+  } catch (const std::exception& exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown advanced-paint stroke failure");
   }
 }
 

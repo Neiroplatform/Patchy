@@ -59,6 +59,7 @@ enum patchy_engine_capability : uint64_t {
   PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING = UINT64_C(1) << 41,
   PATCHY_ENGINE_CAP_RETOUCH_REPAIR = UINT64_C(1) << 42,
   PATCHY_ENGINE_CAP_LOCAL_ADJUSTMENT_BRUSH = UINT64_C(1) << 43,
+  PATCHY_ENGINE_CAP_ADVANCED_PAINT_STROKE = UINT64_C(1) << 44,
 };
 #else
 enum patchy_engine_capability {
@@ -110,6 +111,7 @@ typedef uint64_t patchy_engine_capability;
 #define PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING (UINT64_C(1) << 41)
 #define PATCHY_ENGINE_CAP_RETOUCH_REPAIR (UINT64_C(1) << 42)
 #define PATCHY_ENGINE_CAP_LOCAL_ADJUSTMENT_BRUSH (UINT64_C(1) << 43)
+#define PATCHY_ENGINE_CAP_ADVANCED_PAINT_STROKE (UINT64_C(1) << 44)
 #endif
 
 enum patchy_engine_error_code {
@@ -402,6 +404,45 @@ typedef struct patchy_engine_local_adjustment_brush {
   uint8_t sponge_vibrance;
   uint8_t reserved[5];
 } patchy_engine_local_adjustment_brush;
+
+enum patchy_engine_advanced_paint_mode {
+  PATCHY_ENGINE_ADVANCED_PAINT_MIXER = 0,
+  PATCHY_ENGINE_ADVANCED_PAINT_PATTERN_STAMP = 1,
+};
+
+enum patchy_engine_advanced_paint_pattern {
+  PATCHY_ENGINE_ADVANCED_PATTERN_CHECKER = 0,
+  PATCHY_ENGINE_ADVANCED_PATTERN_DOTS = 1,
+};
+
+typedef struct patchy_engine_advanced_paint_stroke {
+  uint32_t struct_size;
+  uint32_t mode;
+  uint64_t layer_id;
+  const patchy_engine_stroke_point *points;
+  size_t point_count;
+  int32_t brush_size;
+  int32_t softness;
+  int32_t flow;
+  int32_t wet;
+  int32_t load;
+  int32_t mix;
+  uint32_t pattern;
+  int32_t pattern_size;
+  uint8_t primary_red;
+  uint8_t primary_green;
+  uint8_t primary_blue;
+  uint8_t primary_alpha;
+  uint8_t secondary_red;
+  uint8_t secondary_green;
+  uint8_t secondary_blue;
+  uint8_t secondary_alpha;
+  int32_t pattern_anchor_x;
+  int32_t pattern_anchor_y;
+  uint8_t sample_all_layers;
+  uint8_t pattern_aligned;
+  uint8_t reserved[6];
+} patchy_engine_advanced_paint_stroke;
 
 typedef struct patchy_engine_memory_usage {
   uint32_t struct_size;
@@ -1740,6 +1781,12 @@ int patchy_engine_session_apply_local_adjustment_brush(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision,
     const patchy_engine_local_adjustment_brush *brush,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_apply_advanced_paint_stroke(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision,
+    const patchy_engine_advanced_paint_stroke *stroke,
     patchy_engine_transform_progress_fn progress, void *progress_user_data,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
