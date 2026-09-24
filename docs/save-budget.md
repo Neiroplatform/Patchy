@@ -355,8 +355,10 @@ On non-Windows hosts its PSD canary is 11440 bytes/FNV-1a
 Windows resolves the authored Arial run to the system PostScript name `ArialMT`,
 so its deterministic native canaries are 11448 bytes/FNV-1a
 `e3f3e0d4d890c0dc` for PSD and 12432 bytes/FNV-1a `06509563506089eb`
-for PSB. All four cases have the same 417600-byte tracked peak after the S2
-geometry census and require exact
+for PSB. On the macOS Release ABI all four cases have a 417600-byte tracked
+peak after the S2 geometry census. Other native/WASM ABIs derive the peak from
+the 415648-byte scalar baseline plus the exact shared Curves, prepared-overlay,
+and path-group value sizes; every platform requires exact
 success, byte-identical repeat serialization, typed N-1/zero rejection, and
 zero current usage after success or unwind. Existing text, vector, Smart Object,
 fill-opacity, and layered-writer canaries remain
@@ -370,10 +372,12 @@ are test evidence, not checked-in fixtures.
 The S2 whole-gate fixture combines nested groups, a clipping chain, raster and
 vector masks, compound vectors, an open multi-subpath live vector stroke that
 normalizes to native children, and concurrent drop-shadow, large outer-glow,
-stroke, bevel, and satin families. Its clone/geometry-complete census pins
-290972 owner bytes, 949424 normalization-scratch bytes, 2560664
-pre-normalization renderer bytes, and a 3268708-byte public peak after
-normalization changes the effective graph. Sequential normalized rendering pins
+stroke, bevel, and satin families. On the macOS Release libc++ ABI its clone/
+geometry-complete census pins 290972 owner bytes, 949424 normalization-scratch
+bytes, 2560664 pre-normalization renderer bytes, and a 3268708-byte public peak
+after normalization changes the effective graph. Windows and WASM retain exact
+success/N-1 admission but report their ABI-derived logical owner sizes instead
+of pretending libc++ container value sizes are portable. Sequential normalized rendering pins
 FNV-1a `501ebd773ac1f3bc`; reopened rendering pins `47648a1ddc27a07b`.
 The PSD is 11720 bytes/FNV-1a `a90e17b0e1df7606`; the PSB is 12660 bytes/FNV-1a
 `a6eecbb0a2011eb3`. Both formats require repeat-byte equality, semantic reopen,

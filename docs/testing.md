@@ -186,8 +186,10 @@ template/fallback `TySh`, fresh/preserved/patched/staged vector payloads, patche
 `iOpa`, and dirty `SoLd`/`SoLE`/`PlLd`/`plLd`. The combined base + text/style/
 iOpa + live-vector + matching global Smart Object source/dirty-placed + adjustment
 document is exercised and semantically reopened as PSD and PSB. Fixed canaries
-are 11440 bytes/FNV-1a `a46a8dbbd3169900`/417600 peak for PSD
-and 12424 bytes/FNV-1a `74b0d895c5bb7ad7`/417600 peak for PSB. Exact, N-1, zero,
+are 11440 bytes/FNV-1a `a46a8dbbd3169900` for PSD
+and 12424 bytes/FNV-1a `74b0d895c5bb7ad7` for PSB. The macOS Release peak is
+417600 bytes; Windows/WASM derive the logical peak from the same scalar baseline
+plus the shared ABI-sized Curves, prepared-overlay, and path-group values. Exact, N-1, zero,
 byte equality, typed rejection, repeat serialization, and zero-current unwind
 are mandatory. The TySh test records that the odd-first-candidate rebuild branch
 ran, and the staged layer-record test proves sequential inter-layer release plus
