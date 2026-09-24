@@ -317,6 +317,11 @@ int main(int argc, char* argv[]) {
         arguments[2], {QFileInfo(arguments[3]).absoluteFilePath()}, 2000);
     return accepted ? 0 : 23;
   }
+  if (arguments.size() == 3 && arguments[1] == QStringLiteral("--ping")) {
+    const bool accepted =
+        patchy::app::forward_single_instance_request_to(arguments[2], {}, 1000);
+    return accepted ? 0 : 23;
+  }
   if (arguments.size() == 6 && arguments[1] == QStringLiteral("--serve")) {
     const auto endpoint = arguments[2];
     const auto ready_path = arguments[3];
