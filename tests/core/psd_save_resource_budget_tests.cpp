@@ -18,8 +18,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -2595,13 +2597,13 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
   };
 #ifdef _WIN32
   constexpr std::array expected_cases{
-      Expected{false, 11448U, 0xe3f3e0d4d890c0dcULL, 410112U},
-      Expected{true, 12432U, 0x06509563506089ebULL, 410112U},
+      Expected{false, 11448U, 0xe3f3e0d4d890c0dcULL, 415648U},
+      Expected{true, 12432U, 0x06509563506089ebULL, 415648U},
   };
 #else
   constexpr std::array expected_cases{
-      Expected{false, 11440U, 0xa46a8dbbd3169900ULL, 410112U},
-      Expected{true, 12424U, 0x74b0d895c5bb7ad7ULL, 410112U},
+      Expected{false, 11440U, 0xa46a8dbbd3169900ULL, 415648U},
+      Expected{true, 12424U, 0x74b0d895c5bb7ad7ULL, 415648U},
   };
 #endif
   const auto artifact_directory = std::filesystem::path("test-artifacts");
@@ -2710,10 +2712,16 @@ void psd_save_generated_layer_payloads_reach_public_budget() {
   write_s1_psd_artifact_atomic(
       artifact_directory / "s1-generated-layer-payloads.psb",
       accepted_artifacts[1]);
-  constexpr std::string_view manifest =
-      "version=1\n"
-      "psd size=11440 fnv1a=a46a8dbbd3169900\n"
-      "psb size=12424 fnv1a=74b0d895c5bb7ad7\n";
+  std::ostringstream manifest_stream;
+  manifest_stream << "version=1\n";
+  for (std::size_t index = 0U; index < accepted_artifacts.size(); ++index) {
+    manifest_stream
+        << (expected_cases[index].large_document ? "psb" : "psd")
+        << " size=" << std::dec << accepted_artifacts[index].size()
+        << " fnv1a=" << std::hex << std::setw(16) << std::setfill('0')
+        << patchy::test::fnv1a_hash_bytes(accepted_artifacts[index]) << '\n';
+  }
+  const auto manifest = manifest_stream.str();
   write_s1_psd_artifact_atomic(
       artifact_manifest,
       std::span<const std::uint8_t>(
@@ -2842,9 +2850,20 @@ patchy::Document make_s2_workspace_document() {
 void psd_save_s2_normalization_and_renderer_workspace_whole_gate() {
   const auto document = make_s2_workspace_document();
   const auto census = patchy::psd::save_workspace_census(document);
-  CHECK(census.normalization_owner_bytes == 263040U);
-  CHECK(census.normalization_scratch_bytes == 921600U);
-  CHECK(census.renderer_scratch_bytes == 2457600U);
+  if (census.normalization_owner_bytes != 290972U ||
+      census.normalization_scratch_bytes != 949088U ||
+      census.renderer_scratch_bytes != 2560496U) {
+    throw std::runtime_error(
+        "S2 workspace census mismatch: owner=" +
+        std::to_string(census.normalization_owner_bytes) +
+        " normalization_scratch=" +
+        std::to_string(census.normalization_scratch_bytes) +
+        " renderer_scratch=" +
+        std::to_string(census.renderer_scratch_bytes));
+  }
+  CHECK(census.normalization_owner_bytes == 290972U);
+  CHECK(census.normalization_scratch_bytes == 949088U);
+  CHECK(census.renderer_scratch_bytes == 2560496U);
 
   const auto normalized = patchy::psd::prepare_compound_vector_psd(document);
   CHECK(normalized.has_value());
@@ -2865,7 +2884,11 @@ void psd_save_s2_normalization_and_renderer_workspace_whole_gate() {
                           : 0xa90e17b0e1df7606ULL));
     CHECK(measured.tracked_live_bytes == 0U);
     const auto peak = measured.tracked_live_bytes_high_water;
-    CHECK(peak == 3229440U);
+    if (peak != 3268540U) {
+      throw std::runtime_error("S2 public peak mismatch: " +
+                               std::to_string(peak));
+    }
+    CHECK(peak == 3268540U);
 
     const auto repeated = patchy::psd::DocumentIo::write_layered_rgb8(document, options);
     CHECK(repeated == baseline);
@@ -2912,6 +2935,124 @@ void psd_save_s2_normalization_and_renderer_workspace_whole_gate() {
       CHECK(rejected.tracked_live_bytes_high_water <= limit);
     }
   }
+}
+
+void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
+  patchy::Document clone_document(2, 2, patchy::PixelFormat::rgb8());
+  clone_document.metadata().raw_psd_image_resources.resize(131072U, 0x5AU);
+  patchy::Layer marked(clone_document.allocate_layer_id(), "Marked",
+                       patchy::LayerKind::Group);
+  marked.raw_psd_blending_ranges().resize(32768U, 0x6BU);
+  marked.unknown_psd_blocks().push_back(
+      patchy::UnknownPsdBlock{"zzzz", std::vector<std::uint8_t>(65536U, 0x7CU)});
+  patchy::set_compound_vector_group_kind(
+      marked, patchy::CompoundVectorGroupKind::Content);
+  clone_document.add_layer(std::move(marked));
+
+  const auto clone_census =
+      patchy::psd::save_workspace_census(clone_document);
+  const auto copied_payload_bytes = 131072U + 32768U + 65536U;
+  CHECK(clone_census.normalization_owner_bytes >=
+        3U * copied_payload_bytes);
+  patchy::psd::SaveUsage clone_rejected;
+  patchy::psd::WriteOptions clone_rejected_options;
+  clone_rejected_options.budget.max_tracked_live_bytes =
+      clone_census.normalization_owner_bytes - 1U;
+  clone_rejected_options.usage = &clone_rejected;
+  bool clone_did_reject = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(
+        clone_document, clone_rejected_options);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    clone_did_reject = true;
+    CHECK(error.dimension() ==
+          patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(clone_did_reject);
+  CHECK(clone_rejected.tracked_live_bytes == 0U);
+  CHECK(clone_rejected.tracked_live_bytes_high_water <=
+        clone_census.normalization_owner_bytes - 1U);
+
+  patchy::Document geometry_document(8, 8, patchy::PixelFormat::rgb8());
+  patchy::Layer vector(geometry_document.allocate_layer_id(), "Hostile geometry",
+                       patchy::PixelBuffer());
+  vector.metadata()[patchy::kLayerMetadataVectorShape] = "1";
+  patchy::VectorShapeContent shape;
+  patchy::PathSubpath dense;
+  dense.closed = false;
+  dense.shape_group = 0;
+  for (std::size_t index = 0U; index < 128U; ++index) {
+    const auto x = static_cast<double>(index % 8U);
+    const auto y = static_cast<double>((index / 8U) % 8U);
+    dense.anchors.push_back(
+        patchy::PathAnchor{x, y, x, y, x, y, false});
+  }
+  shape.path.subpaths.push_back(std::move(dense));
+  shape.path.subpaths.push_back(
+      s2_subpath({{0.0, 0.0}, {7.0, 7.0}}, false, 1));
+  shape.fill.kind = patchy::VectorFillKind::None;
+  shape.stroke.enabled = true;
+  shape.stroke.fill_enabled = false;
+  shape.stroke.width = 1.0;
+  shape.stroke.alignment = patchy::VectorStrokeAlignment::Center;
+  shape.stroke.cap = patchy::VectorStrokeCap::Butt;
+  shape.stroke.join = patchy::VectorStrokeJoin::Miter;
+  shape.stroke.content.kind = patchy::VectorFillKind::Solid;
+  vector.set_vector_shape(shape);
+  geometry_document.add_layer(std::move(vector));
+
+  const auto geometry_census =
+      patchy::psd::save_workspace_census(geometry_document);
+  CHECK(geometry_census.normalization_scratch_bytes >
+        8U * 8U * 96U * 2U);
+  CHECK(geometry_census.renderer_scratch_bytes > 8U * 8U * 64U);
+
+  auto dashed_document = geometry_document;
+  auto dashed_shape = *dashed_document.layers().front().vector_shape();
+  dashed_shape.stroke.dashes = {0.25, 0.25};
+  dashed_document.layers().front().set_vector_shape(std::move(dashed_shape));
+  const auto dashed_census =
+      patchy::psd::save_workspace_census(dashed_document);
+  CHECK(dashed_census.normalization_scratch_bytes >
+        geometry_census.normalization_scratch_bytes);
+  CHECK(dashed_census.renderer_scratch_bytes >
+        geometry_census.renderer_scratch_bytes);
+
+  patchy::psd::SaveUsage measured;
+  patchy::psd::WriteOptions options;
+  options.usage = &measured;
+  const auto baseline = patchy::psd::DocumentIo::write_layered_rgb8(
+      geometry_document, options);
+  CHECK(!baseline.empty());
+  CHECK(measured.tracked_live_bytes == 0U);
+  const auto exact_peak = measured.tracked_live_bytes_high_water;
+  CHECK(exact_peak >= geometry_census.normalization_scratch_bytes);
+
+  patchy::psd::SaveUsage exact;
+  auto exact_options = options;
+  exact_options.budget.max_tracked_live_bytes = exact_peak;
+  exact_options.usage = &exact;
+  CHECK(patchy::psd::DocumentIo::write_layered_rgb8(
+            geometry_document, exact_options) == baseline);
+  CHECK(exact.tracked_live_bytes == 0U);
+  CHECK(exact.tracked_live_bytes_high_water == exact_peak);
+
+  patchy::psd::SaveUsage one_short;
+  auto one_short_options = options;
+  one_short_options.budget.max_tracked_live_bytes = exact_peak - 1U;
+  one_short_options.usage = &one_short;
+  bool geometry_did_reject = false;
+  try {
+    (void)patchy::psd::DocumentIo::write_layered_rgb8(
+        geometry_document, one_short_options);
+  } catch (const patchy::psd::SaveBudgetExceeded& error) {
+    geometry_did_reject = true;
+    CHECK(error.dimension() ==
+          patchy::psd::SaveBudgetDimension::TrackedLiveBytes);
+  }
+  CHECK(geometry_did_reject);
+  CHECK(one_short.tracked_live_bytes == 0U);
+  CHECK(one_short.tracked_live_bytes_high_water <= exact_peak - 1U);
 }
 
 }  // namespace
@@ -2971,5 +3112,7 @@ std::vector<patchy::test::TestCase> psd_save_resource_budget_tests() {
        psd_save_generated_layer_payloads_reach_public_budget},
       {"psd_save_s2_normalization_and_renderer_workspace_whole_gate",
        psd_save_s2_normalization_and_renderer_workspace_whole_gate},
+      {"psd_save_s2_clone_and_geometry_census_rejects_before_workspace",
+       psd_save_s2_clone_and_geometry_census_rejects_before_workspace},
   };
 }

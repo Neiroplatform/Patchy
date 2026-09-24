@@ -189,9 +189,25 @@ the returned document clones/generated RGBA caches and for vector-raster scratch
 The scratch reservation is released as soon as normalization returns; the clone
 owner remains live through the recursive layered write and therefore overlaps the
 real compositor/serializer lifetime. The clone envelope counts three logical
-copies of caller pixel owners, three overlapping fill/stroke RGBA cache pairs
-per generated vector paint, and 96 bytes per
-canvas pixel for each generated vector paint while rasterization is active.
+copies of caller pixel owners and of every value-owned contiguous vector copied
+by `Document`/`Layer` normalization (including raw image resources, global-mask
+bytes, blending ranges, unknown-block payloads, style arrays, channel records,
+and saved-path geometry). Shared backing stores, strings, map nodes, and
+allocator capacity remain excluded. Generated children additionally reserve
+their vector-model storage, three overlapping fill/stroke RGBA cache pairs per
+generated vector paint, and 96 bytes per canvas pixel for each generated vector
+paint while rasterization is active.
+
+The allocation-free census also derives a geometry envelope from every source
+path. Straight segments contribute one edge and cubic segments conservatively
+contribute the rasterizer's maximum 256 flattened edges. The envelope includes
+polyline/dash-run points, direction arrays, outline edges, edge bucket tables,
+and the 262144-boundary-per-subpath dash fallback. Join and cap factors mirror
+the rasterizer's bevel/miter/round fan limits. This geometry term is added both
+to normalization scratch for every generated paint and to renderer scratch for
+every vector shape/mask, so a tiny canvas with hostile anchor or dash complexity
+cannot pass a canvas-only reservation. Multi-paint shapes also reserve each
+recursive single-part model copy and the retained part rasters.
 
 Before the sequential save compositor allocates, the same census reserves a
 document-derived renderer envelope. It sums nesting-sensitive group targets,
@@ -324,27 +340,36 @@ On non-Windows hosts its PSD canary is 11440 bytes/FNV-1a
 Windows resolves the authored Arial run to the system PostScript name `ArialMT`,
 so its deterministic native canaries are 11448 bytes/FNV-1a
 `e3f3e0d4d890c0dc` for PSD and 12432 bytes/FNV-1a `06509563506089eb`
-for PSB. All four cases have the same 410112-byte tracked peak and require exact
+for PSB. All four cases have the same 415648-byte tracked peak after the S2
+geometry census and require exact
 success, byte-identical repeat serialization, typed N-1/zero rejection, and
 zero current usage after success or unwind. Existing text, vector, Smart Object,
 fill-opacity, and layered-writer canaries remain
 unchanged. The integration test also materializes those exact bytes as
 `test-artifacts/s1-generated-layer-payloads.psd` and `.psb` for the external
 Photoshop gate. They are published through verified temporary files only after
-both formats pass every assertion; the `.manifest` file is written last and is
-the acceptance marker. These files are test evidence, not checked-in fixtures.
+both formats pass every assertion; the `.manifest` file is written last from
+the actual accepted platform bytes and is the acceptance marker. These files
+are test evidence, not checked-in fixtures.
 
 The S2 whole-gate fixture combines nested groups, a clipping chain, raster and
 vector masks, compound vectors, an open multi-subpath live vector stroke that
 normalizes to native children, and concurrent drop-shadow, large outer-glow,
-stroke, bevel, and satin families. Its census pins 263040 owner bytes, 921600
-normalization-scratch bytes, 2457600 pre-normalization renderer bytes, and a
-3229440-byte public peak after
+stroke, bevel, and satin families. Its clone/geometry-complete census pins
+290972 owner bytes, 949088 normalization-scratch bytes, 2560496
+pre-normalization renderer bytes, and a 3268540-byte public peak after
 normalization changes the effective graph. Sequential normalized rendering pins
 FNV-1a `501ebd773ac1f3bc`; reopened rendering pins `47648a1ddc27a07b`.
 The PSD is 11720 bytes/FNV-1a `a90e17b0e1df7606`; the PSB is 12660 bytes/FNV-1a
 `a6eecbb0a2011eb3`. Both formats require repeat-byte equality, semantic reopen,
 exact success, typed N-1/zero rejection, and unwind to zero.
+Emitted PSD/PSB and render hashes remain unchanged. A separate hostile fixture
+puts 128 anchors on a tiny canvas, proves
+that both normalization and renderer reservations scale with geometry, verifies
+that dash fallback increases both envelopes, and requires exact/N-1/unwind
+behavior through the public writer. Its companion marked-group fixture carries
+large raw image-resource, blending-range, and unknown-block payloads and proves
+that their value-owned clone bytes are admitted before normalization allocation.
 
 Every later save-workspace accounting site needs admission before allocation, an owner-coupled
 reservation that survives returned buffers, exact/N-1/zero tests, unwind-to-zero
