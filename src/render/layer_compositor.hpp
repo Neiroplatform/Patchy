@@ -39,14 +39,6 @@ inline Rect paint_bounds_for_render(const Layer& layer, const PixelBuffer& pixel
   return aligned ? layer_visible_alpha_bounds(layer, pixels, bounds).value_or(bounds) : bounds;
 }
 
-struct LayerBoundsOverride {
-  LayerId layer_id{};
-  Rect bounds{};
-  const PixelBuffer* pixels{nullptr};
-  std::optional<Rect> mask_bounds{};
-  std::optional<bool> visible{};
-};
-
 struct CompositeSample {
   RgbColor color{};
   float alpha{0.0F};

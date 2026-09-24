@@ -652,7 +652,11 @@ void psd_save_filter_effects_global_copy_reaches_public_budget() {
   (void)patchy::psd::DocumentIo::write_layered_rgb8(baseline_document,
                                                      baseline_options);
   const auto baseline_peak = baseline_usage.tracked_live_bytes_high_water;
+#ifdef __APPLE__
+  CHECK(baseline_peak == 1142U);
+#else
   CHECK(baseline_peak > sizeof(patchy::Layer));
+#endif
 
   patchy::Document document(1, 1, patchy::PixelFormat::rgb8());
   patchy::SmartFilterEffectsBlock block;
@@ -678,7 +682,11 @@ void psd_save_filter_effects_global_copy_reaches_public_budget() {
         0x39ef3ca4deed6e01ULL);
   CHECK(measured_usage.tracked_live_bytes == 0U);
   const auto measured_peak = measured_usage.tracked_live_bytes_high_water;
+#ifdef __APPLE__
+  CHECK(measured_peak == 13384U);
+#else
   CHECK(measured_peak > baseline_peak);
+#endif
 
   patchy::psd::SaveUsage exact_usage;
   auto exact_options = measured_options;
@@ -1482,7 +1490,11 @@ void psd_save_link_globals_reach_the_public_live_budget() {
         0x9a03676658d006f7ULL);
   CHECK(measured_usage.tracked_live_bytes == 0U);
   const auto measured_peak = measured_usage.tracked_live_bytes_high_water;
+#ifdef __APPLE__
+  CHECK(measured_peak == 3364U);
+#else
   CHECK(measured_peak > baseline.size());
+#endif
 
   patchy::psd::SaveUsage exact_usage;
   auto exact_options = measured_options;
@@ -2758,9 +2770,11 @@ patchy::PixelBuffer s2_gray(std::int32_t width, std::int32_t height,
   return result;
 }
 
-patchy::Document make_s2_workspace_document() {
-  patchy::Document document(48, 40, patchy::PixelFormat::rgb8());
-  document.add_pixel_layer("Base", patchy::test::solid_rgb(48, 40, 12U, 18U, 24U));
+patchy::Document make_s2_workspace_document(std::int32_t width = 48,
+                                             std::int32_t height = 40) {
+  patchy::Document document(width, height, patchy::PixelFormat::rgb8());
+  document.add_pixel_layer(
+      "Base", patchy::test::solid_rgb(width, height, 12U, 18U, 24U));
 
   patchy::Layer outer(document.allocate_layer_id(), "Outer", patchy::LayerKind::Group);
   patchy::Layer inner(document.allocate_layer_id(), "Inner", patchy::LayerKind::Group);
@@ -2775,7 +2789,7 @@ patchy::Document make_s2_workspace_document() {
       {{8.0, 8.0}, {28.0, 8.0}, {28.0, 24.0}, {8.0, 24.0}}, true, 0));
   vector_mask.density = 220U;
   vector_mask.feather = 3.0;
-  vector_mask.cache = s2_gray(48, 40, 255U);
+  vector_mask.cache = s2_gray(width, height, 255U);
   carrier.set_vector_mask(std::move(vector_mask));
   inner.add_child(std::move(carrier));
 
@@ -2892,6 +2906,25 @@ void psd_save_s2_normalization_and_renderer_workspace_whole_gate() {
       *normalized, nullptr, patchy::CompositorExecutionPolicy::Sequential);
   const auto render_hash = patchy::test::fnv1a_hash_bytes(render.data());
   CHECK(render_hash == 0x501ebd773ac1f3bcULL);
+
+  // The same nested/mask/vector/effect graph must stay byte-identical when it
+  // crosses the compositor's automatic 4M-pixel strip-parallel threshold.
+  // Explicit Sequential is the reference used by save; Automatic exercises
+  // the production parallel topology on multi-core native/WASM runners.
+  const auto topology_document = make_s2_workspace_document(2000, 2000);
+  const auto topology_normalized =
+      patchy::psd::prepare_compound_vector_psd(topology_document);
+  CHECK(topology_normalized.has_value());
+  const auto topology_automatic = patchy::Compositor{}.flatten_rgb8(
+      *topology_normalized);
+  const auto topology_sequential =
+      patchy::Compositor{}.flatten_rgb8_with_policy(
+          *topology_normalized, nullptr,
+          patchy::CompositorExecutionPolicy::Sequential);
+  CHECK(topology_automatic.byte_size() == topology_sequential.byte_size());
+  CHECK(std::equal(topology_automatic.data().begin(),
+                   topology_automatic.data().end(),
+                   topology_sequential.data().begin()));
 
   for (const bool large_document : {false, true}) {
     patchy::psd::SaveUsage measured;
@@ -3348,6 +3381,71 @@ void psd_save_s2_clone_and_geometry_census_rejects_before_workspace() {
   CHECK(patchy::psd::save_workspace_census(saturated_effect_document)
             .renderer_scratch_bytes ==
         std::numeric_limits<std::uint64_t>::max());
+
+  patchy::Document off_canvas_group_document(
+      1, 1, patchy::PixelFormat::rgb8());
+  patchy::Layer styled_group(
+      off_canvas_group_document.allocate_layer_id(),
+      "Off-canvas styled group", patchy::LayerKind::Group);
+  patchy::LayerColorOverlay transparent_group_overlay;
+  transparent_group_overlay.enabled = true;
+  transparent_group_overlay.opacity = 0.0F;
+  styled_group.layer_style().color_overlays.push_back(
+      transparent_group_overlay);
+  constexpr std::int32_t kOffCanvasExtent = 256;
+  patchy::Layer broad_child(
+      off_canvas_group_document.allocate_layer_id(), "Broad child",
+      patchy::test::solid_rgba(kOffCanvasExtent, kOffCanvasExtent,
+                               20U, 40U, 60U, 255U));
+  styled_group.add_child(std::move(broad_child));
+  off_canvas_group_document.add_layer(std::move(styled_group));
+
+  const auto off_canvas_group_census =
+      patchy::psd::save_workspace_census(off_canvas_group_document);
+  const auto expected_group_planes =
+      static_cast<std::uint64_t>(kOffCanvasExtent) *
+      static_cast<std::uint64_t>(kOffCanvasExtent) * 32U;
+  const auto expected_group_overlay_owner =
+      sizeof(patchy::render_detail::PreparedInteriorOverlay);
+  const auto expected_group_override_owner =
+      sizeof(patchy::render_detail::LayerBoundsOverride);
+  if (off_canvas_group_census.renderer_scratch_bytes !=
+      expected_group_planes + expected_group_overlay_owner +
+          expected_group_override_owner) {
+    throw std::runtime_error(
+        "off-canvas group census mismatch: actual=" +
+        std::to_string(off_canvas_group_census.renderer_scratch_bytes) +
+        " expected=" +
+        std::to_string(expected_group_planes +
+                       expected_group_overlay_owner +
+                       expected_group_override_owner));
+  }
+  CHECK(off_canvas_group_census.renderer_scratch_bytes > 1U * 32U);
+  verify_targeted_reservation(
+      off_canvas_group_document,
+      kOnePixelCompositorPrefix +
+          off_canvas_group_census.renderer_scratch_bytes,
+      kOnePixelCompositorPrefix);
+  const auto off_canvas_group_peak =
+      verify_public_exact_n_minus_one(off_canvas_group_document);
+  CHECK(off_canvas_group_peak >=
+        off_canvas_group_census.renderer_scratch_bytes);
+
+  patchy::Document restricted_document(1, 1,
+                                        patchy::PixelFormat::rgb8());
+  auto& restricted_layer = restricted_document.add_pixel_layer(
+      "Restricted", patchy::test::solid_rgba(1, 1, 90U, 80U, 70U, 255U));
+  restricted_layer.set_restricted_channels(patchy::kRestrictRed);
+  const auto restricted_census =
+      patchy::psd::save_workspace_census(restricted_document);
+  CHECK(restricted_census.renderer_scratch_bytes == 1U);
+  verify_targeted_reservation(
+      restricted_document,
+      kOnePixelCompositorPrefix + restricted_census.renderer_scratch_bytes,
+      kOnePixelCompositorPrefix);
+  const auto restricted_peak =
+      verify_public_exact_n_minus_one(restricted_document);
+  CHECK(restricted_peak >= restricted_census.renderer_scratch_bytes);
 }
 
 }  // namespace
