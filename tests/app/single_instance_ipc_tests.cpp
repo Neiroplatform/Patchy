@@ -8,6 +8,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QLocalServer>
 #include <QLocalSocket>
 #include <QTemporaryDir>
 #include <QThread>
@@ -347,6 +348,51 @@ int main(int argc, char* argv[]) {
     QTimer::singleShot(timeout_ms, &app, [] { QCoreApplication::exit(24); });
     return app.exec();
   }
+#ifdef Q_OS_WIN
+  if (arguments.size() == 6 && arguments[1] == QStringLiteral("--spoof-serve")) {
+    const auto endpoint = arguments[2];
+    const auto ready_path = arguments[3];
+    const auto capture_path = arguments[4];
+    bool timeout_ok = false;
+    const int timeout_ms = arguments[5].toInt(&timeout_ok);
+    if (!timeout_ok || timeout_ms < 100 || timeout_ms > 30000) {
+      return 22;
+    }
+    QLocalServer server;
+    server.setSocketOptions(QLocalServer::WorldAccessOption);
+    QObject::connect(&server, &QLocalServer::newConnection, &server, [&] {
+      auto* client = server.nextPendingConnection();
+      if (client == nullptr) {
+        QCoreApplication::exit(25);
+        return;
+      }
+      QObject::connect(client, &QLocalSocket::readyRead, client, [client, capture_path] {
+        if (!client->readAll().isEmpty()) {
+          QFile capture(capture_path);
+          if (capture.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            (void)capture.write("request-bytes-disclosed\n");
+          }
+          QCoreApplication::exit(25);
+        }
+      });
+      QObject::connect(client, &QLocalSocket::disconnected, client, [client] {
+        client->deleteLater();
+        QCoreApplication::exit(0);
+      });
+    });
+    if (!server.listen(endpoint)) {
+      return 21;
+    }
+    QFile ready(ready_path);
+    if (!ready.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
+        ready.write("spoof-listening\n") < 0) {
+      return 20;
+    }
+    ready.close();
+    QTimer::singleShot(timeout_ms, &app, [] { QCoreApplication::exit(24); });
+    return app.exec();
+  }
+#endif
 
   const std::vector<std::pair<const char*, std::function<void()>>> tests = {
       {"frame_round_trip_and_commands", frame_round_trip_and_commands},

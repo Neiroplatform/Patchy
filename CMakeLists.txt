@@ -1378,6 +1378,9 @@ ${PATCHY_LUPDATE_MANIFEST_SOURCES}
       src/app/single_instance_ipc.cpp
     )
     target_link_libraries(patchy_single_instance_ipc PUBLIC Qt6::Core Qt6::Network)
+    if(WIN32)
+      target_link_libraries(patchy_single_instance_ipc PRIVATE advapi32)
+    endif()
     patchy_configure_target(patchy_single_instance_ipc)
 
     if(EMSCRIPTEN)

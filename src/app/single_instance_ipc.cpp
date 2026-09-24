@@ -16,6 +16,11 @@
 #include <algorithm>
 #include <utility>
 
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace patchy::app {
 namespace {
 
@@ -167,6 +172,83 @@ QString lock_path_for_endpoint(const QString& endpoint) {
   return QDir(directory).filePath(QStringLiteral("listener-") +
                                   QString::fromLatin1(digest) + QStringLiteral(".lock"));
 }
+
+#ifdef Q_OS_WIN
+class ScopedWindowsHandle {
+ public:
+  explicit ScopedWindowsHandle(HANDLE handle = nullptr) : handle_(handle) {}
+  ~ScopedWindowsHandle() {
+    if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(handle_);
+    }
+  }
+
+  ScopedWindowsHandle(const ScopedWindowsHandle&) = delete;
+  ScopedWindowsHandle& operator=(const ScopedWindowsHandle&) = delete;
+
+  HANDLE get() const { return handle_; }
+
+ private:
+  HANDLE handle_;
+};
+
+bool token_user_sid(HANDLE token, QByteArray* storage, PSID* sid) {
+  DWORD required = 0;
+  (void)GetTokenInformation(token, TokenUser, nullptr, 0, &required);
+  if (required == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    return false;
+  }
+  storage->resize(static_cast<qsizetype>(required));
+  if (!GetTokenInformation(token, TokenUser, storage->data(), required, &required)) {
+    return false;
+  }
+  const auto* token_user = reinterpret_cast<const TOKEN_USER*>(storage->constData());
+  if (!IsValidSid(token_user->User.Sid)) {
+    return false;
+  }
+  *sid = token_user->User.Sid;
+  return true;
+}
+
+bool connected_server_is_current_user(const QLocalSocket& socket) {
+  const auto pipe = reinterpret_cast<HANDLE>(socket.socketDescriptor());
+  if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+
+  ULONG server_process_id = 0;
+  if (!GetNamedPipeServerProcessId(pipe, &server_process_id) || server_process_id == 0) {
+    return false;
+  }
+  ScopedWindowsHandle server_process(
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_process_id));
+  if (server_process.get() == nullptr) {
+    return false;
+  }
+
+  HANDLE raw_server_token = nullptr;
+  if (!OpenProcessToken(server_process.get(), TOKEN_QUERY, &raw_server_token)) {
+    return false;
+  }
+  ScopedWindowsHandle server_token(raw_server_token);
+
+  HANDLE raw_current_token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_current_token)) {
+    return false;
+  }
+  ScopedWindowsHandle current_token(raw_current_token);
+
+  QByteArray server_storage;
+  QByteArray current_storage;
+  PSID server_sid = nullptr;
+  PSID current_sid = nullptr;
+  return token_user_sid(server_token.get(), &server_storage, &server_sid) &&
+         token_user_sid(current_token.get(), &current_storage, &current_sid) &&
+         EqualSid(server_sid, current_sid);
+}
+#else
+bool connected_server_is_current_user(const QLocalSocket&) { return true; }
+#endif
 
 }  // namespace
 
@@ -387,6 +469,13 @@ bool forward_single_instance_request_to(const QString& endpoint, const QStringLi
   QLocalSocket socket;
   socket.connectToServer(endpoint);
   if (!socket.waitForConnected(std::max(timeout_ms, 0))) {
+    return false;
+  }
+  // UserAccessOption protects the real listener from foreign clients. On
+  // Windows the endpoint name is still globally discoverable, so authenticate
+  // the connected server process before disclosing any request bytes.
+  if (!connected_server_is_current_user(socket)) {
+    socket.abort();
     return false;
   }
   if (socket.write(frame) != frame.size() || !socket.waitForBytesWritten(std::max(timeout_ms, 0))) {

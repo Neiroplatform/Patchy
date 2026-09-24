@@ -616,6 +616,7 @@ QString photoshop_style_template() {
       color: @dock_collapse_text;
       border-color: transparent;
     }
+  )") + QStringLiteral(R"(
     QListWidget, QTreeWidget, QComboBox, QSpinBox, QSlider, QLineEdit, QTextEdit {
       background: @field_bg_large;
       color: @text_primary;

@@ -33,9 +33,12 @@
 #include <QScopeGuard>
 #include <QTabWidget>
 #include <QTimer>
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -44,6 +47,36 @@
 namespace {
 using namespace patchy::test::ui;
 using patchy::ui::MainWindowTestAccess;
+
+class InterruptDeadline {
+ public:
+  InterruptDeadline(int timeout_ms, std::function<void()> on_timeout)
+      : worker_([this, timeout_ms, on_timeout = std::move(on_timeout)] {
+          const int steps = std::max(1, timeout_ms / 50);
+          for (int index = 0; index < steps && !cancelled_.load(); ++index) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+          }
+          if (!cancelled_.load()) {
+            on_timeout();
+          }
+        }) {}
+
+  ~InterruptDeadline() { cancel(); }
+
+  InterruptDeadline(const InterruptDeadline&) = delete;
+  InterruptDeadline& operator=(const InterruptDeadline&) = delete;
+
+  void cancel() {
+    cancelled_.store(true);
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+ private:
+  std::atomic_bool cancelled_{false};
+  std::thread worker_;
+};
 
 template <typename Predicate> void until(Predicate ready) {
   QElapsedTimer deadline;
@@ -215,16 +248,13 @@ void ui_mcp_activity_stop_input_lock_and_local_scripts() {
   observer.start(20);
   // A failed Stop implementation must fail this test, not leave a forever
   // loop that continually feeds the normal inactivity watchdog.
-  std::jthread deadline([&](std::stop_token stop_token) {
-    for (int i = 0; i < 100 && !stop_token.stop_requested(); ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    if (!stop_token.stop_requested()) { window.script_engine_host().interrupt_from_any_thread(); }
+  InterruptDeadline deadline(5000, [&] {
+    window.script_engine_host().interrupt_from_any_thread();
   });
   const auto result = connection.call("execute_script", {
       {"code", "app.activeDocument.addLayer('Correction').fill('#ffd8a8'); while(true){console.log('working');}"},
       {"name", "Fix face"}, {"expectedState", state["stateToken"]}}, true);
-  deadline.request_stop();
+  deadline.cancel();
   if (observer_error) { std::rethrow_exception(observer_error); }
   CHECK(saw_working && close_blocked && read_busy);
   CHECK(result["structuredContent"].toObject()["status"] == "cancelled");
@@ -255,7 +285,7 @@ void ui_mcp_attached_cancellation_interrupts_tight_loop() {
   const int id = connection.send("tools/call", {{"name", "execute_script"},
       {"arguments", QJsonObject{{"code", "app.newDocument(8,8); while(true){}"},
                                 {"expectedState", connection.state()["stateToken"]}}}});
-  std::jthread cancel([&] {
+  std::thread cancel([&] {
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
     connection.session.receive_line(QJsonDocument(QJsonObject{{"jsonrpc", "2.0"},
         {"method", "notifications/cancelled"}, {"params", QJsonObject{{"requestId", id}}}}).toJson());
@@ -623,14 +653,11 @@ void ui_mcp_pause_resume_navigation_and_history() {
       } catch (...) { error = std::current_exception(); observer.stop(); host.stop_active_run(); }
     });
     observer.start(15);
-    std::jthread deadline([&](std::stop_token token) {
-      for (int i=0;i<100 && !token.stop_requested();++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      if (!token.stop_requested()) host.interrupt_from_any_thread();
-    });
+    InterruptDeadline deadline(5000, [&] { host.interrupt_from_any_thread(); });
     const auto result = connection.call("execute_script", {{"expectedState", connection.state()["stateToken"]},
       {"code", "var l=app.activeDocument.activeLayer;l.fill('#220000');patchy.ui.present(80);"
                "l.fill('#440000');patchy.ui.present(80);l.fill('#660000');"}}, false);
-    deadline.request_stop(); observer.stop();
+    deadline.cancel(); observer.stop();
     if (error) std::rethrow_exception(error);
     CHECK(result["structuredContent"].toObject()["status"] == "done");
     CHECK(phase == 2 && red() == 0x66 && !host.paused());
@@ -646,10 +673,7 @@ void ui_mcp_pause_stop_disconnect_and_cli_cleanup() {
   Connection connection(window);
   connection.edit("app.newDocument(32,32).addLayer('Ink');");
   auto& host = window.script_engine_host();
-  std::jthread deadline([&](std::stop_token token) {
-    for (int i=0;i<200 && !token.stop_requested();++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    if (!token.stop_requested()) host.interrupt_from_any_thread();
-  });
+  InterruptDeadline deadline(10000, [&] { host.interrupt_from_any_thread(); });
   for (const bool disconnect : {false, true}) {
     bool saw_pause = false;
     QTimer stop;
@@ -719,10 +743,7 @@ void ui_mcp_pause_preserves_timed_brush_pixels() {
       resumed = host.paused(); host.set_paused(false);
     });
   });
-  std::jthread deadline([&](std::stop_token token) {
-    for (int i=0;i<100 && !token.stop_requested();++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    if (!token.stop_requested()) host.interrupt_from_any_thread();
-  });
+  InterruptDeadline deadline(5000, [&] { host.interrupt_from_any_thread(); });
   connection.edit(paint);
   QObject::disconnect(observer);
   CHECK(paused && resumed && !host.paused());
