@@ -2376,6 +2376,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             case PreparedDocumentMutationKind::LayerWarp:
             case PreparedDocumentMutationKind::Liquify:
             case PreparedDocumentMutationKind::RetouchRepair:
+            case PreparedDocumentMutationKind::LocalAdjustmentBrush:
               break;
             default:
               error = make_error(SessionErrorCode::InvalidArgument,

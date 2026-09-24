@@ -1854,6 +1854,9 @@ Rect smudge_brush_segment(Document& document, LayerId layer_id, std::int32_t x0,
     stamp_at(center_x, center_y);
     last_center_x = center_x;
     last_center_y = center_y;
+    if (options.stroke_progress && step % 64 == 0 && options.stroke_progress(dirty)) {
+      break;
+    }
   }
   return dirty;
 }

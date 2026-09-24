@@ -45,6 +45,7 @@ const LAYER_WARP_SIZE = 48;
 const LIQUIFY_INPUT_SIZE = 24;
 const LIQUIFY_STROKE_SIZE = 64;
 const RETOUCH_REPAIR_SIZE = 48;
+const LOCAL_ADJUSTMENT_BRUSH_SIZE = 48;
 const LAYER_BATCH_SIZE = 32;
 const LAYER_BATCH_EDIT_SIZE = 40;
 const LAYER_BATCH_TRANSFORM_SIZE = 96;
@@ -60,6 +61,7 @@ const CAP_LAYER_ARRANGE = 1n << 39n;
 const CAP_SELECTION_REFINEMENT = 1n << 40n;
 const CAP_LIQUIFY_AUTHORING = 1n << 41n;
 const CAP_RETOUCH_REPAIR = 1n << 42n;
+const CAP_LOCAL_ADJUSTMENT_BRUSH = 1n << 43n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -1099,6 +1101,29 @@ export class EmscriptenPatchyEngine {
     } finally {
       if (callback) this.#module.removeFunction(callback);
       if (value.points) this.#module._free(value.points);
+      this.#module._free(value.input);
+    }
+  }
+
+  applyLocalAdjustmentBrush(session, snapshot, input,
+                            cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    if (!(this.#capabilities & CAP_LOCAL_ADJUSTMENT_BRUSH) ||
+        typeof this.#module._patchy_engine_session_apply_local_adjustment_brush !== "function") {
+      throw new PatchyEngineError(2, "Patchy engine does not support local-adjustment brushes");
+    }
+    this.#cancellation(cancellation, "Local-adjustment brush");
+    const value = this.#localAdjustmentBrush(input);
+    let callback = 0;
+    try {
+      callback = this.#module.addFunction(
+        () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_apply_local_adjustment_brush(
+          session, snapshot.stateId, snapshot.revision, value.input,
+          callback, 0, event, error));
+    } finally {
+      if (callback) this.#module.removeFunction(callback);
+      this.#module._free(value.points);
       this.#module._free(value.input);
     }
   }
@@ -2661,6 +2686,57 @@ export class EmscriptenPatchyEngine {
       view.setInt32(36, input.deltaY ?? 0, true);
       view.setUint8(40, input.transparent ? 1 : 0);
       view.setUint8(41, input.sampleAllLayers === false ? 0 : 1);
+      return { input: value, points };
+    } catch (error) {
+      if (points) this.#module._free(points);
+      if (value) this.#module._free(value);
+      throw error;
+    }
+  }
+
+  #localAdjustmentBrush(input) {
+    const pointsInput = input.points ?? [];
+    if (typeof input.layerId !== "bigint" || input.layerId <= 0n ||
+        input.layerId > UINT64_MAX || !Number.isInteger(input.mode) ||
+        input.mode < 0 || input.mode > 5 || !Array.isArray(pointsInput) ||
+        pointsInput.length < 1 || pointsInput.length > 4096 ||
+        pointsInput.some((point) => !Array.isArray(point) || point.length !== 2 ||
+          !point.every((coordinate) => Number.isFinite(coordinate) &&
+            coordinate >= 0 && coordinate <= 0x7fffffff)) ||
+        !Number.isInteger(input.brushSize) || input.brushSize < 1 ||
+        input.brushSize > 4096 || !Number.isInteger(input.softness) ||
+        input.softness < 0 || input.softness > 100 ||
+        !Number.isInteger(input.strength) || input.strength < 1 ||
+        input.strength > 100 || !Number.isInteger(input.toneRange ?? 1) ||
+        (input.toneRange ?? 1) < 0 || (input.toneRange ?? 1) > 2 ||
+        (input.protectTones !== undefined && typeof input.protectTones !== "boolean") ||
+        (input.spongeSaturate !== undefined && typeof input.spongeSaturate !== "boolean") ||
+        (input.spongeVibrance !== undefined && typeof input.spongeVibrance !== "boolean")) {
+      throw new TypeError("Local-adjustment brush exceeds its bounded contract");
+    }
+    let points = 0;
+    let value = 0;
+    try {
+      points = this.#alloc(pointsInput.length * 16);
+      value = this.#alloc(LOCAL_ADJUSTMENT_BRUSH_SIZE);
+      const pointView = this.#view(points, pointsInput.length * 16);
+      pointsInput.forEach((point, index) => {
+        pointView.setFloat64(index * 16, point[0], true);
+        pointView.setFloat64(index * 16 + 8, point[1], true);
+      });
+      const view = this.#view(value, LOCAL_ADJUSTMENT_BRUSH_SIZE);
+      view.setUint32(0, LOCAL_ADJUSTMENT_BRUSH_SIZE, true);
+      view.setUint32(4, input.mode, true);
+      view.setBigUint64(8, input.layerId, true);
+      view.setUint32(16, points, true);
+      view.setUint32(20, pointsInput.length, true);
+      view.setInt32(24, input.brushSize, true);
+      view.setInt32(28, input.softness, true);
+      view.setInt32(32, input.strength, true);
+      view.setUint32(36, input.toneRange ?? 1, true);
+      view.setUint8(40, input.protectTones === false ? 0 : 1);
+      view.setUint8(41, input.spongeSaturate ? 1 : 0);
+      view.setUint8(42, input.spongeVibrance === false ? 0 : 1);
       return { input: value, points };
     } catch (error) {
       if (points) this.#module._free(points);

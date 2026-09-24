@@ -70,6 +70,12 @@
         <button class="tool-button" id="healToolButton" type="button" aria-label="Healing brush" aria-pressed="false" title="Healing brush">✚</button>
         <button class="tool-button" id="spotHealingToolButton" type="button" aria-label="Spot Healing Brush" aria-pressed="false" title="Spot Healing Brush (J)">⊕</button>
         <button class="tool-button" id="patchToolButton" type="button" aria-label="Patch Tool" aria-pressed="false" title="Patch Tool (Shift+J)">⬡</button>
+        <button class="tool-button" id="smudgeToolButton" type="button" aria-label="Smudge Brush" aria-pressed="false" title="Smudge Brush">≋</button>
+        <button class="tool-button" id="dodgeToolButton" type="button" aria-label="Dodge Brush" aria-pressed="false" title="Dodge Brush">☼</button>
+        <button class="tool-button" id="burnToolButton" type="button" aria-label="Burn Brush" aria-pressed="false" title="Burn Brush">◒</button>
+        <button class="tool-button" id="spongeToolButton" type="button" aria-label="Sponge Brush" aria-pressed="false" title="Sponge Brush">◍</button>
+        <button class="tool-button" id="blurToolButton" type="button" aria-label="Blur Brush" aria-pressed="false" title="Blur Brush">◌</button>
+        <button class="tool-button" id="sharpenToolButton" type="button" aria-label="Sharpen Brush" aria-pressed="false" title="Sharpen Brush">◆</button>
         <button class="tool-button" id="gradientToolButton" type="button" aria-label="Gradient" aria-pressed="false" title="Gradient (G)">◩</button>
         <button class="tool-button" id="fillToolButton" type="button" aria-label="Fill selection" title="Fill selection">▰</button>
         <button class="tool-button" id="penToolButton" type="button" aria-label="Pen path" aria-pressed="false" title="Pen path (P)">⌁</button>
@@ -105,6 +111,12 @@
             <label class="retouch-option retouch-patch-option" hidden>Patch <select id="patchModeInput"><option value="1">Source</option><option value="2">Destination</option></select></label>
             <label class="retouch-option" hidden><input id="retouchSampleAllInput" type="checkbox" checked> Sample all layers</label>
             <label class="retouch-option retouch-patch-option" hidden><input id="patchTransparentInput" type="checkbox"> Transparent</label>
+            <label class="local-brush-option" hidden>Softness <input id="localBrushSoftnessInput" type="range" min="0" max="100" value="50"><output id="localBrushSoftnessOutput">50%</output></label>
+            <label class="local-brush-option" hidden>Strength <input id="localBrushStrengthInput" type="range" min="1" max="100" value="50"><output id="localBrushStrengthOutput">50%</output></label>
+            <label class="local-brush-option local-tone-option" hidden>Tones <select id="localToneRangeInput"><option value="0">Shadows</option><option value="1" selected>Midtones</option><option value="2">Highlights</option></select></label>
+            <label class="local-brush-option local-tone-option" hidden><input id="localProtectTonesInput" type="checkbox" checked> Protect tones</label>
+            <label class="local-brush-option local-sponge-option" hidden>Mode <select id="localSpongeModeInput"><option value="0">Desaturate</option><option value="1">Saturate</option></select></label>
+            <label class="local-brush-option local-sponge-option" hidden><input id="localSpongeVibranceInput" type="checkbox" checked> Vibrance</label>
           </span>
           <span id="documentMetrics"></span>
         </div>

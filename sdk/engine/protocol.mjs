@@ -48,6 +48,7 @@ export const PATCHY_ENGINE_CAPABILITIES = Object.freeze({
   selectionRefinement: capability(40),
   liquifyAuthoring: capability(41),
   retouchRepair: capability(42),
+  localAdjustmentBrush: capability(43),
 });
 
 export const PATCHY_ENGINE_REQUIRED_CAPABILITIES =

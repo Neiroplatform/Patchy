@@ -73,6 +73,7 @@ let transformPreviewRestore = null;
 let transformPreviewCancellation = null;
 let paintDraft = null;
 let retouchDraft = null;
+let localBrushDraft = null;
 let rasterPreviewPending = null;
 let rasterPreviewInFlight = false;
 let rasterPreviewGeneration = 0;
@@ -1780,7 +1781,10 @@ function setCanvasTool(tool) {
     ["panToolButton", "pan"], ["brushToolButton", "brush"],
     ["eraserToolButton", "eraser"], ["cloneToolButton", "clone"],
     ["healToolButton", "heal"], ["spotHealingToolButton", "spotHealing"],
-    ["patchToolButton", "patch"], ["gradientToolButton", "gradient"], ["penToolButton", "pen"],
+    ["patchToolButton", "patch"], ["smudgeToolButton", "smudge"],
+    ["dodgeToolButton", "dodge"], ["burnToolButton", "burn"],
+    ["spongeToolButton", "sponge"], ["blurToolButton", "blur"],
+    ["sharpenToolButton", "sharpen"], ["gradientToolButton", "gradient"], ["penToolButton", "pen"],
     ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
   }
@@ -1788,13 +1792,22 @@ function setCanvasTool(tool) {
     option.hidden = tool !== "spotHealing" && tool !== "patch";
   }
   for (const option of document.querySelectorAll(".non-retouch-option")) {
-    option.hidden = tool === "spotHealing" || tool === "patch";
+    option.hidden = tool === "spotHealing" || tool === "patch" ||
+      ["smudge", "dodge", "burn", "sponge", "blur", "sharpen"].includes(tool);
   }
   for (const option of document.querySelectorAll(".retouch-spot-option")) {
     option.hidden = tool !== "spotHealing";
   }
   for (const option of document.querySelectorAll(".retouch-patch-option")) {
     option.hidden = tool !== "patch";
+  }
+  const localBrush = ["smudge", "dodge", "burn", "sponge", "blur", "sharpen"].includes(tool);
+  for (const option of document.querySelectorAll(".local-brush-option")) option.hidden = !localBrush;
+  for (const option of document.querySelectorAll(".local-tone-option")) {
+    option.hidden = tool !== "dodge" && tool !== "burn";
+  }
+  for (const option of document.querySelectorAll(".local-sponge-option")) {
+    option.hidden = tool !== "sponge";
   }
   if (tool === "quickMask") renderQuickMask();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
@@ -3817,6 +3830,98 @@ function finishRetouch(event, cancelled = false) {
   commitRetouch(draft);
 }
 
+const localBrushModes = Object.freeze({ smudge: 0, dodge: 1, burn: 2,
+  sponge: 3, blur: 4, sharpen: 5 });
+const localBrushTitles = Object.freeze({
+  smudge: "Applying Smudge Brush",
+  dodge: "Applying Dodge Brush",
+  burn: "Applying Burn Brush",
+  sponge: "Applying Sponge Brush",
+  blur: "Applying Blur Brush",
+  sharpen: "Applying Sharpen Brush",
+});
+
+function localBrushControls() {
+  const brushSize = Math.round(Number($("brushSizeInput").value));
+  const softness = Math.round(Number($("localBrushSoftnessInput").value));
+  const strength = Math.round(Number($("localBrushStrengthInput").value));
+  const toneRange = Number($("localToneRangeInput").value);
+  if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > 4096 ||
+      !Number.isInteger(softness) || softness < 0 || softness > 100 ||
+      !Number.isInteger(strength) || strength < 1 || strength > 100 ||
+      ![0, 1, 2].includes(toneRange)) return null;
+  return { brushSize, softness, strength, toneRange,
+    protectTones: $("localProtectTonesInput").checked,
+    spongeSaturate: $("localSpongeModeInput").value === "1",
+    spongeVibrance: $("localSpongeVibranceInput").checked };
+}
+
+function drawLocalBrushFeedback(draft, from, to) {
+  const target = draft.overlay;
+  target.save(); target.lineCap = "round"; target.lineJoin = "round";
+  target.lineWidth = draft.brushSize; target.strokeStyle = "#70d7ff3d";
+  target.beginPath(); target.moveTo(from.x, from.y); target.lineTo(to.x, to.y); target.stroke();
+  target.lineWidth = 1 / Math.max(zoom, .01); target.strokeStyle = "#bdeeff";
+  target.beginPath(); target.arc(to.x, to.y, draft.brushSize / 2, 0, Math.PI * 2);
+  target.stroke(); target.restore();
+}
+
+function localBrushPoint(event) {
+  const point = canvasPoint(event);
+  return { x: Math.min(snapshot.width - 1, point.x),
+    y: Math.min(snapshot.height - 1, point.y) };
+}
+
+function beginLocalBrush(event) {
+  const layer = selectedLayer(); const controls = localBrushControls();
+  if (busy || event.button !== 0 || layer?.kind !== 0 || !controls) return;
+  const point = localBrushPoint(event); canvas.setPointerCapture(event.pointerId);
+  localBrushDraft = { pointerId: event.pointerId, tool: canvasTool, layer,
+    stateId: snapshot.stateId, revision: snapshot.revision, points: [point], last: point,
+    ...controls, overlay: $("gestureCanvas").getContext("2d") };
+  drawLocalBrushFeedback(localBrushDraft, point, point);
+}
+
+function moveLocalBrush(event) {
+  const draft = localBrushDraft;
+  if (!draft || draft.pointerId !== event.pointerId) return;
+  const point = localBrushPoint(event);
+  if (Math.hypot(point.x - draft.last.x, point.y - draft.last.y) < .5 ||
+      draft.points.length >= 4096) return;
+  drawLocalBrushFeedback(draft, draft.last, point);
+  draft.last = point; draft.points.push(point);
+}
+
+async function commitLocalBrush(draft) {
+  const title = localBrushTitles[draft.tool];
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  clearError(); setBusy(true, title, "Committing one canonical engine revision");
+  $("cancelOperationButton").hidden = false; $("cancelOperationButton").disabled = false;
+  cancelActiveOperation = () => Atomics.store(cancellation, 0, 1);
+  try {
+    const before = snapshot;
+    const next = await client.applyLocalAdjustmentBrush({ layerId: draft.layer.id,
+      mode: localBrushModes[draft.tool],
+      points: draft.points.map(({ x, y }) => [x, y]), brushSize: draft.brushSize,
+      softness: draft.softness, strength: draft.strength, toneRange: draft.toneRange,
+      protectTones: draft.protectTones, spongeSaturate: draft.spongeSaturate,
+      spongeVibrance: draft.spongeVibrance, cancellation,
+      expectedStateId: draft.stateId, expectedRevision: draft.revision });
+    recordHistoryMutation(before, next, title); await acceptSnapshot(next); scheduleCheckpoint(next);
+  } catch (error) {
+    if (error?.code === 7) setSessionState("document", "Local brush cancelled");
+    else showError("Local brush failed", error);
+  } finally { setBusy(false); }
+}
+
+function finishLocalBrush(event, cancelled = false) {
+  const draft = localBrushDraft;
+  if (!draft || draft.pointerId !== event.pointerId) return;
+  localBrushDraft = null;
+  draft.overlay.clearRect(0, 0, canvas.width, canvas.height);
+  if (!cancelled && (draft.tool !== "smudge" || draft.points.length > 1)) commitLocalBrush(draft);
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
 }
@@ -3872,6 +3977,10 @@ registerCommand("tool.spotHealing", "spotHealingToolButton", () => setCanvasTool
   () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.patch", "patchToolButton", () => setCanvasTool("patch"),
   () => !busy && selectedLayer()?.kind === 0 && Boolean(snapshot?.selection?.length));
+for (const tool of ["smudge", "dodge", "burn", "sponge", "blur", "sharpen"]) {
+  registerCommand(`tool.${tool}`, `${tool}ToolButton`, () => setCanvasTool(tool),
+    () => !busy && selectedLayer()?.kind === 0);
+}
 registerCommand("tool.gradient", "gradientToolButton", () => setCanvasTool("gradient"));
 registerCommand("tool.fill", "fillToolButton", fillSelectedPixels, () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.pen", "penToolButton", () => setCanvasTool("pen"));
@@ -4101,6 +4210,12 @@ $("brushSizeInput").addEventListener("input", () => {
 });
 $("retouchSoftnessInput").addEventListener("input", (event) => {
   $("retouchSoftnessOutput").textContent = `${event.currentTarget.value}%`;
+});
+$("localBrushSoftnessInput").addEventListener("input", (event) => {
+  $("localBrushSoftnessOutput").textContent = `${event.currentTarget.value}%`;
+});
+$("localBrushStrengthInput").addEventListener("input", (event) => {
+  $("localBrushStrengthOutput").textContent = `${event.currentTarget.value}%`;
 });
 $("brushColorInput").addEventListener("input", persistPreferences);
 $("paintTargetSelect").addEventListener("change", updateControls);
@@ -4389,6 +4504,9 @@ canvas.addEventListener("pointerdown", (event) => {
   if (spacePanActive) return;
   if (["brush", "eraser", "clone", "heal"].includes(canvasTool)) { beginPaint(event); return; }
   if (["spotHealing", "patch"].includes(canvasTool)) { beginRetouch(event); return; }
+  if (["smudge", "dodge", "burn", "sponge", "blur", "sharpen"].includes(canvasTool)) {
+    beginLocalBrush(event); return;
+  }
   if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "text") { openTextDialog(); return; }
   if (canvasTool === "pen") {
@@ -4505,6 +4623,7 @@ canvas.addEventListener("pointerdown", (event) => {
 canvas.addEventListener("pointermove", (event) => {
   movePaint(event);
   moveRetouch(event);
+  moveLocalBrush(event);
   if (lassoDraft?.pointerId === event.pointerId) {
     const point = canvasPoint(event); const last = lassoDraft.points.at(-1);
     if (Math.hypot(point.x - last.x, point.y - last.y) >= 1) lassoDraft.points.push(point);
@@ -4541,6 +4660,7 @@ canvas.addEventListener("pointermove", (event) => {
 canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
   finishRetouch(event);
+  finishLocalBrush(event);
   finishGradient(event);
   if (lassoDraft?.pointerId === event.pointerId) {
     const draft = lassoDraft; lassoDraft = null; previewPolygon([]);
@@ -4568,6 +4688,7 @@ canvas.addEventListener("pointerup", (event) => {
 canvas.addEventListener("pointercancel", (event) => {
   finishPaint(event, true); gradientDraft = null; clearRasterPreview(); moveDraft = null; lassoDraft = null;
   finishRetouch(event, true);
+  finishLocalBrush(event, true);
   quickSelectDraft = null; quickMaskDraft = null; previewPolygon([]); clearTransformPreview(true);
   if (canvasTool === "quickMask") renderQuickMask();
 });

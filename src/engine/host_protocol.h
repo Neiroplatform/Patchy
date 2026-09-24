@@ -58,6 +58,7 @@ enum patchy_engine_capability : uint64_t {
   PATCHY_ENGINE_CAP_SELECTION_REFINEMENT = UINT64_C(1) << 40,
   PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING = UINT64_C(1) << 41,
   PATCHY_ENGINE_CAP_RETOUCH_REPAIR = UINT64_C(1) << 42,
+  PATCHY_ENGINE_CAP_LOCAL_ADJUSTMENT_BRUSH = UINT64_C(1) << 43,
 };
 #else
 enum patchy_engine_capability {
@@ -108,6 +109,7 @@ typedef uint64_t patchy_engine_capability;
 #define PATCHY_ENGINE_CAP_SELECTION_REFINEMENT (UINT64_C(1) << 40)
 #define PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING (UINT64_C(1) << 41)
 #define PATCHY_ENGINE_CAP_RETOUCH_REPAIR (UINT64_C(1) << 42)
+#define PATCHY_ENGINE_CAP_LOCAL_ADJUSTMENT_BRUSH (UINT64_C(1) << 43)
 #endif
 
 enum patchy_engine_error_code {
@@ -369,6 +371,37 @@ typedef struct patchy_engine_retouch_repair {
   uint8_t sample_all_layers;
   uint8_t reserved[6];
 } patchy_engine_retouch_repair;
+
+enum patchy_engine_local_adjustment_brush_mode {
+  PATCHY_ENGINE_LOCAL_BRUSH_SMUDGE = 0,
+  PATCHY_ENGINE_LOCAL_BRUSH_DODGE = 1,
+  PATCHY_ENGINE_LOCAL_BRUSH_BURN = 2,
+  PATCHY_ENGINE_LOCAL_BRUSH_SPONGE = 3,
+  PATCHY_ENGINE_LOCAL_BRUSH_BLUR = 4,
+  PATCHY_ENGINE_LOCAL_BRUSH_SHARPEN = 5,
+};
+
+enum patchy_engine_local_adjustment_tone_range {
+  PATCHY_ENGINE_LOCAL_TONES_SHADOWS = 0,
+  PATCHY_ENGINE_LOCAL_TONES_MIDTONES = 1,
+  PATCHY_ENGINE_LOCAL_TONES_HIGHLIGHTS = 2,
+};
+
+typedef struct patchy_engine_local_adjustment_brush {
+  uint32_t struct_size;
+  uint32_t mode;
+  uint64_t layer_id;
+  const patchy_engine_stroke_point *points;
+  size_t point_count;
+  int32_t brush_size;
+  int32_t softness;
+  int32_t strength;
+  uint32_t tone_range;
+  uint8_t protect_tones;
+  uint8_t sponge_saturate;
+  uint8_t sponge_vibrance;
+  uint8_t reserved[5];
+} patchy_engine_local_adjustment_brush;
 
 typedef struct patchy_engine_memory_usage {
   uint32_t struct_size;
@@ -1701,6 +1734,12 @@ int patchy_engine_session_apply_retouch_repair(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision,
     const patchy_engine_retouch_repair *repair,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_apply_local_adjustment_brush(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision,
+    const patchy_engine_local_adjustment_brush *brush,
     patchy_engine_transform_progress_fn progress, void *progress_user_data,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,

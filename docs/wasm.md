@@ -135,6 +135,16 @@ Destination publishes pixels and selection atomically. Source choice remains
 geometry/user-offset only; these smokes must not introduce a healed live
 preview or pixel-driven source search.
 
+`tests/sdk/wasm_local_adjustment_smoke.html` exercises Smudge, Dodge, Burn,
+Sponge, Blur and Sharpen through the same pthread Worker boundary, proves one
+revision per bounded stroke, undo/redo, cancellation, stale rejection and
+PSD/PSB/recovery reopen. Its companion
+`wasm_local_adjustment_ui_smoke.html` drives the production pointer workflow
+and verifies that gesture feedback is disposable. Fixed adjustment modes read
+from an immutable stroke-start layer snapshot; Smudge alone carries bounded
+running pickup state along the supplied path. Neither path may introduce
+pixel-content-driven footprint or source selection.
+
 ## wasm-core preset decisions (all in CMakePresets.json)
 
 - `-fwasm-exceptions`: format readers throw `std::runtime_error` and the

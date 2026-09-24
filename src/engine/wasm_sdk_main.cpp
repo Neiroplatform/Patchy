@@ -97,6 +97,10 @@ static_assert(sizeof(patchy_engine_retouch_repair) == 48);
 static_assert(offsetof(patchy_engine_retouch_repair, points) == 16);
 static_assert(offsetof(patchy_engine_retouch_repair, brush_size) == 24);
 static_assert(offsetof(patchy_engine_retouch_repair, transparent) == 40);
+static_assert(sizeof(patchy_engine_local_adjustment_brush) == 48);
+static_assert(offsetof(patchy_engine_local_adjustment_brush, points) == 16);
+static_assert(offsetof(patchy_engine_local_adjustment_brush, brush_size) == 24);
+static_assert(offsetof(patchy_engine_local_adjustment_brush, protect_tones) == 40);
 static_assert(sizeof(patchy_engine_essential_layer_style_projection) == 296);
 static_assert(offsetof(patchy_engine_essential_layer_style_projection,
                        inner_shadow_count) == 128);

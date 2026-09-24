@@ -3,6 +3,7 @@
 #include "core/blend_math.hpp"
 #include "core/document.hpp"
 #include "core/layer_metadata.hpp"
+#include "core/local_adjustment_brush.hpp"
 #include "core/layer_tree.hpp"
 #include "core/gradient_presets.hpp"
 #include "filters/filter_engine.hpp"
@@ -1018,6 +1019,23 @@ patchy::Document retouch_fixture_document() {
   return document;
 }
 
+patchy::Document local_brush_fixture_document() {
+  patchy::Document document(24, 16, patchy::PixelFormat::rgba8());
+  patchy::PixelBuffer pixels(24, 16, patchy::PixelFormat::rgba8());
+  for (std::int32_t y = 0; y < pixels.height(); ++y) {
+    for (std::int32_t x = 0; x < pixels.width(); ++x) {
+      auto* pixel = pixels.pixel(x, y);
+      const auto detail = (x + y) % 3 == 0 ? 28 : 0;
+      pixel[0] = static_cast<std::uint8_t>(30 + x * 7 + detail);
+      pixel[1] = static_cast<std::uint8_t>(40 + y * 9 - detail / 2);
+      pixel[2] = static_cast<std::uint8_t>(210 - x * 5 + detail / 3);
+      pixel[3] = 255;
+    }
+  }
+  document.add_pixel_layer("Local brushes", std::move(pixels));
+  return document;
+}
+
 std::vector<std::uint8_t> retouch_pixels(const patchy::Document& document,
                                          patchy::LayerId layer_id) {
   const auto bytes = document.find_layer(layer_id)->pixels().data();
@@ -1256,6 +1274,199 @@ void retouch_repair_host_commit_moves_selection_atomically() {
   patchy_engine_runtime_destroy(runtime);
 }
 
+void local_adjustment_brushes_are_deterministic_and_bounded() {
+  for (const auto mode : {patchy::LocalAdjustmentBrushMode::Smudge,
+                          patchy::LocalAdjustmentBrushMode::Dodge,
+                          patchy::LocalAdjustmentBrushMode::Burn,
+                          patchy::LocalAdjustmentBrushMode::Sponge,
+                          patchy::LocalAdjustmentBrushMode::Blur,
+                          patchy::LocalAdjustmentBrushMode::Sharpen}) {
+    auto first = local_brush_fixture_document();
+    auto second = first;
+    const auto layer_id = first.layers().front().id();
+    const auto before = retouch_pixels(first, layer_id);
+    patchy::LocalAdjustmentBrushRequest request;
+    request.mode = mode;
+    request.points = {{5.0, 8.0}, {12.0, 8.0}, {18.0, 10.0}};
+    request.brush_size = 7;
+    request.softness = 35;
+    request.strength = 60;
+    request.sponge_saturate = true;
+    patchy::LocalAdjustmentBrushResult result;
+    std::string error;
+    CHECK(patchy::apply_local_adjustment_brush(first, layer_id, request,
+                                                &result, &error));
+    CHECK(!result.affected_region.empty());
+    CHECK(retouch_pixels(first, layer_id) != before);
+    CHECK(patchy::apply_local_adjustment_brush(second, layer_id, request,
+                                                nullptr, &error));
+    CHECK(retouch_pixels(first, layer_id) == retouch_pixels(second, layer_id));
+  }
+
+  auto selected = local_brush_fixture_document();
+  const auto layer_id = selected.layers().front().id();
+  const auto before = retouch_pixels(selected, layer_id);
+  patchy::LocalAdjustmentBrushRequest request;
+  request.mode = patchy::LocalAdjustmentBrushMode::Dodge;
+  request.points = {{12.0, 8.0}};
+  request.brush_size = 9;
+  request.strength = 80;
+  request.selection = {{0, 0, 4, 4}};
+  std::string error;
+  CHECK(!patchy::apply_local_adjustment_brush(selected, layer_id, request,
+                                               nullptr, &error));
+  CHECK(retouch_pixels(selected, layer_id) == before);
+
+  auto soft_selected = local_brush_fixture_document();
+  const auto soft_layer_id = soft_selected.layers().front().id();
+  const auto soft_before = retouch_pixels(soft_selected, soft_layer_id);
+  patchy::PixelBuffer soft_mask(24, 16, patchy::PixelFormat::gray8());
+  soft_mask.clear(0); soft_mask.pixel(12, 8)[0] = 128;
+  request.points = {{12.0, 8.0}}; request.brush_size = 1;
+  request.strength = 100; request.selection.clear();
+  request.selection_mask_bounds = {0, 0, 24, 16};
+  request.selection_mask = std::move(soft_mask);
+  CHECK(patchy::apply_local_adjustment_brush(
+      soft_selected, soft_layer_id, request, nullptr, &error));
+  const auto soft_after = retouch_pixels(soft_selected, soft_layer_id);
+  CHECK(soft_after != soft_before);
+  CHECK(std::equal(soft_after.begin(), soft_after.begin() + 4,
+                   soft_before.begin()));
+}
+
+void local_adjustment_brush_rejects_locks_and_cancels_atomically() {
+  auto document = local_brush_fixture_document();
+  const auto layer_id = document.layers().front().id();
+  const auto original = retouch_pixels(document, layer_id);
+  patchy::LocalAdjustmentBrushRequest request;
+  request.mode = patchy::LocalAdjustmentBrushMode::Blur;
+  request.points = {{4.0, 4.0}, {19.0, 11.0}};
+  request.brush_size = 11;
+  request.strength = 70;
+  std::string error;
+  document.find_layer(layer_id)->set_lock_flags(patchy::kLayerLockImagePixels);
+  CHECK(!patchy::apply_local_adjustment_brush(document, layer_id, request,
+                                               nullptr, &error));
+  CHECK(retouch_pixels(document, layer_id) == original);
+  document.find_layer(layer_id)->set_lock_flags(0);
+  std::size_t checks = 0;
+  request.continue_operation = [&checks] { return ++checks < 2; };
+  CHECK(!patchy::apply_local_adjustment_brush(document, layer_id, request,
+                                               nullptr, &error));
+  CHECK(error.find("cancelled") != std::string::npos);
+  CHECK(retouch_pixels(document, layer_id) == original);
+
+  auto transparent = local_brush_fixture_document();
+  const auto transparent_id = transparent.layers().front().id();
+  auto* transparent_pixel = transparent.find_layer(transparent_id)->pixels().pixel(12, 8);
+  transparent_pixel[0] = 7; transparent_pixel[1] = 8;
+  transparent_pixel[2] = 9; transparent_pixel[3] = 0;
+  transparent.find_layer(transparent_id)->set_lock_flags(
+      patchy::kLayerLockTransparentPixels);
+  request = {};
+  request.mode = patchy::LocalAdjustmentBrushMode::Smudge;
+  request.points = {{7.0, 8.0}, {17.0, 8.0}};
+  request.brush_size = 7; request.strength = 80;
+  CHECK(patchy::apply_local_adjustment_brush(
+      transparent, transparent_id, request, nullptr, &error));
+  const auto* locked_pixel = transparent.find_layer(transparent_id)->pixels().pixel(12, 8);
+  CHECK(locked_pixel[0] == 7 && locked_pixel[1] == 8 &&
+        locked_pixel[2] == 9 && locked_pixel[3] == 0);
+
+  auto palette_document = local_brush_fixture_document();
+  const auto palette_id = palette_document.layers().front().id();
+  patchy::DocumentPaletteEditing palette_editing;
+  palette_editing.palette.colors = {{0, 0, 0}, {255, 255, 255}, {224, 64, 96}};
+  palette_document.palette_editing() = std::move(palette_editing);
+  const auto palette_before = retouch_pixels(palette_document, palette_id);
+  request = {};
+  request.mode = patchy::LocalAdjustmentBrushMode::Blur;
+  request.points = {{12.0, 8.0}}; request.brush_size = 7;
+  request.softness = 0; request.strength = 100;
+  CHECK(patchy::apply_local_adjustment_brush(
+      palette_document, palette_id, request, nullptr, &error));
+  const auto palette_after = retouch_pixels(palette_document, palette_id);
+  std::size_t snapped = 0;
+  for (std::size_t offset = 0; offset < palette_after.size(); offset += 4U) {
+    if (!std::equal(palette_after.begin() + static_cast<std::ptrdiff_t>(offset),
+                    palette_after.begin() + static_cast<std::ptrdiff_t>(offset + 4U),
+                    palette_before.begin() + static_cast<std::ptrdiff_t>(offset))) {
+      ++snapped;
+      const auto matches = std::any_of(
+          palette_document.palette_editing()->palette.colors.begin(),
+          palette_document.palette_editing()->palette.colors.end(),
+          [&](const patchy::RgbColor& color) {
+            return palette_after[offset] == color.red &&
+                   palette_after[offset + 1U] == color.green &&
+                   palette_after[offset + 2U] == color.blue;
+          });
+      CHECK(matches); CHECK(palette_after[offset + 3U] == 255U);
+    }
+  }
+  CHECK(snapped > 0U);
+
+  auto bounded = local_brush_fixture_document();
+  const auto bounded_id = bounded.layers().front().id();
+  const auto bounded_before = retouch_pixels(bounded, bounded_id);
+  request = {};
+  request.mode = patchy::LocalAdjustmentBrushMode::Sharpen;
+  request.points = {{12.0, 8.0}}; request.brush_size = 4096;
+  CHECK(!patchy::apply_local_adjustment_brush(
+      bounded, bounded_id, request, nullptr, &error));
+  CHECK(error.find("work exceeds") != std::string::npos);
+  CHECK(retouch_pixels(bounded, bounded_id) == bounded_before);
+}
+
+void local_adjustment_brush_host_commits_one_undoable_revision() {
+  patchy_engine_error error{};
+  patchy_engine_protocol_info protocol{};
+  protocol.struct_size = sizeof(protocol);
+  CHECK(patchy_engine_get_protocol_info(&protocol, &error) == 1);
+  CHECK((protocol.capabilities & PATCHY_ENGINE_CAP_LOCAL_ADJUSTMENT_BRUSH) != 0U);
+  auto* runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto* session = patchy_engine_session_create_rgba8(runtime, 24, 16, &error);
+  CHECK(session != nullptr);
+  patchy_engine_document_projection projection{};
+  projection.struct_size = sizeof(projection);
+  CHECK(patchy_engine_session_document(session, &projection, &error) == 1);
+  std::vector<std::uint8_t> rgba(24U * 16U * 4U, 120U);
+  for (std::size_t index = 3; index < rgba.size(); index += 4U) rgba[index] = 255U;
+  patchy_engine_pixel_layer_input layer{};
+  layer.struct_size = sizeof(layer);
+  layer.expected_state_id = projection.state_id;
+  layer.expected_revision = projection.revision;
+  layer.bounds = {0, 0, 24, 16};
+  layer.width = 24; layer.height = 16; layer.rgba = rgba.data();
+  layer.rgba_size = rgba.size(); layer.name = "Local ABI"; layer.name_size = 9;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &layer, &event, &error) == 1);
+  const auto layer_id = event.affected_layer_id;
+  projection = {}; projection.struct_size = sizeof(projection);
+  CHECK(patchy_engine_session_document(session, &projection, &error) == 1);
+  const std::array<patchy_engine_stroke_point, 2> points{{{6.0, 8.0}, {18.0, 8.0}}};
+  patchy_engine_local_adjustment_brush brush{};
+  brush.struct_size = sizeof(brush);
+  brush.mode = PATCHY_ENGINE_LOCAL_BRUSH_DODGE;
+  brush.layer_id = layer_id; brush.points = points.data(); brush.point_count = points.size();
+  brush.brush_size = 7; brush.softness = 25; brush.strength = 60;
+  brush.tone_range = PATCHY_ENGINE_LOCAL_TONES_MIDTONES;
+  brush.protect_tones = 1U; brush.sponge_vibrance = 1U;
+  const auto before_state = projection.state_id;
+  CHECK(patchy_engine_session_apply_local_adjustment_brush(
+            session, projection.state_id, projection.revision, &brush,
+            nullptr, nullptr, &event, &error) == 1);
+  CHECK(event.state_id != before_state);
+  CHECK(patchy_engine_session_apply_local_adjustment_brush(
+            session, projection.state_id, projection.revision, &brush,
+            nullptr, nullptr, &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 // main() decides the Qt platform before the QApplication exists, from a raw argv
 // scan; this pins the scan's contract (exact token, "--" ends it) so the
 // QCommandLineParser definition of --headless and the early scan cannot drift.
@@ -1310,6 +1521,12 @@ std::vector<patchy::test::TestCase> infra_selection_tests() {
        retouch_repair_rejects_locks_and_cancels_without_mutation},
       {"retouch_repair_host_commit_moves_selection_atomically",
        retouch_repair_host_commit_moves_selection_atomically},
+      {"local_adjustment_brushes_are_deterministic_and_bounded",
+       local_adjustment_brushes_are_deterministic_and_bounded},
+      {"local_adjustment_brush_rejects_locks_and_cancels_atomically",
+       local_adjustment_brush_rejects_locks_and_cancels_atomically},
+      {"local_adjustment_brush_host_commits_one_undoable_revision",
+       local_adjustment_brush_host_commits_one_undoable_revision},
       {"cli_headless_flag_matches_exact_token", cli_headless_flag_matches_exact_token},
   };
 }

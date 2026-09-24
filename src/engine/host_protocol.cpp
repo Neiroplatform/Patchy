@@ -10,6 +10,7 @@
 #include "core/quick_select.hpp"
 #include "core/raster_stroke.hpp"
 #include "core/retouch_repair.hpp"
+#include "core/local_adjustment_brush.hpp"
 #include "core/pattern_resource.hpp"
 #include "core/rect_utils.hpp"
 #include "core/smart_object.hpp"
@@ -154,6 +155,10 @@ static_assert(sizeof(patchy_engine_retouch_repair) == 56U);
 static_assert(offsetof(patchy_engine_retouch_repair, points) == 16U);
 static_assert(offsetof(patchy_engine_retouch_repair, brush_size) == 32U);
 static_assert(offsetof(patchy_engine_retouch_repair, transparent) == 48U);
+static_assert(sizeof(patchy_engine_local_adjustment_brush) == 56U);
+static_assert(offsetof(patchy_engine_local_adjustment_brush, points) == 16U);
+static_assert(offsetof(patchy_engine_local_adjustment_brush, brush_size) == 32U);
+static_assert(offsetof(patchy_engine_local_adjustment_brush, protect_tones) == 48U);
 #endif
 
 constexpr std::uint64_t kCapabilities =
@@ -197,7 +202,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_LAYER_ARRANGE |
     PATCHY_ENGINE_CAP_SELECTION_REFINEMENT |
     PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING |
-    PATCHY_ENGINE_CAP_RETOUCH_REPAIR;
+    PATCHY_ENGINE_CAP_RETOUCH_REPAIR |
+    PATCHY_ENGINE_CAP_LOCAL_ADJUSTMENT_BRUSH;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -1089,6 +1095,51 @@ std::optional<patchy::RetouchRepairRequest> retouch_repair_request(
     request.points.push_back({input->points[index].x, input->points[index].y});
   }
   const auto &selection = session->value->selection();
+  request.selection = selection.selection;
+  if (!selection.mask_alpha.empty()) {
+    request.selection_mask_bounds = selection.mask_bounds;
+    request.selection_mask = selection.mask_alpha;
+  }
+  return request;
+}
+
+std::optional<patchy::LocalAdjustmentBrushRequest>
+local_adjustment_brush_request(
+    const patchy_engine_session *session,
+    const patchy_engine_local_adjustment_brush *input,
+    patchy_engine_error *error) {
+  const auto reserved_zero = input != nullptr &&
+      std::all_of(std::begin(input->reserved), std::end(input->reserved),
+                  [](std::uint8_t value) { return value == 0U; });
+  if (input == nullptr || input->struct_size != sizeof(*input) ||
+      input->layer_id == 0 || input->points == nullptr ||
+      input->point_count == 0U || input->point_count > 4096U ||
+      input->mode > PATCHY_ENGINE_LOCAL_BRUSH_SHARPEN ||
+      input->brush_size < 1 || input->brush_size > 4096 ||
+      input->softness < 0 || input->softness > 100 ||
+      input->strength < 1 || input->strength > 100 ||
+      input->tone_range > PATCHY_ENGINE_LOCAL_TONES_HIGHLIGHTS ||
+      input->protect_tones > 1U || input->sponge_saturate > 1U ||
+      input->sponge_vibrance > 1U || !reserved_zero) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "a bounded versioned local-adjustment brush request is required");
+    return std::nullopt;
+  }
+  patchy::LocalAdjustmentBrushRequest request;
+  request.mode = static_cast<patchy::LocalAdjustmentBrushMode>(input->mode);
+  request.brush_size = input->brush_size;
+  request.softness = input->softness;
+  request.strength = input->strength;
+  request.tone_range =
+      static_cast<patchy::LocalAdjustmentToneRange>(input->tone_range);
+  request.protect_tones = input->protect_tones != 0U;
+  request.sponge_saturate = input->sponge_saturate != 0U;
+  request.sponge_vibrance = input->sponge_vibrance != 0U;
+  request.points.reserve(input->point_count);
+  for (std::size_t index = 0; index < input->point_count; ++index) {
+    request.points.push_back({input->points[index].x, input->points[index].y});
+  }
+  const auto& selection = session->value->selection();
   request.selection = selection.selection;
   if (!selection.mask_alpha.empty()) {
     request.selection_mask_bounds = selection.mask_bounds;
@@ -5866,6 +5917,60 @@ int patchy_engine_session_apply_retouch_repair(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown retouch-repair failure");
+  }
+}
+
+int patchy_engine_session_apply_local_adjustment_brush(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision,
+    const patchy_engine_local_adjustment_brush *brush,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  auto request = local_adjustment_brush_request(session, brush, error);
+  if (!request.has_value()) return 0;
+  std::int32_t completed_steps = 0;
+  request->continue_operation = [progress, progress_user_data,
+                                 &completed_steps]() {
+    ++completed_steps;
+    return progress == nullptr ||
+           progress(completed_steps, 0, progress_user_data) != 0;
+  };
+  try {
+    auto prepared = session->value->document();
+    patchy::LocalAdjustmentBrushResult adjusted;
+    std::string brush_error;
+    if (!patchy::apply_local_adjustment_brush(
+            prepared, brush->layer_id, *request, &adjusted, &brush_error)) {
+      return fail(error,
+                  brush_error == "local-adjustment brush was cancelled"
+                      ? PATCHY_ENGINE_ERROR_CANCELLED
+                      : PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  brush_error.c_str());
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::LocalAdjustmentBrush,
+            expected_state_id, std::move(prepared), adjusted.affected_region});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = brush->layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc&) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate local-adjustment brush result");
+  } catch (const std::exception& exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown local-adjustment brush failure");
   }
 }
 
