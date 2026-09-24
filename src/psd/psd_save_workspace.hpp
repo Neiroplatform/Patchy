@@ -1,7 +1,10 @@
 #pragma once
 
+#include "core/adjustment_layer.hpp"
 #include "core/document.hpp"
 #include "core/vector_compound.hpp"
+#include "core/vector_raster_workspace.hpp"
+#include "render/layer_compositor_workspace.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -246,6 +249,15 @@ inline std::uint64_t vector_path_geometry_scratch(
   // heads/cells/coverage are already covered by the per-pixel envelope.
   std::uint64_t total = multiply_saturated(geometry.fill_edges, 32U);
   add_saturated(total, multiply_saturated(geometry.subpaths, 32U));
+  // The rasterizer groups every consecutive shape_group run before it rejects
+  // degenerate geometry. One-anchor subpaths therefore still own entries; the
+  // number of source subpaths is a conservative allocation-free run bound.
+  add_saturated(
+      total,
+      multiply_saturated(
+          static_cast<std::uint64_t>(path.subpaths.size()),
+          static_cast<std::uint64_t>(
+              sizeof(vector_raster_detail::PathGroup))));
   if (stroke == nullptr || !stroke->enabled || !(stroke->width > 0.0) ||
       path.empty()) {
     return total;
@@ -305,6 +317,23 @@ inline std::uint64_t vector_shape_geometry_scratch(
   return total;
 }
 
+inline std::uint64_t adjustment_model_scratch() noexcept {
+  // adjustment_settings_from_layer may overlap the caller's default curves,
+  // four parsed metadata vectors, and the returned rich Curves model while a
+  // value copy is installed. The public model clamps every channel to nineteen
+  // points. Three complete owner sets also dominate one LUT build's normalized
+  // point copy plus its two double work vectors, without parsing metadata or
+  // allocating during this census.
+  constexpr std::uint64_t kCurveChannels = 4U;
+  constexpr std::uint64_t kMaximumCurveControlPoints = 19U;
+  constexpr std::uint64_t kOverlappingOwnerSets = 3U;
+  return multiply_saturated(
+      multiply_saturated(kOverlappingOwnerSets, kCurveChannels),
+      multiply_saturated(
+          kMaximumCurveControlPoints,
+          static_cast<std::uint64_t>(sizeof(CurveControlPoint))));
+}
+
 inline void add_source_pixels(const Layer& layer,
                               std::uint64_t& total) noexcept {
   add_saturated(total, static_cast<std::uint64_t>(layer.pixels().byte_size()));
@@ -346,6 +375,20 @@ inline std::uint64_t enabled_effect_count(const LayerStyle& style) noexcept {
   add(style.bevels);
   add(style.satins);
   return count;
+}
+
+inline std::uint64_t interior_overlay_owner_bytes(
+    const LayerStyle& style) noexcept {
+  std::uint64_t count = 0U;
+  add_saturated(count,
+                static_cast<std::uint64_t>(style.pattern_overlays.size()));
+  add_saturated(count,
+                static_cast<std::uint64_t>(style.gradient_fills.size()));
+  add_saturated(count,
+                static_cast<std::uint64_t>(style.color_overlays.size()));
+  return multiply_saturated(
+      count, static_cast<std::uint64_t>(
+                 sizeof(render_detail::PreparedInteriorOverlay)));
 }
 
 struct LayerCensus {
@@ -393,12 +436,20 @@ inline void inspect_layer(const Layer& layer, LayerCensus& census) noexcept {
       layer.kind() == LayerKind::Adjustment) {
     add_saturated(census.renderer_bytes_per_canvas_pixel, 16U);
   }
+  if (layer.kind() == LayerKind::Adjustment) {
+    add_saturated(census.renderer_geometry_bytes,
+                  adjustment_model_scratch());
+  }
   // One enabled distance/blur/stroke/bevel effect gets a 192-byte-per-pixel
   // envelope. Effects are normally sequential; summing them intentionally
   // remains safe if a future renderer retains more than one prepared mask.
   add_saturated(
       census.renderer_bytes_per_canvas_pixel,
       multiply_saturated(enabled_effect_count(layer.layer_style()), 192U));
+  // prepare_interior_overlays reserves one platform-sized value slot for every
+  // source overlay before filtering disabled/unresolved entries.
+  add_saturated(census.renderer_geometry_bytes,
+                interior_overlay_owner_bytes(layer.layer_style()));
 
   std::uint64_t generated_here = 0U;
   if (layer_is_compound_vector(layer)) {
@@ -479,6 +530,15 @@ inline void inspect_layer(const Layer& layer, LayerCensus& census) noexcept {
       canvas_pixels, layers.renderer_bytes_per_canvas_pixel);
   add_saturated(result.renderer_scratch_bytes,
                 layers.renderer_geometry_bytes);
+  if (document.layers().empty()) {
+    // write_layered_rgb8_impl clones a layer-empty document and retains the
+    // clone plus one synthetic 1x1 RGBA layer through the recursive write.
+    result.normalization_owner_bytes = document_clone_storage(document);
+    add_saturated(result.normalization_owner_bytes,
+                  static_cast<std::uint64_t>(sizeof(Layer)));
+    add_saturated(result.normalization_owner_bytes, 4U);
+    return result;
+  }
   if (!layers.normalization_needed) {
     return result;
   }

@@ -167,7 +167,7 @@ eliminates avoidable byte scratch, and validates deleted paths without allocatin
 Peaks are 44 minimal, 72 parsed replacement, 400 all resource families, 187
 path/clipping, and 160 clean relocation. N-1, staged, zero, malformed, byte, and
 unwind checks apply. DP-008B3a tracks global FEid/FXid payloads and pins a
-12556-byte public peak. DP-008B3b streams generated Patt payloads without heap
+13384-byte public peak after the retained empty-document clone census. DP-008B3b streams generated Patt payloads without heap
 plane scratch; direct opaque/alpha/multi/Unicode/chunk cases, invalid and unwind
 paths, placeholders, and raw Patt/Pat2/Pat3 malformed-prefix dedupe are pinned.
 Public peaks are 1592 authored, 1652 placeholder, and 2044 multi-block bytes.
@@ -176,7 +176,8 @@ normalization. It pins the 64/74-byte normalized mini-PSD/PSB, 184-byte authored
 `liFD`, 496-byte external `liFE`, and unchanged seven-byte raw block. The
 authored direct peak is 258 bytes, a shared embedded owner counted twice peaks
 at 516, and the foreign-wrapper rebuild peaks at 254. The two-link plus `FEid`
-public file is 1070 bytes and peaks at 1680 tracked bytes. Exact/N-1/zero,
+public file is 1070 bytes and peaks at 3364 tracked bytes after the retained
+empty-document clone census. Exact/N-1/zero,
 owner lifetime, invalid/compliant allocation-free normalization, typed public
 rejection, byte hashes, and the existing wrapper/pixel semantic tests are
 mandatory.
@@ -185,8 +186,8 @@ template/fallback `TySh`, fresh/preserved/patched/staged vector payloads, patche
 `iOpa`, and dirty `SoLd`/`SoLE`/`PlLd`/`plLd`. The combined base + text/style/
 iOpa + live-vector + matching global Smart Object source/dirty-placed + adjustment
 document is exercised and semantically reopened as PSD and PSB. Fixed canaries
-are 11440 bytes/FNV-1a `a46a8dbbd3169900`/83164 peak for PSD
-and 12424 bytes/FNV-1a `74b0d895c5bb7ad7`/85452 peak for PSB. Exact, N-1, zero,
+are 11440 bytes/FNV-1a `a46a8dbbd3169900`/417600 peak for PSD
+and 12424 bytes/FNV-1a `74b0d895c5bb7ad7`/417600 peak for PSB. Exact, N-1, zero,
 byte equality, typed rejection, repeat serialization, and zero-current unwind
 are mandatory. The TySh test records that the odd-first-candidate rebuild branch
 ran, and the staged layer-record test proves sequential inter-layer release plus

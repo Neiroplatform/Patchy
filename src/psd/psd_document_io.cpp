@@ -2000,7 +2000,6 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
     return write_layered_rgb8_impl(*prepared, options, tracked_live_budget);
   }
   normalization_scratch.release();
-  normalization_owner.release();
   if (document.layers().empty()) {
     // The signed record count carries merged transparency. Supply one empty
     // record in the file without inventing a layer in the live document.
@@ -2008,6 +2007,7 @@ std::vector<std::uint8_t> write_layered_rgb8_impl(const Document& document,
     writable.add_layer(Layer(writable.allocate_layer_id(), "Layer", PixelBuffer(1, 1, PixelFormat::rgba8())));
     return write_layered_rgb8_impl(writable, options, tracked_live_budget);
   }
+  normalization_owner.release();
   std::size_t record_count = 0;
   const auto count_records = [&](auto&& self, const std::vector<Layer>& layers) -> void {
     for (const auto& layer : layers) {
