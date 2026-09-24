@@ -123,9 +123,9 @@ void invalid_request_is_rejected_without_mutation() {
 
 std::vector<patchy::test::TestCase> advanced_paint_tests() {
   return {
-      {"advanced_pattern_stamp_is_anchored_and_selection_bounded",
+      {"advanced_paint_pattern_stamp_is_anchored_and_selection_bounded",
        pattern_stamp_is_anchored_and_selection_bounded},
-      {"advanced_mixer_sample_all_layers_changes_canvas_pickup",
+      {"advanced_paint_mixer_sample_all_layers_changes_canvas_pickup",
        mixer_sample_all_layers_changes_canvas_pickup},
       {"advanced_paint_cancellation_leaves_the_document_atomic",
        cancellation_leaves_the_document_atomic},
