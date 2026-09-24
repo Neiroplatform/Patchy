@@ -672,39 +672,76 @@ struct LayerCensus {
   std::uint64_t generated_vector_layers{0U};
   std::uint64_t generated_vector_owner_bytes{0U};
   std::uint64_t normalization_geometry_bytes{0U};
-  std::uint64_t renderer_bytes_per_canvas_pixel{0U};
   std::uint64_t renderer_geometry_bytes{0U};
   bool normalization_needed{false};
 };
 
+inline std::pair<std::uint64_t, std::uint64_t> envelope_dimensions(
+    const SafeRenderEnvelope& bounds) noexcept {
+  if (bounds.saturated) {
+    return {std::numeric_limits<std::uint64_t>::max(),
+            std::numeric_limits<std::uint64_t>::max()};
+  }
+  if (bounds.empty) {
+    return {0U, 0U};
+  }
+  return {static_cast<std::uint64_t>(bounds.right) -
+              static_cast<std::uint64_t>(bounds.left),
+          static_cast<std::uint64_t>(bounds.bottom) -
+              static_cast<std::uint64_t>(bounds.top)};
+}
+
+inline void add_domain_bytes(LayerCensus& census, std::uint64_t width,
+                             std::uint64_t height,
+                             std::uint64_t bytes_per_pixel) noexcept {
+  add_saturated(
+      census.renderer_geometry_bytes,
+      multiply_saturated(multiply_saturated(width, height), bytes_per_pixel));
+}
+
 inline void inspect_layer(const Layer& layer, LayerCensus& census,
-                          std::uint64_t canvas_width,
-                          std::uint64_t canvas_height) noexcept {
+                          std::uint64_t domain_width,
+                          std::uint64_t domain_height) noexcept {
+  auto layer_domain_width = domain_width;
+  auto layer_domain_height = domain_height;
+  const auto styled_group =
+      layer.kind() == LayerKind::Group &&
+      layer.layer_style().effects_visible && !layer.layer_style().empty();
+  if (styled_group) {
+    const auto [group_width, group_height] =
+        envelope_dimensions(safe_render_envelope(layer));
+    layer_domain_width = std::max(layer_domain_width, group_width);
+    layer_domain_height = std::max(layer_domain_height, group_height);
+    add_saturated(
+        census.renderer_geometry_bytes,
+        static_cast<std::uint64_t>(
+            sizeof(render_detail::LayerBoundsOverride)));
+  }
   // Group targets retain RGB/alpha/clipping planes while a child is rendered;
   // snapshots and knockout silhouettes share this conservative 32-byte plane.
   if (layer.kind() == LayerKind::Group) {
-    add_saturated(census.renderer_bytes_per_canvas_pixel, 32U);
+    add_domain_bytes(census, layer_domain_width, layer_domain_height, 32U);
   }
   if (layer.clipped()) {
-    add_saturated(census.renderer_bytes_per_canvas_pixel, 16U);
+    add_domain_bytes(census, layer_domain_width, layer_domain_height, 16U);
   }
   if (layer.mask().has_value()) {
-    add_saturated(census.renderer_bytes_per_canvas_pixel, 8U);
+    add_domain_bytes(census, layer_domain_width, layer_domain_height, 8U);
   }
   if (layer.vector_mask() != nullptr) {
     // Coverage, feather blur, and distance intermediates can coexist with the
     // retained mask cache.
-    add_saturated(census.renderer_bytes_per_canvas_pixel, 96U);
+    add_domain_bytes(census, layer_domain_width, layer_domain_height, 96U);
     add_saturated(census.renderer_geometry_bytes,
                   vector_path_geometry_scratch(layer.vector_mask()->path,
                                                nullptr));
   }
   if (layer.vector_shape() != nullptr) {
     // Coverage, raster, paint, and stroke-distance workspaces.
-    add_saturated(census.renderer_bytes_per_canvas_pixel, 64U);
+    add_domain_bytes(census, layer_domain_width, layer_domain_height, 64U);
     // Multi-paint shapes retain every part raster until the final composite.
-    add_saturated(
-        census.renderer_bytes_per_canvas_pixel,
+    add_domain_bytes(
+        census, layer_domain_width, layer_domain_height,
         multiply_saturated(
             static_cast<std::uint64_t>(layer.vector_shape()->parts.size()),
             24U));
@@ -713,19 +750,28 @@ inline void inspect_layer(const Layer& layer, LayerCensus& census,
   }
   if (!layer.raw_psd_blending_ranges().empty() ||
       layer.kind() == LayerKind::Adjustment) {
-    add_saturated(census.renderer_bytes_per_canvas_pixel, 16U);
+    add_domain_bytes(census, layer_domain_width, layer_domain_height, 16U);
   }
   if (layer.kind() == LayerKind::Adjustment) {
     add_saturated(census.renderer_geometry_bytes,
                   adjustment_model_scratch());
+  }
+  if (layer.channel_restriction_supported() &&
+      layer.restricted_channels() != 0U &&
+      layer.restricted_channels() != kRestrictAllChannels) {
+    // ChannelRestrictedTarget retains one byte in its mask vector for every
+    // simultaneously nested restriction. Summing every restricted source
+    // layer is conservative across sequential siblings and exact by element
+    // size across native/WASM ABIs.
+    add_saturated(census.renderer_geometry_bytes, 1U);
   }
   // Style-mask caches use the effect's expanded domain, which can be much
   // larger than the canvas for a tiny layer with a large radius. Sum a
   // conservative 192-byte envelope for every enabled effect's own domain;
   // masks can remain cached together for the lifetime of the save render.
   add_saturated(census.renderer_geometry_bytes,
-                layer_effect_domain_bytes(layer, canvas_width,
-                                          canvas_height));
+                layer_effect_domain_bytes(layer, layer_domain_width,
+                                          layer_domain_height));
   // prepare_interior_overlays reserves one platform-sized value slot for every
   // source overlay before filtering disabled/unresolved entries.
   add_saturated(census.renderer_geometry_bytes,
@@ -786,7 +832,7 @@ inline void inspect_layer(const Layer& layer, LayerCensus& census,
     census.normalization_needed = true;
   }
   for (const auto& child : layer.children()) {
-    inspect_layer(child, census, canvas_width, canvas_height);
+    inspect_layer(child, census, layer_domain_width, layer_domain_height);
   }
 }
 
@@ -812,10 +858,7 @@ inline void inspect_layer(const Layer& layer, LayerCensus& census,
   const auto canvas_pixels = multiply_saturated(canvas_width, canvas_height);
 
   SaveWorkspaceCensus result;
-  result.renderer_scratch_bytes = multiply_saturated(
-      canvas_pixels, layers.renderer_bytes_per_canvas_pixel);
-  add_saturated(result.renderer_scratch_bytes,
-                layers.renderer_geometry_bytes);
+  result.renderer_scratch_bytes = layers.renderer_geometry_bytes;
   if (document.layers().empty()) {
     // write_layered_rgb8_impl clones a layer-empty document and retains the
     // clone plus one synthetic 1x1 RGBA layer through the recursive write.

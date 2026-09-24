@@ -235,6 +235,20 @@ prepared masks later overlap. The existing exact five-byte-per-pixel target/alph
 envelope remains separate. Both reservations precede the covered allocations and
 unwind through the private budget signal on every exit.
 
+Per-layer plane terms follow the active render domain rather than blindly using
+the document canvas. A styled group can isolate and retain its recursive
+`layer_render_bounds` outside that canvas; its group target, silhouette, and all
+child mask/vector/snapshot planes are therefore charged against the larger safe
+recursive envelope. The census reproduces that envelope with signed-64-bit
+coordinate unions plus saturating style padding, without allocating or invoking
+the renderer's `int` geometry arithmetic. Every styled group also reserves the
+exact platform-sized `LayerBoundsOverride` vector value retained across the
+recursive isolated-layer pass.
+Channel-restricted pixel/group layers additionally contribute one logical byte
+per source layer for the nested `ChannelRestrictedTarget` mask vector; summing
+siblings is conservative, while recursive groups cover the true simultaneous
+depth.
+
 A layer-empty layered save is another retained-clone path: the writer copies the
 document, inserts one synthetic 1x1 RGBA layer, and recursively serializes it.
 The first call therefore reserves the value-owned document clone plus the
@@ -387,6 +401,9 @@ after normalization changes the effective graph. Windows and WASM retain exact
 success/N-1 admission but report their ABI-derived logical owner sizes instead
 of pretending libc++ container value sizes are portable. Sequential normalized rendering pins
 FNV-1a `501ebd773ac1f3bc`; reopened rendering pins `47648a1ddc27a07b`.
+The same complete graph is also rendered on a 2000x2000 canvas through
+Automatic and explicit Sequential policies; their bytes must match, crossing
+the 4M-pixel strip-parallel threshold on multi-core native/WASM runners.
 The PSD is 11720 bytes/FNV-1a `a90e17b0e1df7606`; the PSB is 12660 bytes/FNV-1a
 `a6eecbb0a2011eb3`. Both formats require repeat-byte equality, semantic reopen,
 exact success, typed N-1/zero rejection, and unwind to zero.
@@ -404,7 +421,11 @@ renderer-reservation exact/N-1/zero boundary. It also combines 128 one-anchor sh
 runs with 128 enabled Color overlays and 128 disabled Satins on a one-pixel
 canvas and proves all three platform-sized owner terms at the same targeted
 boundary. A separate size-100 Outer Glow pins the 205x205 expanded domain and
-its targeted/public exact/N-1/zero admission. A layer-empty document
+its targeted/public exact/N-1/zero admission. A 1x1 document containing a
+256x256 off-canvas styled group independently pins recursive group/silhouette
+planes and descendant domains at the same targeted/public boundary. A plain
+one-pixel channel-restricted layer pins its otherwise owner-only one-byte
+renderer reservation at targeted/public exact/N-1/zero. A layer-empty document
 with a large raw image-resource vector independently covers the retained
 synthetic-layer clone path at its owner-reservation exact/N-1/zero boundary.
 
