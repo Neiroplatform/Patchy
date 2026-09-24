@@ -4830,6 +4830,7 @@ canvas.addEventListener("pointercancel", (event) => {
   finishPaint(event, true); gradientDraft = null; clearRasterPreview(); moveDraft = null; lassoDraft = null;
   finishRetouch(event, true);
   finishLocalBrush(event, true);
+  finishAdvancedPaint(event, true);
   quickSelectDraft = null; quickMaskDraft = null; previewPolygon([]); clearTransformPreview(true);
   if (canvasTool === "quickMask") renderQuickMask();
 });

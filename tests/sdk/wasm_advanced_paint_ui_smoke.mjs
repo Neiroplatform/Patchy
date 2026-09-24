@@ -43,6 +43,18 @@ try {
     }
     delete canvas.setPointerCapture;
   };
+  const cancelStroke = (start, end, pointerId) => {
+    const canvas = byId("documentCanvas"); const rect = canvas.getBoundingClientRect();
+    canvas.setPointerCapture = () => {};
+    for (const [type, point, buttons] of [["pointerdown", start, 1], ["pointermove", end, 1],
+      ["pointercancel", end, 0]]) {
+      canvas.dispatchEvent(new frame.contentWindow.PointerEvent(type, { bubbles: true, cancelable: true,
+        pointerId, pointerType: "mouse", isPrimary: true, button: 0, buttons,
+        clientX: rect.left + point.x * rect.width / canvas.width,
+        clientY: rect.top + point.y * rect.height / canvas.height }));
+    }
+    delete canvas.setPointerCapture;
+  };
   await waitFor(() => byId("sessionIndicator")?.textContent.includes("Engine ready") && idle(),
     "production editor did not initialize");
   byId("newButton").click();
@@ -60,6 +72,10 @@ try {
   let before = revision(); drag({ x: 12, y: 24 }, { x: 48, y: 24 }, 310);
   await waitFor(() => idle() && revision() === before + 1n && byId("errorBanner").hidden,
     "Mixer Brush did not commit one revision");
+  before = revision(); cancelStroke({ x: 8, y: 8 }, { x: 30, y: 8 }, 312);
+  await delay(100);
+  check(idle() && revision() === before && byId("errorBanner").hidden,
+    "cancelled Mixer Brush gesture changed canonical state");
   byId("patternStampToolButton").click();
   check(!byId("advancedPatternInput").closest("label").hidden, "Pattern controls were not exposed");
   check([...byId("advancedPatternInput").options].some((item) => item.value === "asset:advanced-ui-pattern"),
