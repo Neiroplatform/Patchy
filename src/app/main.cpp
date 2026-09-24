@@ -1,3 +1,4 @@
+#include "app/single_instance_ipc.hpp"
 #include "support/cli_flags.hpp"
 #include "ui/action_icons.hpp"
 #include "ui/app_settings.hpp"
@@ -24,14 +25,11 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
-#include <QDataStream>
 #include <QFileOpenEvent>
 #include <QFont>
 #include <QFontDatabase>
 #include <QImageReader>
 #include <QFormLayout>
-#include <QLocalServer>
-#include <QLocalSocket>
 #include <QProxyStyle>
 #include <QRect>
 #include <QSettings>
@@ -107,57 +105,6 @@ void apply_gui_scale_factor() {
   qputenv("QT_SCALE_FACTOR", QByteArray::number(percent / 100.0));
 }
 
-// Per-user name for the single-instance local socket. Scoping it to the user keeps separate Windows
-// login sessions from fighting over one pipe on a shared machine.
-QString single_instance_server_name() {
-  QString user = qEnvironmentVariable("USERNAME");
-  if (user.isEmpty()) {
-    user = qEnvironmentVariable("USER");
-  }
-  const auto name = QStringLiteral("Patchy-SingleInstance-") + user;
-#ifdef Q_OS_LINUX
-  // Inside Flatpak, QLocalServer's default socket location is the per-sandbox /tmp, so a
-  // second `flatpak run` would never find the first instance's socket. $XDG_RUNTIME_DIR/
-  // app/<app-id>/ is shared across sandboxes of the same app id; use an absolute socket
-  // path there (QLocalServer treats a path-shaped name as the literal socket path).
-  if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
-    const auto runtime_dir = qEnvironmentVariable("XDG_RUNTIME_DIR");
-    if (!runtime_dir.isEmpty()) {
-      return runtime_dir + QStringLiteral("/app/") + qEnvironmentVariable("FLATPAK_ID") +
-             QStringLiteral("/") + name;
-    }
-  }
-#endif
-  return name;
-}
-
-// Screenshot requests ride the single-instance file list as one reserved entry. Real entries are
-// absolute file paths, which can never start with this prefix nor contain newlines, so the two
-// kinds cannot collide. Fields are newline-separated: prefix, output path, widget name, region.
-const QString kScreenshotCommandPrefix = QStringLiteral("patchy-cmd:screenshot\n");
-
-QString encode_screenshot_command(const QString& output_path, const QString& widget_name, const QString& region) {
-  return kScreenshotCommandPrefix + output_path + QLatin1Char('\n') + widget_name + QLatin1Char('\n') + region;
-}
-
-// Script-run requests use the same reserved-entry scheme. Fields are
-// newline-separated: prefix, script path, output path (may be empty), then one
-// field per --script-arg "key=value" token (keys/values must not contain
-// newlines). The running instance executes the script and writes console
-// output plus a final [done]/[failed] line to the output path when the run
-// completes; the invoking process exits immediately and the caller polls for
-// the file.
-const QString kRunScriptCommandPrefix = QStringLiteral("patchy-cmd:run-script\n");
-
-QString encode_run_script_command(const QString& script_path, const QString& output_path,
-                                  const QStringList& script_args) {
-  auto command = kRunScriptCommandPrefix + script_path + QLatin1Char('\n') + output_path;
-  for (const auto& arg : script_args) {
-    command += QLatin1Char('\n') + arg;
-  }
-  return command;
-}
-
 // Parses "x,y,w,h" (as taken by --screenshot-rect); anything else yields an invalid rect,
 // which save_debug_screenshot treats as "the whole widget".
 QRect parse_screenshot_rect(const QString& text) {
@@ -174,28 +121,6 @@ QRect parse_screenshot_rect(const QString& text) {
     }
   }
   return QRect(values[0], values[1], values[2], values[3]);
-}
-
-// Try to hand the file list to an already-running Patchy. Returns true if a running instance accepted
-// the request (in which case this process should exit without opening its own window).
-bool forward_to_running_instance(const QStringList& files) {
-  QLocalSocket socket;
-  socket.connectToServer(single_instance_server_name());
-  if (!socket.waitForConnected(300)) {
-    return false;
-  }
-  QByteArray payload;
-  QDataStream stream(&payload, QIODevice::WriteOnly);
-  stream.setVersion(QDataStream::Qt_5_15);
-  stream << files;
-  socket.write(payload);
-  socket.flush();
-  socket.waitForBytesWritten(1000);
-  socket.disconnectFromServer();
-  if (socket.state() != QLocalSocket::UnconnectedState) {
-    socket.waitForDisconnected(1000);
-  }
-  return true;
 }
 
 // Wraps the platform style to override a couple of interaction hints, leaving
@@ -588,13 +513,15 @@ int main(int argc, char* argv[]) {
 #endif
   QStringList forward_payload = files;
   if (screenshot_mode) {
-    forward_payload.append(encode_screenshot_command(screenshot_path, screenshot_widget, screenshot_rect_text));
+    forward_payload.append(
+        patchy::app::make_screenshot_command(screenshot_path, screenshot_widget,
+                                             screenshot_rect_text));
   }
   if (run_script_mode) {
     forward_payload.append(
-        encode_run_script_command(run_script_path, script_output_path, script_args));
+        patchy::app::make_run_script_command(run_script_path, script_output_path, script_args));
   }
-  if (single_instance_enabled && forward_to_running_instance(forward_payload)) {
+  if (single_instance_enabled && patchy::app::forward_single_instance_request(forward_payload)) {
     return 0;
   }
 
@@ -628,11 +555,10 @@ int main(int argc, char* argv[]) {
     QStringList forwarded_files;
     bool handled_command = false;
     for (const auto& entry : forwarded) {
-      if (entry.startsWith(kRunScriptCommandPrefix)) {
-        const auto parts = entry.split(QLatin1Char('\n'));
-        if (parts.size() >= 3) {
-          window.run_script_command(parts[1], parts[2], parts.mid(3));
-        }
+      if (const auto command = patchy::app::decode_run_script_command(entry);
+          command.has_value()) {
+        window.run_script_command(command->script_path, command->output_path,
+                                  command->arguments);
         handled_command = true;
       } else {
         forwarded_files.append(entry);
@@ -642,49 +568,31 @@ int main(int argc, char* argv[]) {
       window.activate_for_second_instance(forwarded_files);
     }
   });
-  QLocalServer single_instance_server;
+  patchy::app::SingleInstanceServer single_instance_server([&](QStringList forwarded) {
+    // Peel screenshot commands off the file list. A capture must not raise or focus the
+    // window (that would perturb the very state being captured), so a pure-screenshot
+    // request skips activation; a bare relaunch (no files, no commands) still activates.
+    QStringList deferred;
+    bool handled_command = false;
+    for (const auto& entry : forwarded) {
+      if (const auto command = patchy::app::decode_screenshot_command(entry);
+          command.has_value()) {
+        (void)window.save_debug_screenshot(command->output_path, command->widget_name,
+                                           parse_screenshot_rect(command->region));
+        handled_command = true;
+      } else {
+        deferred.append(entry);
+      }
+    }
+    if (!deferred.isEmpty() || !handled_command) {
+      forwarded_requests.push_back(std::move(deferred));
+      forwarded_request_timer.start();
+    }
+  });
   if (single_instance_enabled) {
-    // A previous crash can leave a stale pipe/socket that blocks listen(); clear it first.
-    QLocalServer::removeServer(single_instance_server_name());
-    if (single_instance_server.listen(single_instance_server_name())) {
-      QObject::connect(&single_instance_server, &QLocalServer::newConnection, &window, [&] {
-        QLocalSocket* client = single_instance_server.nextPendingConnection();
-        if (client == nullptr) {
-          return;
-        }
-        // Accumulate until the sender disconnects, then decode the whole payload in one shot so a
-        // chunked write can't be parsed half-read.
-        auto buffer = std::make_shared<QByteArray>();
-        QObject::connect(client, &QLocalSocket::readyRead, client, [client, buffer] { buffer->append(client->readAll()); });
-        QObject::connect(client, &QLocalSocket::disconnected, &window, [&, client, buffer] {
-          buffer->append(client->readAll());
-          QStringList forwarded;
-          QDataStream stream(buffer.get(), QIODevice::ReadOnly);
-          stream.setVersion(QDataStream::Qt_5_15);
-          stream >> forwarded;
-          // Peel screenshot commands off the file list. A capture must not raise or focus the
-          // window (that would perturb the very state being captured), so a pure-screenshot
-          // request skips activation; a bare relaunch (no files, no commands) still activates.
-          QStringList deferred;
-          bool handled_command = false;
-          for (const auto& entry : forwarded) {
-            if (entry.startsWith(kScreenshotCommandPrefix)) {
-              const auto parts = entry.split(QLatin1Char('\n'));
-              if (parts.size() == 4) {
-                (void)window.save_debug_screenshot(parts[1], parts[2], parse_screenshot_rect(parts[3]));
-              }
-              handled_command = true;
-            } else {
-              deferred.append(entry);
-            }
-          }
-          if (!deferred.isEmpty() || !handled_command) {
-            forwarded_requests.push_back(std::move(deferred));
-            forwarded_request_timer.start();
-          }
-          client->deleteLater();
-        });
-      });
+    QString listen_error;
+    if (!single_instance_server.listen(patchy::app::single_instance_endpoint(), &listen_error)) {
+      qWarning("Patchy single-instance listener: %s", qPrintable(listen_error));
     }
   }
 

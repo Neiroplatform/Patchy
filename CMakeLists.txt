@@ -1373,6 +1373,13 @@ ${PATCHY_LUPDATE_MANIFEST_SOURCES}
     endif()
     patchy_configure_target(patchy_ui)
 
+    add_library(patchy_single_instance_ipc
+      src/app/single_instance_ipc.hpp
+      src/app/single_instance_ipc.cpp
+    )
+    target_link_libraries(patchy_single_instance_ipc PUBLIC Qt6::Core Qt6::Network)
+    patchy_configure_target(patchy_single_instance_ipc)
+
     if(EMSCRIPTEN)
       # The single-threaded app artifact (wasm-release-st preset): no
       # -pthread, no pool, no shared memory. It remains a manually selected
@@ -1503,10 +1510,10 @@ ${PATCHY_LUPDATE_MANIFEST_SOURCES}
         src/app/main.cpp
       )
     endif()
-    target_link_libraries(patchy PRIVATE patchy_ui)
+    target_link_libraries(patchy PRIVATE patchy_ui patchy_single_instance_ipc)
     if(NOT EMSCRIPTEN)
       add_executable(patchy-mcp src/app/main.cpp src/app/mcp_server.cpp src/app/mcp_stdio.cpp)
-      target_link_libraries(patchy-mcp PRIVATE patchy_ui)
+      target_link_libraries(patchy-mcp PRIVATE patchy_ui patchy_single_instance_ipc)
       target_compile_definitions(patchy-mcp PRIVATE PATCHY_MCP_EXECUTABLE=1 PATCHY_VERSION="${PROJECT_VERSION}")
       patchy_configure_target(patchy-mcp)
       patchy_copy_translations(patchy-mcp)
@@ -1728,6 +1735,14 @@ if(PATCHY_BUILD_TESTS)
   add_test(NAME patchy_core_tests COMMAND patchy_core_tests)
 
   if(PATCHY_BUILD_APP AND Qt6_FOUND)
+    add_executable(patchy_single_instance_ipc_tests
+      tests/app/single_instance_ipc_tests.cpp
+    )
+    target_include_directories(patchy_single_instance_ipc_tests PRIVATE tests)
+    target_link_libraries(patchy_single_instance_ipc_tests PRIVATE patchy_single_instance_ipc)
+    patchy_configure_target(patchy_single_instance_ipc_tests)
+    add_test(NAME patchy_single_instance_ipc_tests COMMAND patchy_single_instance_ipc_tests)
+
     # One binary; per-group TUs live in tests/ui/ (tests/ui/ui_test_groups.hpp lists
     # the groups; main() concatenates the group vectors in a fixed order — never
     # static self-registration).

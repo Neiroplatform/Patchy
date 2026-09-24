@@ -325,14 +325,16 @@ patchy [--headless] --run-script <file.js> [--script-output <out.txt>] [--script
 ```
 
 `--script-arg key=value` (repeatable) surfaces as `patchy.args.key` in the script (all
-string values); the forwarded single-instance payload carries the raw tokens as extra
+string values); inside a validated run-script command the raw tokens remain extra
 newline-separated fields after the output path, so keys and values must not contain
-newlines. The bundled `Utilities/batch-export.js` is the reference consumer.
+newlines. The command itself travels in the bounded/versioned single-instance frame
+described below. The bundled `Utilities/batch-export.js` is the reference consumer.
 
 - With a running instance: file/script requests wait until any current script
   finishes before dispatch, including Finder opens. The request forwards over the single-instance socket (the
   `patchy-cmd:run-script` reserved entry, same scheme as `--screenshot`), the invoker
-  exits immediately, and the running instance executes the script. Console output,
+  exits only after the receiver validates the complete frame and returns the exact
+  acknowledgement, and the running instance executes the script. Console output,
   errors, and a final `[done]` or `[failed]` line are written to the output file when the
   run fully completes; the caller polls for the file. Warnings are prefixed `[warn] `,
   errors `[error] `, plain log lines are unprefixed so scripts can emit clean data (JSON
@@ -384,7 +386,15 @@ sandbox is "only run scripts you trust", not a permission system. The engine exp
 file, network, or process API beyond the documented `patchy.io` helpers (text files,
 folder listing, single-file existence/size/delete, makeDir) and document save/export
 paths, and v1 binds no network access at all. The single-instance
-pipe is per-user, so `--run-script` adds no cross-user surface.
+pipe is per-user and per-install: its public name contains only an identity digest,
+Unix sockets live behind an owner-only runtime directory (required because macOS does
+not enforce Unix-socket file modes), and every listener sets
+`QLocalServer::UserAccessOption` before `listen()` (the named-pipe ACL on Windows).
+Before any file, screenshot, or script dispatch, `single_instance_ipc` requires exact
+magic/version/declared length, a 1 MiB payload ceiling, at most 256 validated UTF-8
+entries, no trailing bytes, and a complete acknowledgement write. Partial, malformed,
+oversized, unknown-command, or stale competing-listener input changes no application
+state, so `--run-script` adds no cross-user or unbounded-deserialization surface.
 
 ## Legal posture
 
@@ -403,6 +413,11 @@ pipe is per-user, so `--run-script` adds no cross-user surface.
   scripting-guide viewer (both Help entry points, single shared instance), and the
   `patchy.io` probes plus `saveAs`/`open` on a Unicode path
   (`ui_script_io_round_trips_unicode_path`).
+- `tests/app/single_instance_ipc_tests.cpp`: exact frame/command round trips, every
+  malformed and oversize rejection class, opaque per-install endpoint identity,
+  owner-only Unix runtime directory, explicit acknowledgement, live same-user
+  forwarding, stale-listener exclusion, and child modes used by the isolated
+  Linux/macOS/Windows cross-user platform gate.
 - The engine works offscreen; `ScriptEngineHost::message_backlog()` is the easiest
   assertion surface (fresh per MainWindow).
 - Manual smoke: the bundled scripts all run from File > Scripts; `game-of-life.js`
