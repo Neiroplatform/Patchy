@@ -336,12 +336,17 @@ int main(int argc, char* argv[]) {
       dispatch.close();
       QCoreApplication::exit(0);
     });
-    if (!server.listen(endpoint)) {
+    QString listen_error;
+    if (!server.listen(endpoint, &listen_error)) {
+      std::fprintf(stderr, "single-instance probe listener failed: %s\n",
+                   listen_error.toUtf8().constData());
       return 21;
     }
     QFile ready(ready_path);
     if (!ready.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
         ready.write("listening\n") < 0) {
+      std::fprintf(stderr, "single-instance probe readiness failed: %s\n",
+                   ready.errorString().toUtf8().constData());
       return 20;
     }
     ready.close();
@@ -381,11 +386,15 @@ int main(int argc, char* argv[]) {
       });
     });
     if (!server.listen(endpoint)) {
+      std::fprintf(stderr, "spoof probe listener failed: %s\n",
+                   server.errorString().toUtf8().constData());
       return 21;
     }
     QFile ready(ready_path);
     if (!ready.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
         ready.write("spoof-listening\n") < 0) {
+      std::fprintf(stderr, "spoof probe readiness failed: %s\n",
+                   ready.errorString().toUtf8().constData());
       return 20;
     }
     ready.close();
