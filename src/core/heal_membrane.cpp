@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <vector>
 
 namespace patchy {
@@ -27,10 +28,14 @@ struct Level {
 // One lexicographic SOR sweep: each interior cell relaxes toward the average
 // of its existing 4-neighbors. Fixed order, integer math, no early exit -
 // byte-deterministic on every toolchain.
-void sweep(Level& level) {
+bool sweep(Level& level,
+           const std::function<bool()>& continue_operation) {
   const auto width = level.width;
   const auto height = level.height;
   for (std::int32_t y = 0; y < height; ++y) {
+    if ((y & 15) == 0 && continue_operation && !continue_operation()) {
+      return false;
+    }
     for (std::int32_t x = 0; x < width; ++x) {
       const auto index = static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
                          static_cast<std::size_t>(x);
@@ -66,14 +71,17 @@ void sweep(Level& level) {
       }
     }
   }
+  return true;
 }
 
 }  // namespace
 
-void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width, std::int32_t height,
-                         std::int16_t* offsets_rgb) {
+bool solve_heal_membrane_cancellable(
+    const std::uint8_t* interior, std::int32_t width, std::int32_t height,
+    std::int16_t* offsets_rgb,
+    const std::function<bool()>& continue_operation) {
   if (interior == nullptr || offsets_rgb == nullptr || width <= 0 || height <= 0) {
-    return;
+    return true;
   }
   const auto cells = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
 
@@ -87,6 +95,10 @@ void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width, std::
   bool any_interior = false;
   bool any_dirichlet = false;
   for (std::size_t index = 0; index < cells; ++index) {
+    if ((index & 4095U) == 0U && continue_operation &&
+        !continue_operation()) {
+      return false;
+    }
     for (int channel = 0; channel < 3; ++channel) {
       finest.value[index * 3U + static_cast<std::size_t>(channel)] =
           interior[index] != 0U ? 0
@@ -98,7 +110,7 @@ void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width, std::
     any_dirichlet = any_dirichlet || interior[index] == 0U;
   }
   if (!any_interior || !any_dirichlet) {
-    return;
+    return true;
   }
 
   // Coarsen 2x per level: a coarse cell is Dirichlet when ANY child is (the
@@ -114,6 +126,9 @@ void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width, std::
     coarse.interior.resize(coarse_cells);
     coarse.value.resize(coarse_cells * 3U);
     for (std::int32_t y = 0; y < coarse.height; ++y) {
+      if ((y & 15) == 0 && continue_operation && !continue_operation()) {
+        return false;
+      }
       for (std::int32_t x = 0; x < coarse.width; ++x) {
         std::int64_t dirichlet_sum[3] = {0, 0, 0};
         std::int64_t all_sum[3] = {0, 0, 0};
@@ -161,6 +176,9 @@ void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width, std::
     if (level + 1 < static_cast<std::int32_t>(levels.size())) {
       const auto& coarse = levels[static_cast<std::size_t>(level) + 1U];
       for (std::int32_t y = 0; y < current.height; ++y) {
+        if ((y & 15) == 0 && continue_operation && !continue_operation()) {
+          return false;
+        }
         for (std::int32_t x = 0; x < current.width; ++x) {
           const auto index = static_cast<std::size_t>(y) * static_cast<std::size_t>(current.width) +
                              static_cast<std::size_t>(x);
@@ -180,12 +198,16 @@ void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width, std::
     }
     const auto sweeps = level + 1 == static_cast<std::int32_t>(levels.size()) ? kCoarsestSweeps : kLevelSweeps;
     for (int iteration = 0; iteration < sweeps; ++iteration) {
-      sweep(current);
+      if (!sweep(current, continue_operation)) return false;
     }
   }
 
   const auto& solved = levels.front();
   for (std::size_t index = 0; index < cells; ++index) {
+    if ((index & 4095U) == 0U && continue_operation &&
+        !continue_operation()) {
+      return false;
+    }
     if (interior[index] == 0U) {
       continue;
     }
@@ -197,6 +219,13 @@ void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width, std::
           static_cast<std::int16_t>(std::clamp<std::int32_t>(rounded, -32768, 32767));
     }
   }
+  return true;
+}
+
+void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width,
+                         std::int32_t height, std::int16_t* offsets_rgb) {
+  (void)solve_heal_membrane_cancellable(interior, width, height, offsets_rgb,
+                                        {});
 }
 
 }  // namespace patchy

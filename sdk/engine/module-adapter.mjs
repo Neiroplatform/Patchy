@@ -44,6 +44,7 @@ const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
 const LIQUIFY_INPUT_SIZE = 24;
 const LIQUIFY_STROKE_SIZE = 64;
+const RETOUCH_REPAIR_SIZE = 48;
 const LAYER_BATCH_SIZE = 32;
 const LAYER_BATCH_EDIT_SIZE = 40;
 const LAYER_BATCH_TRANSFORM_SIZE = 96;
@@ -58,6 +59,7 @@ const CAP_MULTI_LAYER_TRANSFORM = 1n << 38n;
 const CAP_LAYER_ARRANGE = 1n << 39n;
 const CAP_SELECTION_REFINEMENT = 1n << 40n;
 const CAP_LIQUIFY_AUTHORING = 1n << 41n;
+const CAP_RETOUCH_REPAIR = 1n << 42n;
 const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -1076,6 +1078,29 @@ export class EmscriptenPatchyEngine {
         this.#module._patchy_engine_session_apply_liquify(
           session, snapshot.stateId, snapshot.revision, value.input, event, error));
     } finally { this.#module._free(value.strokes); this.#module._free(value.input); }
+  }
+
+  applyRetouchRepair(session, snapshot, input,
+                     cancellation = new Int32Array(new SharedArrayBuffer(4))) {
+    if (!(this.#capabilities & CAP_RETOUCH_REPAIR) ||
+        typeof this.#module._patchy_engine_session_apply_retouch_repair !== "function") {
+      throw new PatchyEngineError(2, "Patchy engine does not support retouch repair");
+    }
+    this.#cancellation(cancellation, "Retouch repair");
+    const value = this.#retouchRepair(input);
+    let callback = 0;
+    try {
+      callback = this.#module.addFunction(
+        () => Atomics.load(cancellation, 0) === 0 ? 1 : 0, "iiii");
+      return this.#mutation((event, error) =>
+        this.#module._patchy_engine_session_apply_retouch_repair(
+          session, snapshot.stateId, snapshot.revision, value.input,
+          callback, 0, event, error));
+    } finally {
+      if (callback) this.#module.removeFunction(callback);
+      if (value.points) this.#module._free(value.points);
+      this.#module._free(value.input);
+    }
   }
 
   rasterizeLayer(session, snapshot, layerId) {
@@ -2585,6 +2610,62 @@ export class EmscriptenPatchyEngine {
       return { input: value, strokes };
     } catch (error) {
       this.#module._free(strokes); this.#module._free(value); throw error;
+    }
+  }
+
+  #retouchRepair(input) {
+    if (typeof input.layerId !== "bigint" || input.layerId <= 0n ||
+        input.layerId > UINT64_MAX ||
+        ![0, 1, 2].includes(input.mode)) {
+      throw new TypeError("A versioned retouch-repair request is required");
+    }
+    const spot = input.mode === 0;
+    const pointsInput = input.points ?? [];
+    if (!Array.isArray(pointsInput) ||
+        (spot && (pointsInput.length < 1 || pointsInput.length > 4096)) ||
+        (!spot && pointsInput.length !== 0) ||
+        pointsInput.some((point) => !Array.isArray(point) || point.length !== 2 ||
+          !point.every((coordinate) => Number.isFinite(coordinate) &&
+            coordinate >= 0 && coordinate <= 0x7fffffff)) ||
+        (spot && (!Number.isInteger(input.brushSize) || input.brushSize < 1 ||
+          input.brushSize > 4096 || !Number.isInteger(input.softness) ||
+          input.softness < 0 || input.softness > 100)) ||
+        (!spot && (!Number.isInteger(input.deltaX) || !Number.isInteger(input.deltaY) ||
+          input.deltaX < -0x80000000 || input.deltaX > 0x7fffffff ||
+          input.deltaY < -0x80000000 || input.deltaY > 0x7fffffff ||
+          (input.deltaX === 0 && input.deltaY === 0))) ||
+        (spot && input.transparent)) {
+      throw new TypeError("Retouch repair exceeds its bounded contract");
+    }
+    let points = 0;
+    let value = 0;
+    try {
+      points = pointsInput.length ? this.#alloc(pointsInput.length * 16) : 0;
+      value = this.#alloc(RETOUCH_REPAIR_SIZE);
+      if (points) {
+        const pointView = this.#view(points, pointsInput.length * 16);
+        pointsInput.forEach((point, index) => {
+          pointView.setFloat64(index * 16, point[0], true);
+          pointView.setFloat64(index * 16 + 8, point[1], true);
+        });
+      }
+      const view = this.#view(value, RETOUCH_REPAIR_SIZE);
+      view.setUint32(0, RETOUCH_REPAIR_SIZE, true);
+      view.setUint32(4, input.mode, true);
+      view.setBigUint64(8, input.layerId, true);
+      view.setUint32(16, points, true);
+      view.setUint32(20, pointsInput.length, true);
+      view.setInt32(24, input.brushSize ?? 0, true);
+      view.setInt32(28, input.softness ?? 0, true);
+      view.setInt32(32, input.deltaX ?? 0, true);
+      view.setInt32(36, input.deltaY ?? 0, true);
+      view.setUint8(40, input.transparent ? 1 : 0);
+      view.setUint8(41, input.sampleAllLayers === false ? 0 : 1);
+      return { input: value, points };
+    } catch (error) {
+      if (points) this.#module._free(points);
+      if (value) this.#module._free(value);
+      throw error;
     }
   }
 

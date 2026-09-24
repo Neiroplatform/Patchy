@@ -125,6 +125,16 @@ preview, Restore, Cancel, freeze-mask visibility, commit, undo and redo. The
 staged editor gate separately creates a local gradient in the Assets dialog
 and proves that its validated OPFS generation is restored after page reload.
 
+`tests/sdk/wasm_retouch_smoke.html` runs Spot Healing and both Patch state
+transitions through the real pthread Worker engine, pins one-revision
+undo/redo, and reopens ordinary repaired pixels from PSD, PSB and an OPFS
+recovery checkpoint with the translated selection sidecar. Its companion
+`wasm_retouch_ui_smoke.html` drives the production Spot Healing/Patch gestures,
+asserts that raw feedback never mutates canonical state, and checks that Patch
+Destination publishes pixels and selection atomically. Source choice remains
+geometry/user-offset only; these smokes must not introduce a healed live
+preview or pixel-driven source search.
+
 ## wasm-core preset decisions (all in CMakePresets.json)
 
 - `-fwasm-exceptions`: format readers throw `std::runtime_error` and the

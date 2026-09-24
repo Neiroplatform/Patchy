@@ -257,6 +257,11 @@ test("preferences round-trip with validation and malformed-data fallback", async
     paintPreset: "ocean", font: "Georgia", selectionTolerance: 31,
     historyBudgetMiB: 512, panelsHidden: true, guidesVisible: false, snappingEnabled: false });
   assert.deepEqual(await store.loadPreferences({ brushSize: 12 }), saved);
+  assert.deepEqual(await store.savePreferences({ tool: "spotHealing", brushSize: 4096 }),
+    { tool: "spotHealing", brushSize: 4096 });
+  assert.deepEqual(await store.savePreferences({ tool: "patch", brushSize: 24 }),
+    { tool: "patch", brushSize: 24 });
+  await assert.rejects(store.savePreferences({ brushSize: 4097 }), /between 1 and 4096/);
   await assert.rejects(store.savePreferences({ tool: "unknown" }), /Invalid preferred tool/);
   await assert.rejects(store.savePreferences({ locale: "de" }), /Invalid preferred locale/);
   await assert.rejects(store.savePreferences({ historyBudgetMiB: 12 }), /History memory budget/);

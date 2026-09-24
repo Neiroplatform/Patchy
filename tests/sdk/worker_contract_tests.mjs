@@ -46,7 +46,7 @@ test("public capability names stay in exact parity with the C ABI", async () => 
   const header = await readFile(new URL("../../src/engine/host_protocol.h", import.meta.url), "utf8");
   const entries = [...header.matchAll(
     /PATCHY_ENGINE_CAP_([A-Z0-9_]+) = UINT64_C\(1\) << (\d+)/g)];
-  assert.equal(entries.length, 42);
+  assert.equal(entries.length, 43);
   const expected = Object.fromEntries(entries.map(([, cName, bit]) => {
     const name = cName.toLowerCase().replace(/_([a-z0-9])/g, (_, value) => value.toUpperCase());
     return [name, 1n << BigInt(bit)];
@@ -65,7 +65,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
     "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "pastePixelsButton", "paintPresetSelect",
-    "paintTargetSelect", "linkMaskButton",
+    "paintTargetSelect", "linkMaskButton", "spotHealingToolButton", "patchToolButton",
+    "retouchSoftnessInput", "retouchSampleAllInput", "patchModeInput", "patchTransparentInput",
     "importLayerButton", "groupLayerButton", "removeLayerButton", "layerNameInput",
     "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
     "liquifyLayerButton", "liquifyDialog", "liquifyCanvas", "liquifyMaskCanvas",
@@ -141,7 +142,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.previewLayerMaskStroke", "client.applyLayerMaskStroke",
     "client.previewRasterFill", "client.applyRasterFill",
     "client.previewLayerWarp", "client.warpLayer",
-    "client.previewLiquify", "client.applyLiquify",
+    "client.previewLiquify", "client.applyLiquify", "client.applyRetouchRepair",
     "client.addTextLayer",
     "client.updateTextLayer", "client.addVectorShape", "client.setVectorMask",
     "client.updateVectorShape",
@@ -235,12 +236,15 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /value === textDialogOriginalValue[\s\S]*textDialogOriginalRuns\.map/);
   assert.match(script, /client\.updateTextLayer/);
   assert.match(script, /liquifyDraft\.strokes\.length >= 4096/);
+  assert.match(script, /draft\.points\.length >= 4096/);
+  assert.match(script, /Select an area before using Patch Tool/);
+  assert.match(script, /client\.applyRetouchRepair/);
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
     "quickSelect(", "magneticLasso(", "previewSelectionRefinement(", "refineSelection(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel(",
     "editLayers(", "moveLayers(", "groupLayers(", "removeLayers(", "copyLayersToDocument(",
-    "TextStyleRun", "TextParagraphRun"]) {
+    "applyRetouchRepair(", "TextStyleRun", "TextParagraphRun"]) {
     assert.ok(types.includes(contract), `TypeScript declaration misses ${contract}`);
   }
   assert.match(types, /addStateListener\(listener:/);
@@ -1188,6 +1192,63 @@ test("Emscripten adapter packs bounded Liquify strokes and owns preview bytes", 
   assert.equal(releases, 1); engine.dispose();
 });
 
+test("Emscripten adapter packs cancellable Spot Healing and Patch requests", () => {
+  const memory = new ArrayBuffer(8192); const heap = new Uint8Array(memory);
+  const view = new DataView(memory); let next = 512; let callback = null;
+  const alloc = (size) => { const at = next; next += (size + 7) & ~7; return at; };
+  const seen = [];
+  const module = {
+    HEAPU8: heap, _malloc: alloc, _free() {},
+    _patchy_engine_get_protocol_info(info) {
+      view.setUint32(info + 4, 1, true); view.setBigUint64(info + 8, 1n << 42n, true); return 1;
+    },
+    _patchy_engine_runtime_create() { return 11; }, _patchy_engine_runtime_destroy() {},
+    addFunction(value, signature) { assert.equal(signature, "iiii"); callback = value; return 73; },
+    removeFunction(pointer) { assert.equal(pointer, 73); callback = null; },
+    _patchy_engine_session_apply_retouch_repair(session, state, revision, input,
+        progress, progressUserData, event) {
+      assert.deepEqual([session, state, revision, progress, progressUserData],
+        [22, 9n, 4n, 73, 0]);
+      const mode = view.getUint32(input + 4, true);
+      const points = view.getUint32(input + 16, true);
+      const count = view.getUint32(input + 20, true);
+      seen.push({ mode, count, brushSize: view.getInt32(input + 24, true),
+        softness: view.getInt32(input + 28, true), deltaX: view.getInt32(input + 32, true),
+        deltaY: view.getInt32(input + 36, true), transparent: heap[input + 40],
+        sampleAllLayers: heap[input + 41],
+        firstPoint: points ? [view.getFloat64(points, true), view.getFloat64(points + 8, true)] : null,
+        continued: callback(0, 0, 0) });
+      view.setBigUint64(event + 16, 5n, true); view.setBigUint64(event + 24, 10n, true);
+      view.setBigUint64(event + 32, 7n, true); heap[event + 40] = 1; heap[event + 41] = 1;
+      return 1;
+    },
+  };
+  const engine = new EmscriptenPatchyEngine(module);
+  const snapshot = { stateId: 9n, revision: 4n };
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  engine.applyRetouchRepair(22, snapshot, { layerId: 7n, mode: 0,
+    points: [[2.5, 3.5], [4, 3.5]], brushSize: 17, softness: 65,
+    sampleAllLayers: false }, cancellation);
+  Atomics.store(cancellation, 0, 1);
+  engine.applyRetouchRepair(22, snapshot, { layerId: 7n, mode: 2,
+    deltaX: 8, deltaY: -3, transparent: true }, cancellation);
+  assert.deepEqual(seen, [
+    { mode: 0, count: 2, brushSize: 17, softness: 65, deltaX: 0, deltaY: 0,
+      transparent: 0, sampleAllLayers: 0, firstPoint: [2.5, 3.5], continued: 1 },
+    { mode: 2, count: 0, brushSize: 0, softness: 0, deltaX: 8, deltaY: -3,
+      transparent: 1, sampleAllLayers: 1, firstPoint: null, continued: 0 },
+  ]);
+  assert.throws(() => engine.applyRetouchRepair(22, snapshot,
+    { layerId: 7n, mode: 1, deltaX: 0, deltaY: 0 }, cancellation), /bounded contract/);
+  assert.throws(() => engine.applyRetouchRepair(22, snapshot,
+    { layerId: 1n << 64n, mode: 2, deltaX: 1, deltaY: 0 }, cancellation),
+  /versioned retouch-repair/);
+  assert.throws(() => engine.applyRetouchRepair(22, snapshot,
+    { layerId: 7n, mode: 0, points: [[1e300, 2]], brushSize: 5, softness: 0 },
+    cancellation), /bounded contract/);
+  engine.dispose();
+});
+
 test("Emscripten adapter keeps protocol-v1 PSD save compatible and rejects unsupported PSB", () => {
   const memory = new ArrayBuffer(4096); const heap = new Uint8Array(memory);
   const view = new DataView(memory); let next = 512; let releases = 0;
@@ -1918,6 +1979,33 @@ test("worker previews and commits one exact-state Liquify session", async () => 
     (error) => error.name === "PatchyEngineError" && error.code === 6);
   assert.deepEqual(calls.map(([kind]) => kind), ["preview", "commit"]);
   assert.deepEqual(calls[1][3].strokes, strokes);
+  host.dispose();
+});
+
+test("worker commits one cancellable exact-state retouch repair", async () => {
+  let revision = 4n;
+  const calls = [];
+  const engine = {
+    capabilities: 1n << 42n,
+    create() { return 100; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision }; },
+    applyRetouchRepair(session, before, input, cancellation) {
+      calls.push([session, before.revision, input, cancellation]); revision += 1n;
+    },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 8, height: 6, name: "Repair.psd" });
+  const cancellation = new SharedArrayBuffer(4);
+  const message = { layerId: "7", mode: 0, points: [[2, 3]], brushSize: 9,
+    softness: 50, sampleAllLayers: true, cancellation,
+    expectedStateId: "4", expectedRevision: "4" };
+  const committed = await host.dispatch({ method: "applyRetouchRepair", ...message });
+  assert.equal(committed.revision, 5n);
+  assert.ok(calls[0][3] instanceof Int32Array);
+  assert.equal(calls[0][2].layerId, 7n);
+  await assert.rejects(host.dispatch({ method: "applyRetouchRepair", ...message }),
+    (error) => error.name === "PatchyEngineError" && error.code === 6);
   host.dispose();
 });
 

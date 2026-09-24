@@ -2375,6 +2375,7 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
             case PreparedDocumentMutationKind::RasterFill:
             case PreparedDocumentMutationKind::LayerWarp:
             case PreparedDocumentMutationKind::Liquify:
+            case PreparedDocumentMutationKind::RetouchRepair:
               break;
             default:
               error = make_error(SessionErrorCode::InvalidArgument,
@@ -2440,8 +2441,39 @@ CommandResult DocumentSession::execute_impl(const DocumentCommand &command,
                 return;
               }
             }
+            if (concrete.selection.has_value()) {
+              const auto &prepared = *concrete.selection;
+              const auto valid_rect = [this](Rect rect) {
+                return rect.width > 0 && rect.height > 0 && rect.x >= 0 &&
+                       rect.y >= 0 &&
+                       rect.x <= document_.width() - rect.width &&
+                       rect.y <= document_.height() - rect.height;
+              };
+              if (!std::all_of(prepared.selection.begin(),
+                               prepared.selection.end(), valid_rect) ||
+                  !std::all_of(prepared.display_region.begin(),
+                               prepared.display_region.end(), valid_rect) ||
+                  (!prepared.mask_alpha.empty() &&
+                   (prepared.mask_alpha.format() != PixelFormat::gray8() ||
+                    prepared.mask_alpha.width() != prepared.mask_bounds.width ||
+                    prepared.mask_alpha.height() != prepared.mask_bounds.height ||
+                    !valid_rect(prepared.mask_bounds))) ||
+                  (prepared.quick_mask_pixels.has_value() &&
+                   !prepared.quick_mask_pixels->empty() &&
+                   (prepared.quick_mask_pixels->format() != PixelFormat::gray8() ||
+                    prepared.quick_mask_pixels->width() != document_.width() ||
+                    prepared.quick_mask_pixels->height() != document_.height()))) {
+                error = make_error(
+                    SessionErrorCode::InvalidArgument,
+                    "prepared document selection is invalid");
+                return;
+              }
+            }
             prepare_mutation(record_history);
             document_ = concrete.document;
+            if (concrete.selection.has_value()) {
+              selection_ = *concrete.selection;
+            }
             changed = true;
             affected_region = concrete.affected_region.empty()
                                   ? Rect::from_size(document_.width(),

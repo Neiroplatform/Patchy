@@ -424,6 +424,7 @@ enum class PreparedDocumentMutationKind : std::uint8_t {
   RasterFill,
   LayerWarp,
   Liquify,
+  RetouchRepair,
 };
 
 struct CommitPreparedDocumentState {
@@ -431,6 +432,9 @@ struct CommitPreparedDocumentState {
   std::uint64_t expected_state_id{0};
   Document document{};
   Rect affected_region{};
+  // Some prepared pixel mutations also publish a canonical selection change
+  // on the same history/state boundary (Patch Destination follows its drag).
+  std::optional<SelectionSnapshot> selection{};
 };
 
 // Saved-channel structure and metadata are canonical document state too. These

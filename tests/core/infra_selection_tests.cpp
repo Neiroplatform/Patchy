@@ -50,7 +50,9 @@
 #include "core/heal_membrane.hpp"
 #include "core/pixel_tools.hpp"
 #include "core/quick_select.hpp"
+#include "core/retouch_repair.hpp"
 #include "core/spot_heal.hpp"
+#include "engine/host_protocol.h"
 #include "render/compositor.hpp"
 #include "render/layer_compositor.hpp"
 #include "render/tile_cache.hpp"
@@ -1002,6 +1004,258 @@ void heal_membrane_interpolates_boundary_offsets() {
   CHECK(solved_again == solved_ramp);
 }
 
+patchy::Document retouch_fixture_document() {
+  patchy::Document document(24, 16, patchy::PixelFormat::rgba8());
+  patchy::PixelBuffer pixels(24, 16, patchy::PixelFormat::rgba8());
+  for (std::int32_t y = 0; y < pixels.height(); ++y) {
+    for (std::int32_t x = 0; x < pixels.width(); ++x) {
+      auto* pixel = pixels.pixel(x, y);
+      pixel[0] = pixel[1] = pixel[2] = 120;
+      pixel[3] = 255;
+    }
+  }
+  document.add_pixel_layer("Retouch", std::move(pixels));
+  return document;
+}
+
+std::vector<std::uint8_t> retouch_pixels(const patchy::Document& document,
+                                         patchy::LayerId layer_id) {
+  const auto bytes = document.find_layer(layer_id)->pixels().data();
+  return {bytes.begin(), bytes.end()};
+}
+
+void retouch_spot_healing_is_deterministic_and_selection_bounded() {
+  auto first = retouch_fixture_document();
+  const auto layer_id = first.layers().front().id();
+  auto* blemish = first.find_layer(layer_id)->pixels().pixel(12, 8);
+  blemish[0] = 245;
+  blemish[1] = 20;
+  blemish[2] = 30;
+  auto second = first;
+
+  patchy::RetouchRepairRequest request;
+  request.mode = patchy::RetouchRepairMode::SpotHealing;
+  request.points = {{12.0, 8.0}};
+  request.brush_size = 5;
+  request.softness = 0;
+  patchy::RetouchRepairResult result;
+  std::string error;
+  CHECK(patchy::apply_retouch_repair(first, layer_id, request, &result, &error));
+  CHECK(!result.affected_region.empty());
+  const auto* healed = first.find_layer(layer_id)->pixels().pixel(12, 8);
+  CHECK(healed[0] < 180);
+  CHECK(healed[1] > 70);
+  CHECK(healed[2] > 70);
+  CHECK(patchy::apply_retouch_repair(second, layer_id, request, nullptr, &error));
+  CHECK(retouch_pixels(first, layer_id) == retouch_pixels(second, layer_id));
+
+  auto invalid = retouch_fixture_document();
+  const auto invalid_before = retouch_pixels(invalid, layer_id);
+  request.points = {{std::numeric_limits<double>::max(), 8.0}};
+  CHECK(!patchy::apply_retouch_repair(invalid, layer_id, request, nullptr,
+                                      &error));
+  CHECK(retouch_pixels(invalid, layer_id) == invalid_before);
+
+  auto excluded = retouch_fixture_document();
+  auto* excluded_blemish = excluded.find_layer(layer_id)->pixels().pixel(12, 8);
+  excluded_blemish[0] = 245;
+  excluded_blemish[1] = 20;
+  excluded_blemish[2] = 30;
+  const auto before = retouch_pixels(excluded, layer_id);
+  request.points = {{12.0, 8.0}};
+  request.selection = {{0, 0, 4, 4}};
+  CHECK(!patchy::apply_retouch_repair(excluded, layer_id, request, nullptr, &error));
+  CHECK(retouch_pixels(excluded, layer_id) == before);
+}
+
+void retouch_patch_source_and_destination_follow_explicit_offset() {
+  auto source_mode = retouch_fixture_document();
+  const auto layer_id = source_mode.layers().front().id();
+  auto* source_detail = source_mode.find_layer(layer_id)->pixels().pixel(13, 6);
+  source_detail[0] = 15;
+  source_detail[1] = 30;
+  source_detail[2] = 220;
+
+  patchy::RetouchRepairRequest request;
+  request.mode = patchy::RetouchRepairMode::PatchSource;
+  request.selection = {{4, 4, 4, 4}};
+  request.delta_x = 8;
+  patchy::RetouchRepairResult result;
+  std::string error;
+  CHECK(patchy::apply_retouch_repair(source_mode, layer_id, request, &result,
+                                     &error));
+  const auto* copied_to_target =
+      source_mode.find_layer(layer_id)->pixels().pixel(5, 6);
+  CHECK(copied_to_target[2] > copied_to_target[0]);
+  CHECK(result.selection_delta_x == 0 && result.selection_delta_y == 0);
+
+  auto destination_mode = retouch_fixture_document();
+  auto* selected_detail =
+      destination_mode.find_layer(layer_id)->pixels().pixel(5, 6);
+  selected_detail[0] = 15;
+  selected_detail[1] = 30;
+  selected_detail[2] = 220;
+  request.mode = patchy::RetouchRepairMode::PatchDestination;
+  CHECK(patchy::apply_retouch_repair(destination_mode, layer_id, request,
+                                     &result, &error));
+  const auto* copied_to_destination =
+      destination_mode.find_layer(layer_id)->pixels().pixel(13, 6);
+  CHECK(copied_to_destination[2] > copied_to_destination[0]);
+  CHECK(result.selection_delta_x == 8 && result.selection_delta_y == 0);
+
+  auto soft_mask_mode = retouch_fixture_document();
+  for (const auto x : {13, 14}) {
+    auto* soft_source =
+        soft_mask_mode.find_layer(layer_id)->pixels().pixel(x, 6);
+    soft_source[0] = 15;
+    soft_source[1] = 30;
+    soft_source[2] = 220;
+  }
+  patchy::PixelBuffer soft_mask(4, 4, patchy::PixelFormat::gray8());
+  soft_mask.pixel(1, 2)[0] = 255U;
+  soft_mask.pixel(2, 2)[0] = 128U;
+  request.mode = patchy::RetouchRepairMode::PatchSource;
+  request.selection.clear();
+  request.selection_mask_bounds = {4, 4, 4, 4};
+  request.selection_mask = std::move(soft_mask);
+  CHECK(patchy::apply_retouch_repair(soft_mask_mode, layer_id, request,
+                                     &result, &error));
+  const auto* fully_selected =
+      soft_mask_mode.find_layer(layer_id)->pixels().pixel(5, 6);
+  const auto* softly_selected =
+      soft_mask_mode.find_layer(layer_id)->pixels().pixel(6, 6);
+  const auto* excluded =
+      soft_mask_mode.find_layer(layer_id)->pixels().pixel(4, 6);
+  CHECK(fully_selected[2] > fully_selected[0]);
+  CHECK(softly_selected[2] > softly_selected[0]);
+  CHECK(softly_selected[2] < fully_selected[2]);
+  CHECK(excluded[0] == 120 && excluded[1] == 120 && excluded[2] == 120);
+}
+
+void retouch_repair_rejects_locks_and_cancels_without_mutation() {
+  auto document = retouch_fixture_document();
+  const auto layer_id = document.layers().front().id();
+  document.find_layer(layer_id)->pixels().pixel(12, 8)[0] = 245;
+  const auto original = retouch_pixels(document, layer_id);
+
+  patchy::RetouchRepairRequest request;
+  request.mode = patchy::RetouchRepairMode::SpotHealing;
+  request.points = {{12.0, 8.0}};
+  request.brush_size = 5;
+  std::string error;
+  document.find_layer(layer_id)->set_lock_flags(patchy::kLayerLockImagePixels);
+  CHECK(!patchy::apply_retouch_repair(document, layer_id, request, nullptr,
+                                      &error));
+  CHECK(retouch_pixels(document, layer_id) == original);
+
+  document.find_layer(layer_id)->set_lock_flags(0);
+  std::size_t checks = 0;
+  request.continue_operation = [&checks] { return ++checks < 4; };
+  CHECK(!patchy::apply_retouch_repair(document, layer_id, request, nullptr,
+                                      &error));
+  CHECK(error.find("cancelled") != std::string::npos);
+  CHECK(retouch_pixels(document, layer_id) == original);
+
+  checks = 0;
+  request.continue_operation = [&checks] { return ++checks < 25; };
+  CHECK(!patchy::apply_retouch_repair(document, layer_id, request, nullptr,
+                                      &error));
+  CHECK(checks == 25);
+  CHECK(error.find("cancelled") != std::string::npos);
+  CHECK(retouch_pixels(document, layer_id) == original);
+
+  patchy::RetouchRepairRequest hostile_patch;
+  hostile_patch.mode = patchy::RetouchRepairMode::PatchDestination;
+  hostile_patch.selection = {{4, 4, 4, 4}};
+  hostile_patch.delta_x = std::numeric_limits<std::int32_t>::max();
+  CHECK(!patchy::apply_retouch_repair(document, layer_id, hostile_patch,
+                                      nullptr, &error));
+  CHECK(retouch_pixels(document, layer_id) == original);
+  hostile_patch.delta_x = std::numeric_limits<std::int32_t>::min();
+  CHECK(!patchy::apply_retouch_repair(document, layer_id, hostile_patch,
+                                      nullptr, &error));
+  CHECK(retouch_pixels(document, layer_id) == original);
+}
+
+void retouch_repair_host_commit_moves_selection_atomically() {
+  patchy_engine_error error{};
+  patchy_engine_protocol_info protocol{};
+  protocol.struct_size = sizeof(protocol);
+  CHECK(patchy_engine_get_protocol_info(&protocol, &error) == 1);
+  CHECK((protocol.capabilities & PATCHY_ENGINE_CAP_RETOUCH_REPAIR) != 0U);
+  auto* runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto* session = patchy_engine_session_create_rgba8(runtime, 24, 16, &error);
+  CHECK(session != nullptr);
+
+  patchy_engine_document_projection projection{};
+  projection.struct_size = sizeof(projection);
+  CHECK(patchy_engine_session_document(session, &projection, &error) == 1);
+  std::vector<std::uint8_t> rgba(24U * 16U * 4U, 120U);
+  for (std::size_t index = 3; index < rgba.size(); index += 4U) rgba[index] = 255U;
+  auto* detail = rgba.data() + (6U * 24U + 5U) * 4U;
+  detail[0] = 15U;
+  detail[1] = 30U;
+  detail[2] = 220U;
+  patchy_engine_pixel_layer_input layer{};
+  layer.struct_size = sizeof(layer);
+  layer.expected_state_id = projection.state_id;
+  layer.expected_revision = projection.revision;
+  layer.bounds = {0, 0, 24, 16};
+  layer.width = 24;
+  layer.height = 16;
+  layer.rgba = rgba.data();
+  layer.rgba_size = rgba.size();
+  layer.name = "Retouch ABI";
+  layer.name_size = 11;
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_add_rgba8_layer(session, &layer, &event, &error) == 1);
+  const auto layer_id = event.affected_layer_id;
+
+  projection = {};
+  projection.struct_size = sizeof(projection);
+  CHECK(patchy_engine_session_document(session, &projection, &error) == 1);
+  const std::array<patchy_engine_rect, 1> rects{{{4, 4, 4, 4}}};
+  patchy_engine_selection_input selection{};
+  selection.struct_size = sizeof(selection);
+  selection.expected_state_id = projection.state_id;
+  selection.expected_revision = projection.revision;
+  selection.rects = rects.data();
+  selection.rect_count = rects.size();
+  CHECK(patchy_engine_session_set_selection(session, &selection, &event, &error) == 1);
+
+  projection = {};
+  projection.struct_size = sizeof(projection);
+  CHECK(patchy_engine_session_document(session, &projection, &error) == 1);
+  const auto before_repair_state = projection.state_id;
+  patchy_engine_retouch_repair repair{};
+  repair.struct_size = sizeof(repair);
+  repair.mode = PATCHY_ENGINE_RETOUCH_PATCH_DESTINATION;
+  repair.layer_id = layer_id;
+  repair.delta_x = 8;
+  repair.sample_all_layers = 1U;
+  CHECK(patchy_engine_session_apply_retouch_repair(
+            session, projection.state_id, projection.revision, &repair,
+            nullptr, nullptr, &event, &error) == 1);
+  CHECK(event.state_id != before_repair_state);
+  patchy_engine_rect moved{};
+  CHECK(patchy_engine_session_selection_rect_at(session, 0, &moved, &error) == 1);
+  CHECK(moved.x == 12 && moved.y == 4 && moved.width == 4 && moved.height == 4);
+
+  CHECK(patchy_engine_session_apply_retouch_repair(
+            session, projection.state_id, projection.revision, &repair,
+            nullptr, nullptr, &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  patchy_engine_rect restored{};
+  CHECK(patchy_engine_session_selection_rect_at(session, 0, &restored, &error) == 1);
+  CHECK(restored.x == 4 && restored.y == 4);
+
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 // main() decides the Qt platform before the QApplication exists, from a raw argv
 // scan; this pins the scan's contract (exact token, "--" ends it) so the
 // QCommandLineParser definition of --headless and the early scan cannot drift.
@@ -1048,6 +1302,14 @@ std::vector<patchy::test::TestCase> infra_selection_tests() {
       {"spot_heal_source_map_is_coherent_and_outside", spot_heal_source_map_is_coherent_and_outside},
       {"spot_heal_source_map_stays_in_canvas_at_edges", spot_heal_source_map_stays_in_canvas_at_edges},
       {"heal_membrane_interpolates_boundary_offsets", heal_membrane_interpolates_boundary_offsets},
+      {"retouch_spot_healing_is_deterministic_and_selection_bounded",
+       retouch_spot_healing_is_deterministic_and_selection_bounded},
+      {"retouch_patch_source_and_destination_follow_explicit_offset",
+       retouch_patch_source_and_destination_follow_explicit_offset},
+      {"retouch_repair_rejects_locks_and_cancels_without_mutation",
+       retouch_repair_rejects_locks_and_cancels_without_mutation},
+      {"retouch_repair_host_commit_moves_selection_atomically",
+       retouch_repair_host_commit_moves_selection_atomically},
       {"cli_headless_flag_matches_exact_token", cli_headless_flag_matches_exact_token},
   };
 }

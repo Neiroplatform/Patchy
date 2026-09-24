@@ -67,7 +67,9 @@
         <button class="tool-button" id="brushToolButton" type="button" aria-label="Brush" aria-pressed="false" title="Brush (B)">●</button>
         <button class="tool-button" id="eraserToolButton" type="button" aria-label="Eraser" aria-pressed="false" title="Eraser (E)">◇</button>
         <button class="tool-button" id="cloneToolButton" type="button" aria-label="Clone stamp" aria-pressed="false" title="Clone stamp (S)">♙</button>
-        <button class="tool-button" id="healToolButton" type="button" aria-label="Healing brush" aria-pressed="false" title="Healing brush (J)">✚</button>
+        <button class="tool-button" id="healToolButton" type="button" aria-label="Healing brush" aria-pressed="false" title="Healing brush">✚</button>
+        <button class="tool-button" id="spotHealingToolButton" type="button" aria-label="Spot Healing Brush" aria-pressed="false" title="Spot Healing Brush (J)">⊕</button>
+        <button class="tool-button" id="patchToolButton" type="button" aria-label="Patch Tool" aria-pressed="false" title="Patch Tool (Shift+J)">⬡</button>
         <button class="tool-button" id="gradientToolButton" type="button" aria-label="Gradient" aria-pressed="false" title="Gradient (G)">◩</button>
         <button class="tool-button" id="fillToolButton" type="button" aria-label="Fill selection" title="Fill selection">▰</button>
         <button class="tool-button" id="penToolButton" type="button" aria-label="Pen path" aria-pressed="false" title="Pen path (P)">⌁</button>
@@ -84,21 +86,25 @@
         <div class="stage-meta" id="stageMeta" hidden>
           <span id="documentName">Untitled</span>
           <span class="tool-options" id="toolOptions">
-            <label>Size <input id="brushSizeInput" type="range" min="1" max="128" value="24"><output id="brushSizeOutput">24 px</output></label>
-            <label>Color <input id="brushColorInput" type="color" value="#111111"></label>
-            <label>Target <select id="paintTargetSelect" aria-label="Paint target">
+            <label>Size <input id="brushSizeInput" type="range" min="1" max="4096" value="24"><output id="brushSizeOutput">24 px</output></label>
+            <label class="non-retouch-option">Color <input id="brushColorInput" type="color" value="#111111"></label>
+            <label class="non-retouch-option">Target <select id="paintTargetSelect" aria-label="Paint target">
               <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
             </select></label>
-            <label>Paint <select id="paintPresetSelect">
+            <label class="non-retouch-option">Paint <select id="paintPresetSelect">
               <option value="foreground-transparent">Foreground → transparent</option>
               <option value="black-white">Black → white</option>
               <option value="sunset">Sunset</option><option value="ocean">Ocean</option>
               <option value="solid">Solid foreground</option>
               <option value="checker">Checker pattern</option><option value="dots">Dot pattern</option>
             </select></label>
-            <label>Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
-            <label>Edge <input id="edgeContrastInput" type="range" min="1" max="100" value="10"><output id="edgeContrastOutput">10%</output></label>
-            <label><input id="enhanceEdgeInput" type="checkbox"> Enhance edge</label>
+            <label class="non-retouch-option">Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
+            <label class="non-retouch-option">Edge <input id="edgeContrastInput" type="range" min="1" max="100" value="10"><output id="edgeContrastOutput">10%</output></label>
+            <label class="non-retouch-option"><input id="enhanceEdgeInput" type="checkbox"> Enhance edge</label>
+            <label class="retouch-option retouch-spot-option" hidden>Softness <input id="retouchSoftnessInput" type="range" min="0" max="100" value="50"><output id="retouchSoftnessOutput">50%</output></label>
+            <label class="retouch-option retouch-patch-option" hidden>Patch <select id="patchModeInput"><option value="1">Source</option><option value="2">Destination</option></select></label>
+            <label class="retouch-option" hidden><input id="retouchSampleAllInput" type="checkbox" checked> Sample all layers</label>
+            <label class="retouch-option retouch-patch-option" hidden><input id="patchTransparentInput" type="checkbox"> Transparent</label>
           </span>
           <span id="documentMetrics"></span>
         </div>

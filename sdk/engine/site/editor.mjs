@@ -72,6 +72,7 @@ let transformPreviewGeneration = 0;
 let transformPreviewRestore = null;
 let transformPreviewCancellation = null;
 let paintDraft = null;
+let retouchDraft = null;
 let rasterPreviewPending = null;
 let rasterPreviewInFlight = false;
 let rasterPreviewGeneration = 0;
@@ -1778,9 +1779,22 @@ function setCanvasTool(tool) {
     ["quickMaskToolButton", "quickMask"],
     ["panToolButton", "pan"], ["brushToolButton", "brush"],
     ["eraserToolButton", "eraser"], ["cloneToolButton", "clone"],
-    ["healToolButton", "heal"], ["gradientToolButton", "gradient"], ["penToolButton", "pen"],
+    ["healToolButton", "heal"], ["spotHealingToolButton", "spotHealing"],
+    ["patchToolButton", "patch"], ["gradientToolButton", "gradient"], ["penToolButton", "pen"],
     ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
+  }
+  for (const option of document.querySelectorAll(".retouch-option")) {
+    option.hidden = tool !== "spotHealing" && tool !== "patch";
+  }
+  for (const option of document.querySelectorAll(".non-retouch-option")) {
+    option.hidden = tool === "spotHealing" || tool === "patch";
+  }
+  for (const option of document.querySelectorAll(".retouch-spot-option")) {
+    option.hidden = tool !== "spotHealing";
+  }
+  for (const option of document.querySelectorAll(".retouch-patch-option")) {
+    option.hidden = tool !== "patch";
   }
   if (tool === "quickMask") renderQuickMask();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
@@ -3692,6 +3706,117 @@ function finishPaint(event, cancelled = false) {
       : client.applyRasterStroke(rasterStrokePayload(draft)));
 }
 
+function retouchControls() {
+  const brushSize = Math.round(Number($("brushSizeInput").value));
+  const softness = Math.round(Number($("retouchSoftnessInput").value));
+  const mode = Number($("patchModeInput").value);
+  if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > 4096 ||
+      !Number.isInteger(softness) || softness < 0 || softness > 100 ||
+      ![1, 2].includes(mode)) return null;
+  return { brushSize, softness,
+    sampleAllLayers: $("retouchSampleAllInput").checked,
+    transparent: $("patchTransparentInput").checked,
+    mode };
+}
+
+function drawSpotHealingFeedback(draft, from, to) {
+  const target = draft.overlay;
+  target.save(); target.lineCap = "round"; target.lineJoin = "round";
+  target.lineWidth = draft.brushSize;
+  target.strokeStyle = "#d7ff554d"; target.fillStyle = "#d7ff554d";
+  target.beginPath(); target.moveTo(from.x, from.y); target.lineTo(to.x, to.y); target.stroke();
+  target.beginPath(); target.arc(to.x, to.y, draft.brushSize / 2, 0, Math.PI * 2); target.fill();
+  target.lineWidth = 1 / Math.max(zoom, .01); target.strokeStyle = "#f5ffd5";
+  target.beginPath(); target.arc(to.x, to.y, draft.brushSize / 2, 0, Math.PI * 2); target.stroke();
+  target.restore();
+}
+
+function renderPatchFeedback(draft) {
+  const target = draft.overlay;
+  target.clearRect(0, 0, canvas.width, canvas.height);
+  const dx = draft.deltaX; const dy = draft.deltaY;
+  target.save(); target.globalAlpha = .68;
+  for (const rect of snapshot.selection || []) {
+    if (draft.mode === 2) {
+      target.drawImage(canvas, rect.x, rect.y, rect.width, rect.height,
+        rect.x + dx, rect.y + dy, rect.width, rect.height);
+    } else {
+      target.drawImage(canvas, rect.x + dx, rect.y + dy, rect.width, rect.height,
+        rect.x, rect.y, rect.width, rect.height);
+    }
+  }
+  target.globalAlpha = 1; target.setLineDash([6 / Math.max(zoom, .01), 4 / Math.max(zoom, .01)]);
+  target.lineWidth = 1 / Math.max(zoom, .01); target.strokeStyle = "#d7ff55";
+  for (const rect of snapshot.selection || []) {
+    target.strokeRect(rect.x + dx, rect.y + dy, rect.width, rect.height);
+  }
+  target.restore();
+}
+
+function beginRetouch(event) {
+  const layer = selectedLayer(); const controls = retouchControls();
+  if (busy || event.button !== 0 || layer?.kind !== 0 || !controls) return;
+  if (canvasTool === "patch" && !snapshot.selection?.length) {
+    showError("Patch Tool", new Error("Select an area before using Patch Tool.")); return;
+  }
+  const point = canvasPoint(event); canvas.setPointerCapture(event.pointerId);
+  retouchDraft = { pointerId: event.pointerId, tool: canvasTool, layer,
+    stateId: snapshot.stateId, revision: snapshot.revision, start: point, last: point,
+    points: canvasTool === "spotHealing" ? [point] : [], deltaX: 0, deltaY: 0,
+    mode: controls.mode, ...controls, overlay: $("gestureCanvas").getContext("2d") };
+  if (canvasTool === "spotHealing") drawSpotHealingFeedback(retouchDraft, point, point);
+  else renderPatchFeedback(retouchDraft);
+}
+
+function moveRetouch(event) {
+  const draft = retouchDraft;
+  if (!draft || draft.pointerId !== event.pointerId) return;
+  const point = canvasPoint(event);
+  if (draft.tool === "spotHealing") {
+    if (Math.hypot(point.x - draft.last.x, point.y - draft.last.y) < .5) return;
+    if (draft.points.length >= 4096) return;
+    drawSpotHealingFeedback(draft, draft.last, point); draft.last = point; draft.points.push(point);
+  } else {
+    draft.deltaX = Math.round(point.x - draft.start.x);
+    draft.deltaY = Math.round(point.y - draft.start.y);
+    renderPatchFeedback(draft);
+  }
+}
+
+async function commitRetouch(draft) {
+  clearError();
+  const spot = draft.tool === "spotHealing";
+  const title = spot ? "Applying Spot Healing" : "Applying Patch";
+  const cancellation = new Int32Array(new SharedArrayBuffer(4));
+  setBusy(true, title, "Committing one canonical engine revision");
+  $("cancelOperationButton").hidden = false; $("cancelOperationButton").disabled = false;
+  cancelActiveOperation = () => Atomics.store(cancellation, 0, 1);
+  try {
+    const before = snapshot;
+    const next = await client.applyRetouchRepair({ layerId: draft.layer.id,
+      mode: spot ? 0 : draft.mode,
+      points: spot ? draft.points.map(({ x, y }) => [x, y]) : [],
+      brushSize: draft.brushSize, softness: draft.softness,
+      deltaX: draft.deltaX, deltaY: draft.deltaY,
+      transparent: !spot && draft.transparent,
+      sampleAllLayers: draft.sampleAllLayers, cancellation,
+      expectedStateId: draft.stateId, expectedRevision: draft.revision });
+    recordHistoryMutation(before, next, title); await acceptSnapshot(next); scheduleCheckpoint(next);
+  } catch (error) {
+    if (error?.code === 7) setSessionState("document", spot ? "Spot Healing cancelled" : "Patch cancelled");
+    else showError("Retouch repair failed", error);
+  } finally { setBusy(false); }
+}
+
+function finishRetouch(event, cancelled = false) {
+  const draft = retouchDraft;
+  if (!draft || draft.pointerId !== event.pointerId) return;
+  retouchDraft = null;
+  draft.overlay.clearRect(0, 0, canvas.width, canvas.height);
+  if (cancelled || (draft.tool === "patch" && draft.deltaX === 0 && draft.deltaY === 0)) return;
+  commitRetouch(draft);
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
 }
@@ -3743,6 +3868,10 @@ registerCommand("tool.brush", "brushToolButton", () => setCanvasTool("brush"));
 registerCommand("tool.eraser", "eraserToolButton", () => setCanvasTool("eraser"));
 registerCommand("tool.clone", "cloneToolButton", () => setCanvasTool("clone"));
 registerCommand("tool.heal", "healToolButton", () => setCanvasTool("heal"));
+registerCommand("tool.spotHealing", "spotHealingToolButton", () => setCanvasTool("spotHealing"),
+  () => !busy && selectedLayer()?.kind === 0);
+registerCommand("tool.patch", "patchToolButton", () => setCanvasTool("patch"),
+  () => !busy && selectedLayer()?.kind === 0 && Boolean(snapshot?.selection?.length));
 registerCommand("tool.gradient", "gradientToolButton", () => setCanvasTool("gradient"));
 registerCommand("tool.fill", "fillToolButton", fillSelectedPixels, () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.pen", "penToolButton", () => setCanvasTool("pen"));
@@ -3969,6 +4098,9 @@ for (const handle of $("transformOverlay").querySelectorAll("circle")) {
 $("brushSizeInput").addEventListener("input", () => {
   $("brushSizeOutput").textContent = `${$("brushSizeInput").value} px`;
   persistPreferences();
+});
+$("retouchSoftnessInput").addEventListener("input", (event) => {
+  $("retouchSoftnessOutput").textContent = `${event.currentTarget.value}%`;
 });
 $("brushColorInput").addEventListener("input", persistPreferences);
 $("paintTargetSelect").addEventListener("change", updateControls);
@@ -4256,6 +4388,7 @@ canvas.addEventListener("pointerdown", (event) => {
   if (busy || !snapshot || event.button !== 0) return;
   if (spacePanActive) return;
   if (["brush", "eraser", "clone", "heal"].includes(canvasTool)) { beginPaint(event); return; }
+  if (["spotHealing", "patch"].includes(canvasTool)) { beginRetouch(event); return; }
   if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "text") { openTextDialog(); return; }
   if (canvasTool === "pen") {
@@ -4371,6 +4504,7 @@ canvas.addEventListener("pointerdown", (event) => {
 
 canvas.addEventListener("pointermove", (event) => {
   movePaint(event);
+  moveRetouch(event);
   if (lassoDraft?.pointerId === event.pointerId) {
     const point = canvasPoint(event); const last = lassoDraft.points.at(-1);
     if (Math.hypot(point.x - last.x, point.y - last.y) >= 1) lassoDraft.points.push(point);
@@ -4406,6 +4540,7 @@ canvas.addEventListener("pointermove", (event) => {
 });
 canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
+  finishRetouch(event);
   finishGradient(event);
   if (lassoDraft?.pointerId === event.pointerId) {
     const draft = lassoDraft; lassoDraft = null; previewPolygon([]);
@@ -4432,6 +4567,7 @@ canvas.addEventListener("pointerup", (event) => {
 });
 canvas.addEventListener("pointercancel", (event) => {
   finishPaint(event, true); gradientDraft = null; clearRasterPreview(); moveDraft = null; lassoDraft = null;
+  finishRetouch(event, true);
   quickSelectDraft = null; quickMaskDraft = null; previewPolygon([]); clearTransformPreview(true);
   if (canvasTool === "quickMask") renderQuickMask();
 });
@@ -4590,6 +4726,7 @@ window.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "c") executeCommand("tool.crop");
   if (event.key.toLowerCase() === "b") executeCommand("tool.brush");
   if (event.key.toLowerCase() === "e") executeCommand("tool.eraser");
+  if (event.key.toLowerCase() === "j") executeCommand(event.shiftKey ? "tool.patch" : "tool.spotHealing");
   if (event.key.toLowerCase() === "t") executeCommand("tool.text");
   if (event.key.toLowerCase() === "p") executeCommand("tool.pen");
   if (event.key === "Enter" && polygonDraft) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 namespace patchy {
 
@@ -26,5 +27,13 @@ namespace patchy {
 // fixed sweep counts and lexicographic order (AGENTS.md determinism rule).
 void solve_heal_membrane(const std::uint8_t* interior, std::int32_t width, std::int32_t height,
                          std::int16_t* offsets_rgb);
+
+// Same deterministic solve, with bounded cooperative cancellation. Returns
+// false only when `continue_operation` requests cancellation; callers must
+// discard the partially solved output in that case.
+[[nodiscard]] bool solve_heal_membrane_cancellable(
+    const std::uint8_t* interior, std::int32_t width, std::int32_t height,
+    std::int16_t* offsets_rgb,
+    const std::function<bool()>& continue_operation);
 
 }  // namespace patchy

@@ -14,8 +14,9 @@ const VERSION_ROOT_NAME = "patchy-versions-v1";
 const VERSION_MANIFEST_VERSION = 1;
 const DEFAULT_VERSION_RETENTION = 20;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const TOOL_IDS = new Set(["move", "marquee", "lasso", "polygon", "magic", "pan",
-  "brush", "eraser", "clone", "heal", "gradient", "text"]);
+const TOOL_IDS = new Set(["move", "crop", "marquee", "lasso", "polygon", "magic",
+  "quickSelect", "magnetic", "quickMask", "pan", "brush", "eraser", "clone",
+  "heal", "spotHealing", "patch", "gradient", "pen", "text"]);
 const PAINT_PRESETS = new Set(["solid", "foreground-transparent", "black-white",
   "sunset", "ocean", "checker", "dots"]);
 
@@ -613,8 +614,8 @@ function normalizePreferences(value, stored) {
   }
   if (value.brushSize !== undefined) {
     const brushSize = Number(value.brushSize);
-    if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > 512) {
-      throw new RangeError("Preferred brush size must be between 1 and 512");
+    if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > 4096) {
+      throw new RangeError("Preferred brush size must be between 1 and 4096");
     }
     result.brushSize = brushSize;
   }

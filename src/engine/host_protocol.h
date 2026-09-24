@@ -57,6 +57,7 @@ enum patchy_engine_capability : uint64_t {
   PATCHY_ENGINE_CAP_LAYER_ARRANGE = UINT64_C(1) << 39,
   PATCHY_ENGINE_CAP_SELECTION_REFINEMENT = UINT64_C(1) << 40,
   PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING = UINT64_C(1) << 41,
+  PATCHY_ENGINE_CAP_RETOUCH_REPAIR = UINT64_C(1) << 42,
 };
 #else
 enum patchy_engine_capability {
@@ -106,6 +107,7 @@ typedef uint64_t patchy_engine_capability;
 #define PATCHY_ENGINE_CAP_LAYER_ARRANGE (UINT64_C(1) << 39)
 #define PATCHY_ENGINE_CAP_SELECTION_REFINEMENT (UINT64_C(1) << 40)
 #define PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING (UINT64_C(1) << 41)
+#define PATCHY_ENGINE_CAP_RETOUCH_REPAIR (UINT64_C(1) << 42)
 #endif
 
 enum patchy_engine_error_code {
@@ -346,6 +348,27 @@ typedef struct patchy_engine_liquify {
   const patchy_engine_liquify_stroke *strokes;
   size_t stroke_count;
 } patchy_engine_liquify;
+
+enum patchy_engine_retouch_repair_mode {
+  PATCHY_ENGINE_RETOUCH_SPOT_HEALING = 0,
+  PATCHY_ENGINE_RETOUCH_PATCH_SOURCE = 1,
+  PATCHY_ENGINE_RETOUCH_PATCH_DESTINATION = 2,
+};
+
+typedef struct patchy_engine_retouch_repair {
+  uint32_t struct_size;
+  uint32_t mode;
+  uint64_t layer_id;
+  const patchy_engine_stroke_point *points;
+  size_t point_count;
+  int32_t brush_size;
+  int32_t softness;
+  int32_t delta_x;
+  int32_t delta_y;
+  uint8_t transparent;
+  uint8_t sample_all_layers;
+  uint8_t reserved[6];
+} patchy_engine_retouch_repair;
 
 typedef struct patchy_engine_memory_usage {
   uint32_t struct_size;
@@ -1673,6 +1696,12 @@ int patchy_engine_session_preview_liquify(
 int patchy_engine_session_apply_liquify(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const patchy_engine_liquify *liquify,
+    patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_apply_retouch_repair(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision,
+    const patchy_engine_retouch_repair *repair,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
     patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_undo(patchy_engine_session *session,
                                patchy_engine_event *event,

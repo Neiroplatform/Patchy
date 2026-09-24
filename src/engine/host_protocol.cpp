@@ -9,6 +9,7 @@
 #include "core/magnetic_lasso.hpp"
 #include "core/quick_select.hpp"
 #include "core/raster_stroke.hpp"
+#include "core/retouch_repair.hpp"
 #include "core/pattern_resource.hpp"
 #include "core/rect_utils.hpp"
 #include "core/smart_object.hpp"
@@ -148,6 +149,12 @@ static_assert(offsetof(patchy_engine_selection_refinement_input, feather) ==
               40U);
 static_assert(offsetof(patchy_engine_selection_refinement_input, layer_id) ==
               48U);
+#if !defined(__EMSCRIPTEN__)
+static_assert(sizeof(patchy_engine_retouch_repair) == 56U);
+static_assert(offsetof(patchy_engine_retouch_repair, points) == 16U);
+static_assert(offsetof(patchy_engine_retouch_repair, brush_size) == 32U);
+static_assert(offsetof(patchy_engine_retouch_repair, transparent) == 48U);
+#endif
 
 constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_LAYER_PROJECTION |
@@ -189,7 +196,8 @@ constexpr std::uint64_t kCapabilities =
     PATCHY_ENGINE_CAP_MULTI_LAYER_TRANSFORM |
     PATCHY_ENGINE_CAP_LAYER_ARRANGE |
     PATCHY_ENGINE_CAP_SELECTION_REFINEMENT |
-    PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING;
+    PATCHY_ENGINE_CAP_LIQUIFY_AUTHORING |
+    PATCHY_ENGINE_CAP_RETOUCH_REPAIR;
 
 void clear_error(patchy_engine_error *error) noexcept {
   if (error != nullptr) {
@@ -1041,6 +1049,127 @@ std::optional<patchy::LiquifyRequest> liquify_request(
     request.selection_mask = selection.mask_alpha;
   }
   return request;
+}
+
+std::optional<patchy::RetouchRepairRequest> retouch_repair_request(
+    const patchy_engine_session *session,
+    const patchy_engine_retouch_repair *input,
+    patchy_engine_error *error) {
+  const auto reserved_zero = input != nullptr &&
+      std::all_of(std::begin(input->reserved), std::end(input->reserved),
+                  [](std::uint8_t value) { return value == 0U; });
+  const auto spot = input != nullptr &&
+                    input->mode == PATCHY_ENGINE_RETOUCH_SPOT_HEALING;
+  if (input == nullptr || input->struct_size != sizeof(*input) ||
+      input->layer_id == 0 ||
+      input->mode > PATCHY_ENGINE_RETOUCH_PATCH_DESTINATION ||
+      !reserved_zero || input->transparent > 1U ||
+      input->sample_all_layers > 1U ||
+      (spot && (input->points == nullptr || input->point_count == 0U ||
+                input->point_count > 4096U || input->brush_size < 1 ||
+                input->brush_size > 4096 || input->softness < 0 ||
+                input->softness > 100)) ||
+      (!spot && (input->points != nullptr || input->point_count != 0U ||
+                 (input->delta_x == 0 && input->delta_y == 0))) ||
+      (spot && input->transparent != 0U)) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "a bounded versioned retouch-repair request is required");
+    return std::nullopt;
+  }
+  patchy::RetouchRepairRequest request;
+  request.mode = static_cast<patchy::RetouchRepairMode>(input->mode);
+  request.brush_size = input->brush_size;
+  request.softness = input->softness;
+  request.delta_x = input->delta_x;
+  request.delta_y = input->delta_y;
+  request.transparent = input->transparent != 0U;
+  request.sample_all_layers = input->sample_all_layers != 0U;
+  request.points.reserve(input->point_count);
+  for (std::size_t index = 0; index < input->point_count; ++index) {
+    request.points.push_back({input->points[index].x, input->points[index].y});
+  }
+  const auto &selection = session->value->selection();
+  request.selection = selection.selection;
+  if (!selection.mask_alpha.empty()) {
+    request.selection_mask_bounds = selection.mask_bounds;
+    request.selection_mask = selection.mask_alpha;
+  }
+  return request;
+}
+
+patchy::engine::SelectionSnapshot translated_selection(
+    const patchy::engine::SelectionSnapshot &source, std::int32_t dx,
+    std::int32_t dy, std::int32_t width, std::int32_t height) {
+  patchy::engine::SelectionSnapshot result;
+  const auto translate_rect = [&](patchy::Rect rect)
+      -> std::optional<patchy::Rect> {
+    const auto left = static_cast<std::int64_t>(rect.x) + dx;
+    const auto top = static_cast<std::int64_t>(rect.y) + dy;
+    const auto right = left + rect.width;
+    const auto bottom = top + rect.height;
+    const auto clipped_left = std::max<std::int64_t>(0, left);
+    const auto clipped_top = std::max<std::int64_t>(0, top);
+    const auto clipped_right = std::min<std::int64_t>(width, right);
+    const auto clipped_bottom = std::min<std::int64_t>(height, bottom);
+    if (clipped_right <= clipped_left || clipped_bottom <= clipped_top) {
+      return std::nullopt;
+    }
+    return patchy::Rect{
+        static_cast<std::int32_t>(clipped_left),
+        static_cast<std::int32_t>(clipped_top),
+        static_cast<std::int32_t>(clipped_right - clipped_left),
+        static_cast<std::int32_t>(clipped_bottom - clipped_top)};
+  };
+  const auto translate_rects = [&](const std::vector<patchy::Rect> &rects) {
+    std::vector<patchy::Rect> translated;
+    translated.reserve(rects.size());
+    for (const auto rect : rects) {
+      const auto clipped = translate_rect(rect);
+      if (clipped.has_value()) translated.push_back(*clipped);
+    }
+    return translated;
+  };
+  result.selection = translate_rects(source.selection);
+  result.display_region = translate_rects(source.display_region);
+  if (!source.mask_alpha.empty()) {
+    const auto translated_mask_bounds = translate_rect(source.mask_bounds);
+    if (translated_mask_bounds.has_value()) {
+      result.mask_bounds = *translated_mask_bounds;
+      result.mask_alpha = patchy::PixelBuffer(
+          result.mask_bounds.width, result.mask_bounds.height,
+          patchy::PixelFormat::gray8());
+      for (std::int32_t y = 0; y < result.mask_bounds.height; ++y) {
+        const auto source_x = static_cast<std::int64_t>(result.mask_bounds.x) -
+                              dx - source.mask_bounds.x;
+        const auto source_y = static_cast<std::int64_t>(result.mask_bounds.y) +
+                              y - dy - source.mask_bounds.y;
+        std::copy_n(
+            source.mask_alpha.pixel(static_cast<std::int32_t>(source_x),
+                                    static_cast<std::int32_t>(source_y)),
+            result.mask_bounds.width,
+            result.mask_alpha.pixel(0, y));
+      }
+    }
+  }
+  if (source.quick_mask_pixels.has_value() &&
+      !source.quick_mask_pixels->empty()) {
+    patchy::PixelBuffer translated(width, height, patchy::PixelFormat::gray8());
+    for (std::int32_t y = 0; y < height; ++y) {
+      const auto source_y = static_cast<std::int64_t>(y) - dy;
+      if (source_y < 0 || source_y >= height) continue;
+      for (std::int32_t x = 0; x < width; ++x) {
+        const auto source_x = static_cast<std::int64_t>(x) - dx;
+        if (source_x >= 0 && source_x < width) {
+          translated.pixel(x, y)[0] =
+              source.quick_mask_pixels
+                  ->pixel(static_cast<std::int32_t>(source_x),
+                          static_cast<std::int32_t>(source_y))[0];
+        }
+      }
+    }
+    result.quick_mask_pixels = std::move(translated);
+  }
+  return result;
 }
 
 template <typename Operation>
@@ -5676,6 +5805,67 @@ int patchy_engine_session_apply_liquify(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown Liquify failure");
+  }
+}
+
+int patchy_engine_session_apply_retouch_repair(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision,
+    const patchy_engine_retouch_repair *repair,
+    patchy_engine_transform_progress_fn progress, void *progress_user_data,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session is required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  auto request = retouch_repair_request(session, repair, error);
+  if (!request.has_value()) return 0;
+  std::int32_t completed_steps = 0;
+  request->continue_operation = [progress, progress_user_data,
+                                 &completed_steps]() {
+    ++completed_steps;
+    return progress == nullptr ||
+           progress(completed_steps, 0, progress_user_data) != 0;
+  };
+  try {
+    auto prepared = session->value->document();
+    patchy::RetouchRepairResult repaired;
+    std::string repair_error;
+    if (!patchy::apply_retouch_repair(prepared, repair->layer_id, *request,
+                                      &repaired, &repair_error)) {
+      return fail(error,
+                  repair_error == "retouch repair was cancelled"
+                      ? PATCHY_ENGINE_ERROR_CANCELLED
+                      : PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  repair_error.c_str());
+    }
+    std::optional<patchy::engine::SelectionSnapshot> selection;
+    if (repair->mode == PATCHY_ENGINE_RETOUCH_PATCH_DESTINATION) {
+      selection = translated_selection(
+          session->value->selection(), repaired.selection_delta_x,
+          repaired.selection_delta_y, prepared.width(), prepared.height());
+    }
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::RetouchRepair,
+            expected_state_id, std::move(prepared), repaired.affected_region,
+            std::move(selection)});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = repair->layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate retouch-repair result");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown retouch-repair failure");
   }
 }
 
