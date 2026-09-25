@@ -19,6 +19,7 @@
 #if defined(_WIN32)
 #include <process.h>
 #else
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -270,6 +271,32 @@ int main() {
             "unexpected sandbox identity");
     verify_reopen(output);
 
+#if !defined(_WIN32)
+    const auto closed_standard_output = root / "closed-standard-output.psd";
+    const auto closed_standard_child = ::fork();
+    require(closed_standard_child >= 0,
+            "could not create closed-standard-descriptor regression child");
+    if (closed_standard_child == 0) {
+      (void)::close(STDIN_FILENO);
+      (void)::close(STDOUT_FILENO);
+      (void)::close(STDERR_FILENO);
+      const auto closed_standard_result = patchy::worker::run_native_job(
+          base_request(input, closed_standard_output));
+      _exit(closed_standard_result.outcome ==
+                    patchy::worker::NativeJobOutcome::Success
+                ? 0
+                : 1);
+    }
+    int closed_standard_status = 0;
+    require(::waitpid(closed_standard_child, &closed_standard_status, 0) ==
+                closed_standard_child &&
+                WIFEXITED(closed_standard_status) &&
+                WEXITSTATUS(closed_standard_status) == 0,
+            "worker pipe descriptors did not survive exec with closed standard "
+            "descriptors");
+    verify_reopen(closed_standard_output);
+#endif
+
     constexpr std::array<std::uint8_t, 5> prior{'p', 'r', 'i', 'o', 'r'};
     write_bytes(output, prior);
     const auto malformed = root / "malformed.psd";
@@ -378,7 +405,7 @@ int main() {
 
     std::cout << "native worker sandbox: " << expected_sandbox_identity()
               << '\n';
-    std::cout << "native worker isolation: 25/25 PASS\n";
+    std::cout << "native worker isolation: 26/26 PASS\n";
   } catch (const std::exception& error) {
     std::cerr << "[FAIL] " << error.what() << '\n';
     std::filesystem::remove_all(root);

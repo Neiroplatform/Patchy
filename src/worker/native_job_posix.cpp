@@ -21,6 +21,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -196,7 +197,15 @@ std::vector<std::string> worker_arguments(const NativeJobRequest& request) {
                                int input_read, int input_write,
                                int result_read, int result_write) {
   (void)::setpgid(0, 0);
-  if (::dup2(input_read, 3) < 0 || ::dup2(result_write, 4) < 0) {
+  // Duplicate both sources above the fixed protocol descriptors first. This
+  // avoids clobbering one source when the parent had closed standard streams,
+  // and guarantees dup2 clears FD_CLOEXEC even when a pipe originally occupied
+  // descriptor 3 or 4.
+  FileDescriptor input_for_exec(::fcntl(input_read, F_DUPFD_CLOEXEC, 5));
+  FileDescriptor result_for_exec(::fcntl(result_write, F_DUPFD_CLOEXEC, 5));
+  if (!input_for_exec.valid() || !result_for_exec.valid() ||
+      ::dup2(input_for_exec.get(), 3) < 0 ||
+      ::dup2(result_for_exec.get(), 4) < 0) {
     _exit(125);
   }
   close_unneeded_descriptors();
@@ -869,7 +878,6 @@ bool enter_platform_sandbox(const WorkerArguments& arguments,
 (allow signal (target self))
 (allow sysctl-read)
 (allow mach-lookup (global-name "com.apple.system.logger"))
-(allow ipc-posix-shm)
 (allow file-read* (subpath "/System/Library") (subpath "/usr/lib"))
 )SANDBOX";
   char* sandbox_message = nullptr;
@@ -971,6 +979,25 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       errno = 0;
       if (::kill(::getppid(), 0) == 0 || errno != EPERM) {
         detail = "parent process signaling unexpectedly remained available";
+        return false;
+      }
+      const auto shared_memory_name =
+          "/pjy-" + std::to_string(::getpid()) + "-" +
+          std::to_string(std::chrono::steady_clock::now()
+                             .time_since_epoch()
+                             .count());
+      errno = 0;
+      const auto shared_memory = ::shm_open(
+          shared_memory_name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+      if (shared_memory >= 0) {
+        (void)::close(shared_memory);
+        (void)::shm_unlink(shared_memory_name.c_str());
+        detail = "named shared memory unexpectedly remained available";
+        return false;
+      }
+      if (errno != EACCES && errno != EPERM) {
+        detail = "named shared memory was not fail-closed (errno=" +
+                 std::to_string(errno) + ")";
         return false;
       }
 #if defined(__linux__)
