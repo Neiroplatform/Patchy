@@ -683,7 +683,8 @@ if(PATCHY_BUILD_TESTS)
               "${PROJECT_SOURCE_DIR}/tests/sdk/guide_model_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/viewport_model_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/shell_ui_tests.mjs"
-              "${PROJECT_SOURCE_DIR}/tests/sdk/self_hosted_release_tests.mjs")
+              "${PROJECT_SOURCE_DIR}/tests/sdk/self_hosted_release_tests.mjs"
+              "${PROJECT_SOURCE_DIR}/tests/sdk/self_hosted_operations_tests.mjs")
   endif()
 endif()
 

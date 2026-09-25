@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
-import { readFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
 import { verifyRelease } from "./build-self-hosted-release.mjs";
 
@@ -13,6 +13,20 @@ if (!releaseArgument || !["chromium", "firefox", "webkit"].includes(browserName)
   console.error("usage: node verify-self-hosted-release-browser.mjs <release-dir> [chromium|firefox|webkit]");
   process.exit(2);
 }
+
+function environmentInteger(name, fallback, { minimum = 0 } = {}) {
+  const source = process.env[name];
+  if (source === undefined || source === "") return fallback;
+  const value = Number(source);
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${name} must be a safe integer >= ${minimum}`);
+  }
+  return value;
+}
+
+const minimumIterations = environmentInteger("PATCHY_RELEASE_SOAK_ITERATIONS", 1, { minimum: 1 });
+const minimumDurationMs = environmentInteger("PATCHY_RELEASE_SOAK_DURATION_MS", 0);
+const summaryPath = process.env.PATCHY_RELEASE_SOAK_SUMMARY;
 
 async function loadPlaywright() {
   try {
@@ -96,6 +110,7 @@ const server = createServer(async (request, response) => {
 
 const address = await listen(server);
 const baseUrl = `http://127.0.0.1:${address.port}/`;
+const baseOrigin = new URL(baseUrl).origin;
 const playwright = await loadPlaywright();
 const browserType = playwright[browserName];
 const launchOptions = { headless: true };
@@ -109,10 +124,27 @@ try {
   const pageErrors = [];
   const failedRequests = [];
   const externalRequests = [];
+  const forbiddenRequests = [];
+  const pageCrashes = [];
+  let disconnected = false;
+  let acceptedDialogs = 0;
+  browser.on("disconnected", () => { disconnected = true; });
   page.on("pageerror", (error) => pageErrors.push(String(error)));
+  page.on("crash", () => pageCrashes.push("page crashed"));
   page.on("requestfailed", (request) => failedRequests.push(`${request.url()} ${request.failure()?.errorText ?? "failed"}`));
   page.on("request", (request) => {
-    if (!request.url().startsWith(baseUrl)) externalRequests.push(request.url());
+    if (new URL(request.url()).origin !== baseOrigin) externalRequests.push(request.url());
+    if (!['GET', 'HEAD'].includes(request.method())) {
+      forbiddenRequests.push(`${request.method()} ${request.url()}`);
+    }
+  });
+  page.on("dialog", async (dialog) => {
+    acceptedDialogs++;
+    await dialog.accept();
+  });
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis, "showOpenFilePicker", { configurable: true, value: undefined });
+    Object.defineProperty(globalThis, "showSaveFilePicker", { configurable: true, value: undefined });
   });
 
   const capabilityResponse = await page.goto(`${baseUrl}capabilities.html`, { waitUntil: "domcontentloaded" });
@@ -136,10 +168,84 @@ try {
   const browserManifest = await page.evaluate(async () => (await fetch("./release-manifest.json")).json());
   assert.equal(browserManifest.releaseId, manifest.releaseId);
   assert.equal(browserManifest.sourceSha, manifest.sourceSha);
+
+  const startedAt = Date.now();
+  let iterations = 0;
+  let downloadedBytes = 0;
+  let maximumHeapBytes = 0;
+  do {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24"><rect width="32" height="24" fill="#${(iterations + 1).toString(16).padStart(6, "0").slice(-6)}"/><text x="2" y="16" font-size="8">${iterations + 1}</text></svg>`;
+    await page.evaluate(({ name, contents }) => {
+      const file = new File([contents], name, { type: "image/svg+xml" });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      globalThis.dispatchEvent(new DragEvent("drop", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer,
+      }));
+    }, { name: `local-first-audit-${iterations + 1}.svg`, contents: svg });
+    await page.waitForFunction(() =>
+      document.querySelectorAll('#documentTabs [role="tab"]').length === 1 &&
+      Number(document.querySelector("#layerCount")?.textContent) === 1 &&
+      document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
+      document.querySelector("#saveAsButton")?.disabled === false,
+    null, { timeout: 90_000 });
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 90_000 }),
+      page.click("#saveAsButton"),
+    ]);
+    const downloadPath = await download.path();
+    assert.ok(download.suggestedFilename().endsWith(".psd"), "local save did not produce a PSD filename");
+    const downloadStatus = await stat(downloadPath);
+    assert.ok(downloadStatus.size > 0, "local save produced an empty PSD");
+    assert.equal((await readFile(downloadPath)).subarray(0, 4).toString("ascii"), "8BPS",
+      "local save did not produce a layered Photoshop document");
+    downloadedBytes += downloadStatus.size;
+    await download.delete();
+    await page.waitForFunction(() =>
+      document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+
+    await page.click('#documentTabs .document-tab[data-active="true"] button[aria-hidden="true"]');
+    await page.waitForFunction(() =>
+      document.querySelectorAll('#documentTabs [role="tab"]').length === 0 &&
+      document.querySelector(".editor-shell")?.dataset.state === "ready" &&
+      document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+    null, { timeout: 90_000 });
+    const heapBytes = await page.evaluate(() => Number(performance.memory?.usedJSHeapSize ?? 0));
+    maximumHeapBytes = Math.max(maximumHeapBytes, heapBytes);
+    iterations++;
+  } while (iterations < minimumIterations || Date.now() - startedAt < minimumDurationMs);
+
+  const summary = {
+    schema: "patchy.self-hosted-browser-audit/v1",
+    browser: browserName,
+    browserChannel: process.env.PATCHY_BROWSER_CHANNEL ?? null,
+    releaseId: manifest.releaseId,
+    sourceSha: manifest.sourceSha,
+    capabilityTier,
+    iterations,
+    elapsedMs: Date.now() - startedAt,
+    downloadedBytes,
+    maximumHeapBytes: maximumHeapBytes || null,
+    acceptedDialogs,
+    pageErrors,
+    failedRequests,
+    externalRequests,
+    forbiddenRequests,
+    pageCrashes,
+    disconnected,
+  };
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(externalRequests, []);
-  console.log(`PASS browser=${browserName} release=${manifest.releaseId} capability=${capabilityTier} files=${manifest.files.length}`);
+  assert.deepEqual(forbiddenRequests, []);
+  assert.deepEqual(pageCrashes, []);
+  assert.equal(disconnected, false);
+  assert.equal(acceptedDialogs, iterations, "each dirty local document must require explicit close confirmation");
+  if (summaryPath) await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+  console.log(`PASS browser=${browserName} release=${manifest.releaseId} capability=${capabilityTier} files=${manifest.files.length} iterations=${iterations} elapsedMs=${summary.elapsedMs} downloadedBytes=${downloadedBytes}`);
 } finally {
   await browser.close();
   await close(server);

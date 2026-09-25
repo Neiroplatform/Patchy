@@ -222,6 +222,10 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
   assert.match(apache, /mjs/);
   assert.match(browserVerifier, /verifyRelease\(releaseRoot\)/);
   assert.match(browserVerifier, /externalRequests/);
+  assert.match(browserVerifier, /forbiddenRequests/);
+  assert.match(browserVerifier, /PATCHY_RELEASE_SOAK_DURATION_MS/);
+  assert.match(browserVerifier, /page\.waitForEvent\("download"/);
+  assert.match(browserVerifier, /local-first-audit-/);
   assert.match(browserVerifier, /crossOriginIsolated/);
   assert.match(browserVerifier, /precompressed asset was not served/);
 });
