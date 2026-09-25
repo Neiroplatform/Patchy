@@ -665,8 +665,8 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
     case NativeJobProbe::Network: {
       WSADATA winsock{};
       if (::WSAStartup(MAKEWORD(2, 2), &winsock) != 0) {
-        detail = "Winsock initialization failed closed";
-        return true;
+        detail = "Winsock initialization failed before network probe";
+        return false;
       }
       const auto socket_handle = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
       if (socket_handle == INVALID_SOCKET) {
