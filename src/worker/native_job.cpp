@@ -167,7 +167,12 @@ bool parse_worker_arguments(int argc, char** argv, WorkerArguments& parsed) {
   return saw_worker && saw_input && saw_result && parsed.input_handle >= 0 &&
          parsed.result_handle >= 0 && parsed.limits.max_input_bytes > 0U &&
          parsed.limits.max_output_bytes > 0U &&
+         parsed.limits.max_output_bytes <=
+             std::numeric_limits<std::size_t>::max() - kResultHeaderSize -
+                 kMaximumDetailBytes &&
          parsed.limits.max_address_space_bytes >= 64U * 1024U * 1024U &&
+         parsed.limits.max_address_space_bytes <=
+             std::numeric_limits<std::size_t>::max() &&
          parsed.limits.cpu_seconds > 0U;
 }
 

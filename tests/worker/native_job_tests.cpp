@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -283,6 +284,16 @@ int main() {
             "oversized result was not rejected");
     require(read_bytes(output) == std::vector<std::uint8_t>(prior.begin(), prior.end()),
             "oversized result changed prior destination");
+
+    request = base_request(input, output);
+    request.limits.max_output_bytes = std::numeric_limits<std::uint64_t>::max();
+    const auto overflowing_limit = patchy::worker::run_native_job(request);
+    require(overflowing_limit.outcome ==
+                patchy::worker::NativeJobOutcome::InternalError,
+            "overflowing result limit was not rejected before spawn");
+    require(read_bytes(output) ==
+                std::vector<std::uint8_t>(prior.begin(), prior.end()),
+            "overflowing result limit changed prior destination");
 
     const auto read_sentinel = root / "read-sentinel";
     write_bytes(read_sentinel, prior);

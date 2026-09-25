@@ -363,7 +363,12 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
   if (request.worker_executable.empty() ||
       request.limits.max_input_bytes == 0U ||
       request.limits.max_output_bytes == 0U ||
+      request.limits.max_output_bytes >
+          std::numeric_limits<std::size_t>::max() -
+              detail::kResultHeaderSize - detail::kMaximumDetailBytes ||
       request.limits.max_address_space_bytes < 64U * 1024U * 1024U ||
+      request.limits.max_address_space_bytes >
+          std::numeric_limits<std::size_t>::max() ||
       request.limits.cpu_seconds == 0U ||
       request.limits.wall_milliseconds == 0U) {
     result.detail = "invalid native job request";
@@ -524,9 +529,10 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
   input_write.reset();
 
   std::vector<std::uint8_t> output;
-  const auto result_limit = detail::kResultHeaderSize +
-                            request.limits.max_output_bytes +
-                            detail::kMaximumDetailBytes;
+  const auto result_limit =
+      detail::kResultHeaderSize +
+      static_cast<std::size_t>(request.limits.max_output_bytes) +
+      detail::kMaximumDetailBytes;
   bool oversized_result = false;
   std::array<std::uint8_t, 64U * 1024U> chunk{};
   while (true) {
@@ -538,12 +544,14 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
     if (count == 0U) {
       break;
     }
-    if (output.size() + count > result_limit) {
+    const auto count_size = static_cast<std::size_t>(count);
+    if (output.size() > result_limit ||
+        count_size > result_limit - output.size()) {
       oversized_result = true;
       (void)::TerminateJobObject(job.get(), 125U);
       break;
     }
-    output.insert(output.end(), chunk.begin(), chunk.begin() + count);
+    output.insert(output.end(), chunk.begin(), chunk.begin() + count_size);
   }
   result_read.reset();
   (void)::WaitForSingleObject(process.get(), INFINITE);
