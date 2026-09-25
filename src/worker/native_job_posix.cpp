@@ -718,6 +718,87 @@ bool install_seccomp(std::string& error) {
 #ifdef __NR_kcmp
   deny_syscall(__NR_kcmp);
 #endif
+#ifdef __NR_setpgid
+  deny_syscall(__NR_setpgid);
+#endif
+#ifdef __NR_setsid
+  deny_syscall(__NR_setsid);
+#endif
+#ifdef __NR_prlimit64
+  deny_syscall(__NR_prlimit64);
+#endif
+#ifdef __NR_setpriority
+  deny_syscall(__NR_setpriority);
+#endif
+#ifdef __NR_ioprio_set
+  deny_syscall(__NR_ioprio_set);
+#endif
+#ifdef __NR_sched_setparam
+  deny_syscall(__NR_sched_setparam);
+#endif
+#ifdef __NR_sched_setscheduler
+  deny_syscall(__NR_sched_setscheduler);
+#endif
+#ifdef __NR_sched_setaffinity
+  deny_syscall(__NR_sched_setaffinity);
+#endif
+#ifdef __NR_sched_setattr
+  deny_syscall(__NR_sched_setattr);
+#endif
+#ifdef __NR_shmget
+  deny_syscall(__NR_shmget);
+#endif
+#ifdef __NR_shmat
+  deny_syscall(__NR_shmat);
+#endif
+#ifdef __NR_shmdt
+  deny_syscall(__NR_shmdt);
+#endif
+#ifdef __NR_shmctl
+  deny_syscall(__NR_shmctl);
+#endif
+#ifdef __NR_semget
+  deny_syscall(__NR_semget);
+#endif
+#ifdef __NR_semop
+  deny_syscall(__NR_semop);
+#endif
+#ifdef __NR_semtimedop
+  deny_syscall(__NR_semtimedop);
+#endif
+#ifdef __NR_semctl
+  deny_syscall(__NR_semctl);
+#endif
+#ifdef __NR_msgget
+  deny_syscall(__NR_msgget);
+#endif
+#ifdef __NR_msgsnd
+  deny_syscall(__NR_msgsnd);
+#endif
+#ifdef __NR_msgrcv
+  deny_syscall(__NR_msgrcv);
+#endif
+#ifdef __NR_msgctl
+  deny_syscall(__NR_msgctl);
+#endif
+#ifdef __NR_ipc
+  deny_syscall(__NR_ipc);
+#endif
+#ifdef __NR_add_key
+  deny_syscall(__NR_add_key);
+#endif
+#ifdef __NR_request_key
+  deny_syscall(__NR_request_key);
+#endif
+#ifdef __NR_keyctl
+  deny_syscall(__NR_keyctl);
+#endif
+#ifdef __NR_perf_event_open
+  deny_syscall(__NR_perf_event_open);
+#endif
+#ifdef __NR_bpf
+  deny_syscall(__NR_bpf);
+#endif
 #ifdef __NR_io_uring_setup
   deny_syscall(__NR_io_uring_setup);
 #endif
@@ -821,6 +902,21 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       detail = "no probe requested";
       return false;
     case NativeJobProbe::Network: {
+#if defined(__linux__) && defined(__NR_io_uring_setup)
+      alignas(std::uint64_t) std::array<std::uint8_t, 256U> ring_parameters{};
+      errno = 0;
+      const auto ring = static_cast<int>(::syscall(
+          __NR_io_uring_setup, 1U, ring_parameters.data()));
+      if (ring >= 0) {
+        (void)::close(ring);
+        detail = "async network entry unexpectedly remained available";
+        return false;
+      }
+      if (errno != EPERM && errno != ENOSYS) {
+        detail = "async network entry was not fail-closed";
+        return false;
+      }
+#endif
       const auto descriptor = ::socket(AF_INET, SOCK_STREAM, 0);
       if (descriptor < 0) {
         detail = "network socket creation denied";
@@ -877,6 +973,23 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
         detail = "parent process signaling unexpectedly remained available";
         return false;
       }
+#if defined(__linux__)
+      errno = 0;
+      if (::setpgid(0, 0) == 0 || errno != EPERM) {
+        detail = "worker process-group mutation unexpectedly remained available";
+        return false;
+      }
+#if defined(__NR_prlimit64)
+      rlimit parent_limit{};
+      errno = 0;
+      if (::syscall(__NR_prlimit64, ::getppid(), RLIMIT_NOFILE, nullptr,
+                    &parent_limit) == 0 ||
+          errno != EPERM) {
+        detail = "parent resource-limit access unexpectedly remained available";
+        return false;
+      }
+#endif
+#endif
       const auto child = ::fork();
       if (child == 0) {
         _exit(91);
@@ -886,7 +999,7 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
         detail = "child process creation unexpectedly succeeded";
         return false;
       }
-      detail = "parent signaling and child process creation denied";
+      detail = "cross-process authority and child creation denied";
       return errno == EACCES || errno == EPERM || errno == ENOSYS;
     }
     case NativeJobProbe::Crash:
