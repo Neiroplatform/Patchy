@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -64,6 +66,55 @@ class WindowsHandle {
 
  private:
   HANDLE value_{nullptr};
+};
+
+class WindowsSocket {
+ public:
+  WindowsSocket() = default;
+  explicit WindowsSocket(SOCKET value) : value_(value) {}
+  WindowsSocket(const WindowsSocket&) = delete;
+  WindowsSocket& operator=(const WindowsSocket&) = delete;
+  ~WindowsSocket() {
+    if (value_ != INVALID_SOCKET) {
+      (void)::closesocket(value_);
+    }
+  }
+  [[nodiscard]] SOCKET get() const noexcept { return value_; }
+  [[nodiscard]] bool valid() const noexcept {
+    return value_ != INVALID_SOCKET;
+  }
+  void reset(SOCKET value = INVALID_SOCKET) noexcept {
+    if (value_ != INVALID_SOCKET) {
+      (void)::closesocket(value_);
+    }
+    value_ = value;
+  }
+
+ private:
+  SOCKET value_{INVALID_SOCKET};
+};
+
+class WinsockSession {
+ public:
+  WinsockSession() = default;
+  WinsockSession(const WinsockSession&) = delete;
+  WinsockSession& operator=(const WinsockSession&) = delete;
+  ~WinsockSession() {
+    if (active_) {
+      (void)::WSACleanup();
+    }
+  }
+  bool initialize() {
+    if (active_) {
+      return true;
+    }
+    WSADATA winsock{};
+    active_ = ::WSAStartup(MAKEWORD(2, 2), &winsock) == 0;
+    return active_;
+  }
+
+ private:
+  bool active_{false};
 };
 
 class LocalMemory {
@@ -419,6 +470,49 @@ bool restricted_appcontainer_environment() {
   return restricted;
 }
 
+bool prepare_network_probe_endpoint(std::filesystem::path& probe_path,
+                                    WinsockSession& winsock,
+                                    WindowsSocket& listener) {
+  if (!winsock.initialize()) {
+    return false;
+  }
+  listener.reset(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+  if (!listener.valid()) {
+    return false;
+  }
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = 0U;
+  if (::bind(listener.get(), reinterpret_cast<const sockaddr*>(&address),
+             sizeof(address)) == SOCKET_ERROR ||
+      ::listen(listener.get(), 1) == SOCKET_ERROR) {
+    return false;
+  }
+  int address_bytes = sizeof(address);
+  if (::getsockname(listener.get(), reinterpret_cast<sockaddr*>(&address),
+                    &address_bytes) == SOCKET_ERROR ||
+      address.sin_port == 0U) {
+    return false;
+  }
+
+  // Prove that the endpoint is live for a normal process before asking the
+  // zero-capability AppContainer to reach it. This distinguishes network
+  // isolation from a merely closed loopback port.
+  WindowsSocket control(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+  if (!control.valid() ||
+      ::connect(control.get(), reinterpret_cast<const sockaddr*>(&address),
+                sizeof(address)) == SOCKET_ERROR) {
+    return false;
+  }
+  WindowsSocket accepted(::accept(listener.get(), nullptr, nullptr));
+  if (!accepted.valid()) {
+    return false;
+  }
+  probe_path = std::to_wstring(ntohs(address.sin_port));
+  return true;
+}
+
 bool configure_job(HANDLE job, const NativeJobLimits& limits) {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION information{};
   information.BasicLimitInformation.LimitFlags =
@@ -594,8 +688,19 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
   startup.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
   startup.lpAttributeList = attributes.get();
   PROCESS_INFORMATION process_info{};
+  NativeJobRequest worker_request = request;
+  WinsockSession network_probe_winsock;
+  WindowsSocket network_probe_listener;
+  if (request.probe == NativeJobProbe::Network &&
+      !prepare_network_probe_endpoint(worker_request.probe_path,
+                                      network_probe_winsock,
+                                      network_probe_listener)) {
+    result.outcome = NativeJobOutcome::SandboxUnavailable;
+    result.detail = "could not prepare controlled network probe endpoint";
+    return result;
+  }
   auto command_line = make_command_line(private_worker, input_read.get(),
-                                        result_write.get(), request);
+                                        result_write.get(), worker_request);
   std::array<wchar_t, MAX_PATH + 1U> windows_directory{};
   const auto windows_count = ::GetWindowsDirectoryW(
       windows_directory.data(), static_cast<UINT>(windows_directory.size()));
@@ -817,31 +922,42 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       detail = "no probe requested";
       return false;
     case NativeJobProbe::Network: {
-      WSADATA winsock{};
-      if (::WSAStartup(MAKEWORD(2, 2), &winsock) != 0) {
+      std::uint16_t port = 0U;
+      const auto parsed = std::from_chars(arguments.probe_path.data(),
+                                          arguments.probe_path.data() +
+                                              arguments.probe_path.size(),
+                                          port);
+      if (parsed.ec != std::errc{} ||
+          parsed.ptr != arguments.probe_path.data() +
+                            arguments.probe_path.size() ||
+          port == 0U) {
+        detail = "network probe endpoint was invalid";
+        return false;
+      }
+      WinsockSession winsock;
+      if (!winsock.initialize()) {
         detail = "Winsock initialization failed before network probe";
         return false;
       }
-      const auto socket_handle = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-      if (socket_handle == INVALID_SOCKET) {
-        const auto denied = ::WSAGetLastError() == WSAEACCES;
-        (void)::WSACleanup();
-        detail = "network socket creation denied";
-        return denied;
+      WindowsSocket socket_handle(
+          ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+      if (!socket_handle.valid()) {
+        detail = "network socket creation failed before controlled connect";
+        return false;
       }
       sockaddr_in destination{};
       destination.sin_family = AF_INET;
-      destination.sin_port = htons(9U);
+      destination.sin_port = htons(port);
       destination.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
       const auto connected = ::connect(
-          socket_handle, reinterpret_cast<const sockaddr*>(&destination),
+          socket_handle.get(), reinterpret_cast<const sockaddr*>(&destination),
           sizeof(destination));
       const auto connect_error = ::WSAGetLastError();
-      (void)::closesocket(socket_handle);
-      (void)::WSACleanup();
-      detail = connected == SOCKET_ERROR ? "network connect denied"
-                                          : "network connect unexpectedly succeeded";
-      return connected == SOCKET_ERROR && connect_error == WSAEACCES;
+      detail = connected == SOCKET_ERROR
+                   ? "controlled network connect denied (WSA " +
+                         std::to_string(connect_error) + ")"
+                   : "controlled network connect unexpectedly succeeded";
+      return connected == SOCKET_ERROR;
     }
     case NativeJobProbe::FileRead: {
       WindowsHandle file(::CreateFileA(arguments.probe_path.c_str(), GENERIC_READ,
