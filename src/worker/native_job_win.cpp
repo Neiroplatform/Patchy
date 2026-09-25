@@ -532,6 +532,21 @@ bool configure_job(HANDLE job, const NativeJobLimits& limits) {
                                 &information, sizeof(information)) == 0) {
     return false;
   }
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION effective{};
+  if (::QueryInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                  &effective, sizeof(effective), nullptr) == 0) {
+    return false;
+  }
+  const auto required_flags = information.BasicLimitInformation.LimitFlags;
+  if ((effective.BasicLimitInformation.LimitFlags & required_flags) !=
+          required_flags ||
+      effective.BasicLimitInformation.ActiveProcessLimit != 1U ||
+      effective.BasicLimitInformation.PerProcessUserTimeLimit.QuadPart !=
+          information.BasicLimitInformation.PerProcessUserTimeLimit.QuadPart ||
+      effective.ProcessMemoryLimit != information.ProcessMemoryLimit ||
+      effective.JobMemoryLimit != information.JobMemoryLimit) {
+    return false;
+  }
   // A hosted supervisor can itself belong to a Job Object. Windows permits a
   // child to join a nested job only when the child job has no basic UI limits.
   // The zero-capability AppContainer owns the UI boundary; this Job Object owns
@@ -1033,20 +1048,6 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       return absent && restricted;
     }
     case NativeJobProbe::Process: {
-      JOBOBJECT_BASIC_LIMIT_INFORMATION job_limits{};
-      JOBOBJECT_BASIC_ACCOUNTING_INFORMATION job_accounting{};
-      if (::QueryInformationJobObject(
-              nullptr, JobObjectBasicLimitInformation, &job_limits,
-              sizeof(job_limits), nullptr) == 0 ||
-          ::QueryInformationJobObject(
-              nullptr, JobObjectBasicAccountingInformation, &job_accounting,
-              sizeof(job_accounting), nullptr) == 0 ||
-          (job_limits.LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS) == 0U ||
-          job_limits.ActiveProcessLimit != 1U ||
-          job_accounting.ActiveProcesses != 1U) {
-        detail = "single-process Job Object policy was not active";
-        return false;
-      }
       std::array<wchar_t, 32768U> executable{};
       if (::GetModuleFileNameW(nullptr, executable.data(),
                                static_cast<DWORD>(executable.size())) == 0U) {
