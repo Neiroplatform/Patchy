@@ -678,7 +678,7 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       return connected == SOCKET_ERROR && connect_error == WSAEACCES;
     }
     case NativeJobProbe::FileRead: {
-      WindowsHandle file(::CreateFileW(arguments.probe_path.c_str(), GENERIC_READ,
+      WindowsHandle file(::CreateFileA(arguments.probe_path.c_str(), GENERIC_READ,
                                        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                        FILE_ATTRIBUTE_NORMAL, nullptr));
       detail = file.valid() ? "unrelated file read unexpectedly succeeded"
@@ -686,7 +686,7 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       return !file.valid() && ::GetLastError() == ERROR_ACCESS_DENIED;
     }
     case NativeJobProbe::FileWrite: {
-      WindowsHandle file(::CreateFileW(
+      WindowsHandle file(::CreateFileA(
           arguments.probe_path.c_str(), GENERIC_WRITE, 0U, nullptr,
           CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
       detail = file.valid() ? "unrelated file write unexpectedly succeeded"
