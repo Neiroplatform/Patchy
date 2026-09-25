@@ -539,6 +539,11 @@ namespace {
 
 #if defined(__linux__)
 
+constexpr std::uint32_t kSeccompDeny =
+    SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA);
+constexpr std::uint32_t kSeccompAbsent =
+    SECCOMP_RET_ERRNO | (ENOSYS & SECCOMP_RET_DATA);
+
 bool install_landlock(std::string& error) {
 #if defined(__NR_landlock_create_ruleset) && defined(__NR_landlock_restrict_self)
   const auto abi = static_cast<int>(::syscall(
@@ -594,8 +599,6 @@ bool install_landlock(std::string& error) {
 }
 
 bool install_seccomp(std::string& error) {
-  constexpr auto deny = SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA);
-  constexpr auto absent = SECCOMP_RET_ERRNO | (ENOSYS & SECCOMP_RET_DATA);
   std::vector<sock_filter> filter;
   filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
                             offsetof(seccomp_data, arch)));
@@ -611,7 +614,8 @@ bool install_seccomp(std::string& error) {
   filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
                             offsetof(seccomp_data, nr)));
 
-  const auto deny_syscall = [&](int number, std::uint32_t action = deny) {
+  const auto deny_syscall = [&](int number,
+                                std::uint32_t action = kSeccompDeny) {
     filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
                               static_cast<std::uint32_t>(number), 0, 1));
     filter.push_back(BPF_STMT(BPF_RET | BPF_K, action));
@@ -662,7 +666,7 @@ bool install_seccomp(std::string& error) {
   deny_syscall(__NR_vfork);
 #endif
 #ifdef __NR_clone3
-  deny_syscall(__NR_clone3, absent);
+  deny_syscall(__NR_clone3, kSeccompAbsent);
 #endif
 #ifdef __NR_ptrace
   deny_syscall(__NR_ptrace);
@@ -684,7 +688,7 @@ bool install_seccomp(std::string& error) {
   filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
                             offsetof(seccomp_data, args[0])));
   filter.push_back(BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, CLONE_THREAD, 1, 0));
-  filter.push_back(BPF_STMT(BPF_RET | BPF_K, deny));
+  filter.push_back(BPF_STMT(BPF_RET | BPF_K, kSeccompDeny));
 #endif
   filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
 

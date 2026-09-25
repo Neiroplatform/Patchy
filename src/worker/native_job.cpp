@@ -20,6 +20,7 @@
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -405,10 +406,25 @@ namespace patchy::worker {
 
 int native_job_worker_main(int argc, char** argv) {
   using namespace detail;
+#if defined(_WIN32)
+  char* child_marker_value = nullptr;
+  std::size_t child_marker_size = 0U;
+  const auto marker_error =
+      _dupenv_s(&child_marker_value, &child_marker_size,
+                "PATCHY_NATIVE_JOB_CHILD");
+  const auto valid_child_marker = marker_error == 0 &&
+                                  child_marker_value != nullptr &&
+                                  std::string_view(child_marker_value) == "1";
+  std::free(child_marker_value);
+  if (!valid_child_marker) {
+    return 64;
+  }
+#else
   const auto* child_marker = std::getenv("PATCHY_NATIVE_JOB_CHILD");
   if (child_marker == nullptr || std::string_view(child_marker) != "1") {
     return 64;
   }
+#endif
 
   WorkerArguments arguments;
   if (!parse_worker_arguments(argc, argv, arguments)) {

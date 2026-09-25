@@ -3,6 +3,7 @@
 #include "psd/psd_atomic_file_internal.hpp"
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <winsock2.h>
 #include <windows.h>
 #include <aclapi.h>
@@ -693,10 +694,15 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       return !file.valid() && ::GetLastError() == ERROR_ACCESS_DENIED;
     }
     case NativeJobProbe::Environment: {
-      const auto* secret = std::getenv("PATCHY_NATIVE_JOB_SECRET_PROBE");
-      detail = secret == nullptr ? "secret environment absent"
-                                 : "secret environment leaked";
-      return secret == nullptr;
+      std::array<wchar_t, 2> secret{};
+      const auto count = ::GetEnvironmentVariableW(
+          L"PATCHY_NATIVE_JOB_SECRET_PROBE", secret.data(),
+          static_cast<DWORD>(secret.size()));
+      const auto absent = count == 0U &&
+                          ::GetLastError() == ERROR_ENVVAR_NOT_FOUND;
+      detail = absent ? "secret environment absent"
+                      : "secret environment leaked";
+      return absent;
     }
     case NativeJobProbe::Process: {
       std::array<wchar_t, 32768U> executable{};
