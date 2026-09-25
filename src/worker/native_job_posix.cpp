@@ -682,6 +682,51 @@ bool install_seccomp(std::string& error) {
 #ifdef __NR_ptrace
   deny_syscall(__NR_ptrace);
 #endif
+#ifdef __NR_kill
+  deny_syscall(__NR_kill);
+#endif
+#ifdef __NR_tkill
+  deny_syscall(__NR_tkill);
+#endif
+#ifdef __NR_tgkill
+  deny_syscall(__NR_tgkill);
+#endif
+#ifdef __NR_rt_sigqueueinfo
+  deny_syscall(__NR_rt_sigqueueinfo);
+#endif
+#ifdef __NR_rt_tgsigqueueinfo
+  deny_syscall(__NR_rt_tgsigqueueinfo);
+#endif
+#ifdef __NR_process_vm_readv
+  deny_syscall(__NR_process_vm_readv);
+#endif
+#ifdef __NR_process_vm_writev
+  deny_syscall(__NR_process_vm_writev);
+#endif
+#ifdef __NR_pidfd_open
+  deny_syscall(__NR_pidfd_open);
+#endif
+#ifdef __NR_pidfd_getfd
+  deny_syscall(__NR_pidfd_getfd);
+#endif
+#ifdef __NR_pidfd_send_signal
+  deny_syscall(__NR_pidfd_send_signal);
+#endif
+#ifdef __NR_process_mrelease
+  deny_syscall(__NR_process_mrelease);
+#endif
+#ifdef __NR_kcmp
+  deny_syscall(__NR_kcmp);
+#endif
+#ifdef __NR_io_uring_setup
+  deny_syscall(__NR_io_uring_setup);
+#endif
+#ifdef __NR_io_uring_enter
+  deny_syscall(__NR_io_uring_enter);
+#endif
+#ifdef __NR_io_uring_register
+  deny_syscall(__NR_io_uring_register);
+#endif
 #ifdef __NR_mount
   deny_syscall(__NR_mount);
 #endif
@@ -827,6 +872,11 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       detail = "environment empty";
       return true;
     case NativeJobProbe::Process: {
+      errno = 0;
+      if (::kill(::getppid(), 0) == 0 || errno != EPERM) {
+        detail = "parent process signaling unexpectedly remained available";
+        return false;
+      }
       const auto child = ::fork();
       if (child == 0) {
         _exit(91);
@@ -836,13 +886,13 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
         detail = "child process creation unexpectedly succeeded";
         return false;
       }
-      detail = "child process creation denied";
+      detail = "parent signaling and child process creation denied";
       return errno == EACCES || errno == EPERM || errno == ENOSYS;
     }
     case NativeJobProbe::Crash:
-      std::raise(SIGSEGV);
-      detail = "crash probe unexpectedly survived";
-      return false;
+      // Exercise supervisor crash containment without depending on kill/tgkill,
+      // which are intentionally unavailable after the Linux sandbox is active.
+      __builtin_trap();
     case NativeJobProbe::Timeout:
       while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));

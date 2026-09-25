@@ -359,7 +359,7 @@ int main() {
                 std::vector<std::uint8_t>(prior.begin(), prior.end()),
             "memory-limited worker changed prior destination");
 
-    std::cout << "native worker isolation: 21/21 PASS\n";
+    std::cout << "native worker isolation: 22/22 PASS\n";
   } catch (const std::exception& error) {
     std::cerr << "[FAIL] " << error.what() << '\n';
     std::filesystem::remove_all(root);
