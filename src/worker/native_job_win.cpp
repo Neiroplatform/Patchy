@@ -657,7 +657,7 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
   }
 
   AttributeList attributes;
-  if (!attributes.initialize(2U)) {
+  if (!attributes.initialize(3U)) {
     result.outcome = NativeJobOutcome::SandboxUnavailable;
     result.detail = "could not initialize worker attributes";
     return result;
@@ -677,6 +677,15 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
           &capabilities, sizeof(capabilities), nullptr, nullptr) == 0) {
     result.outcome = NativeJobOutcome::SandboxUnavailable;
     result.detail = "could not apply AppContainer security capabilities";
+    return result;
+  }
+  DWORD child_process_policy = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
+  if (::UpdateProcThreadAttribute(
+          attributes.get(), 0U, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
+          &child_process_policy, sizeof(child_process_policy), nullptr,
+          nullptr) == 0) {
+    result.outcome = NativeJobOutcome::SandboxUnavailable;
+    result.detail = "could not apply worker child-process policy";
     return result;
   }
 
@@ -1032,6 +1041,20 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       return absent && restricted;
     }
     case NativeJobProbe::Process: {
+      JOBOBJECT_BASIC_LIMIT_INFORMATION job_limits{};
+      JOBOBJECT_BASIC_ACCOUNTING_INFORMATION job_accounting{};
+      if (::QueryInformationJobObject(
+              nullptr, JobObjectBasicLimitInformation, &job_limits,
+              sizeof(job_limits), nullptr) == 0 ||
+          ::QueryInformationJobObject(
+              nullptr, JobObjectBasicAccountingInformation, &job_accounting,
+              sizeof(job_accounting), nullptr) == 0 ||
+          (job_limits.LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS) == 0U ||
+          job_limits.ActiveProcessLimit != 1U ||
+          job_accounting.ActiveProcesses != 1U) {
+        detail = "single-process Job Object policy was not active";
+        return false;
+      }
       std::array<wchar_t, 32768U> executable{};
       if (::GetModuleFileNameW(nullptr, executable.data(),
                                static_cast<DWORD>(executable.size())) == 0U) {
@@ -1053,8 +1076,11 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
         detail = "child process creation unexpectedly succeeded";
         return false;
       }
-      detail = "child process creation denied";
-      return ::GetLastError() == ERROR_ACCESS_DENIED;
+      const auto error = ::GetLastError();
+      detail = "child process creation denied (Win32 " +
+               std::to_string(error) + ")";
+      return error == ERROR_CHILD_PROCESS_BLOCKED ||
+             error == ERROR_NOT_ENOUGH_QUOTA;
     }
     case NativeJobProbe::Crash:
       ::RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0U,
