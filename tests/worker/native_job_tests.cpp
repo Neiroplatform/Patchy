@@ -5,6 +5,7 @@
 #include <chrono>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -27,6 +28,53 @@ void require(bool condition, const char* message) {
     throw std::runtime_error(message);
   }
 }
+
+class ScopedEnvironmentVariable {
+ public:
+  ScopedEnvironmentVariable(const char* name, const char* value)
+      : name_(name) {
+#if defined(_WIN32)
+    char* current = nullptr;
+    std::size_t current_size = 0U;
+    require(_dupenv_s(&current, &current_size, name) == 0,
+            "could not inspect parent secret environment");
+    if (current != nullptr) {
+      previous_ = current;
+      had_previous_ = true;
+      std::free(current);
+    }
+    require(_putenv_s(name, value) == 0,
+            "could not install parent secret environment");
+#else
+    if (const auto* current = std::getenv(name); current != nullptr) {
+      previous_ = current;
+      had_previous_ = true;
+    }
+    require(::setenv(name, value, 1) == 0,
+            "could not install parent secret environment");
+#endif
+  }
+
+  ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+  ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) =
+      delete;
+  ~ScopedEnvironmentVariable() {
+#if defined(_WIN32)
+    (void)_putenv_s(name_.c_str(), had_previous_ ? previous_.c_str() : "");
+#else
+    if (had_previous_) {
+      (void)::setenv(name_.c_str(), previous_.c_str(), 1);
+    } else {
+      (void)::unsetenv(name_.c_str());
+    }
+#endif
+  }
+
+ private:
+  std::string name_;
+  std::string previous_;
+  bool had_previous_{false};
+};
 
 std::uint64_t process_id() {
 #if defined(_WIN32)
@@ -239,15 +287,21 @@ int main() {
     const auto read_sentinel = root / "read-sentinel";
     write_bytes(read_sentinel, prior);
     const auto write_sentinel = root / "write-sentinel";
-    for (const auto probe : {patchy::worker::NativeJobProbe::Network,
-                             patchy::worker::NativeJobProbe::Environment,
-                             patchy::worker::NativeJobProbe::Process}) {
-      request = base_request({}, {});
-      request.probe = probe;
-      const auto probe_result = patchy::worker::run_native_job(request);
-      require(probe_result.outcome == patchy::worker::NativeJobOutcome::Success,
-              probe_result.detail.c_str());
-      require(!probe_result.sandbox.empty(), "probe omitted sandbox identity");
+    {
+      ScopedEnvironmentVariable parent_secret(
+          "PATCHY_NATIVE_JOB_SECRET_PROBE", "must-not-cross-boundary");
+      for (const auto probe : {patchy::worker::NativeJobProbe::Network,
+                               patchy::worker::NativeJobProbe::Environment,
+                               patchy::worker::NativeJobProbe::Process}) {
+        request = base_request({}, {});
+        request.probe = probe;
+        const auto probe_result = patchy::worker::run_native_job(request);
+        require(
+            probe_result.outcome == patchy::worker::NativeJobOutcome::Success,
+            probe_result.detail.c_str());
+        require(!probe_result.sandbox.empty(),
+                "probe omitted sandbox identity");
+      }
     }
 
     request = base_request({}, {});
