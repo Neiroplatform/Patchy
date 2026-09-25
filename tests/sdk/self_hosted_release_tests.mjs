@@ -80,6 +80,8 @@ test("self-hosted release is deterministic, immutable and independently verifiab
   assert.equal(manifest.files.some((entry) => entry.path === "engine/worker.mjs.gz"), true);
   assert.equal(manifest.securityHeaders["Cross-Origin-Embedder-Policy"], "require-corp");
   assert.match(manifest.securityHeaders["Content-Security-Policy"], /connect-src 'self'/);
+  assert.match(manifest.securityHeaders["Content-Security-Policy"], /'wasm-unsafe-eval'/);
+  assert.doesNotMatch(manifest.securityHeaders["Content-Security-Policy"], /(?<!wasm-)unsafe-eval/);
   const rollback = JSON.parse(await readFile(join(first, "rollback.json"), "utf8"));
   assert.equal(rollback.previousReleasePath, "/releases/r0-2026.09.24/");
   assert.match(rollback.switchContract, /never mutate/);
@@ -197,10 +199,11 @@ test("capability policy blocks unsafe runtime and distinguishes enhanced limits"
 
 test("capability page preserves local-first and strict-CSP contracts", async () => {
   const root = new URL("../../", import.meta.url);
-  const [html, script, apache] = await Promise.all([
+  const [html, script, apache, browserVerifier] = await Promise.all([
     readFile(new URL("sdk/engine/site/capabilities.html", root), "utf8"),
     readFile(new URL("sdk/engine/site/capabilities.mjs", root), "utf8"),
     readFile(new URL("packaging/web/.htaccess", root), "utf8"),
+    readFile(new URL("scripts/release/verify-self-hosted-release-browser.mjs", root), "utf8"),
   ]);
   assert.match(html, /does not upload a file/);
   assert.doesNotMatch(html, /<script(?![^>]+src=)/);
@@ -217,4 +220,8 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
     "X-Content-Type-Options",
   ]) assert.match(apache, new RegExp(header));
   assert.match(apache, /mjs/);
+  assert.match(browserVerifier, /verifyRelease\(releaseRoot\)/);
+  assert.match(browserVerifier, /externalRequests/);
+  assert.match(browserVerifier, /crossOriginIsolated/);
+  assert.match(browserVerifier, /precompressed asset was not served/);
 });
