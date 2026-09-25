@@ -87,6 +87,21 @@ class LocalMemory {
   void* value_{nullptr};
 };
 
+class TemporaryDirectory {
+ public:
+  explicit TemporaryDirectory(std::filesystem::path path)
+      : path_(std::move(path)) {}
+  TemporaryDirectory(const TemporaryDirectory&) = delete;
+  TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
+  ~TemporaryDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+ private:
+  std::filesystem::path path_;
+};
+
 class AppContainerProfile {
  public:
   AppContainerProfile() = default;
@@ -415,12 +430,11 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
     result.detail = "could not stage AppContainer worker executable";
     return result;
   }
-  const auto cleanup_directory = private_worker.parent_path();
+  const auto worker_directory = private_worker.parent_path();
+  [[maybe_unused]] TemporaryDirectory staged_worker(worker_directory);
 
   WindowsHandle job(::CreateJobObjectW(nullptr, nullptr));
   if (!job.valid() || !configure_job(job.get(), request.limits)) {
-    std::error_code ignored;
-    std::filesystem::remove_all(cleanup_directory, ignored);
     result.outcome = NativeJobOutcome::SandboxUnavailable;
     result.detail = "could not configure worker Job Object";
     return result;
@@ -475,7 +489,7 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
       private_worker.c_str(), command_line.data(), nullptr, nullptr, TRUE,
       EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
           CREATE_SUSPENDED | CREATE_NO_WINDOW,
-      environment.data(), cleanup_directory.c_str(), &startup.StartupInfo,
+      environment.data(), worker_directory.c_str(), &startup.StartupInfo,
       &process_info);
   WindowsHandle process(process_info.hProcess);
   WindowsHandle thread(process_info.hThread);
@@ -539,8 +553,6 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
   watchdog.join();
   process.reset();
   job.reset();
-  std::error_code ignored;
-  std::filesystem::remove_all(cleanup_directory, ignored);
 
   if (timed_out.load(std::memory_order_acquire)) {
     result.outcome = NativeJobOutcome::TimedOut;
