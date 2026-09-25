@@ -837,6 +837,13 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
         for (std::size_t offset = 0U; offset < bytes.size(); offset += 4096U) {
           bytes[offset] ^= 0xFFU;
         }
+#if defined(__APPLE__)
+        // The macOS supervisor enforces resident memory from outside the
+        // Seatbelt worker. Keep the committed pages resident long enough for
+        // at least one bounded watchdog sample instead of racing the terminal
+        // probe frame.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+#endif
       } catch (const std::bad_alloc&) {
         detail = "address-space limit enforced";
         return true;
