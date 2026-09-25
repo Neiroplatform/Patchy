@@ -315,17 +315,11 @@ bool configure_job(HANDLE job, const NativeJobLimits& limits) {
                                 &information, sizeof(information)) == 0) {
     return false;
   }
-  JOBOBJECT_BASIC_UI_RESTRICTIONS ui{};
-  ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_DESKTOP |
-                           JOB_OBJECT_UILIMIT_DISPLAYSETTINGS |
-                           JOB_OBJECT_UILIMIT_EXITWINDOWS |
-                           JOB_OBJECT_UILIMIT_GLOBALATOMS |
-                           JOB_OBJECT_UILIMIT_HANDLES |
-                           JOB_OBJECT_UILIMIT_READCLIPBOARD |
-                           JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS |
-                           JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
-  return ::SetInformationJobObject(job, JobObjectBasicUIRestrictions, &ui,
-                                   sizeof(ui)) != 0;
+  // A hosted supervisor can itself belong to a Job Object. Windows permits a
+  // child to join a nested job only when the child job has no basic UI limits.
+  // The zero-capability AppContainer owns the UI boundary; this Job Object owns
+  // resource limits and descendant termination.
+  return true;
 }
 
 bool valid_psd_header(std::span<const std::uint8_t> bytes) {
@@ -502,14 +496,30 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
       &process_info);
   WindowsHandle process(process_info.hProcess);
   WindowsHandle thread(process_info.hThread);
-  if (created == 0 || !process.valid() ||
-      ::AssignProcessToJobObject(job.get(), process.get()) == 0 ||
-      ::ResumeThread(thread.get()) == static_cast<DWORD>(-1)) {
+  const auto launch_failed = [&](std::string_view operation, DWORD error) {
     if (process.valid()) {
       (void)::TerminateProcess(process.get(), 126U);
     }
     result.outcome = NativeJobOutcome::SandboxUnavailable;
-    result.detail = "could not start AppContainer worker in Job Object";
+    result.detail = std::string(operation) + " failed (Win32 " +
+                    std::to_string(error) + ")";
+  };
+  if (created == 0) {
+    launch_failed("CreateProcessW for AppContainer worker", ::GetLastError());
+    return result;
+  }
+  if (!process.valid() || !thread.valid()) {
+    launch_failed("CreateProcessW returned invalid worker handles",
+                  ERROR_INVALID_HANDLE);
+    return result;
+  }
+  if (::AssignProcessToJobObject(job.get(), process.get()) == 0) {
+    launch_failed("AssignProcessToJobObject for AppContainer worker",
+                  ::GetLastError());
+    return result;
+  }
+  if (::ResumeThread(thread.get()) == static_cast<DWORD>(-1)) {
+    launch_failed("ResumeThread for AppContainer worker", ::GetLastError());
     return result;
   }
   thread.reset();
