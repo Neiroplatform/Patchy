@@ -158,22 +158,26 @@ bool file_bytes_equal(const std::filesystem::path& path,
 }
 
 void validate_temporary_file(const std::filesystem::path& path,
-                             std::span<const std::uint8_t> expected) {
+                             std::span<const std::uint8_t> expected,
+                             bool semantic_reopen) {
   if (!file_bytes_equal(path, expected)) {
     atomic_file_detail::throw_write_error();
   }
-  (void)DocumentIo::read_file(path);
+  if (semantic_reopen) {
+    (void)DocumentIo::read_file(path);
+  }
 }
 
 void write_file_bytes_impl(const std::filesystem::path& path,
                            std::span<const std::uint8_t> bytes,
-                           const AtomicWriteTestControl& control) {
+                           const AtomicWriteTestControl& control,
+                           bool semantic_reopen) {
   const auto destination = publication_destination(path);
   auto temporary_path =
       atomic_file_detail::write_temporary_file(destination, bytes, control);
   TemporaryPathGuard cleanup(temporary_path);
 
-  validate_temporary_file(temporary_path, bytes);
+  validate_temporary_file(temporary_path, bytes, semantic_reopen);
   atomic_file_detail::call_stage_hook(
       control, AtomicWriteStage::TemporaryValidated, temporary_path);
 
@@ -188,13 +192,18 @@ void write_file_bytes_impl(const std::filesystem::path& path,
 
 void write_file_bytes(const std::filesystem::path& path,
                       std::span<const std::uint8_t> bytes) {
-  write_file_bytes_impl(path, bytes, AtomicWriteTestControl{});
+  write_file_bytes_impl(path, bytes, AtomicWriteTestControl{}, true);
 }
 
 void write_file_bytes_for_testing(const std::filesystem::path& path,
                                   std::span<const std::uint8_t> bytes,
                                   const AtomicWriteTestControl& control) {
-  write_file_bytes_impl(path, bytes, control);
+  write_file_bytes_impl(path, bytes, control, true);
+}
+
+void write_sandboxed_result_bytes(const std::filesystem::path& path,
+                                  std::span<const std::uint8_t> bytes) {
+  write_file_bytes_impl(path, bytes, AtomicWriteTestControl{}, false);
 }
 
 }  // namespace patchy::psd

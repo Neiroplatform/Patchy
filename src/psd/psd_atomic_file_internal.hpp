@@ -39,6 +39,13 @@ void write_file_bytes_for_testing(const std::filesystem::path& path,
                                   std::span<const std::uint8_t> bytes,
                                   const AtomicWriteTestControl& control);
 
+// Native-job results have already completed a semantic reopen inside the
+// sandbox. The privileged supervisor must not parse untrusted child output, so
+// it uses the same durable same-directory publication transaction with exact
+// byte readback but without invoking the PSD parser again.
+void write_sandboxed_result_bytes(const std::filesystem::path& path,
+                                  std::span<const std::uint8_t> bytes);
+
 namespace atomic_file_detail {
 
 constexpr std::size_t kWriteChunkBytes = 1024U * 1024U;

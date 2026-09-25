@@ -35,6 +35,7 @@ include(GNUInstallDirs)
 option(PATCHY_BUILD_APP "Build the Qt desktop application when Qt 6 is available" ON)
 option(PATCHY_BUILD_TESTS "Build unit tests" ON)
 option(PATCHY_BUILD_WASM_SDK "Build the Qt-free browser engine SDK" OFF)
+option(PATCHY_BUILD_NATIVE_JOB "Build the disposable native engine worker" ON)
 option(PATCHY_ENABLE_STRICT_WARNINGS "Enable strict compiler warnings" ON)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -488,6 +489,36 @@ add_library(patchy_formats
 target_link_libraries(patchy_formats PUBLIC patchy_core patchy_render patchy_psd PRIVATE patchy_filters patchy_libraw)
 
 target_link_libraries(patchy_engine PUBLIC patchy_core patchy_filters PRIVATE patchy_psd patchy_formats)
+
+if(PATCHY_BUILD_NATIVE_JOB AND NOT EMSCRIPTEN)
+  add_library(patchy_native_job_runtime
+    src/worker/native_job.cpp
+  )
+  if(WIN32)
+    target_sources(patchy_native_job_runtime PRIVATE
+      src/worker/native_job_win.cpp
+    )
+  else()
+    target_sources(patchy_native_job_runtime PRIVATE
+      src/worker/native_job_posix.cpp
+    )
+  endif()
+  target_link_libraries(patchy_native_job_runtime PRIVATE patchy_engine patchy_psd)
+  if(WIN32)
+    target_link_libraries(patchy_native_job_runtime PRIVATE
+      advapi32 userenv ws2_32)
+  endif()
+  if(APPLE)
+    target_link_libraries(patchy_native_job_runtime PRIVATE sandbox proc)
+    set_source_files_properties(src/worker/native_job_posix.cpp
+      PROPERTIES COMPILE_OPTIONS -Wno-deprecated-declarations)
+  endif()
+  patchy_configure_target(patchy_native_job_runtime)
+
+  add_executable(patchy-native-job src/worker/native_job_main.cpp)
+  target_link_libraries(patchy-native-job PRIVATE patchy_native_job_runtime)
+  patchy_configure_target(patchy-native-job)
+endif()
 if(EMSCRIPTEN AND PATCHY_BUILD_APP)
   target_sources(patchy_formats PRIVATE src/formats/heif_document_io_wasm.cpp)
   target_compile_definitions(patchy_formats PRIVATE PATCHY_HEIF_WEBCODECS=1)
@@ -1736,6 +1767,21 @@ if(PATCHY_BUILD_TESTS)
   patchy_configure_target(patchy_core_tests)
   target_compile_definitions(patchy_core_tests PRIVATE PATCHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
   add_test(NAME patchy_core_tests COMMAND patchy_core_tests)
+
+  if(PATCHY_BUILD_NATIVE_JOB AND NOT EMSCRIPTEN)
+    add_executable(patchy_native_job_tests
+      tests/worker/native_job_tests.cpp
+    )
+    target_link_libraries(patchy_native_job_tests PRIVATE
+      patchy_native_job_runtime
+      patchy_engine
+    )
+    target_compile_definitions(patchy_native_job_tests PRIVATE
+      PATCHY_NATIVE_JOB_EXECUTABLE="$<TARGET_FILE:patchy-native-job>")
+    patchy_configure_target(patchy_native_job_tests)
+    add_dependencies(patchy_native_job_tests patchy-native-job)
+    add_test(NAME patchy_native_job_tests COMMAND patchy_native_job_tests)
+  endif()
 
   if(PATCHY_BUILD_APP AND Qt6_FOUND)
     add_executable(patchy_single_instance_ipc_tests
