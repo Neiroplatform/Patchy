@@ -170,9 +170,11 @@ try {
   assert.equal(browserManifest.sourceSha, manifest.sourceSha);
 
   const startedAt = Date.now();
+  let nextHeartbeatAt = startedAt + 60_000;
   let iterations = 0;
   let downloadedBytes = 0;
   let maximumHeapBytes = 0;
+  const memorySamples = [];
   do {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24"><rect width="32" height="24" fill="#${(iterations + 1).toString(16).padStart(6, "0").slice(-6)}"/><text x="2" y="16" font-size="8">${iterations + 1}</text></svg>`;
     await page.evaluate(({ name, contents }) => {
@@ -216,7 +218,22 @@ try {
     const heapBytes = await page.evaluate(() => Number(performance.memory?.usedJSHeapSize ?? 0));
     maximumHeapBytes = Math.max(maximumHeapBytes, heapBytes);
     iterations++;
+    const observedAt = Date.now();
+    if (memorySamples.length === 0 || observedAt >= nextHeartbeatAt) {
+      memorySamples.push({ elapsedMs: observedAt - startedAt, heapBytes: heapBytes || null });
+      if (observedAt >= nextHeartbeatAt) {
+        console.log(`SOAK browser=${browserName} iterations=${iterations} elapsedMs=${observedAt - startedAt} heapBytes=${heapBytes || "unavailable"}`);
+        while (nextHeartbeatAt <= observedAt) nextHeartbeatAt += 60_000;
+      }
+    }
   } while (iterations < minimumIterations || Date.now() - startedAt < minimumDurationMs);
+
+  const finishedAt = Date.now();
+  if (memorySamples.at(-1)?.elapsedMs !== finishedAt - startedAt) {
+    const heapBytes = await page.evaluate(() => Number(performance.memory?.usedJSHeapSize ?? 0));
+    maximumHeapBytes = Math.max(maximumHeapBytes, heapBytes);
+    memorySamples.push({ elapsedMs: finishedAt - startedAt, heapBytes: heapBytes || null });
+  }
 
   const summary = {
     schema: "patchy.self-hosted-browser-audit/v1",
@@ -226,9 +243,10 @@ try {
     sourceSha: manifest.sourceSha,
     capabilityTier,
     iterations,
-    elapsedMs: Date.now() - startedAt,
+    elapsedMs: finishedAt - startedAt,
     downloadedBytes,
     maximumHeapBytes: maximumHeapBytes || null,
+    memorySamples,
     acceptedDialogs,
     pageErrors,
     failedRequests,
