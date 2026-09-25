@@ -318,26 +318,35 @@ int main() {
     require(!std::filesystem::exists(write_sentinel),
             "file-write probe created a side effect");
 
-    request = base_request({}, {});
+    request = base_request({}, output);
     request.probe = patchy::worker::NativeJobProbe::Crash;
     const auto crashed = patchy::worker::run_native_job(request);
     require(crashed.outcome == patchy::worker::NativeJobOutcome::Crashed,
             "crash did not stay inside disposable worker");
+    require(read_bytes(output) ==
+                std::vector<std::uint8_t>(prior.begin(), prior.end()),
+            "crashed worker changed prior destination");
 
-    request = base_request({}, {});
+    request = base_request({}, output);
     request.probe = patchy::worker::NativeJobProbe::Timeout;
     request.limits.wall_milliseconds = 200U;
     const auto timed_out = patchy::worker::run_native_job(request);
     require(timed_out.outcome == patchy::worker::NativeJobOutcome::TimedOut,
             "wall deadline did not terminate worker");
+    require(read_bytes(output) ==
+                std::vector<std::uint8_t>(prior.begin(), prior.end()),
+            "timed-out worker changed prior destination");
 
-    request = base_request({}, {});
+    request = base_request({}, output);
     request.probe = patchy::worker::NativeJobProbe::Memory;
     request.limits.max_address_space_bytes = 256U * 1024U * 1024U;
     const auto memory = patchy::worker::run_native_job(request);
     require(memory.outcome == patchy::worker::NativeJobOutcome::Success ||
                 memory.outcome == patchy::worker::NativeJobOutcome::ResourceLimit,
             "address-space limit was not enforced");
+    require(read_bytes(output) ==
+                std::vector<std::uint8_t>(prior.begin(), prior.end()),
+            "memory-limited worker changed prior destination");
 
     std::cout << "native worker isolation: 21/21 PASS\n";
   } catch (const std::exception& error) {
