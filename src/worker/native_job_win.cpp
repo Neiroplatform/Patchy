@@ -517,11 +517,9 @@ bool configure_job(HANDLE job, const NativeJobLimits& limits) {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION information{};
   information.BasicLimitInformation.LimitFlags =
       JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
-      JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
       JOB_OBJECT_LIMIT_PROCESS_MEMORY |
       JOB_OBJECT_LIMIT_JOB_MEMORY |
       JOB_OBJECT_LIMIT_PROCESS_TIME;
-  information.BasicLimitInformation.ActiveProcessLimit = 1U;
   information.BasicLimitInformation.PerProcessUserTimeLimit.QuadPart =
       static_cast<LONGLONG>(limits.cpu_seconds) * 10'000'000LL;
   information.ProcessMemoryLimit =
@@ -1041,20 +1039,6 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       return absent && restricted;
     }
     case NativeJobProbe::Process: {
-      JOBOBJECT_BASIC_LIMIT_INFORMATION job_limits{};
-      JOBOBJECT_BASIC_ACCOUNTING_INFORMATION job_accounting{};
-      if (::QueryInformationJobObject(
-              nullptr, JobObjectBasicLimitInformation, &job_limits,
-              sizeof(job_limits), nullptr) == 0 ||
-          ::QueryInformationJobObject(
-              nullptr, JobObjectBasicAccountingInformation, &job_accounting,
-              sizeof(job_accounting), nullptr) == 0 ||
-          (job_limits.LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS) == 0U ||
-          job_limits.ActiveProcessLimit != 1U ||
-          job_accounting.ActiveProcesses != 1U) {
-        detail = "single-process Job Object policy was not active";
-        return false;
-      }
       std::array<wchar_t, 32768U> executable{};
       if (::GetModuleFileNameW(nullptr, executable.data(),
                                static_cast<DWORD>(executable.size())) == 0U) {
@@ -1079,8 +1063,7 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       const auto error = ::GetLastError();
       detail = "child process creation denied (Win32 " +
                std::to_string(error) + ")";
-      return error == ERROR_CHILD_PROCESS_BLOCKED ||
-             error == ERROR_NOT_ENOUGH_QUOTA;
+      return error == ERROR_CHILD_PROCESS_BLOCKED;
     }
     case NativeJobProbe::Crash:
       ::RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0U,

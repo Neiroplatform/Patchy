@@ -98,6 +98,20 @@ constexpr std::string_view expected_sandbox_identity() {
 #endif
 }
 
+constexpr std::string_view probe_name(patchy::worker::NativeJobProbe probe) {
+  using patchy::worker::NativeJobProbe;
+  switch (probe) {
+    case NativeJobProbe::Network:
+      return "network";
+    case NativeJobProbe::Environment:
+      return "environment";
+    case NativeJobProbe::Process:
+      return "process";
+    default:
+      return "other";
+  }
+}
+
 void write_bytes(const std::filesystem::path& path,
                  std::span<const std::uint8_t> bytes) {
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
@@ -344,6 +358,7 @@ int main() {
       for (const auto probe : {patchy::worker::NativeJobProbe::Network,
                                patchy::worker::NativeJobProbe::Environment,
                                patchy::worker::NativeJobProbe::Process}) {
+        std::cout << "native worker probe: " << probe_name(probe) << '\n';
         request = base_request({}, {});
         request.probe = probe;
         const auto probe_result = patchy::worker::run_native_job(request);
@@ -352,6 +367,8 @@ int main() {
             probe_result.detail.c_str());
         require(probe_result.sandbox == expected_sandbox_identity(),
                 "probe returned unexpected sandbox identity");
+        std::cout << "native worker probe passed: " << probe_name(probe)
+                  << " (" << probe_result.detail << ")\n";
       }
     }
 
