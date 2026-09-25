@@ -85,6 +85,18 @@ std::uint64_t process_id() {
 #endif
 }
 
+constexpr std::string_view expected_sandbox_identity() {
+#if defined(_WIN32)
+  return "windows-appcontainer-job";
+#elif defined(__APPLE__)
+  return "macos-seatbelt-rss-cpu";
+#elif defined(__linux__)
+  return "linux-landlock-seccomp-rlimit";
+#else
+  return "unsupported-platform";
+#endif
+}
+
 void write_bytes(const std::filesystem::path& path,
                  std::span<const std::uint8_t> bytes) {
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
@@ -254,7 +266,8 @@ int main() {
             success.detail.c_str());
     require(success.input_bytes == fixture.size(), "input byte count mismatch");
     require(success.output_bytes > 0U, "missing output byte count");
-    require(!success.sandbox.empty(), "missing sandbox identity");
+    require(success.sandbox == expected_sandbox_identity(),
+            "unexpected sandbox identity");
     verify_reopen(output);
 
     constexpr std::array<std::uint8_t, 5> prior{'p', 'r', 'i', 'o', 'r'};
@@ -310,22 +323,26 @@ int main() {
         require(
             probe_result.outcome == patchy::worker::NativeJobOutcome::Success,
             probe_result.detail.c_str());
-        require(!probe_result.sandbox.empty(),
-                "probe omitted sandbox identity");
+        require(probe_result.sandbox == expected_sandbox_identity(),
+                "probe returned unexpected sandbox identity");
       }
     }
 
     request = base_request({}, {});
     request.probe = patchy::worker::NativeJobProbe::FileRead;
     request.probe_path = read_sentinel;
-    require(patchy::worker::run_native_job(request).outcome ==
-                patchy::worker::NativeJobOutcome::Success,
+    const auto file_read = patchy::worker::run_native_job(request);
+    require(file_read.outcome == patchy::worker::NativeJobOutcome::Success,
             "sandbox allowed unrelated file read");
+    require(file_read.sandbox == expected_sandbox_identity(),
+            "file-read probe returned unexpected sandbox identity");
     request.probe = patchy::worker::NativeJobProbe::FileWrite;
     request.probe_path = write_sentinel;
-    require(patchy::worker::run_native_job(request).outcome ==
-                patchy::worker::NativeJobOutcome::Success,
+    const auto file_write = patchy::worker::run_native_job(request);
+    require(file_write.outcome == patchy::worker::NativeJobOutcome::Success,
             "sandbox allowed unrelated file write");
+    require(file_write.sandbox == expected_sandbox_identity(),
+            "file-write probe returned unexpected sandbox identity");
     require(!std::filesystem::exists(write_sentinel),
             "file-write probe created a side effect");
 
@@ -359,6 +376,8 @@ int main() {
                 std::vector<std::uint8_t>(prior.begin(), prior.end()),
             "memory-limited worker changed prior destination");
 
+    std::cout << "native worker sandbox: " << expected_sandbox_identity()
+              << '\n';
     std::cout << "native worker isolation: 25/25 PASS\n";
   } catch (const std::exception& error) {
     std::cerr << "[FAIL] " << error.what() << '\n';
