@@ -1,15 +1,17 @@
-# Caching rules for the Patchy wasm site (staged to build\package\wasm-site by
-# scripts\release\build-wasm.bat, uploaded to rtsoft.com/patchy).
+# Runtime and caching rules for an immutable Patchy self-hosted release.
 #
 # The html must revalidate on every load so a redeploy is picked up right away.
-# Everything else is referenced from the html with a ?v=<build tag> query
-# string that changes every deploy, so those URLs can cache forever: a new
-# build means a new URL, and stale cached entries are never used again.
+# Everything else can cache forever only because the release builder publishes
+# the complete site under /releases/<release-id>/ and forbids mutation of that
+# directory. A new build is therefore a new URL.
 #
 # Every directive is wrapped in IfModule so a host missing a module serves the
 # site without caching hints instead of failing with a 500.
 <IfModule mod_mime.c>
 AddType application/wasm .wasm
+AddType text/javascript .js .mjs
+AddType text/css .css
+AddType application/json .json
 # Precompressed variants (patchy.wasm.br and friends, written by
 # scripts\wasm\precompress-site.mjs during staging): the suffix is an
 # encoding, not a type, so the response keeps the inner extension's
@@ -28,10 +30,10 @@ AddEncoding gzip .gz
 RewriteEngine On
 RewriteCond %{HTTP:Accept-Encoding} br
 RewriteCond %{REQUEST_FILENAME}.br -f
-RewriteRule ^(.+)\.(js|wasm|data)$ $1.$2.br [L]
+RewriteRule ^(.+)\.(css|js|mjs|wasm|data|svg)$ $1.$2.br [L]
 RewriteCond %{HTTP:Accept-Encoding} gzip
 RewriteCond %{REQUEST_FILENAME}.gz -f
-RewriteRule ^(.+)\.(js|wasm|data)$ $1.$2.gz [L]
+RewriteRule ^(.+)\.(css|js|mjs|wasm|data|svg)$ $1.$2.gz [L]
 </IfModule>
 <IfModule mod_headers.c>
 # Cross-origin isolation: the multithreaded wasm build needs
@@ -42,15 +44,20 @@ RewriteRule ^(.+)\.(js|wasm|data)$ $1.$2.gz [L]
 # drops these (the upload script verifies them after each deploy).
 Header always set Cross-Origin-Opener-Policy "same-origin"
 Header always set Cross-Origin-Embedder-Policy "require-corp"
+Header always set Cross-Origin-Resource-Policy "same-origin"
+Header always set Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self'; media-src 'none'; manifest-src 'self'; form-action 'none'"
+Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()"
+Header always set Referrer-Policy "no-referrer"
+Header always set X-Content-Type-Options "nosniff"
 <FilesMatch "\.html$">
 Header set Cache-Control "no-cache"
 </FilesMatch>
-<FilesMatch "\.(js|wasm|data|png|ico|svg)(\.(br|gz))?$">
+<FilesMatch "\.(css|js|mjs|wasm|data|png|ico|svg)(\.(br|gz))?$">
 Header set Cache-Control "public, max-age=31536000, immutable"
 </FilesMatch>
 # The same URL can answer with br, gzip, or identity depending on the
 # client, so caches must key on Accept-Encoding.
-<FilesMatch "\.(js|wasm|data)(\.(br|gz))?$">
+<FilesMatch "\.(css|js|mjs|wasm|data)(\.(br|gz))?$">
 Header append Vary Accept-Encoding
 </FilesMatch>
 </IfModule>

@@ -8,6 +8,7 @@ const RU = new Map(Object.entries({
   "Versions": "Версии",
   "Assets": "Ассеты",
   "Diagnostics": "Диагностика",
+  "System check": "Проверка системы",
   "Undo": "Отменить",
   "Redo": "Повторить",
   "Canvas": "Холст",

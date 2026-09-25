@@ -572,6 +572,16 @@ if(PATCHY_BUILD_WASM_SDK)
   if(NOT EMSCRIPTEN)
     message(FATAL_ERROR "PATCHY_BUILD_WASM_SDK requires the Emscripten toolchain")
   endif()
+  # Every object linked into a shared-memory wasm module must be compiled with
+  # the same atomics/bulk-memory and exception ABI. Do not rely on callers to
+  # inject these as global CMAKE_C_FLAGS/CMAKE_CXX_FLAGS: a clean configure
+  # must produce a linkable SDK target by itself.
+  foreach(patchy_wasm_dependency IN ITEMS
+      patchy_core patchy_render patchy_lcms2 patchy_color patchy_libraw
+      patchy_psd patchy_filters patchy_formats patchy_engine)
+    target_compile_options(${patchy_wasm_dependency} PRIVATE
+      -pthread -fwasm-exceptions)
+  endforeach()
   add_executable(patchy_engine_wasm_sdk src/engine/wasm_sdk_main.cpp)
   target_link_libraries(patchy_engine_wasm_sdk PRIVATE patchy_engine)
   target_compile_options(patchy_engine_wasm_sdk PRIVATE -pthread -fwasm-exceptions)
@@ -610,6 +620,9 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/patchy.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.css"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.html"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/guide-model.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/viewport-model.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/shell-ui.mjs"
@@ -669,7 +682,8 @@ if(PATCHY_BUILD_TESTS)
               "${PROJECT_SOURCE_DIR}/tests/sdk/support_diagnostics_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/guide_model_tests.mjs"
               "${PROJECT_SOURCE_DIR}/tests/sdk/viewport_model_tests.mjs"
-              "${PROJECT_SOURCE_DIR}/tests/sdk/shell_ui_tests.mjs")
+              "${PROJECT_SOURCE_DIR}/tests/sdk/shell_ui_tests.mjs"
+              "${PROJECT_SOURCE_DIR}/tests/sdk/self_hosted_release_tests.mjs")
   endif()
 endif()
 

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:,">
+  <title>Patchy system check</title>
+  <link rel="stylesheet" href="./capabilities.css">
+</head>
+<body>
+  <main class="capability-shell">
+    <header>
+      <div>
+        <p class="eyebrow">LOCAL-FIRST RUNTIME</p>
+        <h1>System check</h1>
+        <p class="summary">Patchy checks browser capabilities on this device. It does not upload a file or contact a document service.</p>
+      </div>
+      <a class="back-link" href="./patchy.html">Back to editor</a>
+    </header>
+
+    <section class="result-card" aria-labelledby="resultTitle" aria-live="polite">
+      <span class="status-mark" id="statusMark" aria-hidden="true"></span>
+      <div>
+        <p class="eyebrow" id="resultLabel">CHECKING</p>
+        <h2 id="resultTitle">Checking this browser…</h2>
+        <p id="resultDetail">Runtime checks happen locally.</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="requirementsTitle">
+      <div class="section-heading">
+        <div><p class="eyebrow">REQUIREMENTS</p><h2 id="requirementsTitle">Capability report</h2></div>
+        <span class="privacy-chip">No document upload</span>
+      </div>
+      <ul class="capability-list" id="capabilityList"></ul>
+    </section>
+
+    <section class="policy-card" aria-labelledby="policyTitle">
+      <p class="eyebrow">RELEASE POLICY</p>
+      <h2 id="policyTitle">Supported browser families</h2>
+      <p>Chrome, Edge and Firefox are required in the release matrix. Safari remains provisional until its dedicated memory-soak gate passes. Feature detection, not the browser name, decides whether the editor can start.</p>
+      <p>Cross-origin isolation is required for the multithreaded engine. If it is missing, the hosting headers must be fixed; Patchy will not silently switch to a weaker runtime.</p>
+    </section>
+  </main>
+  <script type="module" src="./capabilities.mjs"></script>
+</body>
+</html>
