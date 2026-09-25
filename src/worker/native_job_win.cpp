@@ -471,6 +471,10 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
 
   STARTUPINFOEXW startup{};
   startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
+  startup.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+  startup.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
   startup.lpAttributeList = attributes.get();
   PROCESS_INFORMATION process_info{};
   auto command_line = make_command_line(private_worker, input_read.get(),
@@ -628,6 +632,14 @@ namespace patchy::worker::detail {
 bool enter_platform_sandbox(const WorkerArguments& arguments,
                             std::string& sandbox_name, std::string& error) {
   (void)arguments;
+  for (const auto standard_handle :
+       {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE}) {
+    const auto handle = ::GetStdHandle(standard_handle);
+    if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
+      error = "worker inherited an ambient standard handle";
+      return false;
+    }
+  }
   WindowsHandle token;
   HANDLE raw_token = nullptr;
   if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &raw_token) == 0) {

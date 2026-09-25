@@ -206,6 +206,9 @@ std::vector<std::string> worker_arguments(const NativeJobRequest& request) {
       (void)::close(descriptor);
     }
   }
+  for (const auto descriptor : {STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) {
+    (void)::close(descriptor);
+  }
 
   if (!set_limit(RLIMIT_CORE, 0U)) {
     _exit(124);
@@ -715,6 +718,13 @@ bool install_seccomp(std::string& error) {
 
 bool enter_platform_sandbox(const WorkerArguments& arguments,
                             std::string& sandbox_name, std::string& error) {
+  for (const auto descriptor : {STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) {
+    errno = 0;
+    if (::fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) {
+      error = "worker inherited an ambient standard descriptor";
+      return false;
+    }
+  }
   if (!set_limit(RLIMIT_CORE, 0U) ||
 #if defined(__linux__)
       !set_limit(RLIMIT_AS, arguments.limits.max_address_space_bytes) ||
