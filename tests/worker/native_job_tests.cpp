@@ -275,6 +275,7 @@ int main() {
     const auto fixture = make_fixture();
     write_bytes(input, fixture);
 
+    std::cout << "native worker case: engine-success" << std::endl;
     auto request = base_request(input, output);
     const auto success = patchy::worker::run_native_job(request);
     require(success.outcome == patchy::worker::NativeJobOutcome::Success,
@@ -358,7 +359,7 @@ int main() {
       for (const auto probe : {patchy::worker::NativeJobProbe::Network,
                                patchy::worker::NativeJobProbe::Environment,
                                patchy::worker::NativeJobProbe::Process}) {
-        std::cout << "native worker probe: " << probe_name(probe) << '\n';
+        std::cout << "native worker probe: " << probe_name(probe) << std::endl;
         request = base_request({}, {});
         request.probe = probe;
         const auto probe_result = patchy::worker::run_native_job(request);
