@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <aclapi.h>
 #include <appmodel.h>
+#include <combaseapi.h>
 #include <sddl.h>
 #include <userenv.h>
 #include <ws2tcpip.h>
@@ -18,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cwchar>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -82,6 +84,23 @@ class LocalMemory {
     }
     value_ = value;
   }
+
+ private:
+  void* value_{nullptr};
+};
+
+class CoTaskMemory {
+ public:
+  CoTaskMemory() = default;
+  explicit CoTaskMemory(void* value) : value_(value) {}
+  CoTaskMemory(const CoTaskMemory&) = delete;
+  CoTaskMemory& operator=(const CoTaskMemory&) = delete;
+  ~CoTaskMemory() {
+    if (value_ != nullptr) {
+      ::CoTaskMemFree(value_);
+    }
+  }
+  [[nodiscard]] void* get() const noexcept { return value_; }
 
  private:
   void* value_{nullptr};
@@ -296,6 +315,110 @@ std::filesystem::path make_private_worker_copy(
   return destination;
 }
 
+bool make_appcontainer_environment(PSID sid,
+                                   std::wstring_view windows_directory,
+                                   std::wstring& environment) {
+  LPWSTR raw_sid = nullptr;
+  if (::ConvertSidToStringSidW(sid, &raw_sid) == 0) {
+    return false;
+  }
+  LocalMemory sid_guard(raw_sid);
+  PWSTR raw_local_app_data = nullptr;
+  if (FAILED(::GetAppContainerFolderPath(raw_sid, &raw_local_app_data)) ||
+      raw_local_app_data == nullptr) {
+    return false;
+  }
+  CoTaskMemory local_app_data_guard(raw_local_app_data);
+  const std::filesystem::path local_app_data(raw_local_app_data);
+  const auto temporary = local_app_data / L"Temp";
+  if (!::CreateDirectoryW(temporary.c_str(), nullptr) &&
+      ::GetLastError() != ERROR_ALREADY_EXISTS) {
+    return false;
+  }
+
+  // CreateProcess expects the AppContainer profile variables that Windows
+  // normally redirects when the parent environment is inherited. Keep the
+  // explicit block sorted and limited to that private disposable profile, the
+  // loader root, and the one-shot child marker; no caller variables cross the
+  // boundary.
+  const auto append = [&](std::wstring_view name, std::wstring_view value) {
+    environment.append(name);
+    environment.push_back(L'=');
+    environment.append(value);
+    environment.push_back(L'\0');
+  };
+  environment.clear();
+  append(L"LOCALAPPDATA", local_app_data.native());
+  append(L"PATCHY_NATIVE_JOB_CHILD", L"1");
+  append(L"SystemRoot", windows_directory);
+  append(L"TEMP", temporary.native());
+  append(L"TMP", temporary.native());
+  environment.push_back(L'\0');
+  return true;
+}
+
+std::wstring environment_variable(const wchar_t* name) {
+  const auto required = ::GetEnvironmentVariableW(name, nullptr, 0U);
+  if (required == 0U) {
+    return {};
+  }
+  std::vector<wchar_t> value(required);
+  const auto written = ::GetEnvironmentVariableW(
+      name, value.data(), static_cast<DWORD>(value.size()));
+  if (written == 0U || written >= value.size()) {
+    return {};
+  }
+  return std::wstring(value.data(), written);
+}
+
+bool restricted_appcontainer_environment() {
+  const auto local_app_data = environment_variable(L"LOCALAPPDATA");
+  const auto system_root = environment_variable(L"SystemRoot");
+  const auto temporary = environment_variable(L"TEMP");
+  const auto temporary_alias = environment_variable(L"TMP");
+  if (local_app_data.empty() || system_root.empty() || temporary.empty() ||
+      temporary_alias.empty() ||
+      ::CompareStringOrdinal(temporary.c_str(), -1, temporary_alias.c_str(),
+                             -1, TRUE) != CSTR_EQUAL) {
+    return false;
+  }
+  const auto temporary_parent =
+      std::filesystem::path(temporary).parent_path().native();
+  if (::CompareStringOrdinal(local_app_data.c_str(), -1,
+                             temporary_parent.c_str(), -1,
+                             TRUE) != CSTR_EQUAL) {
+    return false;
+  }
+
+  const auto allowed = [](std::wstring_view name) {
+    for (const auto candidate : {L"LOCALAPPDATA", L"SystemRoot", L"TEMP",
+                                 L"TMP"}) {
+      if (::CompareStringOrdinal(name.data(), static_cast<int>(name.size()),
+                                 candidate, -1, TRUE) == CSTR_EQUAL) {
+        return true;
+      }
+    }
+    return false;
+  };
+  auto* block = ::GetEnvironmentStringsW();
+  if (block == nullptr) {
+    return false;
+  }
+  bool restricted = true;
+  for (auto* entry = block; *entry != L'\0';
+       entry += std::wcslen(entry) + 1U) {
+    const std::wstring_view value(entry);
+    const auto separator = value.find(L'=');
+    if (separator == std::wstring_view::npos ||
+        (separator != 0U && !allowed(value.substr(0U, separator)))) {
+      restricted = false;
+      break;
+    }
+  }
+  (void)::FreeEnvironmentStringsW(block);
+  return restricted;
+}
+
 bool configure_job(HANDLE job, const NativeJobLimits& limits) {
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION information{};
   information.BasicLimitInformation.LimitFlags =
@@ -481,12 +604,13 @@ NativeJobResult run_native_job(const NativeJobRequest& request) {
     result.detail = "could not resolve Windows directory";
     return result;
   }
-  std::wstring environment = L"PATCHY_NATIVE_JOB_CHILD=1";
-  environment.push_back(L'\0');
-  environment += L"SystemRoot=";
-  environment += windows_directory.data();
-  environment.push_back(L'\0');
-  environment.push_back(L'\0');
+  std::wstring environment;
+  if (!make_appcontainer_environment(profile.sid(), windows_directory.data(),
+                                     environment)) {
+    result.outcome = NativeJobOutcome::SandboxUnavailable;
+    result.detail = "could not construct AppContainer environment";
+    return result;
+  }
 
   const auto created = ::CreateProcessW(
       private_worker.c_str(), command_line.data(), nullptr, nullptr, TRUE,
@@ -742,9 +866,11 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
           static_cast<DWORD>(secret.size()));
       const auto absent = count == 0U &&
                           ::GetLastError() == ERROR_ENVVAR_NOT_FOUND;
-      detail = absent ? "secret environment absent"
-                      : "secret environment leaked";
-      return absent;
+      const auto restricted = restricted_appcontainer_environment();
+      detail = absent && restricted
+                   ? "secret environment absent and profile environment bounded"
+                   : "worker environment escaped bounded profile";
+      return absent && restricted;
     }
     case NativeJobProbe::Process: {
       std::array<wchar_t, 32768U> executable{};

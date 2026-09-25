@@ -506,7 +506,7 @@ if(PATCHY_BUILD_NATIVE_JOB AND NOT EMSCRIPTEN)
   target_link_libraries(patchy_native_job_runtime PRIVATE patchy_engine patchy_psd)
   if(WIN32)
     target_link_libraries(patchy_native_job_runtime PRIVATE
-      advapi32 userenv ws2_32)
+      advapi32 ole32 userenv ws2_32)
   endif()
   if(APPLE)
     target_link_libraries(patchy_native_job_runtime PRIVATE sandbox proc)
