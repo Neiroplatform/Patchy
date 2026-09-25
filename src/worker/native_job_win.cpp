@@ -945,6 +945,12 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
         detail = "network socket creation failed before controlled connect";
         return false;
       }
+      u_long nonblocking = 1U;
+      if (::ioctlsocket(socket_handle.get(), FIONBIO, &nonblocking) ==
+          SOCKET_ERROR) {
+        detail = "network socket could not enter nonblocking mode";
+        return false;
+      }
       sockaddr_in destination{};
       destination.sin_family = AF_INET;
       destination.sin_port = htons(port);
@@ -952,12 +958,49 @@ bool run_platform_probe(const WorkerArguments& arguments, std::string& detail) {
       const auto connected = ::connect(
           socket_handle.get(), reinterpret_cast<const sockaddr*>(&destination),
           sizeof(destination));
-      const auto connect_error = ::WSAGetLastError();
-      detail = connected == SOCKET_ERROR
-                   ? "controlled network connect denied (WSA " +
-                         std::to_string(connect_error) + ")"
-                   : "controlled network connect unexpectedly succeeded";
-      return connected == SOCKET_ERROR;
+      if (connected == 0) {
+        detail = "controlled network connect unexpectedly succeeded";
+        return false;
+      }
+      auto connect_error = ::WSAGetLastError();
+      if (connect_error != WSAEWOULDBLOCK &&
+          connect_error != WSAEINPROGRESS && connect_error != WSAEALREADY) {
+        detail = "controlled network connect denied (WSA " +
+                 std::to_string(connect_error) + ")";
+        return true;
+      }
+
+      fd_set writable{};
+      fd_set failed{};
+      FD_SET(socket_handle.get(), &writable);
+      FD_SET(socket_handle.get(), &failed);
+      timeval bounded_wait{0L, 250'000L};
+      const auto selected =
+          ::select(0, nullptr, &writable, &failed, &bounded_wait);
+      if (selected == SOCKET_ERROR) {
+        detail = "controlled network probe select failed (WSA " +
+                 std::to_string(::WSAGetLastError()) + ")";
+        return false;
+      }
+      if (selected == 0) {
+        detail = "controlled network connect denied within bounded wait";
+        return true;
+      }
+      int option_bytes = sizeof(connect_error);
+      if (::getsockopt(socket_handle.get(), SOL_SOCKET, SO_ERROR,
+                       reinterpret_cast<char*>(&connect_error),
+                       &option_bytes) == SOCKET_ERROR) {
+        detail = "controlled network probe status failed (WSA " +
+                 std::to_string(::WSAGetLastError()) + ")";
+        return false;
+      }
+      if (connect_error == 0) {
+        detail = "controlled network connect unexpectedly succeeded";
+        return false;
+      }
+      detail = "controlled network connect denied (WSA " +
+               std::to_string(connect_error) + ")";
+      return true;
     }
     case NativeJobProbe::FileRead: {
       WindowsHandle file(::CreateFileA(arguments.probe_path.c_str(), GENERIC_READ,
