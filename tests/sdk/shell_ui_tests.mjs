@@ -197,6 +197,8 @@ test("beta guide and local starter publish support and responsive contracts", as
   assert.match(editor, /starterForm"\)\.addEventListener\("submit"/);
   assert.match(editor, /starterForm"\)\.requestSubmit\(\$\("starterCustomCreateButton"\)\)/);
   assert.match(editor, /canvasViewport"\)\.focus/);
+  assert.match(editor, /document\.body\.append\(anchor\);\s*anchor\.click\(\);\s*anchor\.remove\(\);/);
+  assert.match(editor, /setTimeout\(\(\) => URL\.revokeObjectURL\(url\), 1000\)/);
   assert.match(html, /id="starterCustomCreateButton" type="submit"/);
   assert.match(html, /id="starterCloseButton" type="button"/);
 });

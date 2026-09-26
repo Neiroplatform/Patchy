@@ -190,7 +190,9 @@ try {
     page.click("#saveAsButton"),
   ]);
   const psbBytes = await readFile(await psbDownload.path());
-  assert.equal(psbDownload.suggestedFilename().endsWith(".psb"), true);
+  const psbFilename = psbDownload.suggestedFilename();
+  assert.equal(psbFilename.endsWith(".psb"), true,
+    `large starter download lost its PSB filename: ${psbFilename}`);
   assert.equal(psbBytes.subarray(0, 4).toString("ascii"), "8BPS");
   assert.equal(psbBytes.readUInt16BE(4), 2, "large starter did not encode PSB version 2");
   await psbDownload.delete();
