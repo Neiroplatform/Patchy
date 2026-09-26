@@ -129,7 +129,8 @@ async function configureBrush(page, color, size) {
 }
 
 async function brushPoint(page, index, total, { measurePreview = false, commit = true } = {}) {
-  await page.locator("#documentCanvas").scrollIntoViewIfNeeded();
+  await page.locator("#documentCanvas").evaluate((element) =>
+    element.scrollIntoView({ block: "nearest", inline: "nearest" }));
   const bounds = await page.locator("#documentCanvas").boundingBox();
   const viewportBounds = await page.locator("#canvasViewport").boundingBox();
   assert.ok(bounds?.width > 0 && bounds?.height > 0, "document canvas has no visible bounds");

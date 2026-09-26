@@ -49,6 +49,9 @@ after capturing the elapsed time. Animation-frame waits and timed
 `getImageData()` reads are invalid for this metric because a headless runner's
 display cadence and GPU-to-CPU readback can add unrelated scheduling stalls.
 Failure output includes the full sample distribution as well as p95.
+The repeated stress driver uses immediate DOM scrolling before reading canvas
+geometry; Playwright actionability scrolling is forbidden there because an
+actively updated canvas never satisfies its element-stability wait.
 
 ## Text edit sessions (August 2026)
 

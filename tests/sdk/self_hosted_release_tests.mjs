@@ -244,6 +244,8 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
   assert.match(browserVerifier, /context\.fill = instrumentedFill/);
   assert.match(browserVerifier, /pointer-handler-to-overlay-fill/);
   assert.match(browserVerifier, /brushPreviewSamplesMs/);
+  assert.match(browserVerifier, /scrollIntoView\(\{ block: "nearest"/);
+  assert.doesNotMatch(browserVerifier, /scrollIntoViewIfNeeded/);
   assert.match(browserVerifier, /pan\/zoom requested an authoritative document recomposite/);
   assert.match(browserVerifier, /page\.waitForEvent\("download"/);
   assert.match(browserVerifier, /local-first-audit-/);
