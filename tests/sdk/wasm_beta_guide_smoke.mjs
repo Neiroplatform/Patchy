@@ -42,6 +42,23 @@ try {
   await waitUntilReady();
   assert.equal((await page.textContent("#helpButton")).trim(), "Getting started");
 
+  await page.click("#emptyNewButton");
+  await page.waitForSelector("#starterDialog[open]");
+  await page.click('#starterDialog button[value="cancel"]');
+  await page.waitForSelector("#starterDialog[open]", { state: "hidden" });
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "emptyNewButton",
+    "closing the starter did not return focus to its invoker");
+  await page.click("#emptyNewButton");
+  await page.fill("#starterWidthInput", "0");
+  await page.click("#starterCustomCreateButton");
+  assert.equal(await page.isVisible("#starterError"), true,
+    "invalid starter dimensions did not fail before document creation");
+  assert.equal((await page.textContent("#detailRevision")).trim(), "-");
+  await page.click('[data-starter-preset="social"]');
+  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "1080 × 1080" &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+
   await page.click("#helpButton");
   await page.waitForSelector("#helpDialog[open]");
   assert.equal((await page.textContent("#helpDialogTitle")).trim(), "Start editing locally");

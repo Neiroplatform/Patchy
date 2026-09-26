@@ -157,6 +157,7 @@
             <p>PSD bytes stay inside the browser Worker. Editing state is owned by the Patchy engine.</p>
             <div class="empty-actions">
               <button class="button button-primary button-large" id="emptyOpenButton" type="button">Choose a PSD</button>
+              <button class="button button-large" id="emptyNewButton" type="button">Create a document</button>
               <button class="button button-large" id="gettingStartedButton" type="button">Getting started</button>
               <span>or drop it anywhere</span>
             </div>
@@ -354,6 +355,37 @@
           <p class="dialog-note"><strong>Excluded:</strong> document and layer names, text, pixels, previews, source bytes, paths, URLs, stack traces and error messages. Nothing is uploaded.</p>
           <label class="check-field"><input id="diagnosticsConsentInput" type="checkbox"><span>I understand and want to create this local file.</span></label>
           <div class="dialog-actions"><button class="button button-primary" id="downloadDiagnosticsButton" type="button" disabled>Download diagnostic JSON</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog starter-dialog" id="starterDialog" aria-labelledby="starterDialogTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">START LOCALLY</p><h2 id="starterDialogTitle">Create a local document</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section class="starter-intro">
+          <p class="dialog-note">Choose a built-in canvas or enter custom dimensions. The document is created in the browser Worker and registered for local recovery.</p>
+          <div class="starter-presets" role="group" aria-label="Document presets">
+            <button class="starter-card" data-starter-preset="blank" type="button"><strong>Blank</strong><span>1600 × 1000 px</span></button>
+            <button class="starter-card" data-starter-preset="social" type="button"><strong>Social square</strong><span>1080 × 1080 px</span></button>
+            <button class="starter-card" data-starter-preset="presentation" type="button"><strong>Presentation</strong><span>1920 × 1080 px</span></button>
+            <button class="starter-card" data-starter-preset="print-a4" type="button"><strong>Print A4-like</strong><span>2480 × 3508 px</span></button>
+          </div>
+        </section>
+        <section>
+          <h3>Custom canvas</h3>
+          <div class="field-row">
+            <label><span>Width</span><input id="starterWidthInput" type="number" min="1" max="300000" step="1" value="1600" required></label>
+            <label><span>Height</span><input id="starterHeightInput" type="number" min="1" max="300000" step="1" value="1000" required></label>
+          </div>
+          <p class="starter-error" id="starterError" role="alert" hidden></p>
+          <div class="dialog-actions"><button class="button button-primary" id="starterCustomCreateButton" type="button">Create custom document</button></div>
+        </section>
+        <section class="starter-links">
+          <p class="dialog-note">Already have work? Continue without upload.</p>
+          <div class="help-actions" aria-label="Other ways to start">
+            <button class="button" id="starterOpenButton" type="button">Open from device</button>
+            <button class="button" id="starterRecoveryButton" type="button">Recover local work</button>
+            <button class="button" id="starterHelpButton" type="button">Open Help</button>
+          </div>
         </section>
       </form>
     </dialog>

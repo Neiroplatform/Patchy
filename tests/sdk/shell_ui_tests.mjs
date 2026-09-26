@@ -3,9 +3,28 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { betaGuideStorageKey, chooseRovingLayerId, installBetaGuide, isEditableTarget,
   translateMessage } from "../../sdk/engine/site/shell-ui.mjs";
+import { STARTER_DIMENSION_LIMIT, STARTER_PRESETS, starterDocumentRequest,
+  starterPreset } from "../../sdk/engine/site/starter-model.mjs";
 
 const root = new URL("../../", import.meta.url);
 const source = (path) => readFile(new URL(path, root), "utf8");
+
+test("local starter presets are deterministic and custom dimensions fail closed", () => {
+  assert.deepEqual(STARTER_PRESETS.map(({ id, width, height }) => [id, width, height]), [
+    ["blank", 1600, 1000], ["social", 1080, 1080],
+    ["presentation", 1920, 1080], ["print-a4", 2480, 3508],
+  ]);
+  assert.deepEqual(starterDocumentRequest(starterPreset("social")),
+    { width: 1080, height: 1080, name: "Untitled.psd" });
+  assert.deepEqual(starterDocumentRequest({ width: "2048", height: "1024" }),
+    { width: 2048, height: 1024, name: "Untitled.psd" });
+  for (const input of [
+    { width: "", height: 1 }, { width: Number.NaN, height: 1 },
+    { width: 0, height: 1 }, { width: 1.5, height: 1 },
+    { width: STARTER_DIMENSION_LIMIT + 1, height: 1 },
+  ]) assert.throws(() => starterDocumentRequest(input), /whole number/);
+  assert.throws(() => starterPreset("remote"), /Unknown starter preset/);
+});
 
 test("English and Russian presentation strings share one deterministic boundary", () => {
   assert.equal(translateMessage("New", "en"), "New");
@@ -147,20 +166,26 @@ test("local-first beta guide stays available and delegates to real editor action
   assert.equal(dialog.open, true);
 });
 
-test("beta guide publishes support boundaries and responsive contracts", async () => {
-  const [html, css, shell] = await Promise.all([
+test("beta guide and local starter publish support and responsive contracts", async () => {
+  const [html, css, shell, editor] = await Promise.all([
     source("sdk/engine/site/patchy.html"), source("sdk/engine/site/editor.css"),
-    source("sdk/engine/site/shell-ui.mjs"),
+    source("sdk/engine/site/shell-ui.mjs"), source("sdk/engine/site/editor.mjs"),
   ]);
   for (const contract of [
     /id="helpButton"/, /id="helpDialog"/, /id="helpOpenButton"/,
     /id="helpRecoveryButton"/, /id="completeGuideButton"/,
+    /id="emptyNewButton"/, /id="starterDialog"/, /data-starter-preset="social"/,
+    /data-starter-preset="presentation"/, /data-starter-preset="print-a4"/,
+    /id="starterCustomCreateButton"/, /id="starterRecoveryButton"/,
     /Photoshop warning-free and 1,000-file corpus acceptance are still external release gates/,
   ]) assert.match(html, contract);
   assert.match(css, /\.shortcut-grid, \.help-columns \{ grid-template-columns: 1fr; \}/);
+  assert.match(css, /\.starter-presets \{ grid-template-columns: 1fr; \}/);
   assert.match(shell, /patchy\.beta-guide\.v1/);
   assert.match(shell, /document\.querySelector\("dialog\[open\]"\)/);
   assert.match(shell, /isEditableTarget\(event\)/);
+  assert.match(editor, /client\.create\(request\.width, request\.height, request\.name\)/);
+  assert.match(editor, /starterDocumentRequest\(input\)/);
 });
 
 test("production shell exposes keyboard, localization, responsive and motion contracts", async () => {

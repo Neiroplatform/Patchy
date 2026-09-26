@@ -15,6 +15,7 @@ import { anchoredScrollDelta, clampScrollPosition, clampZoom, fitZoom,
 import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
 import { chooseRovingLayerId, createLocalizer, installDialogFocusReturn, installRovingToolbar,
   isEditableTarget } from "./shell-ui.mjs";
+import { starterDocumentRequest, starterPreset } from "./starter-model.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -375,6 +376,9 @@ function updateControls() {
   $("redoButton").disabled = busy || !snapshot?.canRedo;
   $("openButton").disabled = busy;
   $("newButton").disabled = busy;
+  $("emptyNewButton").disabled = busy;
+  $("starterCustomCreateButton").disabled = busy;
+  for (const button of document.querySelectorAll("[data-starter-preset]")) button.disabled = busy;
   $("recoveryButton").disabled = busy;
   $("versionsButton").disabled = busy || !snapshot || !workspaceAvailable;
   $("createVersionButton").disabled = busy || !snapshot || !workspaceAvailable;
@@ -2332,19 +2336,49 @@ async function openFile(file, handle = null) {
   finally { setBusy(false); }
 }
 
-async function newDocument() {
+async function newDocument(input = starterPreset("blank")) {
   if (busy) return;
+  let request;
+  try { request = starterDocumentRequest(input); }
+  catch (error) { showError("Could not create document", error); return DIAGNOSTIC_COMMAND_FAILED; }
   clearError();
-  setBusy(true, "Creating document", "Preparing a 1600 × 1000 RGBA workspace");
+  setBusy(true, "Creating document", `Preparing a ${request.width} × ${request.height} RGBA workspace`);
   try {
-    ensureMemorySafe({ width: 1600, height: 1000 }, "New document");
-    const next = await client.create(1600, 1000, "Untitled.psd");
+    ensureMemorySafe(request, "New document");
+    const next = await client.create(request.width, request.height, request.name);
     fileLifecycle.register(next.documentId, next, "psd");
     clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
   } catch (error) { showError("Could not create document", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally { setBusy(false); }
+}
+
+function setStarterError(error = null) {
+  const output = $("starterError");
+  output.hidden = !error;
+  if (error) localizer.setText(output, error?.message || String(error));
+}
+
+let starterReturnFocus = $("emptyNewButton");
+
+function openStarterDialog(event) {
+  if (busy) return;
+  const invoker = event?.currentTarget ?? document.activeElement;
+  starterReturnFocus = invoker?.focus && !invoker.closest?.("dialog")
+    ? invoker : $("emptyNewButton");
+  setStarterError();
+  $("starterWidthInput").value = "1600";
+  $("starterHeightInput").value = "1000";
+  $("starterDialog").showModal();
+}
+
+async function createStarter(input) {
+  let request;
+  try { request = starterDocumentRequest(input); }
+  catch (error) { setStarterError(error); return; }
+  $("starterDialog").close("create");
+  await newDocument(request);
 }
 
 async function saveDocument(saveAs = false) {
@@ -4134,6 +4168,26 @@ for (const [id, command] of commandRegistry) {
 }
 
 $("emptyOpenButton").addEventListener("click", openPicker);
+$("starterDialog").addEventListener("close", () => {
+  const target = starterReturnFocus?.isConnected === false || starterReturnFocus?.disabled
+    ? $("emptyNewButton") : starterReturnFocus;
+  queueMicrotask(() => target?.focus?.({ preventScroll: true }));
+});
+$("emptyNewButton").addEventListener("click", openStarterDialog);
+for (const button of document.querySelectorAll("[data-starter-preset]")) {
+  button.addEventListener("click", () => createStarter(starterPreset(button.dataset.starterPreset)));
+}
+$("starterCustomCreateButton").addEventListener("click", () => createStarter({
+  width: $("starterWidthInput").value,
+  height: $("starterHeightInput").value,
+}));
+for (const [sourceId, targetId] of [["starterOpenButton", "openButton"],
+  ["starterRecoveryButton", "recoveryButton"], ["starterHelpButton", "helpButton"]]) {
+  $(sourceId).addEventListener("click", () => {
+    $("starterDialog").close("action");
+    queueMicrotask(() => $(targetId).click());
+  });
+}
 $("createVersionButton").addEventListener("click", createLocalVersion);
 $("versionLabelInput").addEventListener("input", () => $("versionLabelInput").setCustomValidity(""));
 $("saveFormatSelect").addEventListener("change", () => {

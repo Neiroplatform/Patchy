@@ -626,6 +626,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/guide-model.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/viewport-model.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/shell-ui.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/starter-model.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/text-layout.mjs"
             "${PROJECT_SOURCE_DIR}/packaging/web/.htaccess"
             "${PATCHY_WASM_SDK_SITE_DIR}"

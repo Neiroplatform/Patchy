@@ -177,7 +177,22 @@ const RU = new Map(Object.entries({
   "Keep it on this device.": "Оставьте его на этом устройстве.",
   "PSD bytes stay inside the browser Worker. Editing state is owned by the Patchy engine.": "Байты PSD остаются в Worker браузера. Состоянием редактирования владеет движок Patchy.",
   "Choose a PSD": "Выбрать PSD",
+  "Create a document": "Создать документ",
   "or drop it anywhere": "или перетащите его сюда",
+  "START LOCALLY": "НАЧАТЬ ЛОКАЛЬНО",
+  "Create a local document": "Создать локальный документ",
+  "Choose a built-in canvas or enter custom dimensions. The document is created in the browser Worker and registered for local recovery.": "Выберите встроенный холст или укажите свои размеры. Документ создаётся в Worker браузера и регистрируется для локального восстановления.",
+  "Document presets": "Пресеты документов",
+  "Blank": "Пустой",
+  "Social square": "Квадрат для соцсетей",
+  "Presentation": "Презентация",
+  "Print A4-like": "Печать A4",
+  "Custom canvas": "Свой холст",
+  "Create custom document": "Создать документ своего размера",
+  "Already have work? Continue without upload.": "Уже есть документ? Продолжите без загрузки в сеть.",
+  "Other ways to start": "Другие способы начать",
+  "Open from device": "Открыть с устройства",
+  "Open Help": "Открыть справку",
   "Opening document": "Открываем документ",
   "Reading layers and rendering pixels": "Читаем слои и рисуем пиксели",
   "Cancel": "Отмена",
@@ -861,6 +876,12 @@ export function translateMessage(value, locale = "en") {
   if (shortcut && RU.has(shortcut[1])) return `${RU.get(shortcut[1])} (${shortcut[2]})`;
   let dynamic = source.match(/^Moving (\d+) state(?:s)?$/);
   if (dynamic) return `Переход на ${dynamic[1]} шаг(а)`;
+  dynamic = source.match(/^Preparing a (\d+) × (\d+) RGBA workspace$/);
+  if (dynamic) return `Подготовка рабочей области RGBA ${dynamic[1]} × ${dynamic[2]}`;
+  dynamic = source.match(/^(Width|Height) must be a whole number from 1 to (\d+)$/);
+  if (dynamic) return `${dynamic[1] === "Width" ? "Ширина" : "Высота"} должна быть целым числом от 1 до ${dynamic[2]}`;
+  dynamic = source.match(/^(\d+) × (\d+) px$/);
+  if (dynamic) return `${dynamic[1]} × ${dynamic[2]} пкс`;
   dynamic = source.match(/^(Gradient|Pattern): (.+)$/);
   if (dynamic) return `${translateMessage(dynamic[1], locale)}: ${dynamic[2]}`;
   dynamic = source.match(/^Applying (.+)$/);

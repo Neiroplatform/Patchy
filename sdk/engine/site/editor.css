@@ -275,6 +275,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .layer-style-dialog { width: min(820px, calc(100vw - 28px)); }
 .selection-refinement-dialog { width: min(620px, calc(100vw - 28px)); }
 .help-dialog { width: min(880px, calc(100vw - 28px)); }
+.starter-dialog { width: min(760px, calc(100vw - 28px)); }
+.starter-intro { display: grid; gap: 14px; }
+.starter-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.starter-card { display: grid; gap: 5px; min-height: 74px; padding: 13px 14px; color: var(--text);
+  text-align: left; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-1); cursor: pointer; }
+.starter-card:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.starter-card strong { font-size: 12px; }
+.starter-card span { color: var(--text-faint); font-size: 10px; }
+.starter-error { margin: 10px 0 0; color: var(--danger); font-size: 11px; }
+.starter-links { display: grid; gap: 10px; }
 .help-intro { display: grid; gap: 14px; }
 .help-intro > p { margin: 0; max-width: 70ch; color: var(--text-muted); font-size: 13px; line-height: 1.55; }
 .help-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -364,6 +374,7 @@ kbd { display: inline-grid; min-width: 22px; min-height: 22px; padding: 2px 5px;
   .tool-options label { flex: 0 0 auto; }
   .document-dialog { max-height: calc(100vh - 16px); overflow: auto; }
   .shortcut-grid, .help-columns { grid-template-columns: 1fr; }
+  .starter-presets { grid-template-columns: 1fr; }
   .help-complete { align-items: stretch; flex-direction: column; }
   .field-row-four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .liquify-workspace { grid-template-columns: 1fr; }
