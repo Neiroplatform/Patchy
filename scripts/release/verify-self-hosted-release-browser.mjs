@@ -177,11 +177,16 @@ async function brushPoint(page, index, total, { measurePreview = false, commit =
               settled = true;
               clearTimeout(timeout);
               resolveProbe(performance.now() - started);
-              return;
+              return true;
             }
-            if (!settled) requestAnimationFrame(observe);
+            return false;
           };
-          requestAnimationFrame(observe);
+          const observeFrame = () => {
+            if (!observe() && !settled) requestAnimationFrame(observeFrame);
+          };
+          queueMicrotask(() => {
+            if (!observe() && !settled) requestAnimationFrame(observeFrame);
+          });
         }, { capture: true, once: true });
       });
     }, { x: clientX, y: clientY });
@@ -269,6 +274,7 @@ async function runPerformanceAudit(page, browserLabel, manifest) {
       { measurePreview: true, commit: true }));
   }
   const brushPreviewP95Ms = percentile(brushPreviewSamples, 0.95);
+  console.log(`PERFORMANCE browser=${browserLabel} brushPreviewSamplesMs=${JSON.stringify(brushPreviewSamples)} p95Ms=${brushPreviewP95Ms.toFixed(2)}`);
   assert.ok(brushPreviewP95Ms <= BROWSER_PERFORMANCE_THRESHOLDS.brushPreviewP95Ms,
     `brush preview p95 ${brushPreviewP95Ms.toFixed(2)} ms exceeds ${BROWSER_PERFORMANCE_THRESHOLDS.brushPreviewP95Ms} ms`);
   await closeActiveDocument(page);
@@ -327,6 +333,8 @@ async function runPerformanceAudit(page, browserLabel, manifest) {
     },
     brushPreview: {
       samples: brushPreviewSamples.length,
+      sampleValuesMs: brushPreviewSamples,
+      measurement: "pointer-handler-to-overlay-pixel",
       p95Ms: brushPreviewP95Ms,
       thresholdMs: BROWSER_PERFORMANCE_THRESHOLDS.brushPreviewP95Ms,
     },

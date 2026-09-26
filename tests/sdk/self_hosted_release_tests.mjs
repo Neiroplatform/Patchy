@@ -241,6 +241,9 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
   assert.match(browserVerifier, /PATCHY_RELEASE_PERFORMANCE_DURATION_MS/);
   assert.match(browserVerifier, /patchy\.browser-performance-audit\/v1/);
   assert.match(browserVerifier, /#gestureCanvas/);
+  assert.match(browserVerifier, /queueMicrotask/);
+  assert.match(browserVerifier, /pointer-handler-to-overlay-pixel/);
+  assert.match(browserVerifier, /brushPreviewSamplesMs/);
   assert.match(browserVerifier, /pan\/zoom requested an authoritative document recomposite/);
   assert.match(browserVerifier, /page\.waitForEvent\("download"/);
   assert.match(browserVerifier, /local-first-audit-/);

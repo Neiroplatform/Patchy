@@ -42,6 +42,14 @@ The move-drag proxy/base machinery, the display-resolution preview-scaled docume
 
 The Qt-free browser viewport's no-recomposite and actual-browser frame-budget
 contract lives in [Browser SDK viewport navigation](browser-viewport.md).
+The self-hosted browser release audit measures brush preview latency from the
+capturing `pointerdown` handler through the first changed pixel on the visible
+gesture canvas. It observes once at the post-dispatch microtask checkpoint,
+which includes Patchy's synchronous input handler, and falls back to animation
+frames only for an asynchronous preview. Starting every observation on an
+animation frame is invalid for this metric because a headless runner's display
+cadence can add unrelated scheduling delay. Failure output includes the full
+sample distribution as well as p95.
 
 ## Text edit sessions (August 2026)
 
