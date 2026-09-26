@@ -5,6 +5,12 @@ import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
+import {
+  assessApplicationMemory,
+  BROWSER_PERFORMANCE_THRESHOLDS,
+  parseDisplayedBytes,
+  percentile,
+} from "./browser-performance-policy.mjs";
 import { verifyRelease } from "./build-self-hosted-release.mjs";
 
 const releaseArgument = process.argv[2];
@@ -27,6 +33,14 @@ function environmentInteger(name, fallback, { minimum = 0 } = {}) {
 const minimumIterations = environmentInteger("PATCHY_RELEASE_SOAK_ITERATIONS", 1, { minimum: 1 });
 const minimumDurationMs = environmentInteger("PATCHY_RELEASE_SOAK_DURATION_MS", 0);
 const summaryPath = process.env.PATCHY_RELEASE_SOAK_SUMMARY;
+const performanceDurationMs = environmentInteger("PATCHY_RELEASE_PERFORMANCE_DURATION_MS", 0);
+const performanceSummaryPath = process.env.PATCHY_RELEASE_PERFORMANCE_SUMMARY;
+const performancePanZoomSamples = environmentInteger("PATCHY_RELEASE_PERFORMANCE_PAN_ZOOM_SAMPLES", 120, { minimum: 20 });
+const performanceBrushSamples = environmentInteger("PATCHY_RELEASE_PERFORMANCE_BRUSH_SAMPLES", 12, { minimum: 5 });
+const requireFullPerformanceGate = environmentInteger("PATCHY_RELEASE_PERFORMANCE_REQUIRE_FULL_GATE", 0, { minimum: 0 });
+if (![0, 1].includes(requireFullPerformanceGate)) {
+  throw new Error("PATCHY_RELEASE_PERFORMANCE_REQUIRE_FULL_GATE must be 0 or 1");
+}
 
 async function loadPlaywright() {
   try {
@@ -66,9 +80,267 @@ function close(server) {
   return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
 }
 
+async function dropSvg(page, { name, width, height, fill }) {
+  const contents = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="${fill}"/></svg>`;
+  await page.evaluate(({ fileName, svg }) => {
+    const file = new File([svg], fileName, { type: "image/svg+xml" });
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    globalThis.dispatchEvent(new DragEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    }));
+  }, { fileName: name, svg: contents });
+  await page.waitForFunction(({ expectedWidth, expectedHeight }) =>
+    document.querySelectorAll('#documentTabs [role="tab"]').length === 1 &&
+    document.querySelector("#documentCanvas")?.width === expectedWidth &&
+    document.querySelector("#documentCanvas")?.height === expectedHeight &&
+    Number(document.querySelector("#layerCount")?.textContent) === 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { expectedWidth: width, expectedHeight: height }, { timeout: 90_000 });
+}
+
+async function closeActiveDocument(page) {
+  await page.click('#documentTabs .document-tab[data-active="true"] button[aria-hidden="true"]');
+  await page.waitForFunction(() =>
+    document.querySelectorAll('#documentTabs [role="tab"]').length === 0 &&
+    document.querySelector(".editor-shell")?.dataset.state === "ready" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  null, { timeout: 90_000 });
+}
+
+async function waitForEditorIdle(page) {
+  await page.waitForFunction(() =>
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  null, { timeout: 90_000 });
+}
+
+async function configureBrush(page, color, size) {
+  await page.click("#brushToolButton");
+  await page.evaluate(({ nextColor, nextSize }) => {
+    const colorInput = document.querySelector("#brushColorInput");
+    const sizeInput = document.querySelector("#brushSizeInput");
+    colorInput.value = nextColor;
+    colorInput.dispatchEvent(new Event("input", { bubbles: true }));
+    sizeInput.value = String(nextSize);
+    sizeInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }, { nextColor: color, nextSize: size });
+}
+
+async function brushPoint(page, index, total, { measurePreview = false, commit = true } = {}) {
+  const bounds = await page.locator("#documentCanvas").boundingBox();
+  const viewportBounds = await page.locator("#canvasViewport").boundingBox();
+  assert.ok(bounds?.width > 0 && bounds?.height > 0, "document canvas has no visible bounds");
+  assert.ok(viewportBounds?.width > 0 && viewportBounds?.height > 0, "canvas viewport has no visible bounds");
+  const inset = 24;
+  const visible = {
+    left: Math.max(bounds.x, viewportBounds.x) + inset,
+    top: Math.max(bounds.y, viewportBounds.y) + inset,
+    right: Math.min(bounds.x + bounds.width, viewportBounds.x + viewportBounds.width) - inset,
+    bottom: Math.min(bounds.y + bounds.height, viewportBounds.y + viewportBounds.height) - inset,
+  };
+  assert.ok(visible.right > visible.left && visible.bottom > visible.top,
+    "document canvas has no safely interactive visible area");
+  const columns = Math.max(3, Math.ceil(Math.sqrt(total)));
+  const rows = Math.ceil(total / columns);
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const clientX = visible.left + (visible.right - visible.left) * ((column + 1) / (columns + 1));
+  const clientY = visible.top + (visible.bottom - visible.top) * ((row + 1) / (rows + 1));
+  if (measurePreview) {
+    await page.evaluate(({ x, y }) => {
+      const target = document.querySelector("#gestureCanvas");
+      globalThis.__patchyBrushPreviewProbe = new Promise((resolveProbe, rejectProbe) => {
+        document.querySelector("#documentCanvas").addEventListener("pointerdown", (event) => {
+          globalThis.__patchyBrushPointerId = event.pointerId;
+          const bounds = target.getBoundingClientRect();
+          const pixelX = Math.max(0, Math.min(target.width - 1,
+            Math.floor((x - bounds.left) * target.width / bounds.width)));
+          const pixelY = Math.max(0, Math.min(target.height - 1,
+            Math.floor((y - bounds.top) * target.height / bounds.height)));
+          const context = target.getContext("2d", { alpha: true });
+          const before = [...context.getImageData(pixelX, pixelY, 1, 1).data];
+          const started = performance.now();
+          let settled = false;
+          const timeout = setTimeout(() => {
+            if (!settled) rejectProbe(new Error("brush preview did not update the visible gesture canvas"));
+          }, 15_000);
+          const observe = () => {
+            const after = context.getImageData(pixelX, pixelY, 1, 1).data;
+            if (before.some((value, channel) => value !== after[channel])) {
+              settled = true;
+              clearTimeout(timeout);
+              resolveProbe(performance.now() - started);
+              return;
+            }
+            if (!settled) requestAnimationFrame(observe);
+          };
+          requestAnimationFrame(observe);
+        }, { capture: true, once: true });
+      });
+    }, { x: clientX, y: clientY });
+  }
+  await page.mouse.move(clientX, clientY);
+  await page.mouse.down();
+  const previewMs = measurePreview
+    ? await page.evaluate(() => globalThis.__patchyBrushPreviewProbe)
+    : null;
+  const revision = commit ? await page.locator("#detailRevision").textContent() : null;
+  if (commit) {
+    await page.mouse.move(clientX + Math.min(4, bounds.width / 100), clientY + Math.min(4, bounds.height / 100));
+  } else {
+    await page.evaluate(() => {
+      document.querySelector("#documentCanvas").dispatchEvent(new PointerEvent("pointercancel", {
+        bubbles: true,
+        pointerId: globalThis.__patchyBrushPointerId,
+        pointerType: "mouse",
+      }));
+    });
+  }
+  await page.mouse.up();
+  if (commit) {
+    await page.waitForFunction((previousRevision) =>
+      document.querySelector("#detailRevision")?.textContent !== previousRevision,
+    revision, { timeout: 90_000 });
+  }
+  await waitForEditorIdle(page);
+  return previewMs;
+}
+
+async function applicationMemorySample(page, startedAt) {
+  const label = await page.locator("#memoryLabel").textContent();
+  const heapBytes = await page.evaluate(() => Number(performance.memory?.usedJSHeapSize ?? 0));
+  return {
+    elapsedMs: Date.now() - startedAt,
+    applicationBytes: parseDisplayedBytes(label),
+    heapBytes: heapBytes || null,
+  };
+}
+
+async function runPerformanceAudit(page, browserLabel, manifest) {
+  await dropSvg(page, {
+    name: "performance-4k.svg",
+    width: 3840,
+    height: 2160,
+    fill: "#f0f0f0",
+  });
+  await page.selectOption("#memoryBudgetSelect", "128");
+  await waitForEditorIdle(page);
+
+  const panZoom = await page.evaluate(async ({ sampleCount }) => {
+    const diagnostics = globalThis.__patchyViewportDiagnostics;
+    diagnostics.samples.length = 0;
+    const rendersBefore = diagnostics.renderRequests;
+    const viewport = document.querySelector("#canvasViewport");
+    for (let index = 0; index < sampleCount; index++) {
+      if (index % 4 === 0) document.querySelector("#zoomActualButton").click();
+      else if (index % 4 === 1) document.querySelector("#zoomInButton").click();
+      else if (index % 4 === 2) {
+        viewport.scrollTo({ left: (index * 37) % Math.max(1, viewport.scrollWidth),
+          top: (index * 23) % Math.max(1, viewport.scrollHeight) });
+      } else document.querySelector("#zoomOutButton").click();
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    return {
+      samples: [...diagnostics.samples],
+      rendersBefore,
+      rendersAfter: diagnostics.renderRequests,
+    };
+  }, { sampleCount: performancePanZoomSamples });
+  assert.ok(panZoom.samples.length >= performancePanZoomSamples,
+    `expected ${performancePanZoomSamples} viewport samples, received ${panZoom.samples.length}`);
+  const panZoomP95Ms = percentile(panZoom.samples, 0.95);
+  assert.ok(panZoomP95Ms <= BROWSER_PERFORMANCE_THRESHOLDS.panZoomP95Ms,
+    `pan/zoom p95 ${panZoomP95Ms.toFixed(2)} ms exceeds ${BROWSER_PERFORMANCE_THRESHOLDS.panZoomP95Ms} ms`);
+  assert.equal(panZoom.rendersAfter, panZoom.rendersBefore,
+    "pan/zoom requested an authoritative document recomposite");
+
+  const brushPreviewSamples = [];
+  await configureBrush(page, "#111111", 48);
+  for (let index = 0; index < performanceBrushSamples; index++) {
+    await configureBrush(page, index % 2 ? "#e11d48" : "#111111", 48);
+    brushPreviewSamples.push(await brushPoint(page, index, performanceBrushSamples,
+      { measurePreview: true, commit: true }));
+  }
+  const brushPreviewP95Ms = percentile(brushPreviewSamples, 0.95);
+  assert.ok(brushPreviewP95Ms <= BROWSER_PERFORMANCE_THRESHOLDS.brushPreviewP95Ms,
+    `brush preview p95 ${brushPreviewP95Ms.toFixed(2)} ms exceeds ${BROWSER_PERFORMANCE_THRESHOLDS.brushPreviewP95Ms} ms`);
+  await closeActiveDocument(page);
+
+  await dropSvg(page, {
+    name: "performance-memory.svg",
+    width: 512,
+    height: 512,
+    fill: "#dbeafe",
+  });
+  await page.selectOption("#memoryBudgetSelect", "128");
+  await waitForEditorIdle(page);
+  await configureBrush(page, "#111111", 24);
+  const stressStartedAt = Date.now();
+  let nextSampleAt = stressStartedAt + 60_000;
+  let stressIterations = 0;
+  const applicationMemorySamples = [await applicationMemorySample(page, stressStartedAt)];
+  do {
+    await configureBrush(page, stressIterations % 2 ? "#2563eb" : "#111111", 24);
+    await brushPoint(page, stressIterations % 64, 64);
+    stressIterations++;
+    const observedAt = Date.now();
+    if (observedAt >= nextSampleAt) {
+      applicationMemorySamples.push(await applicationMemorySample(page, stressStartedAt));
+      console.log(`PERFORMANCE browser=${browserLabel} stressIterations=${stressIterations} elapsedMs=${observedAt - stressStartedAt} applicationBytes=${applicationMemorySamples.at(-1).applicationBytes}`);
+      while (nextSampleAt <= observedAt) nextSampleAt += 60_000;
+    }
+  } while (Date.now() - stressStartedAt < performanceDurationMs);
+  applicationMemorySamples.push(await applicationMemorySample(page, stressStartedAt));
+  const stressElapsedMs = Date.now() - stressStartedAt;
+  const memory = assessApplicationMemory(applicationMemorySamples);
+  assert.ok(memory.maximumBytes <= memory.ceilingBytes,
+    `application-owned memory ${memory.maximumBytes} exceeds ${memory.ceilingBytes}`);
+  if (stressElapsedMs >= BROWSER_PERFORMANCE_THRESHOLDS.stressDurationMs) {
+    assert.equal(memory.bounded, true, "30-minute stress did not reach a bounded retained-memory plateau");
+  }
+  const memoryGateQualified = stressElapsedMs >= BROWSER_PERFORMANCE_THRESHOLDS.stressDurationMs && memory.bounded;
+  if (requireFullPerformanceGate) {
+    assert.equal(memoryGateQualified, true,
+      `full performance gate requires ${BROWSER_PERFORMANCE_THRESHOLDS.stressDurationMs} ms and bounded memory`);
+  }
+  await closeActiveDocument(page);
+  return {
+    schema: "patchy.browser-performance-audit/v1",
+    browser: browserLabel,
+    browserChannel: process.env.PATCHY_BROWSER_CHANNEL ?? null,
+    releaseId: manifest.releaseId,
+    sourceSha: manifest.sourceSha,
+    canvas: { width: 3840, height: 2160 },
+    panZoom: {
+      samples: panZoom.samples.length,
+      p95Ms: panZoomP95Ms,
+      thresholdMs: BROWSER_PERFORMANCE_THRESHOLDS.panZoomP95Ms,
+      renderRequests: panZoom.rendersAfter - panZoom.rendersBefore,
+    },
+    brushPreview: {
+      samples: brushPreviewSamples.length,
+      p95Ms: brushPreviewP95Ms,
+      thresholdMs: BROWSER_PERFORMANCE_THRESHOLDS.brushPreviewP95Ms,
+    },
+    memoryStress: {
+      elapsedMs: stressElapsedMs,
+      iterations: stressIterations,
+      samples: applicationMemorySamples,
+      ...memory,
+      qualified: memoryGateQualified,
+    },
+  };
+}
+
 const releaseRoot = resolve(releaseArgument);
 await verifyRelease(releaseRoot);
 const manifest = JSON.parse(await readFile(join(releaseRoot, "release-manifest.json"), "utf8"));
+const releasePolicy = JSON.parse(await readFile(join(releaseRoot, manifest.policy), "utf8"));
+const safariPolicy = releasePolicy.support?.limited?.find((entry) => entry.browser === "Safari");
+assert.equal(safariPolicy?.tier, "limited", "release policy must publish Safari's official limited tier");
+assert.match(safariPolicy.promotionGate, /two-hour Safari memory soak/i);
 const declared = new Set(["release-manifest.json", ...manifest.files.map((entry) => entry.path)]);
 const server = createServer(async (request, response) => {
   try {
@@ -169,6 +441,19 @@ try {
   assert.equal(browserManifest.releaseId, manifest.releaseId);
   assert.equal(browserManifest.sourceSha, manifest.sourceSha);
 
+  const performanceDialogsBefore = acceptedDialogs;
+  const performance = performanceDurationMs > 0
+    ? await runPerformanceAudit(page, browserName, manifest)
+    : null;
+  const performanceAcceptedDialogs = acceptedDialogs - performanceDialogsBefore;
+  if (performance) {
+    assert.equal(performanceAcceptedDialogs, 2,
+      "performance audit must explicitly confirm both dirty local document closes");
+    if (performanceSummaryPath) {
+      await writeFile(performanceSummaryPath, `${JSON.stringify(performance, null, 2)}\n`);
+    }
+  }
+
   const startedAt = Date.now();
   let nextHeartbeatAt = startedAt + 60_000;
   let iterations = 0;
@@ -261,7 +546,8 @@ try {
   assert.deepEqual(forbiddenRequests, []);
   assert.deepEqual(pageCrashes, []);
   assert.equal(disconnected, false);
-  assert.equal(acceptedDialogs, iterations, "each dirty local document must require explicit close confirmation");
+  assert.equal(acceptedDialogs - performanceAcceptedDialogs, iterations,
+    "each dirty local document must require explicit close confirmation");
   if (summaryPath) await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`PASS browser=${browserName} release=${manifest.releaseId} capability=${capabilityTier} files=${manifest.files.length} iterations=${iterations} elapsedMs=${summary.elapsedMs} downloadedBytes=${downloadedBytes}`);
 } finally {

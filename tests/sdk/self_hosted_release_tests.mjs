@@ -5,6 +5,13 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { assessCapabilities, capabilityReport } from "../../sdk/engine/site/capabilities.mjs";
 import { buildRelease, verifyRelease } from "../../scripts/release/build-self-hosted-release.mjs";
+import {
+  assessApplicationMemory,
+  BROWSER_PERFORMANCE_THRESHOLDS,
+  MIB,
+  parseDisplayedBytes,
+  percentile,
+} from "../../scripts/release/browser-performance-policy.mjs";
 
 const RELEASE_ID = "r1-2026.09.25";
 const SOURCE_SHA = "b1d0883f1a3641d4a177832057b2045544204bc6";
@@ -85,6 +92,13 @@ test("self-hosted release is deterministic, immutable and independently verifiab
   const rollback = JSON.parse(await readFile(join(first, "rollback.json"), "utf8"));
   assert.equal(rollback.previousReleasePath, "/releases/r0-2026.09.24/");
   assert.match(rollback.switchContract, /never mutate/);
+  const policy = JSON.parse(await readFile(join(first, "release-policy.json"), "utf8"));
+  assert.deepEqual(policy.support.targetReleaseMatrix, ["Chrome", "Edge", "Firefox"]);
+  assert.equal(policy.support.limited.length, 1);
+  assert.equal(policy.support.limited[0].browser, "Safari");
+  assert.equal(policy.support.limited[0].tier, "limited");
+  assert.match(policy.support.limited[0].reason, /two-hour Safari memory-soak gate is not accepted/);
+  assert.match(policy.support.limited[0].promotionGate, /exact release candidate/);
   const [caddy, nginx, apache, sourceApache] = await Promise.all([
     readFile(join(first, "deploy/Caddyfile"), "utf8"),
     readFile(join(first, "deploy/nginx.conf"), "utf8"),
@@ -224,8 +238,36 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
   assert.match(browserVerifier, /externalRequests/);
   assert.match(browserVerifier, /forbiddenRequests/);
   assert.match(browserVerifier, /PATCHY_RELEASE_SOAK_DURATION_MS/);
+  assert.match(browserVerifier, /PATCHY_RELEASE_PERFORMANCE_DURATION_MS/);
+  assert.match(browserVerifier, /patchy\.browser-performance-audit\/v1/);
+  assert.match(browserVerifier, /#gestureCanvas/);
+  assert.match(browserVerifier, /pan\/zoom requested an authoritative document recomposite/);
   assert.match(browserVerifier, /page\.waitForEvent\("download"/);
   assert.match(browserVerifier, /local-first-audit-/);
   assert.match(browserVerifier, /crossOriginIsolated/);
   assert.match(browserVerifier, /precompressed asset was not served/);
+});
+
+test("browser performance policy calculates p95 and rejects unbounded retained memory", () => {
+  assert.equal(percentile([4, 1, 3, 2, 5], 0.95), 5);
+  assert.equal(percentile([4, 1, 3, 2, 5], 0.5), 3);
+  assert.equal(parseDisplayedBytes("12.5 MB retained · 8.0 MB history"), Math.round(12.5 * MIB));
+  const stable = assessApplicationMemory([
+    { applicationBytes: 64 * MIB },
+    { applicationBytes: 96 * MIB },
+    { applicationBytes: 128 * MIB },
+    { applicationBytes: 127 * MIB },
+    { applicationBytes: 129 * MIB },
+    { applicationBytes: 128 * MIB },
+    { applicationBytes: 130 * MIB },
+  ]);
+  assert.equal(stable.bounded, true);
+  const growing = assessApplicationMemory([
+    { applicationBytes: 64 * MIB },
+    { applicationBytes: 120 * MIB },
+    { applicationBytes: 180 * MIB },
+    { applicationBytes: 230 * MIB },
+    { applicationBytes: BROWSER_PERFORMANCE_THRESHOLDS.applicationMemoryCeilingBytes + 1 },
+  ]);
+  assert.equal(growing.bounded, false);
 });

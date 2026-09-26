@@ -46,6 +46,21 @@ const SECURITY_HEADERS = Object.freeze({
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
 });
+const SUPPORT_POLICY = Object.freeze({
+  targetReleaseMatrix: ["Chrome", "Edge", "Firefox"],
+  limited: [{
+    browser: "Safari",
+    tier: "limited",
+    reason: "The dedicated two-hour Safari memory-soak gate is not accepted.",
+    restrictions: [
+      "No release-certified large-document or long-session claim",
+      "Runtime starts only when required capabilities pass feature detection",
+      "Users must keep an exported PSD/PSB recovery copy for critical work",
+    ],
+    promotionGate: "Pass the dedicated two-hour Safari memory soak on the exact release candidate.",
+  }],
+  rule: "Feature detection decides runtime readiness; release certification requires a separate completed browser gate.",
+});
 const COMPRESSIBLE = /\.(?:css|data|js|mjs|svg|wasm)$/i;
 
 const toPosix = (value) => value.split(sep).join("/");
@@ -115,11 +130,7 @@ function policyFor(releaseId, sourceSha) {
       enhanced: ["OPFS", "OffscreenCanvas", "ImageBitmap", "FileSystemAccess"],
       crossOriginIsolation: "required",
     },
-    support: {
-      targetReleaseMatrix: ["Chrome", "Edge", "Firefox"],
-      provisional: ["Safari"],
-      rule: "Feature detection decides runtime readiness; release certification requires a separate completed browser gate.",
-    },
+    support: SUPPORT_POLICY,
     securityHeaders: SECURITY_HEADERS,
   };
 }
@@ -280,7 +291,9 @@ export async function verifyRelease(releaseDir) {
   }
   const policy = JSON.parse(await readFile(join(root, POLICY_NAME), "utf8"));
   const rollback = JSON.parse(await readFile(join(root, ROLLBACK_NAME), "utf8"));
-  if (policy.releaseId !== manifest.releaseId || policy.sourceSha !== manifest.sourceSha || policy.dataBoundary?.documentUploads !== "disabled") {
+  if (policy.releaseId !== manifest.releaseId || policy.sourceSha !== manifest.sourceSha ||
+      policy.dataBoundary?.documentUploads !== "disabled" ||
+      JSON.stringify(policy.support) !== JSON.stringify(SUPPORT_POLICY)) {
     throw new Error("release policy is not bound to the manifest or violates the local-first boundary");
   }
   if (rollback.releaseId !== manifest.releaseId || rollback.immutableReleasePath !== manifest.immutableReleasePath) {
