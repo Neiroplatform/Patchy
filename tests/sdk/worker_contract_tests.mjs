@@ -349,7 +349,9 @@ test("Worker PSD output Blob validates encoded bytes and retains no Uint8Array f
   assert.deepEqual([...new Uint8Array(await blob.slice(0, 4).arrayBuffer())], [56, 66, 80, 83]);
   const encodedPsb = new Uint8Array(40);
   encodedPsb.set(psdHeader({ version: 2, width: 2, height: 3 }));
-  assert.equal(createPsdBlob(encodedPsb, "psb").size, encodedPsb.byteLength);
+  const psbBlob = createPsdBlob(encodedPsb, "psb");
+  assert.equal(psbBlob.type, "application/octet-stream");
+  assert.equal(psbBlob.size, encodedPsb.byteLength);
   assert.throws(() => createPsdBlob(encoded, "psb"), /unexpected header version/);
   assert.throws(() => createPsdBlob(encodedPsb, "psd"), /unexpected header version/);
   assert.throws(() => createPsdBlob(new Uint8Array(26)), /not a PSD/);

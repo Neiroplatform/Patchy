@@ -68,7 +68,12 @@ export function createPsdBlob(bytes, format = "psd") {
   if (header.version !== expectedVersion) {
     throw new Error(`Encoded ${format.toUpperCase()} has an unexpected header version`);
   }
-  return new Blob([bytes], { type: "image/vnd.adobe.photoshop" });
+  // Firefox maps the Photoshop vendor MIME to the registered .psd extension
+  // even when the download attribute names a valid PSB. PSB has no distinct
+  // registered browser MIME, so keep it generic and let the verified header
+  // plus caller-supplied .psb filename carry the format identity.
+  const type = format === "psb" ? "application/octet-stream" : "image/vnd.adobe.photoshop";
+  return new Blob([bytes], { type });
 }
 
 export async function readBlobInput(blob, maximumBytes = MAX_BROWSER_SOURCE_BYTES) {
