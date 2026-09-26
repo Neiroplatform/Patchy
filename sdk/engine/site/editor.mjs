@@ -2378,7 +2378,10 @@ async function createStarter(input) {
   try { request = starterDocumentRequest(input); }
   catch (error) { setStarterError(error); return; }
   $("starterDialog").close("create");
-  await newDocument(request);
+  const result = await newDocument(request);
+  if (result !== DIAGNOSTIC_COMMAND_FAILED) {
+    $("canvasViewport").focus({ preventScroll: true });
+  }
 }
 
 async function saveDocument(saveAs = false) {
@@ -4173,14 +4176,23 @@ $("starterDialog").addEventListener("close", () => {
     ? $("emptyNewButton") : starterReturnFocus;
   queueMicrotask(() => target?.focus?.({ preventScroll: true }));
 });
+$("starterCloseButton").addEventListener("click", () => $("starterDialog").close("cancel"));
 $("emptyNewButton").addEventListener("click", openStarterDialog);
 for (const button of document.querySelectorAll("[data-starter-preset]")) {
   button.addEventListener("click", () => createStarter(starterPreset(button.dataset.starterPreset)));
 }
-$("starterCustomCreateButton").addEventListener("click", () => createStarter({
-  width: $("starterWidthInput").value,
-  height: $("starterHeightInput").value,
-}));
+$("starterForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  createStarter({
+    width: $("starterWidthInput").value,
+    height: $("starterHeightInput").value,
+  });
+});
+$("starterForm").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.isComposing || !event.target.matches("input")) return;
+  event.preventDefault();
+  $("starterForm").requestSubmit($("starterCustomCreateButton"));
+});
 for (const [sourceId, targetId] of [["starterOpenButton", "openButton"],
   ["starterRecoveryButton", "recoveryButton"], ["starterHelpButton", "helpButton"]]) {
   $(sourceId).addEventListener("click", () => {

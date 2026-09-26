@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
 
 const baseUrl = process.argv[2];
 const browserName = process.argv[3] || "chromium";
@@ -23,11 +24,31 @@ const browserType = playwright[browserName];
 const launchOptions = browserName === "chromium" && process.env.PATCHY_BROWSER_CHANNEL
   ? { channel: process.env.PATCHY_BROWSER_CHANNEL } : {};
 const browser = await browserType.launch({ headless: true, ...launchOptions });
-const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-const page = await context.newPage();
+async function closeBrowserWithDeadline() {
+  const teardownWatchdog = setTimeout(() => {
+    console.error(`BETA-GUIDE-SOURCE-TEARDOWN-TIMEOUT browser=${browserName}`);
+    process.exit(1);
+  }, 15_000);
+  try {
+    await browser.close();
+  } finally {
+    clearTimeout(teardownWatchdog);
+  }
+}
+
+let page;
+try {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  page = await context.newPage();
+} catch (error) {
+  console.error(`BETA-GUIDE-SOURCE-ERROR browser=${browserName} ${error?.stack || error}`);
+  await closeBrowserWithDeadline();
+  throw error;
+}
 const pageErrors = [];
 const failedRequests = [];
 const unexpectedNetwork = [];
+let acceptedDialogs = 0;
 const expectedOrigin = new URL(baseUrl).origin;
 page.on("pageerror", (error) => pageErrors.push(String(error)));
 page.on("requestfailed", (request) => failedRequests.push(
@@ -35,6 +56,14 @@ page.on("requestfailed", (request) => failedRequests.push(
 page.on("request", (request) => {
   const url = request.url();
   if (url.startsWith("http") && new URL(url).origin !== expectedOrigin) unexpectedNetwork.push(url);
+});
+page.on("dialog", async (dialog) => {
+  acceptedDialogs++;
+  await dialog.accept();
+});
+await page.addInitScript(() => {
+  Object.defineProperty(globalThis, "showOpenFilePicker", { configurable: true, value: undefined });
+  Object.defineProperty(globalThis, "showSaveFilePicker", { configurable: true, value: undefined });
 });
 
 const editorUrl = `${baseUrl.replace(/\/$/, "")}/build/wasm-sdk/site/patchy.html?beta-guide-smoke=1`;
@@ -44,12 +73,14 @@ const waitUntilReady = () => page.waitForFunction(() =>
 { timeout: 90_000 });
 
 async function closeActiveDocument() {
+  console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=close-start dialogs=${acceptedDialogs}`);
   await page.click('#documentTabs .document-tab[data-active="true"] button[aria-hidden="true"]');
   await page.waitForFunction(() =>
     document.querySelectorAll('#documentTabs [role="tab"]').length === 0 &&
     document.querySelector(".editor-shell")?.dataset.state === "ready" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
   { timeout: 90_000 });
+  console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=close-complete dialogs=${acceptedDialogs}`);
 }
 
 async function createStarterPreset(id, width, height) {
@@ -63,9 +94,40 @@ async function createStarterPreset(id, width, height) {
   await closeActiveDocument();
 }
 
+async function createCustomStarter(width, height, format, { keyboard = false } = {}) {
+  await page.click("#emptyNewButton");
+  await page.fill("#starterWidthInput", String(width));
+  await page.fill("#starterHeightInput", String(height));
+  if (keyboard) await page.locator("#starterHeightInput").press("Enter");
+  else await page.click("#starterCustomCreateButton");
+  await page.waitForTimeout(250);
+  console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=custom-${width}x${height} state=${JSON.stringify(await page.evaluate(() => ({
+    dialogOpen: document.querySelector("#starterDialog")?.open,
+    canvas: document.querySelector("#detailCanvas")?.textContent,
+    revision: document.querySelector("#detailRevision")?.textContent,
+    format: document.querySelector("#saveFormatSelect")?.value,
+    recovery: document.querySelector("#recoveryLabel")?.dataset.state,
+    busy: document.querySelector(".editor-shell")?.getAttribute("aria-busy"),
+    error: document.querySelector("#errorPanel")?.textContent,
+  })))}`);
+  await page.waitForFunction(({ expectedWidth, expectedHeight, expectedFormat }) =>
+    document.querySelector("#detailCanvas")?.textContent === `${expectedWidth} × ${expectedHeight}` &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector("#saveFormatSelect")?.value === expectedFormat &&
+    ["confirmed", "error"].includes(document.querySelector("#recoveryLabel")?.dataset.state) &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { expectedWidth: width, expectedHeight: height, expectedFormat: format }, { timeout: 90_000 });
+  if (keyboard) {
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "canvasViewport",
+      "keyboard starter creation did not move focus to the document canvas");
+  }
+  return page.locator("#recoveryLabel").getAttribute("data-state");
+}
+
 try {
   await page.goto(editorUrl, { waitUntil: "domcontentloaded" });
   await waitUntilReady();
+  console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=ready`);
   assert.equal((await page.textContent("#helpButton")).trim(), "Getting started");
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -79,7 +141,7 @@ try {
         .gridTemplateColumns.split(" ").length,
       horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
       transitionMs: Number.parseFloat(getComputedStyle(dialog).transitionDuration),
-      targetHeights: [...dialog.querySelectorAll("button")]
+      targetHeights: [...dialog.querySelectorAll("button, input")]
         .map((button) => button.getBoundingClientRect().height),
     };
   });
@@ -89,9 +151,10 @@ try {
   assert.ok(starterLayout.transitionMs <= .001);
   assert.equal(starterLayout.targetHeights.every((height) => height >= 24), true,
     "Starter controls violate the WCAG 2.2 minimum target size");
-  await page.click('#starterDialog button[value="cancel"]');
+  await page.click("#starterCloseButton");
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.emulateMedia({ reducedMotion: "no-preference" });
+  console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=starter-layout`);
 
   await page.focus("#emptyNewButton");
   await page.keyboard.press("Enter");
@@ -115,14 +178,43 @@ try {
   await createStarterPreset("social", 1080, 1080);
   await createStarterPreset("presentation", 1920, 1080);
   await createStarterPreset("print-a4", 2480, 3508);
-  await page.click("#emptyNewButton");
-  await page.fill("#starterWidthInput", "640");
-  await page.fill("#starterHeightInput", "480");
-  await page.click("#starterCustomCreateButton");
-  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "640 × 480" &&
-    document.querySelector("#detailRevision")?.textContent === "0" &&
-    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
-  { timeout: 90_000 });
+  assert.equal(acceptedDialogs, 0,
+    "clean starter documents must close without a destructive-change confirmation");
+  const starterRecoveryState = await createCustomStarter(640, 480, "psd", { keyboard: true });
+  await closeActiveDocument();
+  assert.equal(await createCustomStarter(30000, 1, "psd"), starterRecoveryState);
+  await closeActiveDocument();
+  assert.equal(await createCustomStarter(30001, 1, "psb"), starterRecoveryState);
+  const [psbDownload] = await Promise.all([
+    page.waitForEvent("download", { timeout: 90_000 }),
+    page.click("#saveAsButton"),
+  ]);
+  const psbBytes = await readFile(await psbDownload.path());
+  assert.equal(psbDownload.suggestedFilename().endsWith(".psb"), true);
+  assert.equal(psbBytes.subarray(0, 4).toString("ascii"), "8BPS");
+  assert.equal(psbBytes.readUInt16BE(4), 2, "large starter did not encode PSB version 2");
+  await psbDownload.delete();
+  await closeActiveDocument();
+  assert.equal(acceptedDialogs, 0,
+    "checkpointed clean starters must not invent destructive-change confirmations");
+
+  await page.click("#recoveryButton");
+  if (starterRecoveryState === "confirmed") {
+    const psbRecovery = page.locator(".recovery-row", { hasText: "Untitled.psb" });
+    await psbRecovery.getByRole("button", { name: "Recover" }).click();
+    await page.waitForFunction(() =>
+      document.querySelector("#detailCanvas")?.textContent === "30001 × 1" &&
+      document.querySelector("#saveFormatSelect")?.value === "psb" &&
+      document.querySelector("#recoveryLabel")?.dataset.state === "confirmed" &&
+      document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+    null, { timeout: 90_000 });
+    await closeActiveDocument();
+  } else {
+    assert.match(await page.locator("#recoverySummary").textContent(), /unavailable/i);
+    await page.click('#recoveryDialog button[value="cancel"]');
+  }
+  assert.equal(acceptedDialogs, 0,
+    "recovering an unchanged checkpoint must not invent a dirty-close confirmation");
 
   await page.click("#helpButton");
   await page.waitForSelector("#helpDialog[open]");
@@ -132,6 +224,7 @@ try {
   await page.click("#helpNewButton");
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  await closeActiveDocument();
 
   await page.click("#helpButton");
   await page.click("#completeGuideButton");
@@ -145,7 +238,7 @@ try {
   assert.equal((await page.textContent("#helpButton")).trim(), "Помощь");
   await page.click("#emptyNewButton");
   assert.equal((await page.textContent("#starterDialogTitle")).trim(), "Создать локальный документ");
-  await page.click('#starterDialog button[value="cancel"]');
+  await page.click("#starterCloseButton");
   await page.click("#helpButton");
   assert.equal((await page.textContent("#helpDialogTitle")).trim(), "Начните редактировать локально");
   await page.click('#helpDialog button[value="cancel"]');
@@ -184,10 +277,17 @@ try {
   await page.emulateMedia({ reducedMotion: "reduce" });
   assert.equal(await page.$eval("#helpDialog", (node) =>
     Number.parseFloat(getComputedStyle(node).transitionDuration) <= .001), true);
+  await page.click('#helpDialog button[value="cancel"]');
+  await closeActiveDocument();
+  assert.equal(acceptedDialogs, 0,
+    "beta guide must not invent confirmations for unchanged documents");
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(unexpectedNetwork, []);
-  console.log(`PASS browser=${browserName} beta-guide=local-first responsive=390x844`);
+  console.log(`PASS browser=${browserName} beta-guide=local-first starter-psb=1 recovery=${starterRecoveryState} responsive=390x844`);
+} catch (error) {
+  console.error(`BETA-GUIDE-SOURCE-ERROR browser=${browserName} ${error?.stack || error}`);
+  throw error;
 } finally {
-  await browser.close();
+  await closeBrowserWithDeadline();
 }

@@ -359,10 +359,10 @@
       </form>
     </dialog>
     <dialog class="document-dialog starter-dialog" id="starterDialog" aria-labelledby="starterDialogTitle">
-      <form method="dialog">
-        <header><div><p class="eyebrow">START LOCALLY</p><h2 id="starterDialogTitle">Create a local document</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+      <form method="dialog" id="starterForm" novalidate>
+        <header><div><p class="eyebrow">START LOCALLY</p><h2 id="starterDialogTitle">Create a local document</h2></div><button class="icon-button" id="starterCloseButton" type="button" aria-label="Close">×</button></header>
         <section class="starter-intro">
-          <p class="dialog-note">Choose a built-in canvas or enter custom dimensions. The document is created in the browser Worker and registered for local recovery.</p>
+          <p class="dialog-note">Choose a built-in canvas or enter custom dimensions. The document is created in the browser Worker; a local checkpoint is registered when recovery storage is available.</p>
           <div class="starter-presets" role="group" aria-label="Document presets">
             <button class="starter-card" data-starter-preset="blank" type="button"><strong>Blank</strong><span>1600 × 1000 px</span></button>
             <button class="starter-card" data-starter-preset="social" type="button"><strong>Social square</strong><span>1080 × 1080 px</span></button>
@@ -373,11 +373,11 @@
         <section>
           <h3>Custom canvas</h3>
           <div class="field-row">
-            <label><span>Width</span><input id="starterWidthInput" type="number" min="1" max="300000" step="1" value="1600" required></label>
-            <label><span>Height</span><input id="starterHeightInput" type="number" min="1" max="300000" step="1" value="1000" required></label>
+            <label><span>Width</span><input id="starterWidthInput" type="number" min="1" max="32767" step="1" value="1600" required></label>
+            <label><span>Height</span><input id="starterHeightInput" type="number" min="1" max="32767" step="1" value="1000" required></label>
           </div>
           <p class="starter-error" id="starterError" role="alert" hidden></p>
-          <div class="dialog-actions"><button class="button button-primary" id="starterCustomCreateButton" type="button">Create custom document</button></div>
+          <div class="dialog-actions"><button class="button button-primary" id="starterCustomCreateButton" type="submit">Create custom document</button></div>
         </section>
         <section class="starter-links">
           <p class="dialog-note">Already have work? Continue without upload.</p>

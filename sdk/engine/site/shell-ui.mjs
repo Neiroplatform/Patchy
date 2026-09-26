@@ -181,7 +181,7 @@ const RU = new Map(Object.entries({
   "or drop it anywhere": "или перетащите его сюда",
   "START LOCALLY": "НАЧАТЬ ЛОКАЛЬНО",
   "Create a local document": "Создать локальный документ",
-  "Choose a built-in canvas or enter custom dimensions. The document is created in the browser Worker and registered for local recovery.": "Выберите встроенный холст или укажите свои размеры. Документ создаётся в Worker браузера и регистрируется для локального восстановления.",
+  "Choose a built-in canvas or enter custom dimensions. The document is created in the browser Worker; a local checkpoint is registered when recovery storage is available.": "Выберите встроенный холст или укажите свои размеры. Документ создаётся в Worker браузера; локальная контрольная точка регистрируется, когда хранилище восстановления доступно.",
   "Document presets": "Пресеты документов",
   "Blank": "Пустой",
   "Social square": "Квадрат для соцсетей",

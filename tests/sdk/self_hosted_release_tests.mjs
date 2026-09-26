@@ -213,11 +213,12 @@ test("capability policy blocks unsafe runtime and distinguishes enhanced limits"
 
 test("capability page preserves local-first and strict-CSP contracts", async () => {
   const root = new URL("../../", import.meta.url);
-  const [html, script, apache, browserVerifier] = await Promise.all([
+  const [html, script, apache, browserVerifier, betaGuideSmoke] = await Promise.all([
     readFile(new URL("sdk/engine/site/capabilities.html", root), "utf8"),
     readFile(new URL("sdk/engine/site/capabilities.mjs", root), "utf8"),
     readFile(new URL("packaging/web/.htaccess", root), "utf8"),
     readFile(new URL("scripts/release/verify-self-hosted-release-browser.mjs", root), "utf8"),
+    readFile(new URL("tests/sdk/wasm_beta_guide_smoke.mjs", root), "utf8"),
   ]);
   assert.match(html, /does not upload a file/);
   assert.doesNotMatch(html, /<script(?![^>]+src=)/);
@@ -243,6 +244,12 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
     "browser verifier cleanup must have a process-level deadline");
   assert.match(browserVerifier, /await close\(server\);\s*await browser\.close\(\);/,
     "browser verifier must stop HTTP activity before closing the browser process");
+  assert.match(betaGuideSmoke, /BETA-GUIDE-SOURCE-ERROR/,
+    "source beta-guide smoke must publish its primary error before cleanup");
+  assert.match(betaGuideSmoke, /BETA-GUIDE-SOURCE-TEARDOWN-TIMEOUT/,
+    "source beta-guide smoke must bound browser-process cleanup");
+  assert.match(betaGuideSmoke, /assert\.equal\(acceptedDialogs, 0/,
+    "source beta-guide smoke must reject spurious clean-document confirmations");
   assert.match(browserVerifier, /externalRequests/);
   assert.match(browserVerifier, /forbiddenRequests/);
   assert.match(browserVerifier, /PATCHY_RELEASE_SOAK_DURATION_MS/);

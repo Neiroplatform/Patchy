@@ -1,4 +1,4 @@
-export const STARTER_DIMENSION_LIMIT = 300_000;
+export const STARTER_DIMENSION_LIMIT = 32_767;
 export const STARTER_PSD_DIMENSION_LIMIT = 30_000;
 
 export const STARTER_PRESETS = Object.freeze([

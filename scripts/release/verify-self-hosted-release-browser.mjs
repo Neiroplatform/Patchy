@@ -125,6 +125,26 @@ async function createStarterPreset(page, id, width, height) {
   await closeActiveDocument(page);
 }
 
+async function createCustomStarter(page, width, height, format, { keyboard = false } = {}) {
+  await page.click("#emptyNewButton");
+  await page.fill("#starterWidthInput", String(width));
+  await page.fill("#starterHeightInput", String(height));
+  if (keyboard) await page.locator("#starterHeightInput").press("Enter");
+  else await page.click("#starterCustomCreateButton");
+  await page.waitForFunction(({ expectedWidth, expectedHeight, expectedFormat }) =>
+    document.querySelector("#detailCanvas")?.textContent === `${expectedWidth} × ${expectedHeight}` &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector("#saveFormatSelect")?.value === expectedFormat &&
+    ["confirmed", "error"].includes(document.querySelector("#recoveryLabel")?.dataset.state) &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { expectedWidth: width, expectedHeight: height, expectedFormat: format }, { timeout: 90_000 });
+  if (keyboard) {
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "canvasViewport",
+      "keyboard starter creation did not move focus to the document canvas");
+  }
+  return page.locator("#recoveryLabel").getAttribute("data-state");
+}
+
 async function verifyBetaGuide(page) {
   const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Getting started");
@@ -141,7 +161,7 @@ async function verifyBetaGuide(page) {
         .gridTemplateColumns.split(" ").length,
       horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
       transitionMs: Number.parseFloat(getComputedStyle(dialog).transitionDuration),
-      targetHeights: [...dialog.querySelectorAll("button")]
+      targetHeights: [...dialog.querySelectorAll("button, input")]
         .map((button) => button.getBoundingClientRect().height),
     };
   });
@@ -151,7 +171,7 @@ async function verifyBetaGuide(page) {
   assert.ok(starterLayout.transitionMs <= .001);
   assert.equal(starterLayout.targetHeights.every((height) => height >= 24), true,
     "Starter controls violate the WCAG 2.2 minimum target size");
-  await page.click('#starterDialog button[value="cancel"]');
+  await page.click("#starterCloseButton");
   await page.setViewportSize(originalViewport);
   await page.emulateMedia({ reducedMotion: "no-preference" });
 
@@ -177,15 +197,37 @@ async function verifyBetaGuide(page) {
   await createStarterPreset(page, "social", 1080, 1080);
   await createStarterPreset(page, "presentation", 1920, 1080);
   await createStarterPreset(page, "print-a4", 2480, 3508);
-  await page.click("#emptyNewButton");
-  await page.fill("#starterWidthInput", "640");
-  await page.fill("#starterHeightInput", "480");
-  await page.click("#starterCustomCreateButton");
-  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "640 × 480" &&
-    document.querySelector("#detailRevision")?.textContent === "0" &&
-    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
-  { timeout: 90_000 });
+  const starterRecoveryState = await createCustomStarter(page, 640, 480, "psd", { keyboard: true });
   await closeActiveDocument(page);
+  assert.equal(await createCustomStarter(page, 30000, 1, "psd"), starterRecoveryState);
+  await closeActiveDocument(page);
+  assert.equal(await createCustomStarter(page, 30001, 1, "psb"), starterRecoveryState);
+  const [psbDownload] = await Promise.all([
+    page.waitForEvent("download", { timeout: 90_000 }),
+    page.click("#saveAsButton"),
+  ]);
+  const psbBytes = await readFile(await psbDownload.path());
+  assert.equal(psbDownload.suggestedFilename().endsWith(".psb"), true);
+  assert.equal(psbBytes.subarray(0, 4).toString("ascii"), "8BPS");
+  assert.equal(psbBytes.readUInt16BE(4), 2, "large starter did not encode PSB version 2");
+  await psbDownload.delete();
+  await closeActiveDocument(page);
+
+  await page.click("#recoveryButton");
+  if (starterRecoveryState === "confirmed") {
+    const psbRecovery = page.locator(".recovery-row", { hasText: "Untitled.psb" });
+    await psbRecovery.getByRole("button", { name: "Recover" }).click();
+    await page.waitForFunction(() =>
+      document.querySelector("#detailCanvas")?.textContent === "30001 × 1" &&
+      document.querySelector("#saveFormatSelect")?.value === "psb" &&
+      document.querySelector("#recoveryLabel")?.dataset.state === "confirmed" &&
+      document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+    null, { timeout: 90_000 });
+    await closeActiveDocument(page);
+  } else {
+    assert.match(await page.locator("#recoverySummary").textContent(), /unavailable/i);
+    await page.click('#recoveryDialog button[value="cancel"]');
+  }
 
   await page.click("#helpButton");
   await page.waitForSelector("#helpDialog[open]");
@@ -232,7 +274,7 @@ async function verifyBetaGuide(page) {
   await page.waitForFunction(() => document.querySelector("#helpButton")?.textContent.trim() === "Помощь");
   await page.click("#emptyNewButton");
   assert.equal((await page.locator("#starterDialogTitle").textContent()).trim(), "Создать локальный документ");
-  await page.click('#starterDialog button[value="cancel"]');
+  await page.click("#starterCloseButton");
   await page.click("#helpButton");
   assert.equal((await page.locator("#helpDialogTitle").textContent()).trim(), "Начните редактировать локально");
   await page.click('#helpDialog button[value="cancel"]');
@@ -642,6 +684,8 @@ try {
   const betaGuideDialogsBefore = acceptedDialogs;
   await verifyBetaGuide(page);
   const betaGuideAcceptedDialogs = acceptedDialogs - betaGuideDialogsBefore;
+  assert.equal(betaGuideAcceptedDialogs, 0,
+    "beta guide must not invent confirmations for unchanged documents");
   console.log(`BETA-GUIDE browser=${browserName} local-first=1 starter-presets=4 quick-actions=3 help-shortcut=1 responsive=390x844`);
 
   const performanceDialogsBefore = acceptedDialogs;

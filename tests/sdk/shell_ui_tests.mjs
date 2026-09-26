@@ -22,6 +22,8 @@ test("local starter presets are deterministic and custom dimensions fail closed"
     { width: 30000, height: 1, format: "psd", name: "Untitled.psd" });
   assert.deepEqual(starterDocumentRequest({ width: STARTER_PSD_DIMENSION_LIMIT + 1, height: 1 }),
     { width: 30001, height: 1, format: "psb", name: "Untitled.psb" });
+  assert.deepEqual(starterDocumentRequest({ width: STARTER_DIMENSION_LIMIT, height: 1 }),
+    { width: 32767, height: 1, format: "psb", name: "Untitled.psb" });
   for (const input of [
     { width: "", height: 1 }, { width: Number.NaN, height: 1 },
     { width: 0, height: 1 }, { width: 1.5, height: 1 },
@@ -181,6 +183,7 @@ test("beta guide and local starter publish support and responsive contracts", as
     /id="emptyNewButton"/, /id="starterDialog"/, /data-starter-preset="social"/,
     /data-starter-preset="presentation"/, /data-starter-preset="print-a4"/,
     /id="starterCustomCreateButton"/, /id="starterRecoveryButton"/,
+    /a local checkpoint is registered when recovery storage is available/,
     /Photoshop warning-free and 1,000-file corpus acceptance are still external release gates/,
   ]) assert.match(html, contract);
   assert.match(css, /\.shortcut-grid, \.help-columns \{ grid-template-columns: 1fr; \}/);
@@ -191,6 +194,11 @@ test("beta guide and local starter publish support and responsive contracts", as
   assert.match(editor, /client\.create\(request\.width, request\.height, request\.name\)/);
   assert.match(editor, /fileLifecycle\.register\(next\.documentId, next, request\.format\)/);
   assert.match(editor, /starterDocumentRequest\(input\)/);
+  assert.match(editor, /starterForm"\)\.addEventListener\("submit"/);
+  assert.match(editor, /starterForm"\)\.requestSubmit\(\$\("starterCustomCreateButton"\)\)/);
+  assert.match(editor, /canvasViewport"\)\.focus/);
+  assert.match(html, /id="starterCustomCreateButton" type="submit"/);
+  assert.match(html, /id="starterCloseButton" type="button"/);
 });
 
 test("production shell exposes keyboard, localization, responsive and motion contracts", async () => {
