@@ -128,6 +128,7 @@ async function createStarterPreset(page, id, width, height) {
 async function verifyBetaGuide(page) {
   const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Getting started");
+  console.log(`BETA-GUIDE-PHASE browser=${browserName} phase=quick-actions`);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -225,6 +226,7 @@ async function verifyBetaGuide(page) {
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
   { timeout: 90_000 });
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Help");
+  console.log(`BETA-GUIDE-PHASE browser=${browserName} phase=persistence-reload`);
 
   await page.selectOption("#localeSelect", "ru");
   await page.waitForFunction(() => document.querySelector("#helpButton")?.textContent.trim() === "Помощь");
@@ -237,6 +239,7 @@ async function verifyBetaGuide(page) {
   await page.waitForSelector("#helpDialog[open]", { state: "hidden" });
   assert.equal(await page.evaluate(() => document.activeElement?.id), "helpButton",
     "closing Help did not return focus to its invoker");
+  console.log(`BETA-GUIDE-PHASE browser=${browserName} phase=localization-focus`);
 
   await page.click("#newButton");
   await page.waitForFunction(() =>
@@ -276,6 +279,7 @@ async function verifyBetaGuide(page) {
   await page.setViewportSize(originalViewport);
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.selectOption("#localeSelect", "en");
+  console.log(`BETA-GUIDE-PHASE browser=${browserName} phase=keyboard-reflow`);
 }
 
 async function waitForEditorIdle(page) {
@@ -571,6 +575,7 @@ const address = await listen(server);
 const baseUrl = `http://127.0.0.1:${address.port}/`;
 const baseOrigin = new URL(baseUrl).origin;
 let browser;
+let primaryFailure = null;
 try {
   const playwright = await loadPlaywright();
   const browserType = playwright[browserName];
@@ -748,7 +753,19 @@ try {
     "each dirty local document must require explicit close confirmation");
   if (summaryPath) await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`PASS browser=${browserName} release=${manifest.releaseId} capability=${capabilityTier} files=${manifest.files.length} iterations=${iterations} elapsedMs=${summary.elapsedMs} downloadedBytes=${downloadedBytes}`);
+} catch (error) {
+  primaryFailure = error;
+  console.error(`BROWSER-VERIFY-ERROR browser=${browserName} ${error?.stack || error}`);
+  throw error;
 } finally {
-  await browser.close();
-  await close(server);
+  const teardownWatchdog = setTimeout(() => {
+    console.error(`BROWSER-VERIFY-TEARDOWN-TIMEOUT browser=${browserName} primaryFailure=${Boolean(primaryFailure)}`);
+    process.exit(1);
+  }, 15_000);
+  try {
+    await close(server);
+    await browser.close();
+  } finally {
+    clearTimeout(teardownWatchdog);
+  }
 }

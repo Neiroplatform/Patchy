@@ -237,6 +237,12 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
   assert.match(browserVerifier, /verifyRelease\(releaseRoot\)/);
   assert.match(browserVerifier, /server\.closeAllConnections\?\.\(\)/,
     "browser verifier failures must not hang on Playwright keep-alive sockets");
+  assert.match(browserVerifier, /BROWSER-VERIFY-ERROR/,
+    "browser verifier must publish the primary failure before cleanup");
+  assert.match(browserVerifier, /BROWSER-VERIFY-TEARDOWN-TIMEOUT/,
+    "browser verifier cleanup must have a process-level deadline");
+  assert.match(browserVerifier, /await close\(server\);\s*await browser\.close\(\);/,
+    "browser verifier must stop HTTP activity before closing the browser process");
   assert.match(browserVerifier, /externalRequests/);
   assert.match(browserVerifier, /forbiddenRequests/);
   assert.match(browserVerifier, /PATCHY_RELEASE_SOAK_DURATION_MS/);
