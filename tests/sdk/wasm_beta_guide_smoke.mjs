@@ -27,9 +27,15 @@ const context = await browser.newContext({ viewport: { width: 1280, height: 800 
 const page = await context.newPage();
 const pageErrors = [];
 const failedRequests = [];
+const unexpectedNetwork = [];
+const expectedOrigin = new URL(baseUrl).origin;
 page.on("pageerror", (error) => pageErrors.push(String(error)));
 page.on("requestfailed", (request) => failedRequests.push(
   `${request.url()} ${request.failure()?.errorText || "failed"}`));
+page.on("request", (request) => {
+  const url = request.url();
+  if (url.startsWith("http") && new URL(url).origin !== expectedOrigin) unexpectedNetwork.push(url);
+});
 
 const editorUrl = `${baseUrl.replace(/\/$/, "")}/build/wasm-sdk/site/patchy.html?beta-guide-smoke=1`;
 const waitUntilReady = () => page.waitForFunction(() =>
@@ -118,6 +124,7 @@ try {
     Number.parseFloat(getComputedStyle(node).transitionDuration) <= .001), true);
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);
+  assert.deepEqual(unexpectedNetwork, []);
   console.log(`PASS browser=${browserName} beta-guide=local-first responsive=390x844`);
 } finally {
   await browser.close();
