@@ -77,12 +77,13 @@ test("local-first beta guide stays available and delegates to real editor action
   const element = (id, extra = {}) => {
     const listeners = new Map();
     const value = {
-      id, dataset: {}, disabled: false, open: false, textContent: "", clicks: 0,
+      id, dataset: {}, disabled: false, open: false, textContent: "", clicks: 0, focusCalls: 0,
       addEventListener: (type, listener) => listeners.set(type, listener),
-      dispatch: (type, event = {}) => listeners.get(type)?.(event),
+      dispatch(type, event = {}) { listeners.get(type)?.({ currentTarget: this, target: this, ...event }); },
       click() { this.clicks += 1; this.dispatch("click"); },
+      focus() { this.focusCalls += 1; },
       showModal() { this.open = true; },
-      close(returnValue) { this.open = false; this.returnValue = returnValue; },
+      close(returnValue) { this.open = false; this.returnValue = returnValue; this.dispatch("close"); },
       ...extra,
     };
     elements.set(id, value);
@@ -129,9 +130,11 @@ test("local-first beta guide stays available and delegates to real editor action
   assert.equal(recovery.clicks, 1);
   help.click();
   complete.click();
+  await new Promise(queueMicrotask);
   assert.equal(values.get(betaGuideStorageKey), "complete");
   assert.equal(help.textContent, "Help");
   assert.equal(dialog.returnValue, "complete");
+  assert.ok(help.focusCalls > 0, "closing Help must restore focus to its invoker");
   assert.equal(installBetaGuide(document, storage), null);
 
   let prevented = false;

@@ -1094,7 +1094,16 @@ export function installBetaGuide(document, storage = globalThis.localStorage) {
     catch { return false; }
   };
   const syncLabel = () => { help.textContent = completed() ? "Help" : "Getting started"; };
-  const open = () => { if (!dialog.open) dialog.showModal(); };
+  let returnFocus = help;
+  const open = (event) => {
+    const invoker = event?.currentTarget ?? document.activeElement;
+    returnFocus = invoker?.focus && !invoker.closest?.("dialog") ? invoker : help;
+    if (!dialog.open) dialog.showModal();
+  };
+  dialog.addEventListener("close", () => {
+    const target = returnFocus?.isConnected === false || returnFocus?.disabled ? help : returnFocus;
+    queueMicrotask(() => target?.focus?.({ preventScroll: true }));
+  });
   const activate = (targetId) => {
     dialog.close("action");
     const target = byId(targetId);
