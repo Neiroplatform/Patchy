@@ -2346,6 +2346,7 @@ async function newDocument(input = starterPreset("blank")) {
   try {
     ensureMemorySafe(request, "New document");
     const next = await client.create(request.width, request.height, request.name);
+    documentSaveFormats.set(next.documentId, request.format);
     fileLifecycle.register(next.documentId, next, request.format);
     clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     await acceptSnapshot(next);

@@ -192,6 +192,7 @@ test("beta guide and local starter publish support and responsive contracts", as
   assert.match(shell, /document\.querySelector\("dialog\[open\]"\)/);
   assert.match(shell, /isEditableTarget\(event\)/);
   assert.match(editor, /client\.create\(request\.width, request\.height, request\.name\)/);
+  assert.match(editor, /documentSaveFormats\.set\(next\.documentId, request\.format\);\s*fileLifecycle\.register\(next\.documentId, next, request\.format\)/);
   assert.match(editor, /fileLifecycle\.register\(next\.documentId, next, request\.format\)/);
   assert.match(editor, /starterDocumentRequest\(input\)/);
   assert.match(editor, /starterForm"\)\.addEventListener\("submit"/);
