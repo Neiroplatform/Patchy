@@ -129,9 +129,10 @@ async function verifyBetaGuide(page) {
   const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Getting started");
 
-  await page.click("#emptyNewButton");
+  await page.focus("#emptyNewButton");
+  await page.keyboard.press("Enter");
   await page.waitForSelector("#starterDialog[open]");
-  await page.click('#starterDialog button[value="cancel"]');
+  await page.keyboard.press("Escape");
   await page.waitForSelector("#starterDialog[open]", { state: "hidden" });
   assert.equal(await page.evaluate(() => document.activeElement?.id), "emptyNewButton",
     "closing the packaged starter did not return focus to its invoker");

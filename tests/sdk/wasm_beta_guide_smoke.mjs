@@ -68,9 +68,10 @@ try {
   await waitUntilReady();
   assert.equal((await page.textContent("#helpButton")).trim(), "Getting started");
 
-  await page.click("#emptyNewButton");
+  await page.focus("#emptyNewButton");
+  await page.keyboard.press("Enter");
   await page.waitForSelector("#starterDialog[open]");
-  await page.click('#starterDialog button[value="cancel"]');
+  await page.keyboard.press("Escape");
   await page.waitForSelector("#starterDialog[open]", { state: "hidden" });
   assert.equal(await page.evaluate(() => document.activeElement?.id), "emptyNewButton",
     "closing the starter did not return focus to its invoker");
