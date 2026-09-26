@@ -110,6 +110,17 @@ async function closeActiveDocument(page) {
   null, { timeout: 90_000 });
 }
 
+async function createStarterPreset(page, id, width, height) {
+  await page.click("#emptyNewButton");
+  await page.click(`[data-starter-preset="${id}"]`);
+  await page.waitForFunction(({ expectedWidth, expectedHeight }) =>
+    document.querySelector("#detailCanvas")?.textContent === `${expectedWidth} × ${expectedHeight}` &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { expectedWidth: width, expectedHeight: height }, { timeout: 90_000 });
+  await closeActiveDocument(page);
+}
+
 async function verifyBetaGuide(page) {
   const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Getting started");
@@ -126,8 +137,20 @@ async function verifyBetaGuide(page) {
   assert.equal(await page.isVisible("#starterError"), true,
     "packaged starter accepted invalid dimensions");
   assert.equal((await page.locator("#detailRevision").textContent()).trim(), "-");
-  await page.click('[data-starter-preset="social"]');
-  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "1080 × 1080" &&
+  await page.click('[data-starter-preset="blank"]');
+  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "1600 × 1000" &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
+  await closeActiveDocument(page);
+  await createStarterPreset(page, "social", 1080, 1080);
+  await createStarterPreset(page, "presentation", 1920, 1080);
+  await createStarterPreset(page, "print-a4", 2480, 3508);
+  await page.click("#emptyNewButton");
+  await page.fill("#starterWidthInput", "640");
+  await page.fill("#starterHeightInput", "480");
+  await page.click("#starterCustomCreateButton");
+  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "640 × 480" &&
     document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
   { timeout: 90_000 });
@@ -175,6 +198,9 @@ async function verifyBetaGuide(page) {
 
   await page.selectOption("#localeSelect", "ru");
   await page.waitForFunction(() => document.querySelector("#helpButton")?.textContent.trim() === "Помощь");
+  await page.click("#emptyNewButton");
+  assert.equal((await page.locator("#starterDialogTitle").textContent()).trim(), "Создать локальный документ");
+  await page.click('#starterDialog button[value="cancel"]');
   await page.click("#helpButton");
   assert.equal((await page.locator("#helpDialogTitle").textContent()).trim(), "Начните редактировать локально");
   await page.click('#helpDialog button[value="cancel"]');

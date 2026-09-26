@@ -43,6 +43,26 @@ const waitUntilReady = () => page.waitForFunction(() =>
   document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
 { timeout: 90_000 });
 
+async function closeActiveDocument() {
+  await page.click('#documentTabs .document-tab[data-active="true"] button[aria-hidden="true"]');
+  await page.waitForFunction(() =>
+    document.querySelectorAll('#documentTabs [role="tab"]').length === 0 &&
+    document.querySelector(".editor-shell")?.dataset.state === "ready" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
+}
+
+async function createStarterPreset(id, width, height) {
+  await page.click("#emptyNewButton");
+  await page.click(`[data-starter-preset="${id}"]`);
+  await page.waitForFunction(({ expectedWidth, expectedHeight }) =>
+    document.querySelector("#detailCanvas")?.textContent === `${expectedWidth} × ${expectedHeight}` &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { expectedWidth: width, expectedHeight: height }, { timeout: 90_000 });
+  await closeActiveDocument();
+}
+
 try {
   await page.goto(editorUrl, { waitUntil: "domcontentloaded" });
   await waitUntilReady();
@@ -60,10 +80,23 @@ try {
   assert.equal(await page.isVisible("#starterError"), true,
     "invalid starter dimensions did not fail before document creation");
   assert.equal((await page.textContent("#detailRevision")).trim(), "-");
-  await page.click('[data-starter-preset="social"]');
-  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "1080 × 1080" &&
+  await page.click('[data-starter-preset="blank"]');
+  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "1600 × 1000" &&
     document.querySelector("#detailRevision")?.textContent === "0" &&
-    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
+  await closeActiveDocument();
+  await createStarterPreset("social", 1080, 1080);
+  await createStarterPreset("presentation", 1920, 1080);
+  await createStarterPreset("print-a4", 2480, 3508);
+  await page.click("#emptyNewButton");
+  await page.fill("#starterWidthInput", "640");
+  await page.fill("#starterHeightInput", "480");
+  await page.click("#starterCustomCreateButton");
+  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "640 × 480" &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
 
   await page.click("#helpButton");
   await page.waitForSelector("#helpDialog[open]");
@@ -84,6 +117,9 @@ try {
   assert.equal((await page.textContent("#helpButton")).trim(), "Help");
   await page.selectOption("#localeSelect", "ru");
   assert.equal((await page.textContent("#helpButton")).trim(), "Помощь");
+  await page.click("#emptyNewButton");
+  assert.equal((await page.textContent("#starterDialogTitle")).trim(), "Создать локальный документ");
+  await page.click('#starterDialog button[value="cancel"]');
   await page.click("#helpButton");
   assert.equal((await page.textContent("#helpDialogTitle")).trim(), "Начните редактировать локально");
   await page.click('#helpDialog button[value="cancel"]');
