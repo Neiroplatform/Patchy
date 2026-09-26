@@ -4120,6 +4120,11 @@ registerCommand("view.zoomOut", "zoomOutButton", () => setZoom(zoom / 1.25), () 
 registerCommand("view.zoomIn", "zoomInButton", () => setZoom(zoom * 1.25), () => Boolean(snapshot));
 registerCommand("view.fit", "zoomFitButton", () => setZoom("fit"), () => Boolean(snapshot));
 registerCommand("view.actualPixels", "zoomActualButton", () => setZoom(1), () => Boolean(snapshot));
+registerCommand("view.panels", "togglePanelsButton", () => {
+  const hidden = shell.classList.toggle("panels-hidden");
+  $("togglePanelsButton").setAttribute("aria-pressed", String(hidden));
+  persistPreferences();
+});
 registerCommand("view.guide.vertical", "addVerticalGuideButton", () => addCenteredGuide("vertical"),
   () => !busy && Boolean(snapshot));
 registerCommand("view.guide.horizontal", "addHorizontalGuideButton", () => addCenteredGuide("horizontal"),
@@ -4611,11 +4616,6 @@ $("layerBlendSelect").addEventListener("change", () => {
   if (ids.length) mutate("Changing blend mode", () => client.editLayers(ids, 3,
     { value: Number($("layerBlendSelect").value) }));
 });
-$("togglePanelsButton").addEventListener("click", () => {
-  const hidden = shell.classList.toggle("panels-hidden");
-  $("togglePanelsButton").setAttribute("aria-pressed", String(hidden));
-  persistPreferences();
-});
 $("cleanupRecoveryButton").addEventListener("click", cleanupRecoveryWorkspaces);
 $("diagnosticsConsentInput").addEventListener("change", () => {
   $("downloadDiagnosticsButton").disabled = !$("diagnosticsConsentInput").checked;
@@ -4942,6 +4942,7 @@ window.addEventListener("keydown", (event) => {
   const editingField = isEditableTarget(event);
   if (editingField) return;
   if (key === "o") { event.preventDefault(); executeCommand("document.open"); }
+  if (key === "n") { event.preventDefault(); executeCommand("document.new"); }
   if (key === "s") { event.preventDefault(); executeCommand("document.save"); }
   if (key === "c" && snapshot) { event.preventDefault(); executeCommand("document.copyPixels"); }
   if (key === "v" && snapshot) { event.preventDefault(); executeCommand("document.pastePixels"); }
@@ -4956,6 +4957,7 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || isEditableTarget(event)) return;
+  if (event.key === "F4") { event.preventDefault(); executeCommand("view.panels"); }
   const viewport = $("canvasViewport");
   const viewportFocused = event.target === viewport || viewport.contains(event.target);
   if (snapshot && viewportFocused && event.key === " ") {

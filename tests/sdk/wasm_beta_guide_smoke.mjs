@@ -68,9 +68,20 @@ try {
   assert.equal(await page.evaluate(() => document.activeElement?.id), "helpButton",
     "closing Help did not return focus to its invoker");
 
-  await page.click("#newButton");
+  const newDocumentShortcut = process.platform === "darwin" ? "Meta+N" : "Control+N";
+  await page.keyboard.press(newDocumentShortcut);
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  await page.locator("#layerNameInput").focus();
+  await page.keyboard.press(newDocumentShortcut);
+  assert.equal(await page.locator('#documentTabs [role="tab"]').count(), 1,
+    "the New shortcut captured an editable field");
+  assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), false);
+  await page.keyboard.press("F4");
+  assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), true);
+  assert.equal(await page.getAttribute("#togglePanelsButton", "aria-pressed"), "true");
+  await page.keyboard.press("F4");
+  assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), false);
   await page.locator("#layerNameInput").dispatchEvent("keydown", { key: "?" });
   assert.equal(await page.isVisible("#helpDialog[open]"), false,
     "the global Help shortcut captured an editable field");
