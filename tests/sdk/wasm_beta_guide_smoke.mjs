@@ -65,6 +65,8 @@ try {
   assert.equal((await page.textContent("#helpDialogTitle")).trim(), "Начните редактировать локально");
   await page.click('#helpDialog button[value="cancel"]');
   await page.waitForSelector("#helpDialog[open]", { state: "hidden" });
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "helpButton",
+    "closing Help did not return focus to its invoker");
 
   await page.click("#newButton");
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
