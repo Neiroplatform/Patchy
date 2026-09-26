@@ -170,7 +170,9 @@ async function verifyBetaGuide(page) {
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
   null, { timeout: 90_000 });
   await page.locator("#layerNameInput").focus();
-  await page.keyboard.press(newDocumentShortcut);
+  await page.locator("#layerNameInput").dispatchEvent("keydown", {
+    key: "n", metaKey: process.platform === "darwin", ctrlKey: process.platform !== "darwin",
+  });
   assert.equal(await page.locator('#documentTabs [role="tab"]').count(), 1,
     "the New shortcut captured an editable field");
   await closeActiveDocument(page);
