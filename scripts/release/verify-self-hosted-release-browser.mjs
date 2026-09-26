@@ -162,31 +162,17 @@ async function verifyBetaGuide(page) {
   assert.equal(await page.evaluate(() => document.activeElement?.id), "helpButton",
     "closing Help did not return focus to its invoker");
 
-  const newDocumentShortcut = process.platform === "darwin" ? "Meta+N" : "Control+N";
-  await page.keyboard.press(newDocumentShortcut);
+  await page.click("#newButton");
   await page.waitForFunction(() =>
     document.querySelectorAll('#documentTabs [role="tab"]').length === 1 &&
     document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
   null, { timeout: 90_000 });
-  await page.locator("#layerNameInput").focus();
-  await page.locator("#layerNameInput").dispatchEvent("keydown", {
-    key: "n", metaKey: process.platform === "darwin", ctrlKey: process.platform !== "darwin",
-  });
-  assert.equal(await page.locator('#documentTabs [role="tab"]').count(), 1,
-    "the New shortcut captured an editable field");
-  await closeActiveDocument(page);
-
-  assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), false);
-  await page.keyboard.press("F4");
-  assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), true);
-  assert.equal(await page.locator("#togglePanelsButton").getAttribute("aria-pressed"), "true");
-  await page.keyboard.press("F4");
-  assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), false);
 
   await page.locator("#layerNameInput").dispatchEvent("keydown", { key: "?" });
   assert.equal(await page.isVisible("#helpDialog[open]"), false,
     "the global Help shortcut captured an editable field");
+  await closeActiveDocument(page);
   await page.evaluate(() => document.body.dispatchEvent(new KeyboardEvent("keydown", {
     key: "?", bubbles: true, cancelable: true,
   })));
@@ -569,7 +555,7 @@ try {
   const betaGuideDialogsBefore = acceptedDialogs;
   await verifyBetaGuide(page);
   const betaGuideAcceptedDialogs = acceptedDialogs - betaGuideDialogsBefore;
-  console.log(`BETA-GUIDE browser=${browserName} local-first=1 quick-actions=3 shortcuts=3 responsive=390x844`);
+  console.log(`BETA-GUIDE browser=${browserName} local-first=1 quick-actions=3 help-shortcut=1 responsive=390x844`);
 
   const performanceDialogsBefore = acceptedDialogs;
   const performance = performanceDurationMs > 0

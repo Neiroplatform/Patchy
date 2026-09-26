@@ -4942,7 +4942,6 @@ window.addEventListener("keydown", (event) => {
   const editingField = isEditableTarget(event);
   if (editingField) return;
   if (key === "o") { event.preventDefault(); executeCommand("document.open"); }
-  if (key === "n") { event.preventDefault(); executeCommand("document.new"); }
   if (key === "s") { event.preventDefault(); executeCommand("document.save"); }
   if (key === "c" && snapshot) { event.preventDefault(); executeCommand("document.copyPixels"); }
   if (key === "v" && snapshot) { event.preventDefault(); executeCommand("document.pastePixels"); }
@@ -4957,7 +4956,6 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || isEditableTarget(event)) return;
-  if (event.key === "F4") { event.preventDefault(); executeCommand("view.panels"); }
   const viewport = $("canvasViewport");
   const viewportFocused = event.target === viewport || viewport.contains(event.target);
   if (snapshot && viewportFocused && event.key === " ") {
