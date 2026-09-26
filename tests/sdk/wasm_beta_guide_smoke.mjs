@@ -40,6 +40,10 @@ let page;
 try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await context.newPage();
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis, "showOpenFilePicker", { configurable: true, value: undefined });
+    Object.defineProperty(globalThis, "showSaveFilePicker", { configurable: true, value: undefined });
+  });
 } catch (error) {
   console.error(`BETA-GUIDE-SOURCE-ERROR browser=${browserName} ${error?.stack || error}`);
   await closeBrowserWithDeadline();
@@ -60,10 +64,6 @@ page.on("request", (request) => {
 page.on("dialog", async (dialog) => {
   acceptedDialogs++;
   await dialog.accept();
-});
-await page.addInitScript(() => {
-  Object.defineProperty(globalThis, "showOpenFilePicker", { configurable: true, value: undefined });
-  Object.defineProperty(globalThis, "showSaveFilePicker", { configurable: true, value: undefined });
 });
 
 const editorUrl = `${baseUrl.replace(/\/$/, "")}/build/wasm-sdk/site/patchy.html?beta-guide-smoke=1`;
