@@ -166,27 +166,31 @@ async function brushPoint(page, index, total, { measurePreview = false, commit =
             Math.floor((y - bounds.top) * target.height / bounds.height)));
           const context = target.getContext("2d", { alpha: true });
           const before = [...context.getImageData(pixelX, pixelY, 1, 1).data];
+          const originalFill = context.fill;
           const started = performance.now();
           let settled = false;
+          const restore = () => {
+            if (context.fill === instrumentedFill) context.fill = originalFill;
+          };
           const timeout = setTimeout(() => {
-            if (!settled) rejectProbe(new Error("brush preview did not update the visible gesture canvas"));
+            if (!settled) {
+              restore();
+              rejectProbe(new Error("brush preview did not update the visible gesture canvas"));
+            }
           }, 15_000);
-          const observe = () => {
+          function instrumentedFill(...args) {
+            const result = Reflect.apply(originalFill, this, args);
+            const elapsedMs = performance.now() - started;
             const after = context.getImageData(pixelX, pixelY, 1, 1).data;
             if (before.some((value, channel) => value !== after[channel])) {
               settled = true;
               clearTimeout(timeout);
-              resolveProbe(performance.now() - started);
-              return true;
+              restore();
+              resolveProbe(elapsedMs);
             }
-            return false;
-          };
-          const observeFrame = () => {
-            if (!observe() && !settled) requestAnimationFrame(observeFrame);
-          };
-          queueMicrotask(() => {
-            if (!observe() && !settled) requestAnimationFrame(observeFrame);
-          });
+            return result;
+          }
+          context.fill = instrumentedFill;
         }, { capture: true, once: true });
       });
     }, { x: clientX, y: clientY });
@@ -334,7 +338,7 @@ async function runPerformanceAudit(page, browserLabel, manifest) {
     brushPreview: {
       samples: brushPreviewSamples.length,
       sampleValuesMs: brushPreviewSamples,
-      measurement: "pointer-handler-to-overlay-pixel",
+      measurement: "pointer-handler-to-overlay-fill",
       p95Ms: brushPreviewP95Ms,
       thresholdMs: BROWSER_PERFORMANCE_THRESHOLDS.brushPreviewP95Ms,
     },
