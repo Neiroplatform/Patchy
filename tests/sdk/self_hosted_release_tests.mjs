@@ -235,6 +235,8 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
   ]) assert.match(apache, new RegExp(header));
   assert.match(apache, /mjs/);
   assert.match(browserVerifier, /verifyRelease\(releaseRoot\)/);
+  assert.match(browserVerifier, /server\.closeAllConnections\?\.\(\)/,
+    "browser verifier failures must not hang on Playwright keep-alive sockets");
   assert.match(browserVerifier, /externalRequests/);
   assert.match(browserVerifier, /forbiddenRequests/);
   assert.match(browserVerifier, /PATCHY_RELEASE_SOAK_DURATION_MS/);
