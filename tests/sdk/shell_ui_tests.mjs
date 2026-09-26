@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { betaGuideStorageKey, chooseRovingLayerId, installBetaGuide, isEditableTarget,
   translateMessage } from "../../sdk/engine/site/shell-ui.mjs";
-import { STARTER_DIMENSION_LIMIT, STARTER_PRESETS, starterDocumentRequest,
-  starterPreset } from "../../sdk/engine/site/starter-model.mjs";
+import { STARTER_DIMENSION_LIMIT, STARTER_PRESETS, STARTER_PSD_DIMENSION_LIMIT,
+  starterDocumentRequest, starterPreset } from "../../sdk/engine/site/starter-model.mjs";
 
 const root = new URL("../../", import.meta.url);
 const source = (path) => readFile(new URL(path, root), "utf8");
@@ -15,9 +15,13 @@ test("local starter presets are deterministic and custom dimensions fail closed"
     ["presentation", 1920, 1080], ["print-a4", 2480, 3508],
   ]);
   assert.deepEqual(starterDocumentRequest(starterPreset("social")),
-    { width: 1080, height: 1080, name: "Untitled.psd" });
+    { width: 1080, height: 1080, format: "psd", name: "Untitled.psd" });
   assert.deepEqual(starterDocumentRequest({ width: "2048", height: "1024" }),
-    { width: 2048, height: 1024, name: "Untitled.psd" });
+    { width: 2048, height: 1024, format: "psd", name: "Untitled.psd" });
+  assert.deepEqual(starterDocumentRequest({ width: STARTER_PSD_DIMENSION_LIMIT, height: 1 }),
+    { width: 30000, height: 1, format: "psd", name: "Untitled.psd" });
+  assert.deepEqual(starterDocumentRequest({ width: STARTER_PSD_DIMENSION_LIMIT + 1, height: 1 }),
+    { width: 30001, height: 1, format: "psb", name: "Untitled.psb" });
   for (const input of [
     { width: "", height: 1 }, { width: Number.NaN, height: 1 },
     { width: 0, height: 1 }, { width: 1.5, height: 1 },
@@ -185,6 +189,7 @@ test("beta guide and local starter publish support and responsive contracts", as
   assert.match(shell, /document\.querySelector\("dialog\[open\]"\)/);
   assert.match(shell, /isEditableTarget\(event\)/);
   assert.match(editor, /client\.create\(request\.width, request\.height, request\.name\)/);
+  assert.match(editor, /fileLifecycle\.register\(next\.documentId, next, request\.format\)/);
   assert.match(editor, /starterDocumentRequest\(input\)/);
 });
 

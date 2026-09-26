@@ -1,4 +1,5 @@
 export const STARTER_DIMENSION_LIMIT = 300_000;
+export const STARTER_PSD_DIMENSION_LIMIT = 30_000;
 
 export const STARTER_PRESETS = Object.freeze([
   Object.freeze({ id: "blank", width: 1600, height: 1000, label: "Blank", detail: "1600 × 1000 px" }),
@@ -30,5 +31,7 @@ export function starterDocumentRequest(input = starterPreset("blank")) {
   if (!Number.isSafeInteger(pixels) || pixels * 4 > Number.MAX_SAFE_INTEGER) {
     throw new RangeError("Starter dimensions exceed the safe pixel limit");
   }
-  return Object.freeze({ width, height, name: "Untitled.psd" });
+  const format = width > STARTER_PSD_DIMENSION_LIMIT || height > STARTER_PSD_DIMENSION_LIMIT
+    ? "psb" : "psd";
+  return Object.freeze({ width, height, format, name: `Untitled.${format}` });
 }

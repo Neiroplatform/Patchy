@@ -68,6 +68,31 @@ try {
   await waitUntilReady();
   assert.equal((await page.textContent("#helpButton")).trim(), "Getting started");
 
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.click("#emptyNewButton");
+  const starterLayout = await page.evaluate(() => {
+    const dialog = document.querySelector("#starterDialog");
+    return {
+      dialogWidth: dialog.getBoundingClientRect().width,
+      presetColumns: getComputedStyle(document.querySelector(".starter-presets"))
+        .gridTemplateColumns.split(" ").length,
+      horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+      transitionMs: Number.parseFloat(getComputedStyle(dialog).transitionDuration),
+      targetHeights: [...dialog.querySelectorAll("button")]
+        .map((button) => button.getBoundingClientRect().height),
+    };
+  });
+  assert.ok(starterLayout.dialogWidth <= 390, "Starter dialog overflows the mobile viewport");
+  assert.equal(starterLayout.presetColumns, 1);
+  assert.equal(starterLayout.horizontalOverflow, false);
+  assert.ok(starterLayout.transitionMs <= .001);
+  assert.equal(starterLayout.targetHeights.every((height) => height >= 24), true,
+    "Starter controls violate the WCAG 2.2 minimum target size");
+  await page.click('#starterDialog button[value="cancel"]');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+
   await page.focus("#emptyNewButton");
   await page.keyboard.press("Enter");
   await page.waitForSelector("#starterDialog[open]");
