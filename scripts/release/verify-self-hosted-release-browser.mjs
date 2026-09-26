@@ -77,7 +77,11 @@ function listen(server) {
 }
 
 function close(server) {
-  return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  return new Promise((resolveClose, reject) => {
+    server.close((error) => error ? reject(error) : resolveClose());
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+  });
 }
 
 async function dropSvg(page, { name, width, height, fill }) {
@@ -494,13 +498,19 @@ const server = createServer(async (request, response) => {
 const address = await listen(server);
 const baseUrl = `http://127.0.0.1:${address.port}/`;
 const baseOrigin = new URL(baseUrl).origin;
-const playwright = await loadPlaywright();
-const browserType = playwright[browserName];
-const launchOptions = { headless: true };
-if (browserName === "chromium" && process.env.PATCHY_BROWSER_CHANNEL) {
-  launchOptions.channel = process.env.PATCHY_BROWSER_CHANNEL;
+let browser;
+try {
+  const playwright = await loadPlaywright();
+  const browserType = playwright[browserName];
+  const launchOptions = { headless: true };
+  if (browserName === "chromium" && process.env.PATCHY_BROWSER_CHANNEL) {
+    launchOptions.channel = process.env.PATCHY_BROWSER_CHANNEL;
+  }
+  browser = await browserType.launch(launchOptions);
+} catch (error) {
+  await close(server);
+  throw error;
 }
-const browser = await browserType.launch(launchOptions);
 
 try {
   const page = await browser.newPage();
