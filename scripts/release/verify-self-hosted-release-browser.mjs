@@ -129,11 +129,16 @@ async function configureBrush(page, color, size) {
 }
 
 async function brushPoint(page, index, total, { measurePreview = false, commit = true } = {}) {
+  await page.locator("#documentCanvas").scrollIntoViewIfNeeded();
   const bounds = await page.locator("#documentCanvas").boundingBox();
   const viewportBounds = await page.locator("#canvasViewport").boundingBox();
   assert.ok(bounds?.width > 0 && bounds?.height > 0, "document canvas has no visible bounds");
   assert.ok(viewportBounds?.width > 0 && viewportBounds?.height > 0, "canvas viewport has no visible bounds");
-  const inset = 24;
+  const intersectionWidth = Math.min(bounds.x + bounds.width, viewportBounds.x + viewportBounds.width) -
+    Math.max(bounds.x, viewportBounds.x);
+  const intersectionHeight = Math.min(bounds.y + bounds.height, viewportBounds.y + viewportBounds.height) -
+    Math.max(bounds.y, viewportBounds.y);
+  const inset = Math.max(2, Math.min(24, intersectionWidth / 8, intersectionHeight / 8));
   const visible = {
     left: Math.max(bounds.x, viewportBounds.x) + inset,
     top: Math.max(bounds.y, viewportBounds.y) + inset,
@@ -202,7 +207,7 @@ async function brushPoint(page, index, total, { measurePreview = false, commit =
   if (commit) {
     await page.waitForFunction((previousRevision) =>
       document.querySelector("#detailRevision")?.textContent !== previousRevision,
-    revision, { timeout: 90_000 });
+    revision, { timeout: 30_000 });
   }
   await waitForEditorIdle(page);
   return previewMs;
@@ -281,8 +286,9 @@ async function runPerformanceAudit(page, browserLabel, manifest) {
   let nextSampleAt = stressStartedAt + 60_000;
   let stressIterations = 0;
   const applicationMemorySamples = [await applicationMemorySample(page, stressStartedAt)];
+  const stressColors = ["#111111", "#2563eb", "#e11d48"];
   do {
-    await configureBrush(page, stressIterations % 2 ? "#2563eb" : "#111111", 24);
+    await configureBrush(page, stressColors[stressIterations % stressColors.length], 24);
     await brushPoint(page, stressIterations % 64, 64);
     stressIterations++;
     const observedAt = Date.now();
