@@ -113,6 +113,26 @@ async function closeActiveDocument(page) {
 async function verifyBetaGuide(page) {
   const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Getting started");
+
+  await page.click("#emptyNewButton");
+  await page.waitForSelector("#starterDialog[open]");
+  await page.click('#starterDialog button[value="cancel"]');
+  await page.waitForSelector("#starterDialog[open]", { state: "hidden" });
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "emptyNewButton",
+    "closing the packaged starter did not return focus to its invoker");
+  await page.click("#emptyNewButton");
+  await page.fill("#starterWidthInput", "0");
+  await page.click("#starterCustomCreateButton");
+  assert.equal(await page.isVisible("#starterError"), true,
+    "packaged starter accepted invalid dimensions");
+  assert.equal((await page.locator("#detailRevision").textContent()).trim(), "-");
+  await page.click('[data-starter-preset="social"]');
+  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "1080 × 1080" &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
+  await closeActiveDocument(page);
+
   await page.click("#helpButton");
   await page.waitForSelector("#helpDialog[open]");
   assert.equal((await page.locator("#helpDialogTitle").textContent()).trim(), "Start editing locally");
@@ -555,7 +575,7 @@ try {
   const betaGuideDialogsBefore = acceptedDialogs;
   await verifyBetaGuide(page);
   const betaGuideAcceptedDialogs = acceptedDialogs - betaGuideDialogsBefore;
-  console.log(`BETA-GUIDE browser=${browserName} local-first=1 quick-actions=3 help-shortcut=1 responsive=390x844`);
+  console.log(`BETA-GUIDE browser=${browserName} local-first=1 starter-presets=4 quick-actions=3 help-shortcut=1 responsive=390x844`);
 
   const performanceDialogsBefore = acceptedDialogs;
   const performance = performanceDurationMs > 0
