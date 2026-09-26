@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { chooseRovingLayerId, isEditableTarget,
+import { betaGuideStorageKey, chooseRovingLayerId, installBetaGuide, isEditableTarget,
   translateMessage } from "../../sdk/engine/site/shell-ui.mjs";
 
 const root = new URL("../../", import.meta.url);
@@ -72,6 +72,94 @@ test("editable and IME events are protected from global editor shortcuts", () =>
   assert.equal(isEditableTarget({ target: target("button") }), false);
 });
 
+test("local-first beta guide stays available and delegates to real editor actions", async () => {
+  const elements = new Map();
+  const element = (id, extra = {}) => {
+    const listeners = new Map();
+    const value = {
+      id, dataset: {}, disabled: false, open: false, textContent: "", clicks: 0,
+      addEventListener: (type, listener) => listeners.set(type, listener),
+      dispatch: (type, event = {}) => listeners.get(type)?.(event),
+      click() { this.clicks += 1; this.dispatch("click"); },
+      showModal() { this.open = true; },
+      close(returnValue) { this.open = false; this.returnValue = returnValue; },
+      ...extra,
+    };
+    elements.set(id, value);
+    return value;
+  };
+  const help = element("helpButton");
+  const dialog = element("helpDialog");
+  const emptyGuide = element("gettingStartedButton");
+  const openGuide = element("helpOpenButton");
+  const newGuide = element("helpNewButton");
+  const recoveryGuide = element("helpRecoveryButton");
+  const complete = element("completeGuideButton");
+  const open = element("openButton");
+  const create = element("newButton");
+  const recovery = element("recoveryButton");
+  const documentListeners = new Map();
+  const document = {
+    getElementById: (id) => elements.get(id) ?? null,
+    addEventListener: (type, listener) => documentListeners.set(type, listener),
+    querySelector: () => null,
+  };
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+
+  assert.ok(installBetaGuide(document, storage));
+  assert.equal(help.textContent, "Getting started");
+  help.click();
+  assert.equal(dialog.open, true);
+  openGuide.click();
+  await new Promise(queueMicrotask);
+  assert.equal(open.clicks, 1);
+  assert.equal(dialog.returnValue, "action");
+  emptyGuide.click();
+  assert.equal(dialog.open, true);
+  newGuide.click();
+  await new Promise(queueMicrotask);
+  assert.equal(create.clicks, 1);
+  help.click();
+  recoveryGuide.click();
+  await new Promise(queueMicrotask);
+  assert.equal(recovery.clicks, 1);
+  help.click();
+  complete.click();
+  assert.equal(values.get(betaGuideStorageKey), "complete");
+  assert.equal(help.textContent, "Help");
+  assert.equal(dialog.returnValue, "complete");
+  assert.equal(installBetaGuide(document, storage), null);
+
+  let prevented = false;
+  documentListeners.get("keydown")({
+    defaultPrevented: false, key: "?", metaKey: false, ctrlKey: false, altKey: false,
+    target: { isContentEditable: false, matches: () => false },
+    preventDefault: () => { prevented = true; },
+  });
+  assert.equal(prevented, true);
+  assert.equal(dialog.open, true);
+});
+
+test("beta guide publishes support boundaries and responsive contracts", async () => {
+  const [html, css, shell] = await Promise.all([
+    source("sdk/engine/site/patchy.html"), source("sdk/engine/site/editor.css"),
+    source("sdk/engine/site/shell-ui.mjs"),
+  ]);
+  for (const contract of [
+    /id="helpButton"/, /id="helpDialog"/, /id="helpOpenButton"/,
+    /id="helpRecoveryButton"/, /id="completeGuideButton"/,
+    /Photoshop warning-free and 1,000-file corpus acceptance are still external release gates/,
+  ]) assert.match(html, contract);
+  assert.match(css, /\.shortcut-grid, \.help-columns \{ grid-template-columns: 1fr; \}/);
+  assert.match(shell, /patchy\.beta-guide\.v1/);
+  assert.match(shell, /document\.querySelector\("dialog\[open\]"\)/);
+  assert.match(shell, /isEditableTarget\(event\)/);
+});
+
 test("production shell exposes keyboard, localization, responsive and motion contracts", async () => {
   const [html, css, editor, shell] = await Promise.all([
     source("sdk/engine/site/patchy.html"), source("sdk/engine/site/editor.css"),
@@ -130,7 +218,10 @@ test("every static production UI string has an explicit Russian translation", as
   for (const match of html.matchAll(/(?:aria-label|title|placeholder)="([^"]+)"/g)) {
     strings.add(decode(match[1]));
   }
-  const invariant = new Set(["Patchy", "EN", "RU", "PSD", "PSB", "PNG", "JPEG", "WebP", "Arial"]);
+  const invariant = new Set([
+    "Patchy", "EN", "RU", "PSD", "PSB", "PNG", "JPEG", "WebP", "Arial",
+    "Ctrl", "Shift", "Space", "Tab",
+  ]);
   const missing = [...strings].filter((value) => /[A-Za-z]{2}/.test(value))
     .filter((value) => !invariant.has(value))
     .filter((value) => !/^\d+(?:\.\d+)?\s*(?:px|%|MB|GB)?$/i.test(value))

@@ -41,6 +41,7 @@
         <button class="icon-button" id="pastePixelsButton" type="button" aria-label="Paste layer or image" title="Paste layer or image (Ctrl+V)" disabled>⎙</button>
       </nav>
       <div class="session-tools">
+        <button class="system-check-link" id="helpButton" type="button">Getting started</button>
         <a class="system-check-link" id="systemCheckLink" href="./capabilities.html" target="_blank" rel="noopener">System check</a>
         <label class="locale-control"><span class="sr-only">Interface language</span>
           <select id="localeSelect" aria-label="Interface language">
@@ -156,6 +157,7 @@
             <p>PSD bytes stay inside the browser Worker. Editing state is owned by the Patchy engine.</p>
             <div class="empty-actions">
               <button class="button button-primary button-large" id="emptyOpenButton" type="button">Choose a PSD</button>
+              <button class="button button-large" id="gettingStartedButton" type="button">Getting started</button>
               <span>or drop it anywhere</span>
             </div>
           </div>
@@ -352,6 +354,54 @@
           <p class="dialog-note"><strong>Excluded:</strong> document and layer names, text, pixels, previews, source bytes, paths, URLs, stack traces and error messages. Nothing is uploaded.</p>
           <label class="check-field"><input id="diagnosticsConsentInput" type="checkbox"><span>I understand and want to create this local file.</span></label>
           <div class="dialog-actions"><button class="button button-primary" id="downloadDiagnosticsButton" type="button" disabled>Download diagnostic JSON</button></div>
+        </section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog help-dialog" id="helpDialog" aria-labelledby="helpDialogTitle">
+      <form method="dialog">
+        <header><div><p class="eyebrow">LOCAL-FIRST BETA</p><h2 id="helpDialogTitle">Start editing locally</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section class="help-intro">
+          <p>Your PSD or PSB stays in this browser unless you explicitly save or download it. Editing, recovery, versions and diagnostics run locally.</p>
+          <div class="help-actions" aria-label="Quick start">
+            <button class="button button-primary" id="helpOpenButton" type="button">Open a file</button>
+            <button class="button" id="helpNewButton" type="button">Create blank document</button>
+            <button class="button" id="helpRecoveryButton" type="button">Recover local work</button>
+            <a class="button" href="./capabilities.html" target="_blank" rel="noopener">Check this browser</a>
+          </div>
+        </section>
+        <section>
+          <h3>Keyboard map</h3>
+          <dl class="shortcut-grid">
+            <div><dt>Open file</dt><dd><kbd>Ctrl</kbd> + <kbd>O</kbd></dd></div>
+            <div><dt>New document</dt><dd><kbd>Ctrl</kbd> + <kbd>N</kbd></dd></div>
+            <div><dt>Save or download</dt><dd><kbd>Ctrl</kbd> + <kbd>S</kbd></dd></div>
+            <div><dt>Undo / redo</dt><dd><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd></dd></div>
+            <div><dt>Fit / actual pixels</dt><dd><kbd>0</kbd> / <kbd>1</kbd></dd></div>
+            <div><dt>Pan temporarily</dt><dd><kbd>Space</kbd></dd></div>
+            <div><dt>Brush / Eraser / Move</dt><dd><kbd>B</kbd> / <kbd>E</kbd> / <kbd>V</kbd></dd></div>
+            <div><dt>Selection / Lasso / Magic select</dt><dd><kbd>M</kbd> / <kbd>L</kbd> / <kbd>W</kbd></dd></div>
+            <div><dt>Quick Mask / Text / Pen</dt><dd><kbd>Q</kbd> / <kbd>T</kbd> / <kbd>P</kbd></dd></div>
+            <div><dt>Show or hide panels</dt><dd><kbd>Tab</kbd></dd></div>
+            <div><dt>Open this guide</dt><dd><kbd>?</kbd></dd></div>
+          </dl>
+        </section>
+        <section class="help-columns">
+          <div><h3>Recovery and support</h3><ul class="help-list">
+            <li>Automatic recovery keeps verified local checkpoints in origin-private storage.</li>
+            <li>Named versions are immutable and restore as a new document.</li>
+            <li>Diagnostics exclude names, text, pixels, paths, URLs and source bytes; nothing is uploaded.</li>
+          </ul></div>
+          <div><h3>Known limitations</h3><ul class="help-list limitation-list">
+            <li>Editing is 8-bit RGB; 16/32-bit input is converted for editing.</li>
+            <li>CMYK and Lab are converted to RGB and are not saved as native modes.</li>
+            <li>Safari has a limited support tier; use Chrome, Edge or Firefox for large work.</li>
+            <li>Cloud accounts, sharing and collaboration are not available in this local build.</li>
+            <li>Photoshop warning-free and 1,000-file corpus acceptance are still external release gates.</li>
+          </ul></div>
+        </section>
+        <section class="help-complete">
+          <p class="dialog-note">Keep this guide available from Help or press ? at any time.</p>
+          <div class="dialog-actions"><button class="button button-primary" id="completeGuideButton" type="button">Mark guide complete</button></div>
         </section>
       </form>
     </dialog>

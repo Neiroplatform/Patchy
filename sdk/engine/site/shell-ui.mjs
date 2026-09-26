@@ -9,6 +9,40 @@ const RU = new Map(Object.entries({
   "Assets": "Ассеты",
   "Diagnostics": "Диагностика",
   "System check": "Проверка системы",
+  "Getting started": "Начало работы",
+  "Help": "Помощь",
+  "LOCAL-FIRST BETA": "ЛОКАЛЬНАЯ BETA",
+  "Start editing locally": "Начните редактировать локально",
+  "Your PSD or PSB stays in this browser unless you explicitly save or download it. Editing, recovery, versions and diagnostics run locally.": "PSD или PSB остаётся в этом браузере, пока вы явно не сохраните или не скачаете его. Редактирование, восстановление, версии и диагностика работают локально.",
+  "Quick start": "Быстрый старт",
+  "Open a file": "Открыть файл",
+  "Create blank document": "Создать пустой документ",
+  "Recover local work": "Восстановить локальную работу",
+  "Check this browser": "Проверить этот браузер",
+  "Keyboard map": "Карта клавиш",
+  "Open file": "Открыть файл",
+  "New document": "Новый документ",
+  "Save or download": "Сохранить или скачать",
+  "Undo / redo": "Отмена / повтор",
+  "Fit / actual pixels": "Вписать / реальные пиксели",
+  "Pan temporarily": "Временно перемещать холст",
+  "Brush / Eraser / Move": "Кисть / Ластик / Перемещение",
+  "Selection / Lasso / Magic select": "Выделение / Лассо / Волшебное выделение",
+  "Quick Mask / Text / Pen": "Быстрая маска / Текст / Перо",
+  "Show or hide panels": "Показать или скрыть панели",
+  "Open this guide": "Открыть эту справку",
+  "Recovery and support": "Восстановление и поддержка",
+  "Automatic recovery keeps verified local checkpoints in origin-private storage.": "Автоматическое восстановление хранит проверенные локальные снимки в закрытом хранилище origin.",
+  "Named versions are immutable and restore as a new document.": "Именованные версии неизменяемы и восстанавливаются как новый документ.",
+  "Diagnostics exclude names, text, pixels, paths, URLs and source bytes; nothing is uploaded.": "Диагностика не включает имена, текст, пиксели, контуры, URL и исходные байты; ничего не загружается.",
+  "Known limitations": "Известные ограничения",
+  "Editing is 8-bit RGB; 16/32-bit input is converted for editing.": "Редактирование идёт в 8-битном RGB; 16/32-битные входные данные преобразуются для редактирования.",
+  "CMYK and Lab are converted to RGB and are not saved as native modes.": "CMYK и Lab преобразуются в RGB и не сохраняются как нативные режимы.",
+  "Safari has a limited support tier; use Chrome, Edge or Firefox for large work.": "Safari имеет ограниченный уровень поддержки; для большой работы используйте Chrome, Edge или Firefox.",
+  "Cloud accounts, sharing and collaboration are not available in this local build.": "Облачные аккаунты, общий доступ и совместная работа недоступны в этой локальной сборке.",
+  "Photoshop warning-free and 1,000-file corpus acceptance are still external release gates.": "Открытие в Photoshop без предупреждений и приёмка корпуса из 1 000 файлов по-прежнему являются внешними release gates.",
+  "Keep this guide available from Help or press ? at any time.": "Справка всегда доступна через кнопку «Помощь» или клавишу ?.",
+  "Mark guide complete": "Завершить знакомство",
   "Undo": "Отменить",
   "Redo": "Повторить",
   "Canvas": "Холст",
@@ -1045,4 +1079,45 @@ export function installDialogFocusReturn(document) {
       }
     });
   }
+}
+
+export const betaGuideStorageKey = "patchy.beta-guide.v1";
+
+export function installBetaGuide(document, storage = globalThis.localStorage) {
+  const byId = (id) => document.getElementById(id);
+  const dialog = byId("helpDialog");
+  const help = byId("helpButton");
+  if (!dialog || !help || help.dataset.installed === "true") return null;
+  help.dataset.installed = "true";
+  const completed = () => {
+    try { return storage?.getItem(betaGuideStorageKey) === "complete"; }
+    catch { return false; }
+  };
+  const syncLabel = () => { help.textContent = completed() ? "Help" : "Getting started"; };
+  const open = () => { if (!dialog.open) dialog.showModal(); };
+  const activate = (targetId) => {
+    dialog.close("action");
+    const target = byId(targetId);
+    if (target && !target.disabled) queueMicrotask(() => target.click());
+  };
+  help.addEventListener("click", open);
+  byId("gettingStartedButton")?.addEventListener("click", open);
+  byId("helpOpenButton")?.addEventListener("click", () => activate("openButton"));
+  byId("helpNewButton")?.addEventListener("click", () => activate("newButton"));
+  byId("helpRecoveryButton")?.addEventListener("click", () => activate("recoveryButton"));
+  byId("completeGuideButton")?.addEventListener("click", () => {
+    try { storage?.setItem(betaGuideStorageKey, "complete"); } catch { /* Help remains available. */ }
+    syncLabel(); dialog.close("complete");
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented || event.key !== "?" || event.metaKey || event.ctrlKey || event.altKey ||
+        isEditableTarget(event) || document.querySelector("dialog[open]")) return;
+    event.preventDefault(); open();
+  });
+  syncLabel();
+  return { open, completed };
+}
+
+if (globalThis.document?.getElementById?.("helpDialog")) {
+  queueMicrotask(() => installBetaGuide(globalThis.document));
 }

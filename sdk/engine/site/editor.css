@@ -75,7 +75,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .session-tools { justify-self: end; display: flex; align-items: center; gap: 10px; }
 .system-check-link { padding: 8px 9px; border: 1px solid var(--line-strong); border-radius: var(--radius);
-  color: var(--text-muted); background: var(--surface-1); font-size: 10px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+  color: var(--text-muted); background: var(--surface-1); font-size: 10px; font-weight: 700; text-decoration: none; white-space: nowrap; cursor: pointer; }
 .system-check-link:hover { color: var(--text); background: var(--surface-2); }
 .locale-control select { min-width: 48px; min-height: 30px; padding: 0 6px; color: var(--text-muted);
   border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-1); font-size: 10px; }
@@ -274,6 +274,23 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .recovery-dialog { width: min(680px, calc(100vw - 28px)); }
 .layer-style-dialog { width: min(820px, calc(100vw - 28px)); }
 .selection-refinement-dialog { width: min(620px, calc(100vw - 28px)); }
+.help-dialog { width: min(880px, calc(100vw - 28px)); }
+.help-intro { display: grid; gap: 14px; }
+.help-intro > p { margin: 0; max-width: 70ch; color: var(--text-muted); font-size: 13px; line-height: 1.55; }
+.help-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.help-actions .button { display: inline-flex; align-items: center; min-height: 38px; text-decoration: none; }
+.shortcut-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 0; }
+.shortcut-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0;
+  padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-1); }
+.shortcut-grid dt { color: var(--text-muted); font-size: 11px; }
+.shortcut-grid dd { margin: 0; color: var(--text); font-size: 10px; white-space: nowrap; }
+kbd { display: inline-grid; min-width: 22px; min-height: 22px; padding: 2px 5px; place-items: center;
+  border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; background: var(--surface-2); font: inherit; }
+.help-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.help-list { display: grid; gap: 8px; margin: 0; padding-left: 18px; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.limitation-list li::marker { color: #eab75c; }
+.help-complete { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.help-complete .dialog-actions { flex: 0 0 auto; margin: 0; }
 .liquify-dialog { width: min(1040px, calc(100vw - 28px)); }
 .liquify-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 14px; align-items: start; }
 .liquify-preview {
@@ -346,6 +363,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .tool-options { order: 2; flex: 1 0 100%; margin-left: 0; overflow-x: auto; padding-bottom: 3px; scrollbar-width: thin; }
   .tool-options label { flex: 0 0 auto; }
   .document-dialog { max-height: calc(100vh - 16px); overflow: auto; }
+  .shortcut-grid, .help-columns { grid-template-columns: 1fr; }
+  .help-complete { align-items: stretch; flex-direction: column; }
   .field-row-four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .liquify-workspace { grid-template-columns: 1fr; }
   .liquify-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
