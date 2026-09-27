@@ -111,8 +111,14 @@ export function installCommandSurface(document, { translate = (value) => value }
 
   const runCommand = (command) => {
     if (!commandEnabled(command)) return false;
+    const focusTarget = dialog.open ? returnFocus : openGroup?.trigger;
+    if (dialog.open) {
+      returnFocus = null;
+      dialog.close("command");
+    }
     closeMenus();
-    if (dialog.open) dialog.close("command");
+    const stableFocus = focusTarget?.isConnected && !focusTarget.disabled ? focusTarget : paletteButton;
+    stableFocus.focus({ preventScroll: true });
     command.target.click();
     return true;
   };

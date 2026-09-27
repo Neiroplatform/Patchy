@@ -324,11 +324,20 @@ try {
   await delay(80);
   check(byId("detailRevision").textContent === revision, "IME/editable shortcut changed document state");
 
-  byId("assetsButton").focus(); byId("assetsButton").click();
+  const fileMenu = byId("commandMenu-file");
+  const fileMenuTrigger = fileMenu.previousElementSibling;
+  fileMenuTrigger.focus();
+  fileMenuTrigger.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "ArrowDown", bubbles: true, cancelable: true,
+  }));
+  const assetsCommand = fileMenu.querySelector('[data-command-target="assetsButton"]');
+  check(!fileMenu.hidden && assetsCommand && !assetsCommand.disabled,
+    "File menu did not expose the enabled Assets command");
+  assetsCommand.focus(); assetsCommand.click();
   await waitFor(() => byId("assetsDialog").open, "Assets dialog did not open");
   byId("assetsDialog").querySelector('button[value="cancel"]').click();
-  await delay();
-  check(doc.activeElement === byId("assetsButton"), "dialog close did not return focus to its invoker");
+  await waitFor(() => doc.activeElement === fileMenuTrigger,
+    "command-routed dialog close did not return focus to the menu trigger");
 
   const transformRevision = byId("detailRevision").textContent;
   byId("layerTransformButton").focus(); byId("layerTransformButton").click();
@@ -497,7 +506,16 @@ try {
   frame.contentWindow.URL.createObjectURL = (blob) => { diagnosticBlob = blob; return "blob:diagnostic-smoke"; };
   frame.contentWindow.URL.revokeObjectURL = () => {};
   frame.contentWindow.HTMLAnchorElement.prototype.click = function () { diagnosticFilename = this.download; };
-  byId("diagnosticsButton").focus(); byId("diagnosticsButton").click();
+  fileMenuTrigger.focus();
+  fileMenuTrigger.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "k", ctrlKey: true, bubbles: true, cancelable: true,
+  }));
+  await waitFor(() => byId("commandPalette").open, "Command palette did not open for Diagnostics");
+  const diagnosticsCommand = byId("commandResults")
+    .querySelector('[data-command-target="diagnosticsButton"]');
+  check(diagnosticsCommand && !diagnosticsCommand.disabled,
+    "Command palette did not expose the enabled Diagnostics command");
+  diagnosticsCommand.focus(); diagnosticsCommand.click();
   await waitFor(() => byId("diagnosticsDialog").open, "Diagnostics dialog did not open");
   check(byId("diagnosticsDialogTitle").textContent === "Экспорт диагностики",
     "Diagnostics dialog bypassed Russian localization");
@@ -520,8 +538,8 @@ try {
     "Diagnostics omitted anonymous document shape");
   check(!/one\.svg|two\.svg|unsupported\.txt|Drop a PSD|https?:|\/Users\//i.test(diagnosticText),
     "Diagnostics leaked a filename, error message, URL or path");
-  check(doc.activeElement === byId("diagnosticsButton"),
-    "Diagnostics close did not return focus to its invoker");
+  await waitFor(() => doc.activeElement === fileMenuTrigger,
+    "Diagnostics close did not return focus to the command-palette invoker");
   frame.contentWindow.URL.createObjectURL = originalCreateObjectUrl;
   frame.contentWindow.URL.revokeObjectURL = originalRevokeObjectUrl;
   frame.contentWindow.HTMLAnchorElement.prototype.click = originalAnchorClick;
