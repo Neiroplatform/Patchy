@@ -16,6 +16,7 @@ import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.m
 import { chooseRovingLayerId, createLocalizer, installDialogFocusReturn, installRovingToolbar,
   isEditableTarget } from "./shell-ui.mjs";
 import { starterDocumentRequest, starterPreset } from "./starter-model.mjs";
+import { installCommandSurface } from "./command-surface.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -23,6 +24,7 @@ const localizer = createLocalizer(document, document.documentElement.lang);
 const diagnostics = new BrowserDiagnosticRecorder({ runtime: collectRuntimeProfile(globalThis) });
 localizer.localize(document);
 installDialogFocusReturn(document);
+installCommandSurface(document, { translate: (value) => localizer.text(value) });
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"));
 const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
 let client = null;

@@ -26,6 +26,7 @@ const REQUIRED_FILES = Object.freeze([
   "capabilities.css",
   "capabilities.html",
   "capabilities.mjs",
+  "command-surface.mjs",
   "editor.css",
   "editor.mjs",
   "engine/client.mjs",

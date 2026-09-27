@@ -64,6 +64,10 @@ const browser = await chromium.launch({
 try {
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
+  const runPaletteCommand = async (targetId) => {
+    await page.click("#commandPaletteButton");
+    await page.click(`#commandResults [data-command-target="${targetId}"]:not(:disabled)`);
+  };
   const pageErrors = [];
   const failedRequests = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
@@ -80,7 +84,7 @@ try {
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
 
   await page.selectOption("#localeSelect", "ru");
-  await page.click("#diagnosticsButton");
+  await runPaletteCommand("diagnosticsButton");
   assert.equal(await page.textContent("#diagnosticsSummary"), "Документ не открыт");
   await page.click('#diagnosticsDialog button[value="cancel"]');
 
@@ -117,7 +121,7 @@ try {
 
   await page.selectOption("#saveFormatSelect", "psb");
   await page.waitForFunction(() => document.querySelector("#recoveryLabel")?.dataset.state === "confirmed");
-  await page.click("#versionsButton");
+  await runPaletteCommand("versionsButton");
   await page.fill("#versionLabelInput", "PRIVATE_VERSION_LABEL_SENTINEL");
   await page.click("#createVersionButton");
   await page.waitForFunction(() => document.querySelectorAll("#versionHistoryList .recovery-row").length === 1 &&
@@ -132,7 +136,7 @@ try {
   });
   await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) === 3 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
-  await page.click("#versionsButton");
+  await runPaletteCommand("versionsButton");
   await page.click("#versionHistoryList .recovery-row .button-primary");
   await page.waitForFunction(() => document.querySelectorAll('#documentTabs [role="tab"]').length === 2 &&
     Number(document.querySelector("#layerCount")?.textContent) === 2 &&
@@ -143,7 +147,7 @@ try {
   await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) === 3 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
 
-  await page.click("#pastePixelsButton");
+  await runPaletteCommand("pastePixelsButton");
   await page.waitForSelector("#errorBanner:not([hidden])");
   await page.click("#dismissErrorButton");
   await page.waitForFunction(() => document.querySelector("#recoveryLabel")?.dataset.state === "confirmed");
@@ -157,7 +161,7 @@ try {
     document.querySelector(".editor-shell")?.dataset.state === "document" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null, { timeout: 45_000 });
 
-  await page.click("#diagnosticsButton");
+  await runPaletteCommand("diagnosticsButton");
   assert.equal(await page.isDisabled("#downloadDiagnosticsButton"), true);
   await page.check("#diagnosticsConsentInput");
   const downloadPromise = page.waitForEvent("download");

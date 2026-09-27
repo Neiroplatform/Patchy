@@ -83,6 +83,11 @@ async function closeActiveDocument() {
   console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=close-complete dialogs=${acceptedDialogs}`);
 }
 
+async function runPaletteCommand(targetId) {
+  await page.click("#commandPaletteButton");
+  await page.click(`#commandResults [data-command-target="${targetId}"]:not(:disabled)`);
+}
+
 async function createStarterPreset(id, width, height) {
   await page.click("#emptyNewButton");
   await page.click(`[data-starter-preset="${id}"]`);
@@ -187,7 +192,7 @@ try {
   assert.equal(await createCustomStarter(30001, 1, "psb"), starterRecoveryState);
   const [psbDownload] = await Promise.all([
     page.waitForEvent("download", { timeout: 90_000 }),
-    page.click("#saveAsButton"),
+    runPaletteCommand("saveAsButton"),
   ]);
   const psbBytes = await readFile(await psbDownload.path());
   const psbFilename = psbDownload.suggestedFilename();
@@ -200,7 +205,7 @@ try {
   assert.equal(acceptedDialogs, 0,
     "checkpointed clean starters must not invent destructive-change confirmations");
 
-  await page.click("#recoveryButton");
+  await runPaletteCommand("recoveryButton");
   if (starterRecoveryState === "confirmed") {
     const psbRecovery = page.locator(".recovery-row", { hasText: "Untitled.psb" });
     await psbRecovery.getByRole("button", { name: "Recover" }).click();
@@ -236,6 +241,73 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await waitUntilReady();
   assert.equal((await page.textContent("#helpButton")).trim(), "Help");
+
+  await page.keyboard.press("Control+K");
+  await page.waitForSelector("#commandPalette[open]");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "commandSearchInput",
+    "the command palette did not focus its search field");
+  await page.fill("#commandSearchInput", "new");
+  const newCommand = page.locator('#commandResults [data-command-target="newButton"]:not(:disabled)');
+  assert.match(await newCommand.textContent(), /New/i);
+  await newCommand.click();
+  await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  await page.keyboard.press("Control+K");
+  await page.fill("#commandSearchInput", "save");
+  const saveCommand = page.locator('#commandResults [data-command-target="saveButton"]');
+  assert.equal(await saveCommand.isDisabled(), false,
+    "the command palette did not mirror the enabled document Save action");
+  await page.keyboard.press("Escape");
+
+  const fileMenu = page.locator(".command-menu").filter({ has: page.getByRole("button", { name: "File" }) });
+  const fileTrigger = fileMenu.getByRole("button", { name: "File" });
+  await fileTrigger.focus();
+  await fileTrigger.press("ArrowDown");
+  assert.equal(await fileTrigger.getAttribute("aria-expanded"), "true");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("role")), "menuitem",
+    "opening a command menu did not focus its first enabled item");
+  await page.keyboard.press("ArrowRight");
+  const editTrigger = page.getByRole("button", { name: "Edit", exact: true });
+  assert.equal(await editTrigger.getAttribute("aria-expanded"), "true",
+    "ArrowRight did not move between command menus");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "Edit",
+    "closing a command menu did not return focus to its trigger");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const commandLayout = await page.evaluate(() => {
+    const trigger = document.querySelector("#commandPaletteButton");
+    const menus = [...document.querySelectorAll(".command-menu")];
+    return {
+      paletteVisible: getComputedStyle(trigger).display !== "none",
+      menusHidden: menus.every((menu) => getComputedStyle(menu).display === "none"),
+      horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+    };
+  });
+  assert.deepEqual(commandLayout, {
+    paletteVisible: true,
+    menusHidden: true,
+    horizontalOverflow: false,
+  });
+  await page.click("#commandPaletteButton");
+  const paletteWidth = await page.$eval("#commandPalette", (node) => node.getBoundingClientRect().width);
+  assert.ok(paletteWidth <= 390, "command palette overflows the mobile viewport");
+  await page.click("#commandPaletteClose");
+  await page.setViewportSize({ width: 320, height: 720 });
+  const edgeLayout = await page.evaluate(() => ({
+    horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+    commandTargetHeight: document.querySelector("#commandPaletteButton").getBoundingClientRect().height,
+  }));
+  assert.equal(edgeLayout.horizontalOverflow, false, "command surface overflows at the 320px edge case");
+  assert.ok(edgeLayout.commandTargetHeight >= 24, "mobile command entry violates the minimum target size");
+  await page.click("#commandPaletteButton");
+  assert.ok(await page.$eval("#commandPalette", (node) => node.getBoundingClientRect().width) <= 320,
+    "command palette overflows the 320px edge case");
+  await page.click("#commandPaletteClose");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await closeActiveDocument();
+  console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=command-surface`);
+
   await page.selectOption("#localeSelect", "ru");
   assert.equal((await page.textContent("#helpButton")).trim(), "Помощь");
   await page.click("#emptyNewButton");

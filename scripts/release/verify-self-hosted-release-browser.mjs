@@ -114,6 +114,11 @@ async function closeActiveDocument(page) {
   null, { timeout: 90_000 });
 }
 
+async function runPaletteCommand(page, targetId) {
+  await page.click("#commandPaletteButton");
+  await page.click(`#commandResults [data-command-target="${targetId}"]:not(:disabled)`);
+}
+
 async function createStarterPreset(page, id, width, height) {
   await page.click("#emptyNewButton");
   await page.click(`[data-starter-preset="${id}"]`);
@@ -204,7 +209,7 @@ async function verifyBetaGuide(page) {
   assert.equal(await createCustomStarter(page, 30001, 1, "psb"), starterRecoveryState);
   const [psbDownload] = await Promise.all([
     page.waitForEvent("download", { timeout: 90_000 }),
-    page.click("#saveAsButton"),
+    runPaletteCommand(page, "saveAsButton"),
   ]);
   const psbBytes = await readFile(await psbDownload.path());
   const psbFilename = psbDownload.suggestedFilename();
@@ -215,7 +220,7 @@ async function verifyBetaGuide(page) {
   await psbDownload.delete();
   await closeActiveDocument(page);
 
-  await page.click("#recoveryButton");
+  await runPaletteCommand(page, "recoveryButton");
   if (starterRecoveryState === "confirmed") {
     const psbRecovery = page.locator(".recovery-row", { hasText: "Untitled.psb" });
     await psbRecovery.getByRole("button", { name: "Recover" }).click();
@@ -271,6 +276,48 @@ async function verifyBetaGuide(page) {
   { timeout: 90_000 });
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Help");
   console.log(`BETA-GUIDE-PHASE browser=${browserName} phase=persistence-reload`);
+
+  await page.keyboard.press("Control+K");
+  await page.waitForSelector("#commandPalette[open]");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "commandSearchInput");
+  await page.fill("#commandSearchInput", "new");
+  await page.click('#commandResults [data-command-target="newButton"]:not(:disabled)');
+  await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  await page.keyboard.press("Control+K");
+  await page.fill("#commandSearchInput", "save");
+  assert.equal(await page.locator('#commandResults [data-command-target="saveButton"]').isDisabled(), false);
+  await page.keyboard.press("Escape");
+
+  const fileTrigger = page.locator('.command-menu-trigger', { hasText: /^File$/ });
+  await fileTrigger.focus();
+  await fileTrigger.press("ArrowDown");
+  assert.equal(await fileTrigger.getAttribute("aria-expanded"), "true");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("role")), "menuitem");
+  await page.keyboard.press("ArrowRight");
+  const editTrigger = page.locator('.command-menu-trigger', { hasText: /^Edit$/ });
+  assert.equal(await editTrigger.getAttribute("aria-expanded"), "true");
+  await page.keyboard.press("Escape");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.deepEqual(await page.evaluate(() => ({
+    paletteVisible: getComputedStyle(document.querySelector("#commandPaletteButton")).display !== "none",
+    menusHidden: [...document.querySelectorAll(".command-menu")]
+      .every((menu) => getComputedStyle(menu).display === "none"),
+    horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+  })), { paletteVisible: true, menusHidden: true, horizontalOverflow: false });
+  await page.click("#commandPaletteButton");
+  assert.ok(await page.locator("#commandPalette").evaluate((node) => node.getBoundingClientRect().width) <= 390);
+  await page.click("#commandPaletteClose");
+  await page.setViewportSize({ width: 320, height: 720 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  assert.ok(await page.locator("#commandPaletteButton").evaluate((node) => node.getBoundingClientRect().height) >= 24);
+  await page.click("#commandPaletteButton");
+  assert.ok(await page.locator("#commandPalette").evaluate((node) => node.getBoundingClientRect().width) <= 320);
+  await page.click("#commandPaletteClose");
+  await page.setViewportSize(originalViewport);
+  await closeActiveDocument(page);
+  console.log(`BETA-GUIDE-PHASE browser=${browserName} phase=command-surface`);
 
   await page.selectOption("#localeSelect", "ru");
   await page.waitForFunction(() => document.querySelector("#helpButton")?.textContent.trim() === "Помощь");
@@ -730,7 +777,7 @@ try {
 
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: 90_000 }),
-      page.click("#saveAsButton"),
+      runPaletteCommand(page, "saveAsButton"),
     ]);
     const downloadPath = await download.path();
     assert.ok(download.suggestedFilename().endsWith(".psd"), "local save did not produce a PSD filename");

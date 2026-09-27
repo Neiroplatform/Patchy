@@ -16,6 +16,11 @@
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span><strong>Patchy</strong><small>local editor</small></span>
       </a>
+      <nav class="command-menubar" id="commandMenuBar" aria-label="Application menu">
+        <button class="command-palette-trigger" id="commandPaletteButton" type="button" aria-keyshortcuts="Control+K Meta+K">
+          <span>Commands</span><kbd>Ctrl K</kbd>
+        </button>
+      </nav>
       <nav class="document-actions" aria-label="Document actions">
         <button class="button button-primary" id="openButton" type="button">Open PSD</button>
         <button class="button" id="newButton" type="button">New</button>
@@ -788,6 +793,18 @@
           <label><span>Amount</span><input id="smartFilterAmountInput" type="number" min="0.1" max="1000" step="0.1" value="8"></label></div>
           <div class="dialog-actions"><button class="button button-primary" id="commitSmartFilterButton" type="button">Apply filter</button></div></section>
       </form>
+    </dialog>
+    <dialog class="command-palette" id="commandPalette" aria-labelledby="commandPaletteTitle">
+      <header>
+        <div><p class="eyebrow">COMMANDS</p><h2 id="commandPaletteTitle">Find a command</h2></div>
+        <button class="icon-button" id="commandPaletteClose" type="button" aria-label="Close">×</button>
+      </header>
+      <label class="command-search"><span class="sr-only">Search commands</span>
+        <input id="commandSearchInput" type="search" autocomplete="off" placeholder="Type a command or shortcut">
+        <kbd>Ctrl K</kbd>
+      </label>
+      <div class="command-results" id="commandResults" role="listbox" aria-label="Matching commands"></div>
+      <p class="command-empty" id="commandEmptyState" role="status" hidden>No matching commands</p>
     </dialog>
   </div>
   <script type="module" src="./editor.mjs"></script>
