@@ -390,7 +390,7 @@ kbd { display: inline-grid; min-width: 22px; min-height: 22px; padding: 2px 5px;
 
 @media (max-width: 1400px) {
   .topbar { gap: 8px; padding-inline: 12px; }
-  .brand small, .system-check-link, .session-indicator span:last-child { display: none; }
+  .brand small, #systemCheckLink, .session-indicator span:last-child { display: none; }
   .command-menu-trigger { padding-inline: 7px; }
 }
 
