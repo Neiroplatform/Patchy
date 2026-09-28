@@ -37,6 +37,7 @@ async function createSite(root, marker) {
     ["legal/artifact-sbom.cdx.json", "{}\n"],
     ["legal/link-inputs.json", "{}\n"],
     ["legal/notices.json", "{}\n"],
+    ["legal/preset-provenance.json", "{}\n"],
     ["legal/source.json", "{}\n"],
     ["legal/licenses/PATCHY-LICENSE.txt", "Patchy license\n"],
     ["legal/licenses/PATCHY-NOTICE-THIRD-PARTY.txt", "Patchy notices\n"],
@@ -82,7 +83,7 @@ test("verified releases install, activate and roll back without mutation", async
   const value = await fixture();
   t.after(() => rm(value.root, { recursive: true, force: true }));
   const first = await installRelease({ releaseDir: join(value.root, "built", value.firstId), hostRoot: value.host });
-  assert.equal(first.fileCount, 57);
+  assert.equal(first.fileCount, 58);
   assert.ok(first.elapsedMs < 600_000);
   const firstActivation = await activateRelease({ hostRoot: value.host, releaseId: value.firstId });
   assert.equal(firstActivation.previousReleaseId, null);

@@ -1,0 +1,112 @@
+{
+  "schema": "patchy.self-hosted-preset-provenance-plan/v1",
+  "evidenceBoundary": "compiled-link-input-census",
+  "families": [
+    {
+      "archiveMember": "contour_presets.cpp.o",
+      "expectedIds": [
+        "contour.linear",
+        "contour.cone",
+        "contour.cone_inverted",
+        "contour.cove_deep",
+        "contour.cove_shallow",
+        "contour.gaussian",
+        "contour.half_round",
+        "contour.ring",
+        "contour.ring_double",
+        "contour.rolling_slope",
+        "contour.rounded_steps",
+        "contour.sawtooth"
+      ],
+      "family": "contour",
+      "sourcePath": "src/core/contour_presets.cpp"
+    },
+    {
+      "archiveMember": "pattern_presets.cpp.o",
+      "expectedIds": [
+        "c4a11e00-0001-4b1d-9c3e-7a7c9e55b001",
+        "c4a11e00-0002-4b1d-9c3e-7a7c9e55b002",
+        "c4a11e00-0003-4b1d-9c3e-7a7c9e55b003",
+        "c4a11e00-0004-4b1d-9c3e-7a7c9e55b004",
+        "c4a11e00-0005-4b1d-9c3e-7a7c9e55b005",
+        "c4a11e00-0006-4b1d-9c3e-7a7c9e55b006",
+        "c4a11e00-0007-4b1d-9c3e-7a7c9e55b007",
+        "c4a11e00-0008-4b1d-9c3e-7a7c9e55b008",
+        "c4a11e00-0009-4b1d-9c3e-7a7c9e55b009",
+        "c4a11e00-000a-4b1d-9c3e-7a7c9e55b00a",
+        "c4a11e00-000b-4b1d-9c3e-7a7c9e55b00b",
+        "c4a11e00-000c-4b1d-9c3e-7a7c9e55b00c"
+      ],
+      "family": "pattern",
+      "sourcePath": "src/core/pattern_presets.cpp"
+    },
+    {
+      "archiveMember": "style_presets.cpp.o",
+      "expectedIds": [
+        "57a1e500-0001-4c6d-8f2a-9b3d4e55c001",
+        "57a1e500-0002-4c6d-8f2a-9b3d4e55c002",
+        "57a1e500-0003-4c6d-8f2a-9b3d4e55c003",
+        "57a1e500-0004-4c6d-8f2a-9b3d4e55c004",
+        "57a1e500-0005-4c6d-8f2a-9b3d4e55c005",
+        "57a1e500-0006-4c6d-8f2a-9b3d4e55c006",
+        "57a1e500-0007-4c6d-8f2a-9b3d4e55c007",
+        "57a1e500-0008-4c6d-8f2a-9b3d4e55c008",
+        "57a1e500-0009-4c6d-8f2a-9b3d4e55c009",
+        "57a1e500-000a-4c6d-8f2a-9b3d4e55c00a",
+        "57a1e500-000b-4c6d-8f2a-9b3d4e55c00b",
+        "57a1e500-000c-4c6d-8f2a-9b3d4e55c00c",
+        "57a1e500-000d-4c6d-8f2a-9b3d4e55c00d",
+        "57a1e500-000e-4c6d-8f2a-9b3d4e55c00e",
+        "57a1e500-000f-4c6d-8f2a-9b3d4e55c00f",
+        "57a1e500-0010-4c6d-8f2a-9b3d4e55c010",
+        "57a1e500-0011-4c6d-8f2a-9b3d4e55c011",
+        "57a1e500-0012-4c6d-8f2a-9b3d4e55c012",
+        "57a1e500-0013-4c6d-8f2a-9b3d4e55c013",
+        "57a1e500-0014-4c6d-8f2a-9b3d4e55c014",
+        "57a1e500-0015-4c6d-8f2a-9b3d4e55c015",
+        "57a1e500-0016-4c6d-8f2a-9b3d4e55c016",
+        "57a1e500-0017-4c6d-8f2a-9b3d4e55c017",
+        "57a1e500-0018-4c6d-8f2a-9b3d4e55c018",
+        "57a1e500-0019-4c6d-8f2a-9b3d4e55c019",
+        "57a1e500-001a-4c6d-8f2a-9b3d4e55c01a",
+        "57a1e500-001b-4c6d-8f2a-9b3d4e55c01b",
+        "57a1e500-001c-4c6d-8f2a-9b3d4e55c01c",
+        "57a1e500-001d-4c6d-8f2a-9b3d4e55c01d",
+        "57a1e500-001e-4c6d-8f2a-9b3d4e55c01e",
+        "57a1e500-001f-4c6d-8f2a-9b3d4e55c01f",
+        "57a1e500-0020-4c6d-8f2a-9b3d4e55c020",
+        "57a1e500-0021-4c6d-8f2a-9b3d4e55c021",
+        "57a1e500-0022-4c6d-8f2a-9b3d4e55c022",
+        "57a1e500-0023-4c6d-8f2a-9b3d4e55c023",
+        "57a1e500-0024-4c6d-8f2a-9b3d4e55c024",
+        "57a1e500-0025-4c6d-8f2a-9b3d4e55c025",
+        "57a1e500-0026-4c6d-8f2a-9b3d4e55c026",
+        "57a1e500-0027-4c6d-8f2a-9b3d4e55c027"
+      ],
+      "family": "style",
+      "sourcePath": "src/core/style_presets.cpp"
+    }
+  ],
+  "expectedRecipeOnlyAssetReferences": [
+    "f0705a00-0001-4c8b-9e3d-2a5b6c77e001",
+    "f0705a00-0002-4c8b-9e3d-2a5b6c77e002",
+    "f0705a00-0003-4c8b-9e3d-2a5b6c77e003",
+    "f0705a00-0004-4c8b-9e3d-2a5b6c77e004",
+    "f0705a00-0005-4c8b-9e3d-2a5b6c77e005",
+    "f0705a00-0007-4c8b-9e3d-2a5b6c77e007",
+    "f0705a00-0008-4c8b-9e3d-2a5b6c77e008",
+    "f0705a00-0009-4c8b-9e3d-2a5b6c77e009",
+    "f0705a00-000a-4c8b-9e3d-2a5b6c77e00a",
+    "f0705a00-000c-4c8b-9e3d-2a5b6c77e00c",
+    "f0705a00-000d-4c8b-9e3d-2a5b6c77e00d",
+    "f0705a00-000e-4c8b-9e3d-2a5b6c77e00e",
+    "f0705a00-0012-4c8b-9e3d-2a5b6c77e012",
+    "f0705a00-0013-4c8b-9e3d-2a5b6c77e013"
+  ],
+  "ownerAttestation": {
+    "decision": null,
+    "reviewedAt": null,
+    "reviewer": null,
+    "status": "pending_external_owner_attestation"
+  }
+}

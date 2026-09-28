@@ -4,8 +4,9 @@
 The generator consumes the exact wasm-ld map emitted beside patchy-engine.wasm,
 maps every contributing object/archive member to an allowlisted component, and
 stages a deterministic CycloneDX SBOM plus the applicable license texts.  It
-does not make a legal-clearance decision: unresolved compiled preset provenance
-keeps the distribution state BLOCKED.
+also closes the machine census of every linked preset object and item into an
+owner-review packet.  It does not make a legal-clearance decision: absent
+external owner attestation keeps the distribution state BLOCKED.
 """
 
 from __future__ import annotations
@@ -30,6 +31,32 @@ MAP_INPUT_RE = re.compile(
     re.IGNORECASE,
 )
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+PRESET_PLAN_RELATIVE = "compliance/self-hosted-preset-provenance-plan.json"
+PRESET_PLAN_SCHEMA = "patchy.self-hosted-preset-provenance-plan/v1"
+PRESET_OUTPUT_SCHEMA = "patchy.self-hosted-preset-provenance/v1"
+PRESET_FAMILIES = ("contour", "pattern", "style")
+PRESET_SOURCE_BY_MEMBER = {
+    "contour_presets.cpp.o": "src/core/contour_presets.cpp",
+    "pattern_presets.cpp.o": "src/core/pattern_presets.cpp",
+    "style_presets.cpp.o": "src/core/style_presets.cpp",
+}
+CONTOUR_PRESET_RE = re.compile(
+    r'\{"(contour\.[a-z0-9_]+)",\s*PATCHY_TRANSLATE_NOOP\("QObject",\s*"([^"]+)"\)',
+    re.MULTILINE,
+)
+PATTERN_PRESET_RE = re.compile(
+    r'\{"(c4a11e00-[0-9a-f-]+)",\s*PATCHY_TRANSLATE_NOOP\("QObject",\s*"([^"]+)"\)\}',
+    re.MULTILINE,
+)
+STYLE_FOLDER_RE = re.compile(
+    r'constexpr const char\* (k[A-Za-z]+Folder) = PATCHY_TRANSLATE_NOOP\("QObject",\s*"([^"]+)"\);'
+)
+STYLE_PRESET_RE = re.compile(
+    r'\{\{"(57a1e500-[0-9a-f-]+)",\s*PATCHY_TRANSLATE_NOOP\("QObject",\s*"([^"]+)"\),'
+    r'\s*(k[A-Za-z]+Folder),\s*(\d+)\}',
+    re.MULTILINE,
+)
+PHOTO_PATTERN_REFERENCE_RE = re.compile(r'"(f0705a00-[0-9a-f-]+)"')
 FORBIDDEN_INPUT_FRAGMENTS = (
     "libheif",
     "libpatchy_libraw",
@@ -216,10 +243,9 @@ def classify(inputs: list[dict[str, str | None]]) -> tuple[dict[str, list[dict[s
                 component = "little-cms"
             elif name == "libpatchy_psd.a" and member == "miniz.c.o":
                 component = "miniz"
-            elif name == "libpatchy_core.a" and member in {
-                "pattern_presets.cpp.o",
-                "style_presets.cpp.o",
-            }:
+            elif name == "libpatchy_core.a" and member.endswith("_presets.cpp.o"):
+                if member not in PRESET_SOURCE_BY_MEMBER:
+                    raise VerificationError(f"unknown compiled preset object: {member}")
                 component = "patchy-presets"
             else:
                 component = "patchy"
@@ -246,6 +272,173 @@ def classify(inputs: list[dict[str, str | None]]) -> tuple[dict[str, list[dict[s
         "desktop agent kit",
     ]
     return grouped, exclusions
+
+
+def load_preset_plan(source_root: Path) -> tuple[dict[str, object], bytes]:
+    plan_path = source_root / PRESET_PLAN_RELATIVE
+    plan_bytes = read_regular(plan_path, label="preset provenance plan", maximum=1024 * 1024)
+    try:
+        plan = json.loads(plan_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise VerificationError(f"preset provenance plan is not valid UTF-8 JSON: {error}") from error
+    if not isinstance(plan, dict) or set(plan) != {
+        "schema",
+        "evidenceBoundary",
+        "families",
+        "expectedRecipeOnlyAssetReferences",
+        "ownerAttestation",
+    }:
+        raise VerificationError("preset provenance plan has an unsupported root contract")
+    if plan["schema"] != PRESET_PLAN_SCHEMA or plan["evidenceBoundary"] != "compiled-link-input-census":
+        raise VerificationError("preset provenance plan schema or evidence boundary is unsupported")
+    families = plan["families"]
+    if (
+        not isinstance(families, list)
+        or not all(isinstance(item, dict) for item in families)
+        or [item.get("family") for item in families] != list(PRESET_FAMILIES)
+    ):
+        raise VerificationError("preset provenance plan must declare contour, pattern, style in order")
+    all_ids: list[str] = []
+    for item in families:
+        if set(item) != {"archiveMember", "expectedIds", "family", "sourcePath"}:
+            raise VerificationError("preset provenance family has an unsupported contract")
+        member = item["archiveMember"]
+        family = item["family"]
+        if not isinstance(member, str) or not isinstance(family, str):
+            raise VerificationError("preset provenance family and archive member must be strings")
+        if not isinstance(item["sourcePath"], str):
+            raise VerificationError(f"preset family {family} sourcePath must be a string")
+        source_path = safe_relative(item["sourcePath"], label="preset source path")
+        if member not in PRESET_SOURCE_BY_MEMBER or PRESET_SOURCE_BY_MEMBER[member] != source_path:
+            raise VerificationError(f"preset family {family} has an unsupported source/object binding")
+        expected_ids = item["expectedIds"]
+        if not isinstance(expected_ids, list) or not expected_ids or not all(isinstance(value, str) and value for value in expected_ids):
+            raise VerificationError(f"preset family {family} expectedIds must be non-empty strings")
+        if len(set(expected_ids)) != len(expected_ids):
+            raise VerificationError(f"preset family {family} repeats an id")
+        all_ids.extend(expected_ids)
+    if len(set(all_ids)) != len(all_ids):
+        raise VerificationError("preset provenance plan repeats an id across families")
+    asset_refs = plan["expectedRecipeOnlyAssetReferences"]
+    if (
+        not isinstance(asset_refs, list)
+        or not all(isinstance(value, str) and value for value in asset_refs)
+        or asset_refs != sorted(set(asset_refs))
+    ):
+        raise VerificationError("preset recipe-only asset references must be unique and sorted")
+    attestation = plan["ownerAttestation"]
+    if attestation != {
+        "decision": None,
+        "reviewedAt": None,
+        "reviewer": None,
+        "status": "pending_external_owner_attestation",
+    }:
+        raise VerificationError("preset provenance plan may not invent an owner attestation")
+    return plan, plan_bytes
+
+
+def extract_preset_items(family: str, data: bytes) -> list[dict[str, object]]:
+    try:
+        source = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise VerificationError(f"{family} preset source is not UTF-8: {error}") from error
+    if family == "contour":
+        rows = CONTOUR_PRESET_RE.findall(source)
+        return [{"family": family, "id": preset_id, "name": name} for preset_id, name in rows]
+    if family == "pattern":
+        rows = PATTERN_PRESET_RE.findall(source)
+        return [{"family": family, "id": preset_id, "name": name} for preset_id, name in rows]
+    if family == "style":
+        folders = dict(STYLE_FOLDER_RE.findall(source))
+        rows = STYLE_PRESET_RE.findall(source)
+        if any(folder not in folders for _, _, folder, _ in rows):
+            raise VerificationError("style preset references an unknown canonical folder")
+        return [
+            {
+                "family": family,
+                "id": preset_id,
+                "name": name,
+                "folder": folders[folder],
+                "introducedVersion": int(version),
+            }
+            for preset_id, name, folder, version in rows
+        ]
+    raise VerificationError(f"unsupported preset family: {family}")
+
+
+def build_preset_provenance(
+    *,
+    source_root: Path,
+    source_sha: str,
+    grouped: dict[str, list[dict[str, str | None]]],
+) -> dict[str, object]:
+    plan, plan_bytes = load_preset_plan(source_root)
+    linked = grouped["patchy-presets"]
+    actual_members = []
+    for record in linked:
+        if PurePosixPath(str(record["path"])).name != "libpatchy_core.a" or record["archive_member"] is None:
+            raise VerificationError("preset component contains a non-core or non-archive input")
+        actual_members.append(str(record["archive_member"]))
+    expected_members = [str(item["archiveMember"]) for item in plan["families"]]
+    if sorted(actual_members) != sorted(expected_members):
+        raise VerificationError("linked preset objects differ from the provenance plan")
+
+    source_records: list[dict[str, object]] = []
+    items: list[dict[str, object]] = []
+    source_text: dict[str, str] = {}
+    for family_plan in plan["families"]:
+        family = str(family_plan["family"])
+        source_path = str(family_plan["sourcePath"])
+        source_data = read_regular(source_root / source_path, label=f"{family} preset source")
+        extracted = extract_preset_items(family, source_data)
+        actual_ids = [str(item["id"]) for item in extracted]
+        if actual_ids != family_plan["expectedIds"]:
+            raise VerificationError(f"{family} preset ids differ from the reviewed provenance plan")
+        for item in extracted:
+            item["sourcePath"] = source_path
+            item["rightsState"] = "pending_external_owner_attestation"
+        items.extend(extracted)
+        source_records.append(
+            {
+                "archiveMember": family_plan["archiveMember"],
+                "sourcePath": source_path,
+                "bytes": len(source_data),
+                "sha256": sha256(source_data),
+                "itemCount": len(extracted),
+            }
+        )
+        source_text[family] = source_data.decode("utf-8")
+
+    if len({str(item["id"]) for item in items}) != len(items):
+        raise VerificationError("extracted preset ids are not globally unique")
+    actual_asset_refs = sorted(set(PHOTO_PATTERN_REFERENCE_RE.findall(source_text["style"])))
+    if actual_asset_refs != plan["expectedRecipeOnlyAssetReferences"]:
+        raise VerificationError("style recipe-only asset references differ from the provenance plan")
+    return {
+        "schema": PRESET_OUTPUT_SCHEMA,
+        "sourceSha": source_sha,
+        "planSha256": sha256(plan_bytes),
+        "evidenceBoundary": "compiled-link-input-census",
+        "status": "READY_FOR_OWNER_ATTESTATION",
+        "distributionGate": "BLOCKED",
+        "linkedObjects": source_records,
+        "itemCount": len(items),
+        "items": items,
+        "recipeOnlyAssetReferences": [
+            {
+                "id": preset_id,
+                "relationship": "style-recipe-reference-only",
+                "assetBytesInArtifact": False,
+            }
+            for preset_id in actual_asset_refs
+        ],
+        "ownerAttestation": plan["ownerAttestation"],
+        "nonClaims": [
+            "Git history, source comments and this census are not an ownership or assignment attestation.",
+            "Recipe-only asset references do not assert that the corresponding texture bytes ship in this artifact.",
+            "READY_FOR_OWNER_ATTESTATION is not distribution clearance.",
+        ],
+    }
 
 
 def inventory_site(site_root: Path) -> list[dict[str, object]]:
@@ -284,6 +477,7 @@ def component(
     inputs: list[dict[str, str | None]],
     *,
     unresolved: str = "none",
+    extra_properties: list[dict[str, str]] | None = None,
 ) -> dict[str, object]:
     return {
         "bom-ref": f"patchy-self-hosted:{slug}@{version}",
@@ -296,7 +490,7 @@ def component(
             {"name": "patchy:artifact:link-inputs", "value": json.dumps(inputs, separators=(",", ":"), sort_keys=True)},
             {"name": "patchy:artifact:notice-path", "value": notice},
             {"name": "patchy:artifact:unresolved", "value": unresolved},
-        ],
+        ] + list(extra_properties or []),
     }
 
 
@@ -308,10 +502,18 @@ def build_sbom(
     grouped: dict[str, list[dict[str, str | None]]],
     site_files: list[dict[str, object]],
     exclusions: list[str],
+    preset_provenance: dict[str, object],
+    preset_provenance_sha: str,
 ) -> dict[str, object]:
     specs = {
         "patchy": ("Patchy Qt-free self-hosted engine", "0.94", "MIT", "legal/licenses/PATCHY-LICENSE.txt", "none"),
-        "patchy-presets": ("Compiled Patchy pattern/style presets", source_sha, None, "legal/licenses/PATCHY-NOTICE-THIRD-PARTY.txt", "authorship-assignment-and-per-preset-provenance-not-recorded"),
+        "patchy-presets": (
+            "Compiled Patchy presets",
+            source_sha,
+            None,
+            "legal/licenses/PATCHY-NOTICE-THIRD-PARTY.txt",
+            "external-owner-attestation-not-recorded",
+        ),
         "little-cms": ("Little CMS core", "2.17", "MIT", "legal/licenses/little-cms-LICENSE.txt", "exact-upstream-revision-and-archive-digest-not-recorded"),
         "miniz": ("miniz", "3.0.2", "MIT", "legal/licenses/miniz-LICENSE.txt", "source-banner-declares-3.0.0-while-project-notice-declares-3.0.2"),
         "emscripten": ("Emscripten generated runtime", EXPECTED_EMSCRIPTEN_VERSION, "MIT OR NCSA", "legal/licenses/emscripten-LICENSE.txt", "none"),
@@ -334,6 +536,19 @@ def build_sbom(
                 notice,
                 grouped[slug],
                 unresolved=unresolved,
+                extra_properties=(
+                    [
+                        {"name": "patchy:artifact:preset-provenance-path", "value": "legal/preset-provenance.json"},
+                        {"name": "patchy:artifact:preset-provenance-sha256", "value": preset_provenance_sha},
+                        {"name": "patchy:artifact:preset-count", "value": str(preset_provenance["itemCount"])},
+                        {
+                            "name": "patchy:artifact:preset-owner-attestation",
+                            "value": str(preset_provenance["ownerAttestation"]["status"]),
+                        },
+                    ]
+                    if slug == "patchy-presets"
+                    else []
+                ),
             )
         )
     root_ref = f"patchy-self-hosted:release@{source_sha}"
@@ -414,6 +629,12 @@ def write_payload(
     inputs = parse_map(map_data, build_root=build_root, emscripten_root=emscripten_root)
     grouped, exclusions = classify(inputs)
     site_files = inventory_site(site_root)
+    preset_provenance = build_preset_provenance(
+        source_root=source_root,
+        source_sha=source_sha,
+        grouped=grouped,
+    )
+    preset_bytes = canonical_bytes(preset_provenance)
 
     legal_root = site_root / "legal"
     if legal_root.exists() or legal_root.is_symlink():
@@ -434,6 +655,7 @@ def write_payload(
     }
     input_bytes = canonical_bytes(input_manifest)
     (legal_root / "link-inputs.json").write_bytes(input_bytes)
+    (legal_root / "preset-provenance.json").write_bytes(preset_bytes)
     licenses = copy_licenses(source_root, emscripten_root, legal_root / "licenses")
     source_record = {
         "schema": "patchy.self-hosted-source/v1",
@@ -457,6 +679,8 @@ def write_payload(
         grouped=grouped,
         site_files=site_files,
         exclusions=exclusions,
+        preset_provenance=preset_provenance,
+        preset_provenance_sha=sha256(preset_bytes),
     )
     sbom_bytes = canonical_bytes(sbom)
     (legal_root / "artifact-sbom.cdx.json").write_bytes(sbom_bytes)
@@ -465,6 +689,13 @@ def write_payload(
         "sourceSha": source_sha,
         "artifactSbomSha256": sha256(sbom_bytes),
         "linkInputsSha256": sha256(input_bytes),
+        "presetProvenance": {
+            "path": "legal/preset-provenance.json",
+            "sha256": sha256(preset_bytes),
+            "status": preset_provenance["status"],
+            "itemCount": preset_provenance["itemCount"],
+            "ownerAttestation": preset_provenance["ownerAttestation"]["status"],
+        },
         "licenses": licenses,
         "noticeCompleteness": "complete-for-components-listed-in-artifact-sbom",
         "distributionGate": "BLOCKED",
@@ -482,6 +713,8 @@ def write_payload(
         "stagedFileCount": len(site_files),
         "artifactSbomSha256": sha256(sbom_bytes),
         "noticeIndexSha256": sha256(notice_bytes),
+        "presetProvenanceSha256": sha256(preset_bytes),
+        "presetCount": preset_provenance["itemCount"],
         "distributionGate": "BLOCKED",
     }
 

@@ -36,6 +36,7 @@ const REQUIRED_FILES = Object.freeze([
   "legal/artifact-sbom.cdx.json",
   "legal/link-inputs.json",
   "legal/notices.json",
+  "legal/preset-provenance.json",
   "legal/source.json",
   "legal/licenses/PATCHY-LICENSE.txt",
   "legal/licenses/PATCHY-NOTICE-THIRD-PARTY.txt",

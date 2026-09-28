@@ -30,6 +30,7 @@ const REQUIRED = [
   "legal/artifact-sbom.cdx.json",
   "legal/link-inputs.json",
   "legal/notices.json",
+  "legal/preset-provenance.json",
   "legal/source.json",
   "legal/licenses/PATCHY-LICENSE.txt",
   "legal/licenses/PATCHY-NOTICE-THIRD-PARTY.txt",
@@ -245,6 +246,7 @@ test("capability and legal pages preserve local-first and strict-CSP contracts",
   assert.doesNotMatch(legalHtml, /<script/);
   assert.doesNotMatch(legalHtml, /https?:\/\//);
   assert.match(legalHtml, /artifact-sbom\.cdx\.json/);
+  assert.match(legalHtml, /preset-provenance\.json/);
   assert.match(legalHtml, /Component closure is not legal clearance/);
   assert.doesNotMatch(script, /fetch\s*\(/);
   assert.doesNotMatch(script, /userAgent/);
@@ -291,6 +293,7 @@ test("capability and legal pages preserve local-first and strict-CSP contracts",
   assert.match(browserVerifier, /precompressed asset was not served/);
   assert.match(browserVerifier, /"network\.proxy\.type": 0/);
   assert.match(browserVerifier, /legalEvidence\.sbom\.components\.length, 11/);
+  assert.match(browserVerifier, /legalEvidence\.presetProvenance\.itemCount, 63/);
   assert.match(browserVerifier, /durableRetention, "not_guaranteed_by_this_artifact"/);
 });
 

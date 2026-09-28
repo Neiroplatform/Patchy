@@ -731,15 +731,16 @@ try {
       const response = await fetch(href);
       return { href, status: response.status };
     }));
-    const [sbom, linkInputs, notices, source] = await Promise.all([
+    const [sbom, linkInputs, notices, presetProvenance, source] = await Promise.all([
       fetch("./legal/artifact-sbom.cdx.json").then((response) => response.json()),
       fetch("./legal/link-inputs.json").then((response) => response.json()),
       fetch("./legal/notices.json").then((response) => response.json()),
+      fetch("./legal/preset-provenance.json").then((response) => response.json()),
       fetch("./legal/source.json").then((response) => response.json()),
     ]);
-    return { hrefs, responses, sbom, linkInputs, notices, source };
+    return { hrefs, responses, sbom, linkInputs, notices, presetProvenance, source };
   });
-  assert.equal(legalEvidence.hrefs.length, 15);
+  assert.equal(legalEvidence.hrefs.length, 16);
   assert.equal(legalEvidence.hrefs.every((href) => href?.startsWith("./legal/")), true);
   assert.equal(legalEvidence.responses.every((response) => response.status === 200), true);
   assert.equal(legalEvidence.sbom.bomFormat, "CycloneDX");
@@ -748,6 +749,12 @@ try {
   assert.equal(legalEvidence.linkInputs.inputs.length > 0, true);
   assert.equal(legalEvidence.linkInputs.excludedComponents.includes("Qt for WebAssembly"), true);
   assert.equal(legalEvidence.notices.distributionGate, "BLOCKED");
+  assert.equal(legalEvidence.presetProvenance.schema, "patchy.self-hosted-preset-provenance/v1");
+  assert.equal(legalEvidence.presetProvenance.status, "READY_FOR_OWNER_ATTESTATION");
+  assert.equal(legalEvidence.presetProvenance.distributionGate, "BLOCKED");
+  assert.equal(legalEvidence.presetProvenance.itemCount, 63);
+  assert.equal(legalEvidence.presetProvenance.ownerAttestation.status,
+    "pending_external_owner_attestation");
   assert.equal(legalEvidence.source.commit, manifest.sourceSha);
   assert.equal(legalEvidence.source.durableRetention, "not_guaranteed_by_this_artifact");
 
