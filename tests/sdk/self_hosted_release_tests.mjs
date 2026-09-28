@@ -289,6 +289,7 @@ test("capability and legal pages preserve local-first and strict-CSP contracts",
   assert.match(browserVerifier, /local-first-audit-/);
   assert.match(browserVerifier, /crossOriginIsolated/);
   assert.match(browserVerifier, /precompressed asset was not served/);
+  assert.match(browserVerifier, /"network\.proxy\.type": 0/);
   assert.match(browserVerifier, /legalEvidence\.sbom\.components\.length, 11/);
   assert.match(browserVerifier, /durableRetention, "not_guaranteed_by_this_artifact"/);
 });

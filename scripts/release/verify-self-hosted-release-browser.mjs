@@ -674,6 +674,9 @@ try {
   if (browserName === "chromium" && process.env.PATCHY_BROWSER_CHANNEL) {
     launchOptions.channel = process.env.PATCHY_BROWSER_CHANNEL;
   }
+  if (browserName === "firefox") {
+    launchOptions.firefoxUserPrefs = { "network.proxy.type": 0 };
+  }
   browser = await browserType.launch(launchOptions);
 } catch (error) {
   await close(server);
