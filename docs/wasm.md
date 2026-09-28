@@ -108,6 +108,16 @@ fixture: real pthread WASM executes Quick Select, Magnetic Lasso and Quick
 Mask, then undo/redo and layered PSD save/reopen. It must report `PASS`; the
 Node contract alone cannot substitute for this browser run.
 
+The SDK link also emits `build/wasm-sdk/patchy-engine.map`. Staging parses the
+map fail-closed and writes `site/legal/`: a CycloneDX artifact SBOM, exact
+link-input inventory, notice index, source identity and the applicable Patchy,
+Little CMS, miniz and Emscripten runtime license material. `legal.html` exposes
+only same-origin links to those files. The artifact graph is Qt/libheif-free;
+an unused static archive named on a link command does not count as shipped
+unless at least one member appears in the map. The current record deliberately
+keeps `distributionGate=BLOCKED` while compiled preset provenance, durable
+source retention and the external legal decision remain unresolved.
+
 `tests/sdk/wasm_layer_style_smoke.html` is the focused editable-effect gate.
 Real pthread WASM authors Drop Shadow, Inner Shadow, Outer Glow, Inner Glow,
 Satin, Stroke and Color Overlay through one exact-state Worker command, checks

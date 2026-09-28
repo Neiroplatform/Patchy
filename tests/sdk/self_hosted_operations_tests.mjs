@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { buildRelease } from "../../scripts/release/build-self-hosted-release.mjs";
 import {
@@ -17,7 +17,7 @@ const SHA_B = "b".repeat(40);
 async function createSite(root, marker) {
   const site = join(root, `site-${marker}`);
   const engine = join(site, "engine");
-  await import("node:fs/promises").then(({ mkdir }) => mkdir(engine, { recursive: true }));
+  await mkdir(engine, { recursive: true });
   const files = new Map([
     [".htaccess", "Header always set Cross-Origin-Opener-Policy same-origin\n"],
     ["capabilities.css", "body{color:white}"],
@@ -26,6 +26,7 @@ async function createSite(root, marker) {
     ["command-surface.mjs", "export const commands=[];"],
     ["editor.css", "body{background:black}"],
     ["editor.mjs", `export const marker=${JSON.stringify(marker)};`],
+    ["legal.html", "<!doctype html><main>Legal evidence</main>"],
     ["patchy-engine.mjs", "export default async()=>({});"],
     ["patchy-engine.wasm", Buffer.from([0, 97, 115, 109, 1, 0, 0, 0])],
     ["patchy.html", "<!doctype html><main>Patchy</main>"],
@@ -33,8 +34,27 @@ async function createSite(root, marker) {
     ["engine/index.mjs", "export const version=1;"],
     ["engine/protocol.mjs", "export const protocol=1;"],
     ["engine/worker.mjs", "self.onmessage=()=>{};"],
+    ["legal/artifact-sbom.cdx.json", "{}\n"],
+    ["legal/link-inputs.json", "{}\n"],
+    ["legal/notices.json", "{}\n"],
+    ["legal/source.json", "{}\n"],
+    ["legal/licenses/PATCHY-LICENSE.txt", "Patchy license\n"],
+    ["legal/licenses/PATCHY-NOTICE-THIRD-PARTY.txt", "Patchy notices\n"],
+    ["legal/licenses/compiler-rt-LICENSE.txt", "compiler-rt license\n"],
+    ["legal/licenses/dlmalloc.c", "dlmalloc source notice\n"],
+    ["legal/licenses/emscripten-LICENSE.txt", "Emscripten license\n"],
+    ["legal/licenses/libcxx-LICENSE.txt", "libc++ license\n"],
+    ["legal/licenses/libcxxabi-LICENSE.txt", "libc++abi license\n"],
+    ["legal/licenses/libunwind-LICENSE.txt", "libunwind license\n"],
+    ["legal/licenses/little-cms-LICENSE.txt", "Little CMS license\n"],
+    ["legal/licenses/miniz-LICENSE.txt", "miniz license\n"],
+    ["legal/licenses/musl-COPYRIGHT.txt", "musl copyright\n"],
   ]);
-  for (const [name, contents] of files) await writeFile(join(site, name), contents);
+  for (const [name, contents] of files) {
+    const path = join(site, name);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, contents);
+  }
   return site;
 }
 
@@ -62,7 +82,7 @@ test("verified releases install, activate and roll back without mutation", async
   const value = await fixture();
   t.after(() => rm(value.root, { recursive: true, force: true }));
   const first = await installRelease({ releaseDir: join(value.root, "built", value.firstId), hostRoot: value.host });
-  assert.equal(first.fileCount, 41);
+  assert.equal(first.fileCount, 57);
   assert.ok(first.elapsedMs < 600_000);
   const firstActivation = await activateRelease({ hostRoot: value.host, releaseId: value.firstId });
   assert.equal(firstActivation.previousReleaseId, null);

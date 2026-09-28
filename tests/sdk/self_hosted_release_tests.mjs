@@ -27,6 +27,22 @@ const REQUIRED = [
   "engine/index.mjs",
   "engine/protocol.mjs",
   "engine/worker.mjs",
+  "legal/artifact-sbom.cdx.json",
+  "legal/link-inputs.json",
+  "legal/notices.json",
+  "legal/source.json",
+  "legal/licenses/PATCHY-LICENSE.txt",
+  "legal/licenses/PATCHY-NOTICE-THIRD-PARTY.txt",
+  "legal/licenses/compiler-rt-LICENSE.txt",
+  "legal/licenses/dlmalloc.c",
+  "legal/licenses/emscripten-LICENSE.txt",
+  "legal/licenses/libcxx-LICENSE.txt",
+  "legal/licenses/libcxxabi-LICENSE.txt",
+  "legal/licenses/libunwind-LICENSE.txt",
+  "legal/licenses/little-cms-LICENSE.txt",
+  "legal/licenses/miniz-LICENSE.txt",
+  "legal/licenses/musl-COPYRIGHT.txt",
+  "legal.html",
   "patchy-engine.mjs",
   "patchy-engine.wasm",
   "patchy.html",
@@ -212,18 +228,24 @@ test("capability policy blocks unsafe runtime and distinguishes enhanced limits"
   assert.equal(report.filter((item) => item.required).length, 4);
 });
 
-test("capability page preserves local-first and strict-CSP contracts", async () => {
+test("capability and legal pages preserve local-first and strict-CSP contracts", async () => {
   const root = new URL("../../", import.meta.url);
-  const [html, script, apache, browserVerifier, betaGuideSmoke] = await Promise.all([
+  const [html, legalHtml, script, apache, browserVerifier, betaGuideSmoke] = await Promise.all([
     readFile(new URL("sdk/engine/site/capabilities.html", root), "utf8"),
+    readFile(new URL("sdk/engine/site/legal.html", root), "utf8"),
     readFile(new URL("sdk/engine/site/capabilities.mjs", root), "utf8"),
     readFile(new URL("packaging/web/.htaccess", root), "utf8"),
     readFile(new URL("scripts/release/verify-self-hosted-release-browser.mjs", root), "utf8"),
     readFile(new URL("tests/sdk/wasm_beta_guide_smoke.mjs", root), "utf8"),
   ]);
   assert.match(html, /does not upload a file/);
+  assert.match(html, /href="\.\/legal\.html"/);
   assert.doesNotMatch(html, /<script(?![^>]+src=)/);
   assert.doesNotMatch(html, /style=/);
+  assert.doesNotMatch(legalHtml, /<script/);
+  assert.doesNotMatch(legalHtml, /https?:\/\//);
+  assert.match(legalHtml, /artifact-sbom\.cdx\.json/);
+  assert.match(legalHtml, /Component closure is not legal clearance/);
   assert.doesNotMatch(script, /fetch\s*\(/);
   assert.doesNotMatch(script, /userAgent/);
   for (const header of [
@@ -267,6 +289,8 @@ test("capability page preserves local-first and strict-CSP contracts", async () 
   assert.match(browserVerifier, /local-first-audit-/);
   assert.match(browserVerifier, /crossOriginIsolated/);
   assert.match(browserVerifier, /precompressed asset was not served/);
+  assert.match(browserVerifier, /legalEvidence\.sbom\.components\.length, 11/);
+  assert.match(browserVerifier, /durableRetention, "not_guaranteed_by_this_artifact"/);
 });
 
 test("browser performance policy calculates p95 and rejects unbounded retained memory", () => {

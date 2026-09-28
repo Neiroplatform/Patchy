@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:,">
+  <title>Patchy licenses and source</title>
+  <link rel="stylesheet" href="./capabilities.css">
+</head>
+<body>
+  <main class="capability-shell">
+    <header>
+      <div>
+        <p class="eyebrow">RELEASE EVIDENCE</p>
+        <h1>Licenses and source</h1>
+        <p class="summary">This package records the components linked into the local-first Worker editor, their notices, and the exact source revision. These files are local to this release and do not contact a document service.</p>
+      </div>
+      <a class="back-link" href="./patchy.html">Back to editor</a>
+    </header>
+
+    <section class="policy-card" aria-labelledby="inventoryTitle">
+      <p class="eyebrow">ARTIFACT INVENTORY</p>
+      <h2 id="inventoryTitle">Machine-readable evidence</h2>
+      <ul class="evidence-links">
+        <li><a href="./legal/artifact-sbom.cdx.json">CycloneDX artifact SBOM</a></li>
+        <li><a href="./legal/link-inputs.json">Exact linker-input inventory</a></li>
+        <li><a href="./legal/notices.json">Notice index and remaining blockers</a></li>
+        <li><a href="./legal/source.json">Exact source identity</a></li>
+      </ul>
+    </section>
+
+    <section class="policy-card" aria-labelledby="noticesTitle">
+      <p class="eyebrow">NOTICES</p>
+      <h2 id="noticesTitle">Included license material</h2>
+      <ul class="evidence-links">
+        <li><a href="./legal/licenses/PATCHY-LICENSE.txt">Patchy MIT license</a></li>
+        <li><a href="./legal/licenses/PATCHY-NOTICE-THIRD-PARTY.txt">Patchy third-party notice</a></li>
+        <li><a href="./legal/licenses/little-cms-LICENSE.txt">Little CMS license</a></li>
+        <li><a href="./legal/licenses/miniz-LICENSE.txt">miniz license</a></li>
+        <li><a href="./legal/licenses/emscripten-LICENSE.txt">Emscripten license</a></li>
+        <li><a href="./legal/licenses/musl-COPYRIGHT.txt">musl copyright and license</a></li>
+        <li><a href="./legal/licenses/libcxx-LICENSE.txt">LLVM libc++ license</a></li>
+        <li><a href="./legal/licenses/libcxxabi-LICENSE.txt">LLVM libc++abi license</a></li>
+        <li><a href="./legal/licenses/compiler-rt-LICENSE.txt">LLVM compiler-rt license</a></li>
+        <li><a href="./legal/licenses/libunwind-LICENSE.txt">LLVM libunwind license</a></li>
+        <li><a href="./legal/licenses/dlmalloc.c">dlmalloc source and public-domain notice</a></li>
+      </ul>
+    </section>
+
+    <section class="policy-card" aria-labelledby="decisionTitle">
+      <p class="eyebrow">CURRENT DECISION</p>
+      <h2 id="decisionTitle">Component closure is not legal clearance</h2>
+      <p>The artifact inventory is complete for the linked and staged inputs. Public distribution remains blocked until compiled preset provenance, durable exact-source retention and the external legal decision are recorded.</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -37,7 +37,10 @@ h2 { margin-bottom: 7px; font-size: clamp(19px, 3vw, 28px); letter-spacing: -.02
 .capability-list li[data-ready="false"] output { color: var(--danger); }
 .capability-list li[data-required="false"][data-ready="false"] output { color: var(--warning); }
 .policy-card { padding: clamp(20px, 4vw, 32px); border-left: 3px solid var(--accent); background: var(--surface); }
+.policy-card + .policy-card { margin-top: 20px; }
 .policy-card p:last-child { margin-bottom: 0; }
+.policy-card a, .evidence-links a { color: #d9eaff; text-underline-offset: 3px; }
+.evidence-links { display: grid; gap: 9px; margin: 16px 0 0; padding-left: 20px; color: var(--muted); line-height: 1.5; }
 
 @media (max-width: 620px) {
   header, .section-heading { display: grid; }

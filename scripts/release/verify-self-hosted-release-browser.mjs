@@ -716,6 +716,37 @@ try {
   const capabilityTier = await page.locator(".result-card").getAttribute("data-tier");
   assert.notEqual(capabilityTier, "blocked", "release runtime is missing a required capability");
   assert.equal(await page.evaluate(() => globalThis.crossOriginIsolated), true);
+  assert.equal(await page.locator('a[href="./legal.html"]').count(), 1,
+    "system check must expose the packaged legal/source surface");
+
+  const legalResponse = await page.goto(`${baseUrl}legal.html`, { waitUntil: "domcontentloaded" });
+  assert.equal(legalResponse.status(), 200);
+  const legalEvidence = await page.evaluate(async () => {
+    const hrefs = [...document.querySelectorAll(".evidence-links a")]
+      .map((link) => link.getAttribute("href"));
+    const responses = await Promise.all(hrefs.map(async (href) => {
+      const response = await fetch(href);
+      return { href, status: response.status };
+    }));
+    const [sbom, linkInputs, notices, source] = await Promise.all([
+      fetch("./legal/artifact-sbom.cdx.json").then((response) => response.json()),
+      fetch("./legal/link-inputs.json").then((response) => response.json()),
+      fetch("./legal/notices.json").then((response) => response.json()),
+      fetch("./legal/source.json").then((response) => response.json()),
+    ]);
+    return { hrefs, responses, sbom, linkInputs, notices, source };
+  });
+  assert.equal(legalEvidence.hrefs.length, 15);
+  assert.equal(legalEvidence.hrefs.every((href) => href?.startsWith("./legal/")), true);
+  assert.equal(legalEvidence.responses.every((response) => response.status === 200), true);
+  assert.equal(legalEvidence.sbom.bomFormat, "CycloneDX");
+  assert.equal(legalEvidence.sbom.components.length, 11);
+  assert.equal(legalEvidence.sbom.compositions[0].aggregate, "complete");
+  assert.equal(legalEvidence.linkInputs.inputs.length > 0, true);
+  assert.equal(legalEvidence.linkInputs.excludedComponents.includes("Qt for WebAssembly"), true);
+  assert.equal(legalEvidence.notices.distributionGate, "BLOCKED");
+  assert.equal(legalEvidence.source.commit, manifest.sourceSha);
+  assert.equal(legalEvidence.source.durableRetention, "not_guaranteed_by_this_artifact");
 
   const assetResponse = await page.request.get(`${baseUrl}editor.mjs`);
   assert.equal(assetResponse.status(), 200);

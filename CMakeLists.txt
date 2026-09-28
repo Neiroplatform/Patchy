@@ -572,6 +572,22 @@ if(PATCHY_BUILD_WASM_SDK)
   if(NOT EMSCRIPTEN)
     message(FATAL_ERROR "PATCHY_BUILD_WASM_SDK requires the Emscripten toolchain")
   endif()
+  find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+  get_filename_component(PATCHY_EMSCRIPTEN_ROOT "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  set(PATCHY_WASM_SDK_LINK_MAP "${CMAKE_CURRENT_BINARY_DIR}/patchy-engine.map")
+  execute_process(
+    COMMAND git rev-parse HEAD
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    OUTPUT_VARIABLE PATCHY_WASM_SDK_SOURCE_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE PATCHY_WASM_SDK_GIT_RESULT
+  )
+  string(LENGTH "${PATCHY_WASM_SDK_SOURCE_SHA}" PATCHY_WASM_SDK_SOURCE_SHA_LENGTH)
+  if(NOT PATCHY_WASM_SDK_GIT_RESULT EQUAL 0 OR
+     NOT PATCHY_WASM_SDK_SOURCE_SHA_LENGTH EQUAL 40 OR
+     NOT PATCHY_WASM_SDK_SOURCE_SHA MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "The self-hosted SDK requires one exact Git source SHA")
+  endif()
   # Every object linked into a shared-memory wasm module must be compiled with
   # the same atomics/bulk-memory and exception ABI. Do not rely on callers to
   # inject these as global CMAKE_C_FLAGS/CMAKE_CXX_FLAGS: a clean configure
@@ -604,6 +620,7 @@ if(PATCHY_BUILD_WASM_SDK)
     -sPTHREAD_POOL_SIZE=32
     -sPTHREAD_POOL_SIZE_STRICT=2
     -Wno-pthreads-mem-growth
+    "SHELL:-Wl,-Map=${PATCHY_WASM_SDK_LINK_MAP}"
     "SHELL:-sEXPORTED_FUNCTIONS=@${PROJECT_SOURCE_DIR}/sdk/engine/exports.json"
   )
   set_target_properties(patchy_engine_wasm_sdk PROPERTIES
@@ -624,6 +641,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/legal.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/guide-model.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/viewport-model.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/shell-ui.mjs"
@@ -651,6 +669,14 @@ if(PATCHY_BUILD_WASM_SDK)
             "$<TARGET_FILE:patchy_engine_wasm_sdk>"
             "$<TARGET_FILE_DIR:patchy_engine_wasm_sdk>/patchy-engine.wasm"
             "${PATCHY_WASM_SDK_SITE_DIR}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/scripts/release/generate-self-hosted-compliance.py"
+            --source-root "${PROJECT_SOURCE_DIR}"
+            --build-root "${CMAKE_CURRENT_BINARY_DIR}"
+            --emscripten-root "${PATCHY_EMSCRIPTEN_ROOT}"
+            --site-root "${PATCHY_WASM_SDK_SITE_DIR}"
+            --map "${PATCHY_WASM_SDK_LINK_MAP}"
+            --source-sha "${PATCHY_WASM_SDK_SOURCE_SHA}"
     DEPENDS patchy_engine_wasm_sdk
     COMMENT "Staging the self-hosted Patchy Worker editor")
 endif()
