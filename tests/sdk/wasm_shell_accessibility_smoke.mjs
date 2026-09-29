@@ -296,6 +296,9 @@ try {
   check(afterLayer && afterLayer !== beforeLayer && focusedLayer === afterLayer,
     `virtualized Layers ArrowDown did not retain focus on the new selection (${beforeLayer} -> ${afterLayer || "none"}, focus=${focusedLayer || "none"})`);
 
+  byId("workspacePanelHistoryButton").click();
+  check(!byId("workspacePanelHistory").hidden && byId("workspacePanelLayers").hidden,
+    "History panel tab did not expose the history controls");
   const historyCurrent = byId("historyList").querySelector('[aria-selected="true"]');
   historyCurrent.focus();
   historyCurrent.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
@@ -307,6 +310,9 @@ try {
   await waitFor(() => doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
     doc.activeElement === byId("historyList").querySelector('[aria-selected="true"]'),
   "History activation did not retain focus on the resulting current state");
+  byId("workspacePanelLayersButton").click();
+  check(!byId("workspacePanelLayers").hidden && byId("workspacePanelHistory").hidden,
+    "Layers panel tab did not restore the layer controls");
 
   const revision = byId("detailRevision").textContent;
   byId("layerNameInput").focus();
@@ -340,7 +346,16 @@ try {
     "command-routed dialog close did not return focus to the menu trigger");
 
   const transformRevision = byId("detailRevision").textContent;
-  byId("layerTransformButton").focus(); byId("layerTransformButton").click();
+  const layerMenu = byId("commandMenu-layer");
+  const layerMenuTrigger = layerMenu.previousElementSibling;
+  layerMenuTrigger.focus();
+  layerMenuTrigger.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
+    key: "ArrowDown", bubbles: true, cancelable: true,
+  }));
+  const transformCommand = layerMenu.querySelector('[data-command-target="layerTransformButton"]');
+  check(!layerMenu.hidden && transformCommand && !transformCommand.disabled,
+    "Layer menu did not expose the enabled Transform command");
+  transformCommand.focus(); transformCommand.click();
   await waitFor(() => byId("layerTransformDialog").open, "Transform dialog did not open");
   const dialogControls = [...byId("layerTransformDialog").querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled)")]
     .filter((item) => item.getClientRects().length);
@@ -352,7 +367,7 @@ try {
   doc.activeElement.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
     key: "Escape", bubbles: true, cancelable: true,
   }));
-  await waitFor(() => !byId("layerTransformDialog").open && doc.activeElement === byId("layerTransformButton"),
+  await waitFor(() => !byId("layerTransformDialog").open && doc.activeElement === layerMenuTrigger,
     "Escape did not close dialog and return focus");
   check(byId("detailRevision").textContent === transformRevision, "dialog Escape committed document state");
 
