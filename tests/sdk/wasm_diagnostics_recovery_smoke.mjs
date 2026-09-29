@@ -109,13 +109,14 @@ try {
     [...canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, width, 1).data], pixelWidth));
   assert.deepEqual(canonicalPixelBytes, pixelBytes,
     "production PNG decode/canonical render changed the opaque raster marker");
-  await page.click("#textToolButton");
+  await page.click('[aria-controls="toolGroup-draw"]');
+  await page.click("#toolGroup-draw #textToolButton");
   await page.waitForSelector("#textDialog[open]");
   await page.fill("#textValueInput", "PRIVATE_TEXT_STORY_SENTINEL");
   await page.click("#commitTextButton");
   await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) >= 2 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
-  await page.click("#selectAllButton");
+  await runPaletteCommand("selectAllButton");
   await page.waitForFunction(() => Number(document.querySelector("#detailRevision")?.textContent) >= 2 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
 
