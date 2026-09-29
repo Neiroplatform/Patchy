@@ -25,7 +25,7 @@ const diagnostics = new BrowserDiagnosticRecorder({ runtime: collectRuntimeProfi
 localizer.localize(document);
 installDialogFocusReturn(document);
 installCommandSurface(document, { translate: (value) => localizer.text(value) });
-const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"));
+const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"), ".tool-button:not([hidden])");
 const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
 let client = null;
 let errorReturnFocus = null;

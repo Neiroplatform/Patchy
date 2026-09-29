@@ -134,6 +134,57 @@ try {
   await waitUntilReady();
   console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=ready`);
   assert.equal((await page.textContent("#helpButton")).trim(), "Getting started");
+  assert.deepEqual(await page.locator(".command-menu-trigger").allTextContents(),
+    ["File", "Edit", "Image", "Layer", "Select", "Filter", "View", "Window", "Help"]);
+  assert.equal(await page.locator(".tool-cluster").count(), 8,
+    "workspace tools were not collapsed into the expected semantic groups");
+  assert.equal(await page.locator(".tool-group-toggle").evaluateAll((toggles) =>
+    toggles.every((toggle) => toggle.getBoundingClientRect().width >= 24 &&
+      toggle.getBoundingClientRect().height >= 24)), true,
+  "tool group disclosures violate the WCAG 2.2 minimum target size");
+  assert.deepEqual(await page.evaluate(() =>
+    [...document.querySelectorAll("[data-workspace-panel]")].filter((panel) => !panel.hidden)
+      .map((panel) => panel.id)), ["workspacePanelLayers"]);
+  assert.equal(await page.evaluate(() => {
+    const stage = document.querySelector(".stage").getBoundingClientRect();
+    const inspector = document.querySelector(".inspector").getBoundingClientRect();
+    return stage.right <= inspector.left + .5;
+  }), true, "active stage content overlaps the inspector column");
+
+  await page.click('[data-tool-group="selection"] .tool-group-toggle');
+  assert.equal(await page.locator('[data-tool-group="selection"] .tool-group-menu [role="menuitem"]')
+    .count(), 6);
+  await page.click("#lassoToolButton");
+  assert.equal(await page.$eval('[data-tool-group="selection"] > .tool-button', (button) => button.id),
+    "lassoToolButton", "selected nested tool was not promoted to the visible rail slot");
+  assert.equal(await page.getAttribute('[data-tool-group="selection"] .tool-group-toggle', "aria-expanded"),
+    "false");
+  const selectionDisclosure = page.locator('[data-tool-group="selection"] .tool-group-toggle');
+  await selectionDisclosure.focus();
+  await selectionDisclosure.press("ArrowDown");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("role")), "menuitem",
+    "keyboard disclosure did not focus the first nested tool");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("tool-group-toggle")), true,
+    "closing a tool flyout did not return focus to its disclosure");
+
+  await page.click("#workspacePanelHistoryButton");
+  assert.deepEqual(await page.evaluate(() =>
+    [...document.querySelectorAll("[data-workspace-panel]")].filter((panel) => !panel.hidden)
+      .map((panel) => panel.id)), ["workspacePanelHistory"]);
+  await page.getByRole("button", { name: "Window", exact: true }).click();
+  await page.click('#commandMenu-window [data-command-target="workspacePanelPropertiesButton"]');
+  assert.deepEqual(await page.evaluate(() =>
+    [...document.querySelectorAll("[data-workspace-panel]")].filter((panel) => !panel.hidden)
+      .map((panel) => panel.id)), ["workspacePanelProperties"]);
+  await page.click("#workspacePanelLayersButton");
+  await page.locator("#workspacePanelLayersButton").press("ArrowRight");
+  assert.equal(await page.getAttribute("#workspacePanelPropertiesButton", "aria-selected"), "true",
+    "ArrowRight did not move between workspace panel tabs");
+  await page.locator("#workspacePanelPropertiesButton").press("Home");
+  assert.equal(await page.getAttribute("#workspacePanelLayersButton", "aria-selected"), "true",
+    "Home did not return to the first workspace panel tab");
+  console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=workspace-ia`);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -179,6 +230,11 @@ try {
     document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
   { timeout: 90_000 });
+  assert.equal(await page.evaluate(() => {
+    const stage = document.querySelector(".stage").getBoundingClientRect();
+    const inspector = document.querySelector(".inspector").getBoundingClientRect();
+    return stage.right <= inspector.left + .5;
+  }), true, "document tool options overlap the inspector column");
   await closeActiveDocument();
   await createStarterPreset("social", 1080, 1080);
   await createStarterPreset("presentation", 1920, 1080);
@@ -275,20 +331,35 @@ try {
     "closing a command menu did not return focus to its trigger");
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const commandLayout = await page.evaluate(() => {
     const trigger = document.querySelector("#commandPaletteButton");
     const menus = [...document.querySelectorAll(".command-menu")];
+    const stage = document.querySelector(".stage").getBoundingClientRect();
     return {
       paletteVisible: getComputedStyle(trigger).display !== "none",
       menusHidden: menus.every((menu) => getComputedStyle(menu).display === "none"),
       horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+      panelTabsFit: document.querySelector(".workspace-panel-tabs").scrollWidth <=
+        document.querySelector(".workspace-panel-tabs").clientWidth,
+      stageContained: stage.left >= 0 && stage.right <= innerWidth + .5,
     };
   });
   assert.deepEqual(commandLayout, {
     paletteVisible: true,
     menusHidden: true,
     horizontalOverflow: false,
+    panelTabsFit: true,
+    stageContained: true,
   });
+  await page.click('[data-tool-group="selection"] .tool-group-toggle');
+  const toolMenuBounds = await page.$eval('[data-tool-group="selection"] .tool-group-menu', (menu) => {
+    const rect = menu.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, width: rect.width };
+  });
+  assert.ok(toolMenuBounds.left >= 0 && toolMenuBounds.right <= 390,
+    `tool flyout overflows the mobile viewport: ${JSON.stringify(toolMenuBounds)}`);
+  await page.keyboard.press("Escape");
   await page.click("#commandPaletteButton");
   const paletteWidth = await page.$eval("#commandPalette", (node) => node.getBoundingClientRect().width);
   assert.ok(paletteWidth <= 390, "command palette overflows the mobile viewport");
@@ -310,6 +381,10 @@ try {
 
   await page.selectOption("#localeSelect", "ru");
   assert.equal((await page.textContent("#helpButton")).trim(), "Помощь");
+  assert.deepEqual(await page.locator(".command-menu-trigger").allTextContents(),
+    ["Файл", "Правка", "Изображение", "Слой", "Выделение", "Фильтр", "Вид", "Окно", "Помощь"]);
+  assert.equal(await page.getAttribute('[data-tool-group="selection"] .tool-group-toggle', "aria-label"),
+    "Инструменты выделения");
   await page.click("#emptyNewButton");
   assert.equal((await page.textContent("#starterDialogTitle")).trim(), "Создать локальный документ");
   await page.click("#starterCloseButton");

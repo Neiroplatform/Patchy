@@ -11,6 +11,10 @@ const GROUPS = [
     ["copyPixelsButton", "Copy selected layer", "Ctrl+C"],
     ["pastePixelsButton", "Paste layer or image", "Ctrl+V"],
   ] },
+  { id: "image", label: "Image", commands: [
+    ["transformButton", "Image and canvas size…"],
+    ["cropToolButton", "Crop tool", "C"],
+  ] },
   { id: "layer", label: "Layer", commands: [
     ["importLayerButton", "Import pixels…"], ["groupLayerButton", "Group layers"],
     ["ungroupLayerButton", "Ungroup layers"], ["removeLayerButton", "Delete layer"],
@@ -18,8 +22,7 @@ const GROUPS = [
     ["adjustmentLayerButton", "Add adjustment"],
     ["smartObjectButton", "Place Smart Object…"],
     ["openSmartObjectButton", "Open Smart Object contents"],
-    ["filterLayerButton", "Filters…"], ["smartFilterButton", "Smart Filter…"],
-    ["liquifyLayerButton", "Liquify…"], ["layerTransformButton", "Transform…"],
+    ["layerTransformButton", "Transform…"],
     ["layerWarpButton", "Warp…"], ["arrangeLayersButton", "Arrange layers"],
     ["createMaskButton", "Add layer mask"], ["createVectorMaskButton", "Add vector mask"],
     ["rasterizeLayerButton", "Rasterize layer"], ["mergeVisibleButton", "Merge visible copy"],
@@ -35,11 +38,23 @@ const GROUPS = [
     ["similarSelectionButton", "Select similar"],
     ["smoothSelectionButton", "Select and Mask…"],
   ] },
+  { id: "filter", label: "Filter", commands: [
+    ["filterLayerButton", "Pixel filters…"],
+    ["smartFilterButton", "Smart Filter…"],
+    ["liquifyLayerButton", "Liquify…"],
+  ] },
   { id: "view", label: "View", commands: [
     ["zoomOutButton", "Zoom out", "−"], ["zoomFitButton", "Fit canvas", "0"],
     ["zoomActualButton", "Actual pixels", "1"], ["zoomInButton", "Zoom in", "+"],
     ["toggleGuidesButton", "Toggle guides"], ["toggleSnapButton", "Toggle snapping"],
-    ["togglePanelsButton", "Toggle panels"], ["transformButton", "Canvas size and rotation…"],
+  ] },
+  { id: "window", label: "Window", commands: [
+    ["togglePanelsButton", "Toggle panels"],
+    ["workspacePanelLayersButton", "Layers"],
+    ["workspacePanelPropertiesButton", "Properties"],
+    ["workspacePanelHistoryButton", "History"],
+    ["workspacePanelStructureButton", "Channels and paths"],
+    ["workspacePanelInfoButton", "Document info"],
   ] },
   { id: "help", label: "Help", commands: [
     ["helpButton", "Getting started", "?"], ["systemCheckLink", "System check"],
@@ -51,6 +66,21 @@ export const COMMAND_GROUPS = Object.freeze(GROUPS.map((group) => Object.freeze(
   commands: Object.freeze(group.commands.map(([targetId, label, shortcut = ""]) =>
     Object.freeze({ id: `${group.id}.${targetId}`, group: group.id, targetId, label, shortcut }))),
 })));
+
+export const TOOL_GROUPS = Object.freeze([
+  { id: "transform", label: "Move and crop tools", members: ["moveToolButton", "cropToolButton"] },
+  { id: "selection", label: "Selection tools", members: ["marqueeToolButton", "lassoToolButton",
+    "polygonToolButton", "magicToolButton", "quickSelectToolButton", "magneticToolButton", "quickMaskToolButton"] },
+  { id: "paint", label: "Paint tools", members: ["brushToolButton", "mixerToolButton",
+    "patternStampToolButton", "eraserToolButton"] },
+  { id: "retouch", label: "Retouch tools", members: ["healToolButton", "spotHealingToolButton",
+    "patchToolButton", "cloneToolButton"] },
+  { id: "tone", label: "Local adjustment tools", members: ["smudgeToolButton", "dodgeToolButton",
+    "burnToolButton", "spongeToolButton", "blurToolButton", "sharpenToolButton"] },
+  { id: "fill", label: "Fill tools", members: ["gradientToolButton", "fillToolButton"] },
+  { id: "draw", label: "Drawing tools", members: ["penToolButton", "textToolButton"] },
+  { id: "navigation", label: "Navigation tools", members: ["panToolButton"] },
+].map((group) => Object.freeze({ ...group, members: Object.freeze(group.members) })));
 
 const normalized = (value) => String(value ?? "").normalize("NFKD").toLocaleLowerCase().trim();
 
@@ -68,6 +98,146 @@ function targetLabel(target, fallback) {
     (target?.childElementCount ? "" : target?.textContent?.replace(/\s+/g, " ").trim()) || fallback;
 }
 
+function installToolGroups(document, translate) {
+  const rail = document.querySelector(".tool-rail");
+  if (!rail || rail.dataset.grouped === "true") return null;
+  rail.dataset.grouped = "true";
+  const clusters = [];
+  let openCluster = null;
+
+  const closeCluster = ({ focus = false } = {}) => {
+    const previous = openCluster;
+    openCluster = null;
+    for (const cluster of clusters) {
+      cluster.wrapper.dataset.open = "false";
+      cluster.toggle.setAttribute("aria-expanded", "false");
+      cluster.menu.hidden = true;
+      for (const button of cluster.secondary) button.hidden = true;
+    }
+    if (focus) previous?.toggle.focus();
+  };
+
+  const open = (cluster) => {
+    closeCluster();
+    openCluster = cluster;
+    cluster.wrapper.dataset.open = "true";
+    cluster.toggle.setAttribute("aria-expanded", "true");
+    cluster.menu.hidden = false;
+    for (const button of cluster.secondary) button.hidden = false;
+    cluster.secondary[0]?.focus();
+  };
+
+  for (const group of TOOL_GROUPS) {
+    const buttons = group.members.map((id) => document.getElementById(id)).filter(Boolean);
+    if (!buttons.length) continue;
+    const [primary, ...secondary] = buttons;
+    const wrapper = document.createElement("div");
+    wrapper.className = "tool-cluster";
+    wrapper.dataset.toolGroup = group.id;
+    wrapper.dataset.open = "false";
+    primary.before(wrapper);
+    wrapper.append(primary);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "tool-group-toggle";
+    toggle.textContent = "◢";
+    toggle.setAttribute("aria-haspopup", "menu");
+    toggle.setAttribute("aria-expanded", "false");
+    const menu = document.createElement("div");
+    menu.className = "tool-group-menu";
+    menu.id = `toolGroup-${group.id}`;
+    menu.setAttribute("role", "menu");
+    menu.hidden = true;
+    toggle.setAttribute("aria-controls", menu.id);
+    const cluster = { group, wrapper, toggle, menu, primary, secondary };
+    clusters.push(cluster);
+    const syncLabels = () => {
+      const label = translate(group.label);
+      toggle.setAttribute("aria-label", label);
+      toggle.title = label;
+      menu.setAttribute("aria-label", label);
+    };
+    syncLabels();
+    const promote = (button) => {
+      if (button === cluster.primary || !cluster.menu.contains(button)) return;
+      const previous = cluster.primary;
+      const index = cluster.secondary.indexOf(button);
+      cluster.primary = button;
+      cluster.secondary[index] = previous;
+      button.hidden = false;
+      button.removeAttribute("role");
+      previous.hidden = true;
+      previous.setAttribute("role", "menuitem");
+      wrapper.insertBefore(button, toggle);
+      menu.insertBefore(previous, menu.children[index] ?? null);
+    };
+    for (const button of buttons) {
+      button.addEventListener("click", () => {
+        promote(button);
+        queueMicrotask(() => closeCluster());
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") { event.preventDefault(); closeCluster({ focus: true }); }
+      });
+    }
+    for (const button of secondary) {
+      button.hidden = true;
+      button.setAttribute("role", "menuitem");
+      menu.append(button);
+    }
+    wrapper.append(toggle, menu);
+    toggle.addEventListener("click", () => openCluster === cluster ? closeCluster() : open(cluster));
+    toggle.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") { event.preventDefault(); open(cluster); }
+      else if (event.key === "Escape") { event.preventDefault(); closeCluster(); }
+    });
+    document.addEventListener("patchy:localechange", syncLabels);
+  }
+  const spacer = rail.querySelector(".tool-spacer");
+  for (const group of TOOL_GROUPS) {
+    const cluster = clusters.find((entry) => entry.group.id === group.id);
+    if (cluster) rail.insertBefore(cluster.wrapper, spacer);
+  }
+  document.addEventListener("click", (event) => {
+    if (openCluster && !openCluster.wrapper.contains(event.target)) closeCluster();
+  });
+  return { close: closeCluster };
+}
+
+function installWorkspacePanels(document) {
+  const shell = document.querySelector(".editor-shell");
+  const tablist = document.querySelector(".workspace-panel-tabs");
+  if (!shell || !tablist) return null;
+  const tabs = [...tablist.querySelectorAll("[data-panel-target]")];
+  const panels = [...document.querySelectorAll("[data-workspace-panel]")];
+  const activate = (tab, { focus = false } = {}) => {
+    const target = tab?.dataset.panelTarget;
+    if (!target || !document.getElementById(target)) return false;
+    shell.classList.remove("panels-hidden");
+    for (const item of tabs) {
+      const selected = item === tab;
+      item.setAttribute("aria-selected", String(selected));
+      item.tabIndex = selected ? 0 : -1;
+    }
+    for (const panel of panels) panel.hidden = panel.id !== target;
+    if (focus) tab.focus();
+    return true;
+  };
+  for (const tab of tabs) {
+    tab.addEventListener("click", () => activate(tab));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const index = tabs.indexOf(tab);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 :
+        (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      activate(tabs[next], { focus: true });
+    });
+  }
+  activate(tabs.find((tab) => tab.getAttribute("aria-selected") === "true") || tabs[0]);
+  return { activate };
+}
+
 export function installCommandSurface(document, { translate = (value) => value } = {}) {
   const menubar = document.getElementById("commandMenuBar");
   const dialog = document.getElementById("commandPalette");
@@ -76,6 +246,9 @@ export function installCommandSurface(document, { translate = (value) => value }
   const results = document.getElementById("commandResults");
   const close = document.getElementById("commandPaletteClose");
   if (!menubar || !dialog || !paletteButton || !search || !results || !close) return null;
+
+  const toolGroups = installToolGroups(document, translate);
+  const workspacePanels = installWorkspacePanels(document);
 
   let openGroup = null;
   let returnFocus = null;
@@ -280,7 +453,7 @@ export function installCommandSurface(document, { translate = (value) => value }
     childList: true, characterData: true, subtree: true,
   });
 
-  return { openPalette, closeMenus, refresh: () => {
+  return { openPalette, closeMenus, toolGroups, workspacePanels, refresh: () => {
     for (const { item, command } of menuItems) syncItem(item, command);
     renderPalette();
   }, disconnect: () => observer?.disconnect() };
