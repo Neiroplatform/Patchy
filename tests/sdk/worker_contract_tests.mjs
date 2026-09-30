@@ -264,7 +264,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 560px\)/);
   assert.match(css, /\.document-actions \{ gap: 5px; overflow-x: auto;/);
-  assert.match(css, /\.inspector \{ min-width: 0; min-height: 0;[^}]+display: block; overflow-y: auto;/);
+  assert.match(css, /\.inspector \{ min-width: 0; min-height: 0;[^}]+display: grid;[^}]+overflow: hidden;/);
   assert.match(html, /role="alert"/);
   assert.match(nodeServer, /'\.css': 'text\/css; charset=utf-8'/);
   assert.match(pythonServer, /"\.css": "text\/css; charset=utf-8"/);

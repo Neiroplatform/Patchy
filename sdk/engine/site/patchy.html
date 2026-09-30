@@ -100,7 +100,8 @@
         <div class="document-tabs" id="documentTabs" role="tablist" aria-label="Open documents" hidden></div>
         <div class="stage-meta" id="stageMeta" hidden>
           <span id="documentName">Untitled</span>
-          <span class="tool-options" id="toolOptions">
+          <span class="active-tool-context" id="activeToolContext">Rectangular selection</span>
+          <span class="tool-options" id="toolOptions" role="toolbar" aria-label="Rectangular selection · Tool options">
             <label>Size <input id="brushSizeInput" type="range" min="1" max="4096" value="24"><output id="brushSizeOutput">24 px</output></label>
             <label class="non-retouch-option">Color <input id="brushColorInput" type="color" value="#111111"></label>
             <label class="non-retouch-option standard-paint-option">Target <select id="paintTargetSelect" aria-label="Paint target">
@@ -195,13 +196,13 @@
 
       <aside class="inspector" id="inspector" aria-label="Document panels">
         <div class="workspace-panel-tabs" role="tablist" aria-label="Workspace panels">
-          <button id="workspacePanelLayersButton" type="button" role="tab" aria-selected="true" aria-controls="workspacePanelLayers" data-panel-target="workspacePanelLayers">Layers</button>
-          <button id="workspacePanelPropertiesButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelProperties" data-panel-target="workspacePanelProperties" tabindex="-1">Properties</button>
+          <button id="workspacePanelLayersButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelLayers" data-panel-target="workspacePanelLayers" data-primary-tab hidden tabindex="-1">Layers</button>
+          <button id="workspacePanelPropertiesButton" type="button" role="tab" aria-selected="true" aria-controls="workspacePanelProperties" data-panel-target="workspacePanelProperties">Properties</button>
           <button id="workspacePanelHistoryButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelHistory" data-panel-target="workspacePanelHistory" tabindex="-1">History</button>
           <button id="workspacePanelStructureButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelStructure" data-panel-target="workspacePanelStructure" tabindex="-1">Channels</button>
           <button id="workspacePanelInfoButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelInfo" data-panel-target="workspacePanelInfo" tabindex="-1">Info</button>
         </div>
-        <section class="panel layers-panel" id="workspacePanelLayers" role="tabpanel" aria-labelledby="workspacePanelLayersButton" data-workspace-panel>
+        <section class="panel layers-panel" id="workspacePanelLayers" role="tabpanel" aria-labelledby="workspacePanelLayersButton" data-workspace-panel data-primary-panel>
           <header class="panel-header">
             <div><p class="eyebrow">STRUCTURE</p><h2>Layers</h2></div>
             <span class="layer-count" id="layerCount">0</span>
@@ -214,9 +215,9 @@
             <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
             <button type="button" id="filterLayerButton" disabled>Filters</button>
             <button type="button" id="liquifyLayerButton" disabled>Liquify…</button>
-            <button type="button" id="textLayerButton" disabled>Add text</button>
-            <button type="button" id="shapeLayerButton" disabled>Add shape</button>
-            <button type="button" id="adjustmentLayerButton" disabled>Add adjustment</button>
+            <button type="button" id="textLayerButton" disabled>Create text</button>
+            <button type="button" id="shapeLayerButton" disabled>Create shape</button>
+            <button type="button" id="adjustmentLayerButton" disabled>Create adjustment</button>
             <button type="button" id="smartObjectButton" disabled>Place Smart Object</button>
             <button type="button" id="openSmartObjectButton" disabled>Open contents</button>
             <button type="button" id="smartFilterButton" disabled>Smart Filter</button>
@@ -243,7 +244,7 @@
           <div class="layer-list" id="layerList" role="list" aria-label="Layers"></div>
           <div class="panel-empty" id="layersEmpty">Open a document to inspect its layers.</div>
         </section>
-        <section class="panel properties-panel" id="workspacePanelProperties" role="tabpanel" aria-labelledby="workspacePanelPropertiesButton" data-workspace-panel hidden>
+        <section class="panel properties-panel" id="workspacePanelProperties" role="tabpanel" aria-labelledby="workspacePanelPropertiesButton" data-workspace-panel data-secondary-panel>
           <header class="panel-header"><div><p class="eyebrow">APPEARANCE</p><h2 id="propertiesTitle">Selected layer</h2></div></header>
           <div class="property-fields">
             <label><span>Name</span><input id="layerNameInput" type="text" maxlength="256" disabled></label>
@@ -268,9 +269,10 @@
             </select></label>
             <button id="applyLayerStyleButton" type="button" disabled>Apply style</button>
             <button id="editLayerStyleButton" type="button" disabled>Edit effects…</button>
+            <button id="editLayerTypeButton" type="button" disabled hidden>Edit layer contents…</button>
           </div>
         </section>
-        <section class="panel history-panel" id="workspacePanelHistory" role="tabpanel" aria-labelledby="workspacePanelHistoryButton" data-workspace-panel hidden>
+        <section class="panel history-panel" id="workspacePanelHistory" role="tabpanel" aria-labelledby="workspacePanelHistoryButton" data-workspace-panel data-secondary-panel hidden>
           <header class="panel-header">
             <div><p class="eyebrow">DOCUMENT</p><h2 id="historyTitle">History</h2></div>
             <span class="layer-count" id="historyCount">0</span>
@@ -278,7 +280,7 @@
           <div class="history-list" id="historyList" role="listbox" aria-label="Document history"></div>
           <div class="panel-empty" id="historyEmpty">Edit the document to build history.</div>
         </section>
-        <section class="panel structure-panel" id="workspacePanelStructure" role="tabpanel" aria-labelledby="workspacePanelStructureButton" data-workspace-panel hidden>
+        <section class="panel structure-panel" id="workspacePanelStructure" role="tabpanel" aria-labelledby="workspacePanelStructureButton" data-workspace-panel data-secondary-panel hidden>
           <header class="panel-header"><div><p class="eyebrow">CHANNELS &amp; PATHS</p><h2>Structure</h2></div></header>
           <div class="layer-actions">
             <button id="invertSelectionButton" type="button" disabled>Invert selection</button>
@@ -314,7 +316,7 @@
             </div>
           </div>
         </section>
-        <section class="panel details-panel" id="workspacePanelInfo" role="tabpanel" aria-labelledby="workspacePanelInfoButton" data-workspace-panel hidden>
+        <section class="panel details-panel" id="workspacePanelInfo" role="tabpanel" aria-labelledby="workspacePanelInfoButton" data-workspace-panel data-secondary-panel hidden>
           <header class="panel-header"><div><p class="eyebrow">SESSION</p><h2>Document</h2></div></header>
           <dl class="details-grid">
             <div><dt>State</dt><dd id="detailState">No document</dd></div>
@@ -566,7 +568,7 @@
             <label><span>Width</span><input id="textWidthInput" type="number" min="1" step="1" required></label>
             <label><span>Height</span><input id="textHeightInput" type="number" min="1" step="1" required></label>
           </div>
-          <div class="dialog-actions"><button class="button button-primary" id="commitTextButton" type="button">Create text</button></div>
+          <div class="dialog-actions"><button class="button" type="submit" value="cancel" formnovalidate>Cancel</button><button class="button button-primary" id="commitTextButton" type="button">Create text</button></div>
         </section>
       </form>
     </dialog>
@@ -766,7 +768,7 @@
           <label><span>Fill</span><input id="shapeFillInput" type="color" value="#4f7cff"></label>
           <label><span>Stroke</span><input id="shapeStrokeInput" type="color" value="#10141d"></label>
           <label><span>Stroke width</span><input id="shapeStrokeWidthInput" type="number" min="0" max="200" value="0"></label>
-        </div><div class="dialog-actions"><button class="button button-primary" id="commitShapeButton" type="button">Create shape</button></div></section>
+        </div><div class="dialog-actions"><button class="button" type="submit" value="cancel" formnovalidate>Cancel</button><button class="button button-primary" id="commitShapeButton" type="button">Create shape</button></div></section>
       </form>
     </dialog>
     <dialog class="document-dialog" id="adjustmentDialog" aria-labelledby="adjustmentDialogTitle">
@@ -777,7 +779,7 @@
           <option value="4">Invert</option><option value="5">Posterize</option><option value="6">Threshold</option>
         </select></label><div class="property-fields" id="adjustmentParameterFields"></div>
         <p class="dialog-note">Adjustment layers remain editable and are preserved through PSD save/reopen.</p>
-        <div class="dialog-actions"><button class="button button-primary" id="commitAdjustmentButton" type="button">Apply adjustment</button></div></section>
+        <div class="dialog-actions"><button class="button" type="submit" value="cancel" formnovalidate>Cancel</button><button class="button button-primary" id="commitAdjustmentButton" type="button">Apply adjustment</button></div></section>
       </form>
     </dialog>
     <dialog class="document-dialog" id="filterDialog" aria-labelledby="filterDialogTitle">

@@ -17,14 +17,26 @@ import { chooseRovingLayerId, createLocalizer, installDialogFocusReturn, install
   isEditableTarget } from "./shell-ui.mjs";
 import { starterDocumentRequest, starterPreset } from "./starter-model.mjs";
 import { installCommandSurface } from "./command-surface.mjs";
+import { installWorkspaceContext } from "./workspace-context.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
+const contextualEditorIds = ["textDialog", "shapeDialog", "adjustmentDialog"];
+const propertiesPanel = $("workspacePanelProperties");
+for (const id of contextualEditorIds) {
+  const dialog = $(id);
+  dialog.classList.add("context-editor-dialog");
+  propertiesPanel.append(dialog);
+  dialog.addEventListener("close", () => {
+    if (propertiesPanel.dataset.contextEditor === id) delete propertiesPanel.dataset.contextEditor;
+  });
+}
 const localizer = createLocalizer(document, document.documentElement.lang);
 const diagnostics = new BrowserDiagnosticRecorder({ runtime: collectRuntimeProfile(globalThis) });
 localizer.localize(document);
 installDialogFocusReturn(document);
-installCommandSurface(document, { translate: (value) => localizer.text(value) });
+const commandSurface = installCommandSurface(document, { translate: (value) => localizer.text(value) });
+const workspaceContext = installWorkspaceContext(document, { translate: (value) => localizer.text(value) });
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"), ".tool-button:not([hidden])");
 const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
 let client = null;
@@ -37,6 +49,7 @@ let snapshot = null;
 let selectedLayerId = null;
 let selectedLayerIds = new Set();
 let layerSelectionAnchorId = null;
+let lastLayerActivation = { id: null, at: 0 };
 let selectedChannelId = null;
 let selectedPathId = null;
 let documentName = "Untitled.psd";
@@ -179,6 +192,52 @@ function setSingleLayerSelection(layerId) {
 }
 
 function clearLayerSelection() { setSingleLayerSelection(null); }
+
+function revealLayerProperties() {
+  commandSurface?.workspacePanels?.activate($("workspacePanelPropertiesButton"));
+}
+
+function openContextEditor(dialogId) {
+  revealLayerProperties();
+  for (const id of contextualEditorIds) {
+    const dialog = $(id);
+    if (id !== dialogId && dialog.open) dialog.close("switch");
+  }
+  propertiesPanel.dataset.contextEditor = dialogId;
+  const dialog = $(dialogId);
+  if (!dialog.open) dialog.show();
+  queueMicrotask(() => dialog.querySelector(
+    "input:not([disabled]), select:not([disabled]), textarea:not([disabled])")?.focus());
+}
+
+function focusSelectedLayerRow() {
+  if (selectedLayerId == null) return;
+  const row = $("layerList").querySelector(`[data-layer-id="${String(selectedLayerId)}"] .layer-select-button`);
+  row?.focus({ preventScroll: true });
+}
+
+function selectCreatedLayer(kind, operation) {
+  const previous = new Set(snapshot?.layers.map((layer) => layer.id) || []);
+  return async () => {
+    const next = await operation();
+    const created = [...(next?.layers || [])].reverse()
+      .find((layer) => layer.kind === kind && !previous.has(layer.id));
+    if (created) {
+      setSingleLayerSelection(created.id);
+      revealLayerProperties();
+    }
+    return next;
+  };
+}
+
+function editSelectedLayerType() {
+  const layer = selectedLayer();
+  if (busy || !layer) return;
+  revealLayerProperties();
+  if (layer.kind === 2) openAdjustmentDialog();
+  else if (layer.kind === 3) openTextDialog();
+  else if (layer.kind === 4) openShapeDialog();
+}
 
 function selectedLayerIdsTopToBottom({ rootsOnly = false } = {}) {
   if (!snapshot) return [];
@@ -394,7 +453,7 @@ function updateControls() {
   $("liquifyLayerButton").disabled = busy || !single || layer?.kind !== 0 ||
     !layer?.bounds || layer.bounds.width <= 0 || layer.bounds.height <= 0;
   $("textLayerButton").disabled = busy || !snapshot;
-  localizer.setText($("textLayerButton"), single && layer?.kind === 3 ? "Edit text" : "Add text");
+  localizer.setText($("textLayerButton"), single && layer?.kind === 3 ? "Edit text" : "Create text");
   $("layerTransformButton").disabled = busy || !transformSelection();
   const arrangement = transformSelection();
   const arrangementMode = Number($("layerArrangeModeInput").value);
@@ -408,6 +467,13 @@ function updateControls() {
     Boolean(layer?.vectorMask) || Boolean(layer?.mask && !layer.mask.linked);
   $("shapeLayerButton").disabled = busy || !snapshot;
   $("adjustmentLayerButton").disabled = busy || !snapshot;
+  localizer.setText($("shapeLayerButton"), single && layer?.kind === 4 ? "Edit shape" : "Create shape");
+  localizer.setText($("adjustmentLayerButton"), single && layer?.kind === 2 ? "Edit adjustment" : "Create adjustment");
+  const editableType = single && [2, 3, 4].includes(layer?.kind);
+  $("editLayerTypeButton").hidden = !editableType;
+  $("editLayerTypeButton").disabled = busy || !editableType;
+  if (editableType) localizer.setText($("editLayerTypeButton"), layer.kind === 2 ? "Edit adjustment" :
+    layer.kind === 3 ? "Edit text" : "Edit shape");
   $("smartObjectButton").disabled = busy || !snapshot;
   localizer.setText($("smartObjectButton"), layer?.kind === 5 ? "Replace Smart Object" : "Place Smart Object");
   $("openSmartObjectButton").disabled = busy || !single || layer?.kind !== 5 ||
@@ -1193,10 +1259,16 @@ function renderLayers() {
     selectButton.tabIndex = rovingLayerId === layer.id ? 0 : -1;
     selectButton.setAttribute("aria-pressed", String(selectedLayerIds.has(layer.id)));
     localizer.setAttribute(selectButton, "aria-label", `Select ${layer.name || "unnamed layer"}`);
-    row.querySelector(".layer-select-button").addEventListener("click", (event) => {
+    selectButton.addEventListener("click", (event) => {
+      const now = performance.now();
+      const repeated = lastLayerActivation.id === layer.id && now - lastLayerActivation.at < 500;
+      lastLayerActivation = { id: layer.id, at: now };
       selectLayerFromEvent(layer, event, layers);
       renderLayers();
       renderLayerProperties();
+      if (repeated && !event.shiftKey && !(event.ctrlKey || event.metaKey)) {
+        queueMicrotask(editSelectedLayerType);
+      }
     });
     row.addEventListener("dragstart", (event) => {
       if (!selectedLayerIds.has(layer.id)) setSingleLayerSelection(layer.id);
@@ -1791,6 +1863,7 @@ function setCanvasTool(tool) {
   if (tool !== "crop" && cropDraft) { cropDraft = null; renderSelection(); }
   canvasTool = tool;
   $("canvasViewport").dataset.tool = tool;
+  let activeToolButton = null;
   for (const [id, value] of [["moveToolButton", "move"], ["cropToolButton", "crop"],
     ["marqueeToolButton", "marquee"],
     ["lassoToolButton", "lasso"], ["polygonToolButton", "polygon"], ["magicToolButton", "magic"],
@@ -1806,35 +1879,10 @@ function setCanvasTool(tool) {
     ["sharpenToolButton", "sharpen"], ["gradientToolButton", "gradient"], ["penToolButton", "pen"],
     ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
+    if (tool === value) activeToolButton = $(id);
   }
-  for (const option of document.querySelectorAll(".retouch-option")) {
-    option.hidden = tool !== "spotHealing" && tool !== "patch";
-  }
-  for (const option of document.querySelectorAll(".non-retouch-option")) {
-    option.hidden = tool === "spotHealing" || tool === "patch" ||
-      ["smudge", "dodge", "burn", "sponge", "blur", "sharpen"].includes(tool);
-  }
-  for (const option of document.querySelectorAll(".retouch-spot-option")) {
-    option.hidden = tool !== "spotHealing";
-  }
-  for (const option of document.querySelectorAll(".retouch-patch-option")) {
-    option.hidden = tool !== "patch";
-  }
-  const localBrush = ["smudge", "dodge", "burn", "sponge", "blur", "sharpen"].includes(tool);
-  for (const option of document.querySelectorAll(".local-brush-option")) option.hidden = !localBrush;
-  for (const option of document.querySelectorAll(".local-tone-option")) {
-    option.hidden = tool !== "dodge" && tool !== "burn";
-  }
-  for (const option of document.querySelectorAll(".local-sponge-option")) {
-    option.hidden = tool !== "sponge";
-  }
-  const advancedPaint = tool === "mixer" || tool === "patternStamp";
-  for (const option of document.querySelectorAll(".standard-paint-option")) {
-    option.hidden = advancedPaint || option.hidden;
-  }
-  for (const option of document.querySelectorAll(".advanced-paint-option")) option.hidden = !advancedPaint;
-  for (const option of document.querySelectorAll(".advanced-mixer-option")) option.hidden = tool !== "mixer";
-  for (const option of document.querySelectorAll(".advanced-pattern-option")) option.hidden = tool !== "patternStamp";
+  commandSurface?.toolGroups?.promote(activeToolButton);
+  workspaceContext?.render(tool);
   if (tool === "quickMask") renderQuickMask();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   syncToolRoving(document.querySelector('.tool-rail [aria-pressed="true"]') || document.activeElement);
@@ -2294,6 +2342,7 @@ async function mutate(title, operation) {
     recordHistoryMutation(before, next, title);
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
+    return next;
   }
   catch (error) {
     showError(`${title} failed`, error);
@@ -2899,23 +2948,28 @@ function openShapeDialog() {
     ["shapeWidthInput", bounds.width], ["shapeHeightInput", bounds.height]]) $(id).value = String(value);
   $("shapeDialogTitle").textContent = layer?.kind === 4 ? "Edit vector points" : "Create vector shape";
   $("commitShapeButton").textContent = layer?.kind === 4 ? "Update shape" : "Create shape";
-  $("shapeDialog").showModal();
+  openContextEditor("shapeDialog");
 }
 
-function commitShape() {
+async function commitShape() {
   const x = integerInput("shapeXInput"); const y = integerInput("shapeYInput");
   const width = integerInput("shapeWidthInput", true); const height = integerInput("shapeHeightInput", true);
   const strokeWidth = Number($("shapeStrokeWidthInput").value);
   if ([x, y, width, height].some((value) => value == null) || !Number.isFinite(strokeWidth) || strokeWidth < 0) return;
-  $("shapeDialog").close();
   const bounds = { x, y, width, height };
   const layer = selectedLayer();
   const input = { name: layer?.name || "Shape",
     path: geometricShapePath($("shapeKindInput").value, bounds),
     fill: colorBytes($("shapeFillInput").value), strokeEnabled: strokeWidth > 0,
     stroke: colorBytes($("shapeStrokeInput").value), strokeWidth };
-  mutate(layer?.kind === 4 ? "Updating vector points" : "Creating vector shape", () => layer?.kind === 4
-    ? client.updateVectorShape(layer.id, input) : client.addVectorShape(input));
+  const operation = layer?.kind === 4
+    ? () => client.updateVectorShape(layer.id, input)
+    : selectCreatedLayer(4, () => client.addVectorShape(input));
+  const next = await mutate(layer?.kind === 4 ? "Updating vector points" : "Creating vector shape", operation);
+  if (next !== DIAGNOSTIC_COMMAND_FAILED) {
+    $("shapeDialog").close("apply");
+    queueMicrotask(focusSelectedLayerRow);
+  }
 }
 
 function openAdjustmentDialog() {
@@ -2926,7 +2980,7 @@ function openAdjustmentDialog() {
   $("commitAdjustmentButton").textContent = editing ? "Update adjustment" : "Create adjustment";
   $("adjustmentKindInput").value = String(layer?.adjustment?.kind ?? 7);
   renderAdjustmentParameters(editing ? layer.adjustment : null);
-  $("adjustmentDialog").showModal();
+  openContextEditor("adjustmentDialog");
 }
 
 function renderAdjustmentParameters(existing = null) {
@@ -2955,7 +3009,7 @@ function renderAdjustmentParameters(existing = null) {
   }
 }
 
-function commitAdjustment() {
+async function commitAdjustment() {
   const kind = Number($("adjustmentKindInput").value);
   const definition = ADJUSTMENTS.find((item) => item.kind === kind);
   if (!definition) return;
@@ -2990,9 +3044,14 @@ function commitAdjustment() {
   }
   const input = { name: adjustmentName(kind), kind, values, curvePoints };
   const layer = selectedLayer();
-  $("adjustmentDialog").close();
-  mutate(layer?.kind === 2 ? "Updating adjustment" : "Creating adjustment", () => layer?.kind === 2
-    ? client.updateAdjustment(layer.id, input) : client.addAdjustment(input));
+  const operation = layer?.kind === 2
+    ? () => client.updateAdjustment(layer.id, input)
+    : selectCreatedLayer(2, () => client.addAdjustment(input));
+  const next = await mutate(layer?.kind === 2 ? "Updating adjustment" : "Creating adjustment", operation);
+  if (next !== DIAGNOSTIC_COMMAND_FAILED) {
+    $("adjustmentDialog").close("apply");
+    queueMicrotask(focusSelectedLayerRow);
+  }
 }
 
 async function placeSmartObject(file) {
@@ -3314,7 +3373,7 @@ function openTextDialog() {
   renderTextRunList(); renderParagraphRunList();
   for (const [id, value] of [["textXInput", bounds.x], ["textYInput", bounds.y],
     ["textWidthInput", bounds.width], ["textHeightInput", bounds.height]]) $(id).value = String(value);
-  $("textDialog").showModal();
+  openContextEditor("textDialog");
 }
 
 async function commitTextDialog() {
@@ -3335,11 +3394,17 @@ async function commitTextDialog() {
       textEditingId ? layer?.name || "Text" : value.split(/\s+/)[0] || "Text",
       textDialogRuns, textDialogParagraphRuns);
   } catch (error) { showError("Could not prepare text", error); return; }
-  $("textDialog").close();
   const editing = textEditingId; textEditingId = null;
-  await mutate(editing ? "Updating text" : "Creating text", () => editing
-    ? client.updateTextLayer(editing, payload, { transferOwnership: true })
-    : client.addTextLayer(payload, { transferOwnership: true }));
+  const operation = editing
+    ? () => client.updateTextLayer(editing, payload, { transferOwnership: true })
+    : selectCreatedLayer(3, () => client.addTextLayer(payload, { transferOwnership: true }));
+  const next = await mutate(editing ? "Updating text" : "Creating text", operation);
+  if (next !== DIAGNOSTIC_COMMAND_FAILED) {
+    $("textDialog").close("apply");
+    queueMicrotask(focusSelectedLayerRow);
+  } else {
+    textEditingId = editing;
+  }
 }
 
 function openLayerTransformDialog() {
@@ -4237,16 +4302,19 @@ $("adjustmentKindInput").addEventListener("change", () => renderAdjustmentParame
 $("commitFilterButton").addEventListener("click", () => {
   try { commitFilter(); } catch (error) { showError("Could not apply filter", error); }
 });
-$("commitAdjustmentButton").addEventListener("click", () => {
-  try { commitAdjustment(); } catch (error) { showError("Could not apply adjustment", error); }
+$("commitAdjustmentButton").addEventListener("click", async () => {
+  try { await commitAdjustment(); } catch (error) { showError("Could not apply adjustment", error); }
 });
 $("textLayerButton").addEventListener("click", openTextDialog);
 $("shapeLayerButton").addEventListener("click", openShapeDialog);
 $("adjustmentLayerButton").addEventListener("click", openAdjustmentDialog);
+$("editLayerTypeButton").addEventListener("click", editSelectedLayerType);
 $("smartObjectButton").addEventListener("click", () => $("smartObjectInput").click());
 $("smartObjectInput").addEventListener("change", () => { placeSmartObject($("smartObjectInput").files[0]); $("smartObjectInput").value = ""; });
 $("smartFilterButton").addEventListener("click", openSmartFilterDialog);
-$("commitShapeButton").addEventListener("click", commitShape);
+$("commitShapeButton").addEventListener("click", async () => {
+  try { await commitShape(); } catch (error) { showError("Could not apply shape", error); }
+});
 $("commitSmartFilterButton").addEventListener("click", commitSmartFilter);
 $("layerTransformButton").addEventListener("click", openLayerTransformDialog);
 $("layerWarpButton").addEventListener("click", openLayerWarpDialog);

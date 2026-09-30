@@ -638,6 +638,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/command-surface.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/workspace-context.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.mjs"

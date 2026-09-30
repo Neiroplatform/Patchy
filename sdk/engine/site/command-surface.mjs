@@ -149,7 +149,7 @@ function installToolGroups(document, translate) {
     menu.setAttribute("role", "menu");
     menu.hidden = true;
     toggle.setAttribute("aria-controls", menu.id);
-    const cluster = { group, wrapper, toggle, menu, primary, secondary };
+    const cluster = { group, wrapper, toggle, menu, primary, secondary, promote: null };
     clusters.push(cluster);
     const syncLabels = () => {
       const label = translate(group.label);
@@ -171,6 +171,7 @@ function installToolGroups(document, translate) {
       wrapper.insertBefore(button, toggle);
       menu.insertBefore(previous, menu.children[index] ?? null);
     };
+    cluster.promote = promote;
     for (const button of buttons) {
       button.addEventListener("click", () => {
         promote(button);
@@ -178,6 +179,17 @@ function installToolGroups(document, translate) {
       });
       button.addEventListener("keydown", (event) => {
         if (event.key === "Escape") { event.preventDefault(); closeCluster({ focus: true }); }
+        else if (event.key === "ArrowRight" && button === cluster.primary) {
+          event.preventDefault(); open(cluster);
+        } else if (cluster.menu.contains(button) && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+          const available = [...cluster.menu.querySelectorAll(".tool-button:not([hidden])")];
+          if (!available.length) return;
+          event.preventDefault();
+          const index = available.indexOf(button);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? available.length - 1 :
+            (index + (event.key === "ArrowDown" ? 1 : -1) + available.length) % available.length;
+          available[next].focus();
+        }
       });
     }
     for (const button of secondary) {
@@ -201,7 +213,15 @@ function installToolGroups(document, translate) {
   document.addEventListener("click", (event) => {
     if (openCluster && !openCluster.wrapper.contains(event.target)) closeCluster();
   });
-  return { close: closeCluster };
+  return {
+    close: closeCluster,
+    promote(target) {
+      const cluster = clusters.find((entry) => entry.primary === target || entry.secondary.includes(target));
+      if (!cluster || !target) return false;
+      cluster.promote(target);
+      return true;
+    },
+  };
 }
 
 function installWorkspacePanels(document) {
@@ -210,16 +230,35 @@ function installWorkspacePanels(document) {
   if (!shell || !tablist) return null;
   const tabs = [...tablist.querySelectorAll("[data-panel-target]")];
   const panels = [...document.querySelectorAll("[data-workspace-panel]")];
+  const narrowViewport = document.defaultView?.matchMedia?.("(max-width: 820px)");
+  const primaryTab = tabs.find((tab) => tab.hasAttribute("data-primary-tab"));
+  const primaryPanel = panels.find((panel) => panel.hasAttribute("data-primary-panel"));
+  const secondaryTabs = tabs.filter((tab) => tab !== primaryTab);
+  let activeTab = secondaryTabs.find((tab) => tab.getAttribute("aria-selected") === "true") || secondaryTabs[0];
+  let secondaryTarget = "workspacePanelProperties";
   const activate = (tab, { focus = false } = {}) => {
     const target = tab?.dataset.panelTarget;
     if (!target || !document.getElementById(target)) return false;
+    const narrow = Boolean(narrowViewport?.matches);
+    if (!narrow && tab === primaryTab) {
+      shell.classList.remove("panels-hidden");
+      primaryPanel.hidden = false;
+      if (focus) primaryPanel.querySelector("button:not(:disabled), [tabindex='0']")?.focus();
+      return true;
+    }
+    activeTab = tab;
+    if (target !== "workspacePanelLayers") secondaryTarget = target;
     shell.classList.remove("panels-hidden");
     for (const item of tabs) {
       const selected = item === tab;
       item.setAttribute("aria-selected", String(selected));
       item.tabIndex = selected ? 0 : -1;
     }
-    for (const panel of panels) panel.hidden = panel.id !== target;
+    for (const panel of panels) {
+      panel.hidden = narrow ? panel.id !== target :
+        !(panel.hasAttribute("data-primary-panel") || panel.id === secondaryTarget);
+    }
+    shell.dataset.inspectorMode = narrow ? "single" : "dual";
     if (focus) tab.focus();
     return true;
   };
@@ -228,13 +267,33 @@ function installWorkspacePanels(document) {
     tab.addEventListener("keydown", (event) => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
-      const index = tabs.indexOf(tab);
-      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 :
-        (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-      activate(tabs[next], { focus: true });
+      const available = tabs.filter((item) => !item.hidden);
+      const index = available.indexOf(tab);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? available.length - 1 :
+        (index + (event.key === "ArrowRight" ? 1 : -1) + available.length) % available.length;
+      activate(available[next], { focus: true });
     });
   }
-  activate(tabs.find((tab) => tab.getAttribute("aria-selected") === "true") || tabs[0]);
+  const syncLayout = () => {
+    const narrow = Boolean(narrowViewport?.matches);
+    if (primaryTab) primaryTab.hidden = !narrow;
+    if (primaryPanel) {
+      primaryPanel.setAttribute("role", narrow ? "tabpanel" : "region");
+      if (narrow) {
+        primaryPanel.setAttribute("aria-labelledby", primaryTab.id);
+        primaryPanel.removeAttribute("aria-label");
+      } else {
+        primaryPanel.removeAttribute("aria-labelledby");
+        primaryPanel.setAttribute("aria-label", "Layers");
+      }
+    }
+    if (!narrow && activeTab === primaryTab) {
+      activeTab = secondaryTabs.find((tab) => tab.dataset.panelTarget === secondaryTarget) || secondaryTabs[0];
+    }
+    activate(activeTab);
+  };
+  narrowViewport?.addEventListener?.("change", syncLayout);
+  syncLayout();
   return { activate };
 }
 

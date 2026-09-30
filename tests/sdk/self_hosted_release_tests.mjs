@@ -21,6 +21,7 @@ const REQUIRED = [
   "capabilities.html",
   "capabilities.mjs",
   "command-surface.mjs",
+  "workspace-context.mjs",
   "editor.css",
   "editor.mjs",
   "engine/client.mjs",

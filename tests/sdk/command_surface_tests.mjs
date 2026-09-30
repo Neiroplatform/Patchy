@@ -62,6 +62,7 @@ test("production shell stages and publishes the accessible command surface", asy
   ]) assert.match(html, contract);
   assert.match(css, /\.command-menu-panel/);
   assert.match(css, /\.tool-group-menu/);
+  assert.match(css, /\.tool-cluster[\s\S]+grid-template-columns: 26px 24px/);
   assert.match(css, /\.workspace-panel-tabs/);
   assert.match(css, /\.command-palette::backdrop/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]+\.command-menubar/);
