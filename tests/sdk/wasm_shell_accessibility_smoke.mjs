@@ -297,8 +297,8 @@ try {
     `virtualized Layers ArrowDown did not retain focus on the new selection (${beforeLayer} -> ${afterLayer || "none"}, focus=${focusedLayer || "none"})`);
 
   byId("workspacePanelHistoryButton").click();
-  check(!byId("workspacePanelHistory").hidden && byId("workspacePanelLayers").hidden,
-    "History panel tab did not expose the history controls");
+  check(!byId("workspacePanelHistory").hidden && !byId("workspacePanelLayers").hidden,
+    "History context did not remain usable beside the desktop Layers panel");
   const historyCurrent = byId("historyList").querySelector('[aria-selected="true"]');
   historyCurrent.focus();
   historyCurrent.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
@@ -310,9 +310,10 @@ try {
   await waitFor(() => doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
     doc.activeElement === byId("historyList").querySelector('[aria-selected="true"]'),
   "History activation did not retain focus on the resulting current state");
-  byId("workspacePanelLayersButton").click();
-  check(!byId("workspacePanelLayers").hidden && byId("workspacePanelHistory").hidden,
-    "Layers panel tab did not restore the layer controls");
+  byId("workspacePanelPropertiesButton").click();
+  check(!byId("workspacePanelLayers").hidden && !byId("workspacePanelProperties").hidden &&
+    byId("workspacePanelHistory").hidden,
+  "Properties context did not replace History beside the desktop Layers panel");
 
   const revision = byId("detailRevision").textContent;
   byId("layerNameInput").focus();
@@ -565,10 +566,22 @@ try {
     "narrow shell introduced document-level horizontal overflow");
   check(doc.querySelector(".inspector").getBoundingClientRect().width > 0,
     "narrow-width policy made document panels unreachable");
-  for (const id of ["brushSizeInput", "brushColorInput", "paintTargetSelect", "paintPresetSelect",
-    "selectionToleranceInput", "edgeContrastInput"]) {
-    check(byId(id).getClientRects().length, `narrow-width policy hid P0 tool control ${id}`);
-  }
+  const toolControlVisible = (id) => byId(id).getClientRects().length > 0;
+  byId("brushToolButton").click(); await delay();
+  check(["brushSizeInput", "brushColorInput", "paintTargetSelect"].every(toolControlVisible),
+    "narrow Brush context hid a relevant P0 control");
+  check(!toolControlVisible("selectionToleranceInput") && !toolControlVisible("edgeContrastInput"),
+    "narrow Brush context retained irrelevant selection controls");
+  byId("quickSelectToolButton").click(); await delay();
+  check(["brushSizeInput", "selectionToleranceInput", "edgeContrastInput"].every(toolControlVisible),
+    "narrow Quick Select context hid a relevant P0 control");
+  check(!toolControlVisible("brushColorInput") && !toolControlVisible("paintTargetSelect"),
+    "narrow Quick Select context retained irrelevant paint controls");
+  byId("gradientToolButton").click(); await delay();
+  check(["brushColorInput", "paintTargetSelect", "paintPresetSelect"].every(toolControlVisible),
+    "narrow Gradient context hid a relevant P0 control");
+  check(!toolControlVisible("selectionToleranceInput") && !toolControlVisible("edgeContrastInput"),
+    "narrow Gradient context retained irrelevant selection controls");
   const hasReducedMotionRule = [...doc.styleSheets].some((sheet) => {
     try { return [...sheet.cssRules].some((rule) => rule.conditionText?.includes("prefers-reduced-motion")); }
     catch { return false; }
