@@ -18,6 +18,7 @@ import { chooseRovingLayerId, createLocalizer, installDialogFocusReturn, install
 import { starterDocumentRequest, starterPreset } from "./starter-model.mjs";
 import { installCommandSurface } from "./command-surface.mjs";
 import { installWorkspaceContext } from "./workspace-context.mjs";
+import { openFileKind } from "./reference-workflow.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -38,6 +39,28 @@ installDialogFocusReturn(document);
 const commandSurface = installCommandSurface(document, { translate: (value) => localizer.text(value) });
 const workspaceContext = installWorkspaceContext(document, { translate: (value) => localizer.text(value) });
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"), ".tool-button:not([hidden])");
+const inspectorResizer = $("inspectorResizer");
+const setInspectorWidth = (width) => document.documentElement.style.setProperty(
+  "--inspector-width", `${Math.max(240, Math.min(480, Math.round(width)))}px`);
+inspectorResizer.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  event.preventDefault(); inspectorResizer.setPointerCapture(event.pointerId);
+  const move = (nextEvent) => setInspectorWidth(innerWidth - nextEvent.clientX);
+  const finish = () => {
+    inspectorResizer.removeEventListener("pointermove", move);
+    inspectorResizer.removeEventListener("pointerup", finish);
+    inspectorResizer.removeEventListener("pointercancel", finish);
+  };
+  inspectorResizer.addEventListener("pointermove", move);
+  inspectorResizer.addEventListener("pointerup", finish);
+  inspectorResizer.addEventListener("pointercancel", finish);
+});
+inspectorResizer.addEventListener("keydown", (event) => {
+  if (![/ArrowLeft/, /ArrowRight/].some((pattern) => pattern.test(event.key))) return;
+  event.preventDefault();
+  const current = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--inspector-width")) || 316;
+  setInspectorWidth(current + (event.key === "ArrowLeft" ? (event.shiftKey ? 40 : 10) : -(event.shiftKey ? 40 : 10)));
+});
 const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
 let client = null;
 let errorReturnFocus = null;
@@ -54,6 +77,8 @@ let selectedChannelId = null;
 let selectedPathId = null;
 let documentName = "Untitled.psd";
 let busy = false;
+let busyPresentationTimer = 0;
+let toastTimer = 0;
 let dragDepth = 0;
 let cancelActiveOperation = null;
 let canvasTool = "marquee";
@@ -131,7 +156,7 @@ let layerWindowFrame = 0;
 const layerThumbnailCache = new Map();
 const documentHistoryLabels = new Map();
 const documentSaveFormats = new Map();
-const LAYER_ROW_HEIGHT = 48;
+const LAYER_ROW_HEIGHT = 40;
 const LAYER_OVERSCAN = 5;
 const MAX_LAYER_THUMBNAILS = 256;
 const workingSetLimit = browserWorkingSetLimit({
@@ -396,10 +421,20 @@ function setSessionState(state, label) {
   localizer.setText($("sessionIndicator").lastElementChild, label);
 }
 
+function showToast(label) {
+  const toast = $("actionToast");
+  clearTimeout(toastTimer); localizer.setText(toast, label); toast.hidden = false;
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 1800);
+}
+
 function setBusy(active, title = "Working", detail = "The engine is updating the document") {
   busy = active;
   shell.setAttribute("aria-busy", String(active));
-  $("busyState").hidden = !active;
+  clearTimeout(busyPresentationTimer);
+  if (active) {
+    $("busyState").hidden = true;
+    busyPresentationTimer = setTimeout(() => { if (busy) $("busyState").hidden = false; }, 180);
+  } else $("busyState").hidden = true;
   localizer.setText($("busyTitle"), title);
   localizer.setText($("busyDetail"), detail);
   if (!active) {
@@ -445,6 +480,8 @@ function updateControls() {
   $("createVersionButton").disabled = busy || !snapshot || !workspaceAvailable;
   $("memoryBudgetSelect").disabled = busy;
   $("importLayerButton").disabled = busy || !snapshot;
+  $("layerViaCopyButton").disabled = busy || !snapshot?.selection?.length || !single ||
+    layer?.kind !== 0 || !layer.visible;
   $("groupLayerButton").disabled = busy || !layers.length;
   $("ungroupLayerButton").disabled = busy || !layers.length || layers.some((item) => item.kind !== 1);
   $("removeLayerButton").disabled = busy || !layers.length;
@@ -504,6 +541,10 @@ function updateControls() {
   $("layerBlendSelect").disabled = busy || !layers.length;
   $("layerClipInput").disabled = busy || !single;
   $("layerLockInput").disabled = busy || !layers.length;
+  $("quickLayerOpacityInput").disabled = busy || !layers.length;
+  $("quickLayerFillInput").disabled = busy || !layers.length || layers.some((item) => item.kind === 1);
+  $("quickLayerBlendSelect").disabled = busy || !layers.length;
+  $("quickLayerLockInput").disabled = busy || !layers.length;
   $("layerStyleSelect").disabled = busy || !single;
   $("applyLayerStyleButton").disabled = busy || !single;
   $("editLayerStyleButton").disabled = busy || !single;
@@ -804,6 +845,7 @@ function applyPreferences(preferences) {
   $("brushSizeInput").value = String(preferences.brushSize);
   $("brushSizeOutput").textContent = `${preferences.brushSize} px`;
   $("brushColorInput").value = preferences.color;
+  $("foregroundSwatchInput").value = preferences.color;
   $("paintPresetSelect").value = preferences.paintPreset;
   $("textFontInput").value = preferences.font;
   $("selectionToleranceInput").value = String(preferences.selectionTolerance);
@@ -1349,6 +1391,17 @@ function renderLayerProperties() {
     blendSelect.prepend(option);
   }
   blendSelect.value = layer ? String(layer.blendMode) : "1";
+  $("quickLayerOpacityInput").value = layer ? String(Math.round(layer.opacity * 100)) : "100";
+  $("quickLayerFillInput").value = layer ? String(Math.round(layer.fillOpacity * 100)) : "100";
+  $("quickLayerLockInput").checked = Boolean(layer?.lockFlags) && !mixed("lockFlags");
+  $("quickLayerLockInput").indeterminate = mixed("lockFlags");
+  const quickBlend = $("quickLayerBlendSelect");
+  quickBlend.querySelectorAll("[data-current-mode]").forEach((option) => option.remove());
+  if (layer && !blendModes.has(layer.blendMode)) {
+    const option = new Option(`Engine mode ${layer.blendMode}`, String(layer.blendMode));
+    option.dataset.currentMode = "true"; quickBlend.prepend(option);
+  }
+  quickBlend.value = layer ? String(layer.blendMode) : "1";
   updateControls();
 }
 
@@ -1826,18 +1879,77 @@ function addCenteredGuide(orientation) {
 
 function renderSelection(rect = marqueeDraft) {
   const overlay = $("selectionOverlay");
-  const rects = rect ? [rect] : snapshot?.selection || [];
-  if (canvasTool === "quickMask") { overlay.hidden = true; renderQuickMask(); return; }
-  if (!snapshot || !rects.length) { overlay.hidden = true; return; }
-  const left = Math.min(...rects.map((item) => item.x));
-  const top = Math.min(...rects.map((item) => item.y));
-  const right = Math.max(...rects.map((item) => item.x + item.width));
-  const bottom = Math.max(...rects.map((item) => item.y + item.height));
-  overlay.style.left = `${left / snapshot.width * 100}%`;
-  overlay.style.top = `${top / snapshot.height * 100}%`;
-  overlay.style.width = `${(right - left) / snapshot.width * 100}%`;
-  overlay.style.height = `${(bottom - top) / snapshot.height * 100}%`;
-  overlay.hidden = false;
+  if (cropDraft || transformDialogDraft) { overlay.setAttribute("hidden", ""); return; }
+  if (canvasTool === "quickMask") { overlay.setAttribute("hidden", ""); renderQuickMask(); return; }
+  if (!snapshot || (!rect && !snapshot.selection?.length)) { overlay.setAttribute("hidden", ""); return; }
+  const path = rect ? rectanglePath(rect) : selectionPath();
+  if (!path?.subpaths?.length) { overlay.setAttribute("hidden", ""); return; }
+  const data = path.subpaths.map(({ anchors, closed }) => anchors.length
+    ? `M ${anchors.map((point) => `${point.x} ${point.y}`).join(" L ")}${closed ? " Z" : ""}`
+    : "").filter(Boolean).join(" ");
+  overlay.setAttribute("viewBox", `0 0 ${snapshot.width} ${snapshot.height}`);
+  $("selectionShadowPath").setAttribute("d", data);
+  $("selectionMarchPath").setAttribute("d", data);
+  overlay.removeAttribute("hidden");
+}
+
+function geometryHud(bounds, label = "") {
+  const hud = $("geometryHud");
+  if (!snapshot || !bounds) { hud.hidden = true; return; }
+  hud.textContent = `${label ? `${label} · ` : ""}${Math.round(bounds.width)} × ${Math.round(bounds.height)} px`;
+  hud.style.left = `${Math.min(96, Math.max(2, (bounds.x + bounds.width) / snapshot.width * 100))}%`;
+  hud.style.top = `${Math.min(96, Math.max(2, (bounds.y + bounds.height) / snapshot.height * 100))}%`;
+  hud.hidden = false;
+}
+
+function cropRatio() {
+  if (!snapshot) return null;
+  const value = $("cropRatioInput").value;
+  if (value === "original") return snapshot.width / snapshot.height;
+  if (value.includes(":")) {
+    const [width, height] = value.split(":").map(Number);
+    if (width > 0 && height > 0) return width / height;
+  }
+  return null;
+}
+
+function constrainedCrop(start, point) {
+  let deltaX = point.x - start.x; let deltaY = point.y - start.y;
+  const ratio = cropRatio();
+  if (ratio) {
+    const signX = Math.sign(deltaX) || 1; const signY = Math.sign(deltaY) || 1;
+    if (Math.abs(deltaX) / Math.max(1, Math.abs(deltaY)) > ratio) deltaY = signY * Math.abs(deltaX) / ratio;
+    else deltaX = signX * Math.abs(deltaY) * ratio;
+  }
+  const target = { x: Math.min(start.x, start.x + deltaX), y: Math.min(start.y, start.y + deltaY),
+    width: Math.abs(deltaX), height: Math.abs(deltaY) };
+  const x = Math.max(0, Math.floor(target.x)); const y = Math.max(0, Math.floor(target.y));
+  return { x, y, width: Math.max(1, Math.min(snapshot.width - x, Math.ceil(target.width))),
+    height: Math.max(1, Math.min(snapshot.height - y, Math.ceil(target.height))) };
+}
+
+function renderCropOverlay() {
+  const overlay = $("cropOverlay");
+  if (!snapshot || !cropDraft) {
+    overlay.setAttribute("hidden", ""); $("applyCropButton").disabled = true; $("cancelCropButton").disabled = true;
+    if (!transformDialogDraft) geometryHud(null);
+    renderSelection();
+    return;
+  }
+  const { x, y, width, height } = cropDraft; const right = x + width; const bottom = y + height;
+  overlay.setAttribute("viewBox", `0 0 ${snapshot.width} ${snapshot.height}`);
+  $("cropDimPath").setAttribute("d", `M0 0H${snapshot.width}V${snapshot.height}H0Z M${x} ${y}V${bottom}H${right}V${y}Z`);
+  for (const [attribute, value] of Object.entries({ x, y, width, height })) $("cropBoundary").setAttribute(attribute, String(value));
+  $("cropGrid").setAttribute("d", `M${x + width / 3} ${y}V${bottom} M${x + width * 2 / 3} ${y}V${bottom} M${x} ${y + height / 3}H${right} M${x} ${y + height * 2 / 3}H${right}`);
+  const positions = [[x, y], [x + width / 2, y], [right, y], [right, y + height / 2],
+    [right, bottom], [x + width / 2, bottom], [x, bottom], [x, y + height / 2]];
+  [...$("cropHandles").querySelectorAll("circle")].forEach((handle, index) => {
+    handle.setAttribute("cx", String(positions[index][0])); handle.setAttribute("cy", String(positions[index][1]));
+    handle.setAttribute("r", String(Math.max(3, 5 / Math.max(zoom, .05))));
+  });
+  overlay.removeAttribute("hidden"); $("applyCropButton").disabled = false; $("cancelCropButton").disabled = false;
+  renderSelection();
+  geometryHud(cropDraft, "Crop");
 }
 
 function renderQuickMask(gray = null) {
@@ -1860,7 +1972,7 @@ function setCanvasTool(tool) {
   if (tool !== "magnetic") magneticDraft = null;
   if (tool !== "quickSelect") quickSelectDraft = null;
   if (tool !== "quickMask") quickMaskDraft = null;
-  if (tool !== "crop" && cropDraft) { cropDraft = null; renderSelection(); }
+  if (tool !== "crop" && cropDraft) { cropDraft = null; renderCropOverlay(); }
   canvasTool = tool;
   $("canvasViewport").dataset.tool = tool;
   let activeToolButton = null;
@@ -1883,6 +1995,7 @@ function setCanvasTool(tool) {
   }
   commandSurface?.toolGroups?.promote(activeToolButton);
   workspaceContext?.render(tool);
+  renderCropOverlay();
   if (tool === "quickMask") renderQuickMask();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   syncToolRoving(document.querySelector('.tool-rail [aria-pressed="true"]') || document.activeElement);
@@ -1909,9 +2022,18 @@ function fullSelectionMask() {
 }
 
 function commitSelectionMask(title, gray) {
-  return mutate(title, () => client.setSelectionMask(
-    { x: 0, y: 0, width: snapshot.width, height: snapshot.height }, gray,
-    { transferOwnership: true }));
+  const feather = Number($("selectionQuickFeatherInput").value);
+  return mutate(title, async () => {
+    let next = await client.setSelectionMask(
+      { x: 0, y: 0, width: snapshot.width, height: snapshot.height }, gray,
+      { transferOwnership: true });
+    if (Number.isFinite(feather) && feather > 0) next = await client.refineSelection({
+      smooth: 0, feather: Math.min(250, feather), contrast: 0, shiftEdge: 0,
+      output: "selection", layerId: null,
+      expectedStateId: next.stateId, expectedRevision: next.revision,
+    });
+    return next;
+  });
 }
 
 function selectionRefinementInput({ report = false } = {}) {
@@ -2041,7 +2163,8 @@ function combinedSelectionMask(next, mode = "replace") {
 }
 
 function selectionMode(event) {
-  return event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" : "replace";
+  return event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" :
+    ($("selectionModeInput").value || "replace");
 }
 
 function selectionCombineValue(mode) {
@@ -2067,6 +2190,15 @@ function polygonMask(points) {
   const rgba = targetContext.getImageData(0, 0, snapshot.width, snapshot.height).data;
   const gray = new Uint8Array(snapshot.width * snapshot.height);
   for (let index = 0; index < gray.length; ++index) gray[index] = rgba[index * 4 + 3];
+  return gray;
+}
+
+function rectangleMask(rect) {
+  const gray = new Uint8Array(snapshot.width * snapshot.height);
+  const left = Math.max(0, Math.floor(rect.x)); const top = Math.max(0, Math.floor(rect.y));
+  const right = Math.min(snapshot.width, Math.ceil(rect.x + rect.width));
+  const bottom = Math.min(snapshot.height, Math.ceil(rect.y + rect.height));
+  for (let y = top; y < bottom; ++y) gray.fill(255, y * snapshot.width + left, y * snapshot.width + right);
   return gray;
 }
 
@@ -2109,16 +2241,38 @@ function quadFromBounds(bounds) {
 
 function renderTransformOverlay(quad = moveDraft?.quad || transformDraft?.quad || transformDialogDraft?.quad) {
   const overlay = $("transformOverlay");
-  if (!snapshot || !quad) { overlay.hidden = true; return; }
+  if (!snapshot || !quad) {
+    overlay.setAttribute("hidden", ""); $("applyTransformButton").disabled = true; $("cancelTransformButton").disabled = true;
+    if (!cropDraft) geometryHud(null);
+    renderSelection();
+    return;
+  }
   overlay.setAttribute("viewBox", `0 0 ${snapshot.width} ${snapshot.height}`);
   $("transformPolygon").setAttribute("points", Array.from({ length: 4 }, (_, index) =>
     `${quad[index * 2]},${quad[index * 2 + 1]}`).join(" "));
-  [...overlay.querySelectorAll("circle")].forEach((handle, index) => {
-    handle.setAttribute("cx", String(quad[index * 2]));
-    handle.setAttribute("cy", String(quad[index * 2 + 1]));
+  const pointForHandle = (name) => {
+    if (name?.startsWith("corner-")) {
+      const index = Number(name.slice(7)); return [quad[index * 2], quad[index * 2 + 1]];
+    }
+    const pairs = { "edge-top": [0, 1], "edge-right": [1, 2], "edge-bottom": [2, 3], "edge-left": [3, 0] };
+    const pair = pairs[name];
+    if (!pair) return [quad.filter((_, index) => index % 2 === 0).reduce((a, b) => a + b, 0) / 4,
+      quad.filter((_, index) => index % 2 === 1).reduce((a, b) => a + b, 0) / 4];
+    return [(quad[pair[0] * 2] + quad[pair[1] * 2]) / 2,
+      (quad[pair[0] * 2 + 1] + quad[pair[1] * 2 + 1]) / 2];
+  };
+  [...overlay.querySelectorAll("circle")].forEach((handle) => {
+    const [x, y] = pointForHandle(handle.dataset.transformHandle);
+    handle.setAttribute("cx", String(x));
+    handle.setAttribute("cy", String(y));
     handle.setAttribute("r", String(Math.max(3, 6 / Math.max(zoom, .05))));
   });
-  overlay.hidden = false;
+  overlay.removeAttribute("hidden"); $("applyTransformButton").disabled = !transformDialogDraft;
+  $("cancelTransformButton").disabled = !transformDialogDraft;
+  renderSelection();
+  const xs = quad.filter((_, index) => index % 2 === 0); const ys = quad.filter((_, index) => index % 2 === 1);
+  geometryHud({ x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys) }, "Transform");
 }
 
 function clearTransformPreview(clearOverlay = false) {
@@ -2342,6 +2496,7 @@ async function mutate(title, operation) {
     recordHistoryMutation(before, next, title);
     await acceptSnapshot(next);
     scheduleCheckpoint(next);
+    showToast(title);
     return next;
   }
   catch (error) {
@@ -2371,6 +2526,12 @@ async function navigateHistory(steps) {
 
 async function openFile(file, handle = null) {
   if (!file || busy) return;
+  const kind = openFileKind(file);
+  if (kind === "raster") return importPixelLayer(file, true);
+  if (kind !== "layered") {
+    showError("Unsupported file", new Error("Open a PSD, PSB, PNG, JPEG, WebP, AVIF, or SVG file."));
+    return DIAGNOSTIC_COMMAND_FAILED;
+  }
   clearError();
   setBusy(true, "Opening document", "Transferring bytes to the isolated Worker");
   try {
@@ -2706,8 +2867,12 @@ async function importPixelLayer(file, createDocument = false) {
     scratchContext.drawImage(image, 0, 0);
     const rgba = new Uint8Array(scratchContext.getImageData(0, 0, image.width, image.height).data);
     const name = file.name.replace(/\.[^.]+$/, "") || "Imported pixels";
-    if (!snapshot) {
-      await acceptSnapshot(await client.create(image.width, image.height, `${name}.psd`));
+    if (createDocument || !snapshot) {
+      const created = await client.create(image.width, image.height, `${name}.psd`);
+      documentSaveFormats.set(created.documentId, "psd");
+      fileLifecycle.register(created.documentId, created, "psd");
+      clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
+      await acceptSnapshot(created);
     }
     const before = snapshot;
     const next = await client.addPixelLayer({
@@ -2719,6 +2884,31 @@ async function importPixelLayer(file, createDocument = false) {
     scheduleCheckpoint(next);
   } catch (error) { showError("Could not import pixels", error); }
   finally { image?.close?.(); setBusy(false); }
+}
+
+async function layerViaCopy() {
+  const layer = selectedLayer();
+  const selectedBounds = selectionBounds();
+  if (busy || !snapshot || layer?.kind !== 0 || !layer.visible || !selectedBounds) return;
+  clearError();
+  setBusy(true, "Creating layer from selection", "Copying selected pixels into one editable layer");
+  try {
+    const before = snapshot;
+    const usedNames = new Set(before.layers.map((item) => item.name));
+    const baseName = localizer.text("Layer"); let suffix = 1;
+    while (usedNames.has(`${baseName} ${suffix}`)) suffix++;
+    const next = await client.copyLayerSelection(layer.id, `${baseName} ${suffix}`);
+    recordHistoryMutation(before, next, "Layer via copy");
+    const previousIds = new Set(before.layers.map((item) => item.id));
+    const created = next.layers.find((item) => item.kind === 0 && !previousIds.has(item.id));
+    if (created) setSingleLayerSelection(created.id);
+    await acceptSnapshot(next); scheduleCheckpoint(next);
+    setSessionState("document", "Selection copied to a new layer");
+    showToast("Selection copied to a new layer");
+  } catch (error) {
+    showError("Could not create layer from selection", error);
+    return DIAGNOSTIC_COMMAND_FAILED;
+  } finally { setBusy(false); }
 }
 
 function rectanglePath(bounds) {
@@ -3410,6 +3600,7 @@ async function commitTextDialog() {
 function openLayerTransformDialog() {
   const target = transformSelection();
   if (busy || !target) return;
+  if (canvasTool !== "move") setCanvasTool("move");
   for (const [id, value] of [["layerXInput", target.bounds.x], ["layerYInput", target.bounds.y],
     ["layerWidthInput", target.bounds.width], ["layerHeightInput", target.bounds.height]]) $(id).value = String(value);
   $("layerAngleInput").value = "0";
@@ -3421,6 +3612,8 @@ function openLayerTransformDialog() {
   transformDialogDraft = { ...target, quad: quadFromBounds(target.bounds) };
   updateTransformDialogPreview();
   $("layerTransformDialog").show();
+  $("applyTransformButton").disabled = false;
+  $("cancelTransformButton").disabled = false;
 }
 
 function openLayerWarpDialog() {
@@ -4185,6 +4378,9 @@ registerCommand("document.export", "exportButton", exportDocument, () => !busy &
 registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
 registerCommand("document.pastePixels", "pastePixelsButton", pastePixels, () => !busy && Boolean(snapshot) &&
   Boolean(layerClipboard || clipboardImageBlob || navigator.clipboard?.read));
+registerCommand("layer.layerViaCopy", "layerViaCopyButton", layerViaCopy, () => !busy &&
+  Boolean(snapshot?.selection?.length) && selectedLayers().length === 1 &&
+  selectedLayer()?.kind === 0 && selectedLayer()?.visible);
 registerCommand("history.undo", "undoButton", () => navigateHistory(-1), () => !busy && Boolean(snapshot?.canUndo));
 registerCommand("history.redo", "redoButton", () => navigateHistory(1), () => !busy && Boolean(snapshot?.canRedo));
 registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
@@ -4282,6 +4478,48 @@ $("fileInput").addEventListener("change", () => { openFile($("fileInput").files[
 $("dismissErrorButton").addEventListener("click", clearError);
 $("importLayerButton").addEventListener("click", () => { if (!busy && snapshot) $("imageInput").click(); });
 $("imageInput").addEventListener("change", () => { importPixelLayer($("imageInput").files[0]); $("imageInput").value = ""; });
+
+const canvasContextMenu = $("canvasContextMenu");
+function closeCanvasContextMenu({ restoreFocus = false } = {}) {
+  if (canvasContextMenu.hidden) return;
+  canvasContextMenu.hidden = true;
+  if (restoreFocus) $("canvasViewport").focus({ preventScroll: true });
+}
+function syncCanvasContextMenu() {
+  for (const button of canvasContextMenu.querySelectorAll("button")) {
+    const command = button.dataset.commandProxy && commandRegistry.get(button.dataset.commandProxy);
+    const target = button.dataset.targetProxy && $(button.dataset.targetProxy);
+    button.disabled = command ? !command.enabled() : !target || target.disabled;
+  }
+}
+canvasContextMenu.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button || button.disabled) return;
+  closeCanvasContextMenu();
+  if (button.dataset.commandProxy) executeCommand(button.dataset.commandProxy);
+  else $(button.dataset.targetProxy)?.click();
+});
+canvasContextMenu.addEventListener("keydown", (event) => {
+  const buttons = [...canvasContextMenu.querySelectorAll("button:not(:disabled)")];
+  const index = buttons.indexOf(document.activeElement);
+  if (event.key === "Escape") { event.preventDefault(); closeCanvasContextMenu({ restoreFocus: true }); }
+  if (["ArrowDown", "ArrowUp"].includes(event.key) && buttons.length) {
+    event.preventDefault();
+    buttons[(index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length].focus();
+  }
+});
+canvas.addEventListener("contextmenu", (event) => {
+  if (!snapshot) return;
+  event.preventDefault(); syncCanvasContextMenu();
+  canvasContextMenu.hidden = false;
+  const rect = canvasContextMenu.getBoundingClientRect();
+  canvasContextMenu.style.left = `${Math.max(8, Math.min(event.clientX, innerWidth - rect.width - 8))}px`;
+  canvasContextMenu.style.top = `${Math.max(8, Math.min(event.clientY, innerHeight - rect.height - 8))}px`;
+  canvasContextMenu.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
+});
+window.addEventListener("pointerdown", (event) => {
+  if (!canvasContextMenu.hidden && !canvasContextMenu.contains(event.target)) closeCanvasContextMenu();
+});
 $("removeLayerButton").addEventListener("click", () => {
   const ids = selectedLayerIdsTopToBottom({ rootsOnly: true });
   if (ids.length) mutate(ids.length > 1 ? "Deleting layers" : "Deleting layer",
@@ -4374,6 +4612,11 @@ $("commitLayerTransformButton").addEventListener("click", () => {
   commitLayerQuad(draft, quad, draft.leaves.length > 1
     ? "Transforming layers" : "Transforming layer");
 });
+$("applyTransformButton").addEventListener("click", () => $("commitLayerTransformButton").click());
+$("cancelTransformButton").addEventListener("click", () => {
+  transformDialogDraft = null; transformDraft = null; clearTransformPreview(true);
+  if ($("layerTransformDialog").open) $("layerTransformDialog").close("cancel");
+});
 $("commitLayerWarpButton").addEventListener("click", commitLayerWarp);
 for (const id of ["layerWarpStyleInput", "layerWarpBendInput", "layerWarpHorizontalInput",
   "layerWarpVerticalInput", "layerWarpRotateInput"]) $(id).addEventListener("input", scheduleWarpPreview);
@@ -4439,31 +4682,45 @@ for (const id of ["layerXInput", "layerYInput", "layerWidthInput", "layerHeightI
 $("layerTransformDialog").addEventListener("close", () => {
   if (transformDialogDraft) { transformDialogDraft = null; clearTransformPreview(true); }
 });
-for (const handle of $("transformOverlay").querySelectorAll("circle")) {
+for (const handle of $("transformOverlay").querySelectorAll("circle[data-transform-handle]")) {
   handle.addEventListener("pointerdown", (event) => {
     if (!transformDialogDraft || busy || event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();
     handle.setPointerCapture(event.pointerId);
     transformDraft = { pointerId: event.pointerId,
-      index: Number(handle.dataset.transformHandle), hasText: transformDialogDraft.hasText,
+      handle: handle.dataset.transformHandle, hasText: transformDialogDraft.hasText,
       quad: [...transformDialogDraft.quad] };
   });
   handle.addEventListener("pointermove", (event) => {
     if (transformDraft?.pointerId !== event.pointerId || !transformDialogDraft) return;
-    const point = canvasPointUnclamped(event); const index = transformDraft.index;
+    const point = canvasPointUnclamped(event); const name = transformDraft.handle;
+    const cornerIndex = name.startsWith("corner-") ? Number(name.slice(7)) : null;
     if (transformDraft.hasText) {
-      const opposite = (index + 2) % 4;
-      const oppositeX = transformDraft.quad[opposite * 2];
-      const oppositeY = transformDraft.quad[opposite * 2 + 1];
-      $("layerXInput").value = String(Math.min(point.x, oppositeX));
-      $("layerYInput").value = String(Math.min(point.y, oppositeY));
-      $("layerWidthInput").value = String(Math.max(.01, Math.abs(point.x - oppositeX)));
-      $("layerHeightInput").value = String(Math.max(.01, Math.abs(point.y - oppositeY)));
+      const xs = transformDraft.quad.filter((_, index) => index % 2 === 0);
+      const ys = transformDraft.quad.filter((_, index) => index % 2 === 1);
+      let left = Math.min(...xs); let right = Math.max(...xs); let top = Math.min(...ys); let bottom = Math.max(...ys);
+      if (cornerIndex != null) {
+        const opposite = (cornerIndex + 2) % 4;
+        const oppositeX = transformDraft.quad[opposite * 2]; const oppositeY = transformDraft.quad[opposite * 2 + 1];
+        left = Math.min(point.x, oppositeX); right = Math.max(point.x, oppositeX);
+        top = Math.min(point.y, oppositeY); bottom = Math.max(point.y, oppositeY);
+      } else if (name === "edge-left") left = Math.min(point.x, right - .01);
+      else if (name === "edge-right") right = Math.max(point.x, left + .01);
+      else if (name === "edge-top") top = Math.min(point.y, bottom - .01);
+      else if (name === "edge-bottom") bottom = Math.max(point.y, top + .01);
+      $("layerXInput").value = String(left); $("layerYInput").value = String(top);
+      $("layerWidthInput").value = String(Math.max(.01, right - left));
+      $("layerHeightInput").value = String(Math.max(.01, bottom - top));
       $("layerAngleInput").value = "0"; $("layerFlipXInput").checked = false;
       $("layerFlipYInput").checked = false; updateTransformDialogPreview();
       return;
     }
-    const quad = [...transformDraft.quad]; quad[index * 2] = point.x; quad[index * 2 + 1] = point.y;
+    const quad = [...transformDraft.quad];
+    if (cornerIndex != null) { quad[cornerIndex * 2] = point.x; quad[cornerIndex * 2 + 1] = point.y; }
+    else if (name === "edge-top") { quad[1] = point.y; quad[3] = point.y; }
+    else if (name === "edge-right") { quad[2] = point.x; quad[4] = point.x; }
+    else if (name === "edge-bottom") { quad[5] = point.y; quad[7] = point.y; }
+    else if (name === "edge-left") { quad[0] = point.x; quad[6] = point.x; }
     $("layerTransformModeInput").value = "perspective";
     layerCornerInputIds.forEach((id, coordinate) => { $(id).readOnly = false; $(id).value = quad[coordinate].toFixed(2); });
     transformDialogDraft.quad = quad; renderTransformOverlay(quad);
@@ -4474,6 +4731,30 @@ for (const handle of $("transformOverlay").querySelectorAll("circle")) {
   };
   handle.addEventListener("pointerup", finishHandle);
   handle.addEventListener("pointercancel", finishHandle);
+  handle.addEventListener("keydown", (event) => {
+    if (!transformDialogDraft || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const amount = event.shiftKey ? 10 : 1;
+    const dx = event.key === "ArrowRight" ? amount : event.key === "ArrowLeft" ? -amount : 0;
+    const dy = event.key === "ArrowDown" ? amount : event.key === "ArrowUp" ? -amount : 0;
+    const name = handle.dataset.transformHandle; const quad = [...transformDialogDraft.quad];
+    const cornerIndex = name.startsWith("corner-") ? Number(name.slice(7)) : null;
+    if (cornerIndex != null) { quad[cornerIndex * 2] += dx; quad[cornerIndex * 2 + 1] += dy; }
+    else if (name === "edge-top") { quad[1] += dy; quad[3] += dy; }
+    else if (name === "edge-right") { quad[2] += dx; quad[4] += dx; }
+    else if (name === "edge-bottom") { quad[5] += dy; quad[7] += dy; }
+    else if (name === "edge-left") { quad[0] += dx; quad[6] += dx; }
+    if (transformDialogDraft.hasText) {
+      const xs = quad.filter((_, index) => index % 2 === 0); const ys = quad.filter((_, index) => index % 2 === 1);
+      $("layerXInput").value = String(Math.min(...xs)); $("layerYInput").value = String(Math.min(...ys));
+      $("layerWidthInput").value = String(Math.max(.01, Math.max(...xs) - Math.min(...xs)));
+      $("layerHeightInput").value = String(Math.max(.01, Math.max(...ys) - Math.min(...ys)));
+      updateTransformDialogPreview(); return;
+    }
+    $("layerTransformModeInput").value = "perspective";
+    layerCornerInputIds.forEach((id, coordinate) => { $(id).readOnly = false; $(id).value = quad[coordinate].toFixed(2); });
+    transformDialogDraft.quad = quad; renderTransformOverlay(quad); scheduleTransformPreview(transformDialogDraft, quad);
+  });
 }
 $("brushSizeInput").addEventListener("input", () => {
   $("brushSizeOutput").textContent = `${$("brushSizeInput").value} px`;
@@ -4498,7 +4779,22 @@ for (const [input, output, suffix] of [
 ]) {
   $(input).addEventListener("input", (event) => { $(output).textContent = `${event.currentTarget.value}${suffix}`; });
 }
-$("brushColorInput").addEventListener("input", persistPreferences);
+$("brushColorInput").addEventListener("input", () => {
+  $("foregroundSwatchInput").value = $("brushColorInput").value; persistPreferences();
+});
+$("foregroundSwatchInput").addEventListener("input", () => {
+  $("brushColorInput").value = $("foregroundSwatchInput").value; persistPreferences();
+});
+$("swapSwatchesButton").addEventListener("click", () => {
+  const foreground = $("foregroundSwatchInput").value;
+  $("foregroundSwatchInput").value = $("backgroundSwatchInput").value;
+  $("backgroundSwatchInput").value = foreground;
+  $("brushColorInput").value = $("foregroundSwatchInput").value; persistPreferences();
+});
+$("defaultSwatchesButton").addEventListener("click", () => {
+  $("foregroundSwatchInput").value = "#111111"; $("backgroundSwatchInput").value = "#ffffff";
+  $("brushColorInput").value = "#111111"; persistPreferences();
+});
 $("paintTargetSelect").addEventListener("change", updateControls);
 $("paintPresetSelect").addEventListener("change", persistPreferences);
 $("textFontInput").addEventListener("change", persistPreferences);
@@ -4571,6 +4867,69 @@ $("rotateArbitraryButton").addEventListener("click", () => {
       () => client.rotateCanvas(degrees, geometryFillColor()));
   }
 });
+
+const cropHandleGroup = $("cropHandles");
+for (let index = 0; index < 8; ++index) {
+  const handle = document.createElementNS(cropHandleGroup.namespaceURI, "circle");
+  handle.dataset.cropHandle = String(index); handle.setAttribute("role", "button");
+  handle.setAttribute("aria-label", `Crop handle ${index + 1}`); handle.setAttribute("tabindex", "0");
+  cropHandleGroup.append(handle);
+  let drag = null;
+  handle.addEventListener("pointerdown", (event) => {
+    if (!cropDraft || busy || event.button !== 0) return;
+    event.preventDefault(); event.stopPropagation(); handle.setPointerCapture(event.pointerId);
+    drag = { pointerId: event.pointerId, bounds: { ...cropDraft } };
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const point = canvasPointUnclamped(event); const start = drag.bounds;
+    if ([0, 2, 4, 6].includes(index) && cropRatio()) {
+      const opposite = { 0: { x: start.x + start.width, y: start.y + start.height },
+        2: { x: start.x, y: start.y + start.height },
+        4: { x: start.x, y: start.y }, 6: { x: start.x + start.width, y: start.y } }[index];
+      cropDraft = constrainedCrop(opposite, point); renderCropOverlay(); return;
+    }
+    let left = start.x; let top = start.y; let right = start.x + start.width; let bottom = start.y + start.height;
+    if ([0, 6, 7].includes(index)) left = Math.max(0, Math.min(point.x, right - 1));
+    if ([2, 3, 4].includes(index)) right = Math.min(snapshot.width, Math.max(point.x, left + 1));
+    if ([0, 1, 2].includes(index)) top = Math.max(0, Math.min(point.y, bottom - 1));
+    if ([4, 5, 6].includes(index)) bottom = Math.min(snapshot.height, Math.max(point.y, top + 1));
+    cropDraft = { x: Math.round(left), y: Math.round(top), width: Math.max(1, Math.round(right - left)),
+      height: Math.max(1, Math.round(bottom - top)) }; renderCropOverlay();
+  });
+  const finish = (event) => { if (drag?.pointerId === event.pointerId) drag = null; };
+  handle.addEventListener("pointerup", finish); handle.addEventListener("pointercancel", finish);
+  handle.addEventListener("keydown", (event) => {
+    if (!cropDraft || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const amount = event.shiftKey ? 10 : 1; const next = { ...cropDraft };
+    const dx = event.key === "ArrowRight" ? amount : event.key === "ArrowLeft" ? -amount : 0;
+    const dy = event.key === "ArrowDown" ? amount : event.key === "ArrowUp" ? -amount : 0;
+    if ([0, 6, 7].includes(index) && dx) { const right = next.x + next.width; next.x = Math.max(0, Math.min(right - 1, next.x + dx)); next.width = right - next.x; }
+    if ([2, 3, 4].includes(index) && dx) next.width = Math.max(1, Math.min(snapshot.width - next.x, next.width + dx));
+    if ([0, 1, 2].includes(index) && dy) { const bottom = next.y + next.height; next.y = Math.max(0, Math.min(bottom - 1, next.y + dy)); next.height = bottom - next.y; }
+    if ([4, 5, 6].includes(index) && dy) next.height = Math.max(1, Math.min(snapshot.height - next.y, next.height + dy));
+    cropDraft = next; renderCropOverlay();
+  });
+}
+
+function cancelCropDraft() { cropDraft = null; renderCropOverlay(); }
+function commitCropDraft() {
+  if (!cropDraft || busy) return;
+  const crop = { ...cropDraft }; cropDraft = null; renderCropOverlay();
+  geometryMutation("Cropping document", () => cropGeometrySize(crop,
+    { clipToCanvas: true, canvasWidth: snapshot.width, canvasHeight: snapshot.height }),
+  () => client.cropDocument(crop, { clockwiseDegrees: 0, color: geometryFillColor(), clipToCanvas: true }));
+}
+$("cancelCropButton").addEventListener("click", cancelCropDraft);
+$("applyCropButton").addEventListener("click", commitCropDraft);
+$("cropRatioInput").addEventListener("change", () => {
+  if (!cropDraft || !cropRatio()) return;
+  cropDraft = constrainedCrop({ x: cropDraft.x, y: cropDraft.y },
+    { x: cropDraft.x + cropDraft.width, y: cropDraft.y + cropDraft.height });
+  renderCropOverlay();
+});
+
 $("cropButton").addEventListener("click", () => {
   const x = integerInput("cropXInput");
   const y = integerInput("cropYInput");
@@ -4641,6 +5000,28 @@ $("layerLockInput").addEventListener("change", () => {
   const ids = selectedLayerIdsTopToBottom();
   if (ids.length) mutate("Changing layer lock", () => client.editLayers(ids, 4,
     { value: $("layerLockInput").checked ? 7 : 0 }));
+});
+$("quickLayerOpacityInput").addEventListener("change", () => {
+  const ids = selectedLayerIdsTopToBottom(); const value = Number($("quickLayerOpacityInput").value);
+  if (ids.length && Number.isFinite(value) && value >= 0 && value <= 100) {
+    mutate("Changing opacity", () => client.editLayers(ids, 1, { opacity: value / 100 }));
+  } else renderLayerProperties();
+});
+$("quickLayerFillInput").addEventListener("change", () => {
+  const ids = selectedLayerIdsTopToBottom(); const value = Number($("quickLayerFillInput").value);
+  if (ids.length && Number.isFinite(value) && value >= 0 && value <= 100) {
+    mutate("Changing fill opacity", () => client.editLayers(ids, 2, { opacity: value / 100 }));
+  } else renderLayerProperties();
+});
+$("quickLayerBlendSelect").addEventListener("change", () => {
+  const ids = selectedLayerIdsTopToBottom();
+  if (ids.length) mutate("Changing blend mode", () => client.editLayers(ids, 0,
+    { blendMode: Number($("quickLayerBlendSelect").value) }));
+});
+$("quickLayerLockInput").addEventListener("change", () => {
+  const ids = selectedLayerIdsTopToBottom();
+  if (ids.length) mutate("Changing layer lock", () => client.editLayers(ids, 4,
+    { value: $("quickLayerLockInput").checked ? 7 : 0 }));
 });
 $("applyLayerStyleButton").addEventListener("click", () => {
   const layer = selectedLayer();
@@ -4852,22 +5233,19 @@ canvas.addEventListener("pointerdown", (event) => {
     const start = canvasPoint(event);
     canvas.setPointerCapture(event.pointerId);
     cropDraft = { x: Math.floor(start.x), y: Math.floor(start.y), width: 1, height: 1 };
+    renderCropOverlay();
     const move = (nextEvent) => {
       const point = canvasPoint(nextEvent);
-      const x = Math.floor(Math.min(start.x, point.x));
-      const y = Math.floor(Math.min(start.y, point.y));
-      cropDraft = { x, y, width: Math.max(1, Math.ceil(Math.max(start.x, point.x)) - x),
-        height: Math.max(1, Math.ceil(Math.max(start.y, point.y)) - y) };
-      renderSelection(cropDraft);
+      cropDraft = constrainedCrop(start, point);
+      renderCropOverlay();
     };
     const finish = () => {
       canvas.removeEventListener("pointermove", move);
       canvas.removeEventListener("pointerup", finish);
       canvas.removeEventListener("pointercancel", cancel);
-      const crop = cropDraft; cropDraft = null; renderSelection();
-      if (crop) openDocumentDialog(crop);
+      renderCropOverlay();
     };
-    const cancel = () => { cropDraft = null; renderSelection(); finish(); };
+    const cancel = () => { cropDraft = null; renderCropOverlay(); finish(); };
     canvas.addEventListener("pointermove", move);
     canvas.addEventListener("pointerup", finish);
     canvas.addEventListener("pointercancel", cancel);
@@ -4891,7 +5269,8 @@ canvas.addEventListener("pointerdown", (event) => {
     canvas.removeEventListener("pointercancel", cancel);
     const selection = marqueeDraft;
     marqueeDraft = null;
-    if (selection) mutate("Selecting area", () => client.setSelection([selection]));
+    if (selection) commitSelectionMask("Selecting area", combinedSelectionMask(
+      rectangleMask(selection), selectionMode(event)));
   };
   const cancel = () => { marqueeDraft = null; renderSelection(); finish(); };
   canvas.addEventListener("pointermove", move);
@@ -5092,6 +5471,9 @@ window.addEventListener("keydown", (event) => {
   }
   if (key === "a") { event.preventDefault(); executeCommand("selection.all"); }
   if (key === "d") { event.preventDefault(); executeCommand("selection.clear"); }
+  if (key === "j" && snapshot?.selection?.length) {
+    event.preventDefault(); executeCommand("layer.layerViaCopy");
+  }
 });
 
 window.addEventListener("keydown", (event) => {
@@ -5132,6 +5514,14 @@ window.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "j") executeCommand(event.shiftKey ? "tool.patch" : "tool.spotHealing");
   if (event.key.toLowerCase() === "t") executeCommand("tool.text");
   if (event.key.toLowerCase() === "p") executeCommand("tool.pen");
+  if (event.key === "Enter" && cropDraft) { event.preventDefault(); commitCropDraft(); return; }
+  if (event.key === "Escape" && cropDraft) { event.preventDefault(); cancelCropDraft(); return; }
+  if (event.key === "Enter" && transformDialogDraft) {
+    event.preventDefault(); $("commitLayerTransformButton").click(); return;
+  }
+  if (event.key === "Escape" && transformDialogDraft) {
+    event.preventDefault(); $("cancelTransformButton").click(); return;
+  }
   if (event.key === "Enter" && polygonDraft) {
     const draft = polygonDraft; polygonDraft = null; previewPolygon([]);
     if (draft.points.length >= 3) commitSelectionMask("Selecting polygonal area",
@@ -5175,8 +5565,8 @@ window.addEventListener("drop", (event) => {
   event.preventDefault(); dragDepth = 0; $("dropState").hidden = true;
   const file = event.dataTransfer?.files?.[0];
   if (!file) return;
-  if (/\.(psd|psb)$/i.test(file.name)) openFile(file);
-  else if (file.type.startsWith("image/") || /\.svg$/i.test(file.name)) importPixelLayer(file, !snapshot);
+  if (openFileKind(file) === "layered") openFile(file);
+  else if (openFileKind(file) === "raster") importPixelLayer(file, !snapshot);
   else showError("Unsupported drop", new Error("Drop a PSD, PSB, PNG, JPEG, WebP, AVIF, or SVG file."));
 });
 

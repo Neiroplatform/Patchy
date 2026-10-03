@@ -429,6 +429,9 @@ export class PatchyWorkerClient {
       name, width, height, bounds, rgba: owned.buffer,
     }, [owned.buffer]);
   }
+  copyLayerSelection(layerId, name) {
+    return this.#request("copyLayerSelection", { layerId: String(layerId), name });
+  }
   layerPixels(layerId) { return this.#request("layerPixels", { layerId: String(layerId) }); }
   layerThumbnail(layerId, maximumEdge, expectedStateId, expectedRevision) {
     return this.#request("layerThumbnail", { layerId: String(layerId), maximumEdge,

@@ -133,7 +133,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
     "client.copyLayersToDocument",
-    "client.editLayers", "client.moveLayers", "client.addPixelLayer",
+    "client.editLayers", "client.moveLayers", "client.addPixelLayer", "client.copyLayerSelection",
     "client.groupLayers", "client.ungroupLayers", "client.removeLayers",
     "client.renameLayer",
     "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
@@ -1612,6 +1612,8 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   assert.deepEqual(calls.find((call) => call[0] === "crop"),
     ["crop", { x: -1, y: 1, width: 4, height: 3 }, -2.5, [7, 8, 9, 0], false]);
   await host.dispatch({ method: "setSelection", rects: [{ x: 0, y: 0, width: 1, height: 1 }] });
+  await host.dispatch({ method: "copyLayerSelection", layerId: "7", name: "Layer 1" });
+  assert.deepEqual(calls.find((call) => call[0] === "pixels"), ["pixels", "Layer 1", 4]);
   await host.dispatch({ method: "setSelectionMask", bounds: { x: 0, y: 0, width: 3, height: 2 },
     gray: new Uint8Array([0, 64, 255, 255, 64, 0]).buffer });
   let advancedBefore = await host.dispatch({ method: "snapshot" });

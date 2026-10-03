@@ -29,7 +29,8 @@ test("workspace contexts cover every shipped persistent and one-shot tool family
 
 test("selection, paint, retouch and tone contexts expose only relevant existing controls", () => {
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.magic.controls,
-    ["selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"]);
+    ["selectionModeInput", "selectionQuickFeatherInput", "selectionToleranceInput",
+      "edgeContrastInput", "enhanceEdgeInput"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.brush.controls,
     ["brushSizeInput", "brushColorInput", "paintTargetSelect"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.patch.controls,

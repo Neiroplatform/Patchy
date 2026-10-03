@@ -27,6 +27,7 @@ async function createSite(root, marker) {
     ["workspace-context.mjs", "export const contexts=[];"],
     ["editor.css", "body{background:black}"],
     ["editor.mjs", `export const marker=${JSON.stringify(marker)};`],
+    ["reference-workflow.mjs", "export const ready=true;"],
     ["legal.html", "<!doctype html><main>Legal evidence</main>"],
     ["patchy-engine.mjs", "export default async()=>({});"],
     ["patchy-engine.wasm", Buffer.from([0, 97, 115, 109, 1, 0, 0, 0])],
@@ -34,6 +35,7 @@ async function createSite(root, marker) {
     ["engine/client.mjs", "export class Client{}"],
     ["engine/index.mjs", "export const version=1;"],
     ["engine/protocol.mjs", "export const protocol=1;"],
+    ["engine/selection-copy.mjs", "export const copy=true;"],
     ["engine/worker.mjs", "self.onmessage=()=>{};"],
     ["legal/artifact-sbom.cdx.json", "{}\n"],
     ["legal/link-inputs.json", "{}\n"],
@@ -84,7 +86,7 @@ test("verified releases install, activate and roll back without mutation", async
   const value = await fixture();
   t.after(() => rm(value.root, { recursive: true, force: true }));
   const first = await installRelease({ releaseDir: join(value.root, "built", value.firstId), hostRoot: value.host });
-  assert.equal(first.fileCount, 61);
+  assert.equal(first.fileCount, 67);
   assert.ok(first.elapsedMs < 600_000);
   const firstActivation = await activateRelease({ hostRoot: value.host, releaseId: value.firstId });
   assert.equal(firstActivation.previousReleaseId, null);

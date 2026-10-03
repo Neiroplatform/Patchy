@@ -17,6 +17,7 @@ test("command surface exposes one deterministic route to high-value editor actio
   for (const targetId of [
     "openButton", "newButton", "saveButton", "undoButton", "redoButton",
     "filterLayerButton", "layerTransformButton", "createMaskButton",
+    "layerViaCopyButton",
     "selectAllButton", "smoothSelectionButton", "zoomFitButton", "helpButton",
     "transformButton", "workspacePanelLayersButton", "workspacePanelHistoryButton",
   ]) assert.ok(commands.some((command) => command.targetId === targetId), targetId);
@@ -88,14 +89,21 @@ test("production shell stages and publishes the accessible command surface", asy
     /id="workspacePanelInfo" role="tabpanel"/,
   ]) assert.match(html, contract);
   assert.match(css, /\.command-menu-panel/);
+  assert.match(css, /\.command-submenu-panel/);
   assert.match(css, /\.tool-group-menu/);
-  assert.match(css, /\.tool-cluster[\s\S]+grid-template-columns: 26px 24px/);
+  assert.match(css, /\.tool-cluster[\s\S]+width: 36px/);
+  assert.match(css, /\.tool-group-toggle[\s\S]+position: absolute/);
   assert.match(css, /\.workspace-panel-tabs/);
   assert.match(css, /\.command-palette::backdrop/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]+\.command-menubar/);
   assert.match(editor, /import \{ installCommandSurface \} from "\.\/command-surface\.mjs"/);
   assert.match(editor, /installCommandSurface\(document/);
   assert.match(editor, /installRovingToolbar\([^\n]+"\.tool-button:not\(\[hidden\]\)"\)/);
+  assert.match(await source("sdk/engine/site/command-surface.mjs"), /const MENU_SUBGROUPS/);
+  assert.match(html, /id="canvasContextMenu" role="menu"/);
+  assert.match(editor, /copyLayerSelection\(/);
+  assert.match(editor, /addEventListener\("contextmenu"/);
+  assert.match(css, /\.canvas-context-menu/);
   assert.match(cmake, /sdk\/engine\/site\/command-surface\.mjs/);
   assert.match(release, /"command-surface\.mjs"/);
 });

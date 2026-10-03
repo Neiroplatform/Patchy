@@ -1,7 +1,11 @@
-const LAYERED_TYPES = [{
-  description: "Layered Photoshop document",
-  accept: { "application/octet-stream": [".psd", ".psb"] },
-}];
+const OPEN_TYPES = [
+  { description: "Layered Photoshop document", accept: { "application/octet-stream": [".psd", ".psb"] } },
+  { description: "Image", accept: {
+    "image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"], "image/webp": [".webp"],
+    "image/avif": [".avif"], "image/svg+xml": [".svg"],
+  } },
+];
+const LAYERED_TYPES = OPEN_TYPES.slice(0, 1);
 
 function abortError(error) {
   return error?.name === "AbortError";
@@ -47,7 +51,7 @@ export class BrowserFileLifecycle {
   async pickOpen() {
     if (!this.supported) return { kind: "fallback" };
     try {
-      const handles = await this.#scope.showOpenFilePicker({ multiple: false, types: LAYERED_TYPES,
+      const handles = await this.#scope.showOpenFilePicker({ multiple: false, types: OPEN_TYPES,
         excludeAcceptAllOption: true });
       const handle = handles?.[0];
       if (!handle || typeof handle.getFile !== "function") throw new TypeError("Open picker returned no file handle");

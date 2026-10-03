@@ -1,4 +1,5 @@
 import { EmscriptenPatchyEngine } from "./module-adapter.mjs";
+import { copyLayerSelection } from "./selection-copy.mjs";
 
 const MAX_OPEN_DOCUMENTS = 16;
 const DEFAULT_DOCUMENT_HISTORY_BUDGET = 256 * 1024 * 1024;
@@ -652,6 +653,28 @@ export class PatchyWorkerHost {
           bounds: message.bounds, rgba: new Uint8Array(message.rgba),
         });
         return this.#snapshot();
+      case "copyLayerSelection": {
+        const before = this.#snapshot();
+        const layer = before.layers.find((candidate) => candidate.id === BigInt(message.layerId));
+        if (!layer || layer.kind !== 0 || !layer.visible) {
+          throw new Error("Layer via copy requires one visible pixel layer");
+        }
+        if (!before.selection?.length && !before.selectionMask) {
+          throw new Error("Layer via copy requires an active selection");
+        }
+        const mask = selectionGray(before);
+        const selectionBounds = before.selectionMask?.bounds || selectionMask(before).bounds;
+        const payload = copyLayerSelection({ layer,
+          rgba: this.#engine.layerPixels(this.#requireSession(), layer.id),
+          selectionMask: mask, selectionBounds,
+          documentWidth: before.width, documentHeight: before.height });
+        if (!payload) throw new Error("The selected area contains no visible pixels on this layer");
+        this.#engine.addPixelLayer(this.#requireSession(), before, {
+          name: message.name, width: payload.bounds.width, height: payload.bounds.height,
+          bounds: payload.bounds, rgba: payload.rgba,
+        });
+        return this.#snapshot();
+      }
       case "layerPixels":
         return this.#engine.layerPixels(
           this.#requireSession(), BigInt(message.layerId));

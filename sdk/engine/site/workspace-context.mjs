@@ -1,14 +1,14 @@
 const descriptor = (family, label, controls = [], target = "document") => ({ family, label, controls, target });
 
 const contexts = {
-  move: descriptor("transform", "Move layer"),
-  crop: descriptor("transform", "Crop document"),
-  marquee: descriptor("selection", "Rectangular selection"),
-  lasso: descriptor("selection", "Freehand lasso"),
-  polygon: descriptor("selection", "Polygonal lasso"),
-  magic: descriptor("selection", "Magic selection", ["selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"]),
+  move: descriptor("transform", "Move layer", ["cancelTransformButton", "applyTransformButton"]),
+  crop: descriptor("transform", "Crop document", ["cropRatioInput", "cancelCropButton", "applyCropButton"]),
+  marquee: descriptor("selection", "Rectangular selection", ["selectionModeInput", "selectionQuickFeatherInput"]),
+  lasso: descriptor("selection", "Freehand lasso", ["selectionModeInput", "selectionQuickFeatherInput"]),
+  polygon: descriptor("selection", "Polygonal lasso", ["selectionModeInput", "selectionQuickFeatherInput"]),
+  magic: descriptor("selection", "Magic selection", ["selectionModeInput", "selectionQuickFeatherInput", "selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"]),
   quickSelect: descriptor("selection", "Quick Select", ["brushSizeInput", "selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"]),
-  magnetic: descriptor("selection", "Magnetic Lasso", ["edgeContrastInput"]),
+  magnetic: descriptor("selection", "Magnetic Lasso", ["selectionModeInput", "selectionQuickFeatherInput", "edgeContrastInput"]),
   quickMask: descriptor("selection", "Quick Mask", ["brushSizeInput"], "selection-mask"),
   pan: descriptor("navigation", "Pan canvas"),
   brush: descriptor("paint", "Brush", ["brushSizeInput", "brushColorInput", "paintTargetSelect"], "layer-or-mask"),
@@ -56,7 +56,7 @@ export function installWorkspaceContext(document, { translate = (value) => value
   const optionNodes = new Map();
   for (const id of WORKSPACE_OPTION_CONTROL_IDS) {
     const control = document.getElementById(id);
-    const node = control?.closest("label");
+    const node = control?.closest("label, .direct-operation-actions");
     if (!node) continue;
     node.dataset.toolOption = id;
     optionNodes.set(id, node);

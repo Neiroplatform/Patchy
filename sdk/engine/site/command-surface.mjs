@@ -16,7 +16,8 @@ const GROUPS = [
     ["cropToolButton", "Crop tool", "C"],
   ] },
   { id: "layer", label: "Layer", commands: [
-    ["importLayerButton", "Import pixels…"], ["groupLayerButton", "Group layers"],
+    ["importLayerButton", "Import pixels…"], ["layerViaCopyButton", "Layer via copy", "Ctrl+J"],
+    ["groupLayerButton", "Group layers"],
     ["ungroupLayerButton", "Ungroup layers"], ["removeLayerButton", "Delete layer"],
     ["textLayerButton", "Add text"], ["shapeLayerButton", "Add shape"],
     ["adjustmentLayerButton", "Add adjustment"],
@@ -60,6 +61,21 @@ const GROUPS = [
     ["helpButton", "Getting started", "?"], ["systemCheckLink", "System check"],
   ] },
 ];
+
+const MENU_SUBGROUPS = Object.freeze({
+  image: [
+    { label: "Geometry", targets: ["transformButton", "cropToolButton"] },
+  ],
+  layer: [
+    { label: "Create", targets: ["importLayerButton", "textLayerButton", "shapeLayerButton",
+      "adjustmentLayerButton", "smartObjectButton"] },
+    { label: "Transform", targets: ["layerTransformButton", "layerWarpButton", "arrangeLayersButton"] },
+    { label: "Masks", targets: ["createMaskButton", "createVectorMaskButton"] },
+  ],
+  select: [
+    { label: "Modify", targets: ["expandSelectionButton", "contractSelectionButton", "borderSelectionButton"] },
+  ],
+});
 
 export const COMMAND_GROUPS = Object.freeze(GROUPS.map((group) => Object.freeze({
   ...group,
@@ -159,17 +175,18 @@ function installToolGroups(document, translate) {
     };
     syncLabels();
     const promote = (button) => {
-      if (button === cluster.primary || !cluster.menu.contains(button)) return;
-      const previous = cluster.primary;
-      const index = cluster.secondary.indexOf(button);
+      if (button === cluster.primary || !buttons.includes(button)) return;
       cluster.primary = button;
-      cluster.secondary[index] = previous;
+      cluster.secondary = buttons.filter((item) => item !== button);
       button.hidden = false;
       button.removeAttribute("role");
-      previous.hidden = true;
-      previous.setAttribute("role", "menuitem");
       wrapper.insertBefore(button, toggle);
-      menu.insertBefore(previous, menu.children[index] ?? null);
+      menu.replaceChildren();
+      for (const item of cluster.secondary) {
+        item.hidden = true;
+        item.setAttribute("role", "menuitem");
+        menu.append(item);
+      }
     };
     cluster.promote = promote;
     for (const button of buttons) {
@@ -330,6 +347,8 @@ export function installCommandSurface(document, { translate = (value) => value }
     for (const entry of triggers) {
       entry.trigger.setAttribute("aria-expanded", "false");
       entry.menu.hidden = true;
+      for (const submenu of entry.menu.querySelectorAll(".command-submenu-panel")) submenu.hidden = true;
+      for (const trigger of entry.menu.querySelectorAll(".command-submenu-trigger")) trigger.setAttribute("aria-expanded", "false");
     }
     if (focus) previous?.trigger.focus();
   };
@@ -355,8 +374,12 @@ export function installCommandSurface(document, { translate = (value) => value }
     return true;
   };
 
+  const directMenuItems = (menu) => [...menu.children].map((child) =>
+    child.matches?.('[role="menuitem"]') ? child : child.querySelector?.(":scope > .command-submenu-trigger"))
+    .filter((item) => item && !item.disabled);
+
   const focusMenuItem = (menu, index) => {
-    const available = [...menu.querySelectorAll('[role="menuitem"]:not(:disabled)')];
+    const available = directMenuItems(menu);
     if (!available.length) return;
     available[(index + available.length) % available.length].focus();
   };
@@ -396,7 +419,7 @@ export function installCommandSurface(document, { translate = (value) => value }
     const entry = { group, trigger, menu };
     triggers.push(entry);
 
-    for (const command of descriptors.filter((item) => item.group === group.id)) {
+    const appendCommand = (command, parent, { nested = false, submenuTrigger = null } = {}) => {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "command-menu-item";
@@ -406,18 +429,58 @@ export function installCommandSurface(document, { translate = (value) => value }
       syncItem(item, command);
       item.addEventListener("click", () => runCommand(command));
       item.addEventListener("keydown", (event) => {
-        const available = [...menu.querySelectorAll('[role="menuitem"]:not(:disabled)')];
+        const available = directMenuItems(parent);
         const index = available.indexOf(item);
-        if (event.key === "ArrowDown") { event.preventDefault(); focusMenuItem(menu, index + 1); }
-        else if (event.key === "ArrowUp") { event.preventDefault(); focusMenuItem(menu, index - 1); }
-        else if (event.key === "Home") { event.preventDefault(); focusMenuItem(menu, 0); }
-        else if (event.key === "End") { event.preventDefault(); focusMenuItem(menu, -1); }
+        if (event.key === "ArrowDown") { event.preventDefault(); focusMenuItem(parent, index + 1); }
+        else if (event.key === "ArrowUp") { event.preventDefault(); focusMenuItem(parent, index - 1); }
+        else if (event.key === "Home") { event.preventDefault(); focusMenuItem(parent, 0); }
+        else if (event.key === "End") { event.preventDefault(); focusMenuItem(parent, -1); }
         else if (event.key === "Escape") { event.preventDefault(); closeMenus({ focus: true }); }
-        else if (event.key === "ArrowRight") { event.preventDefault(); moveTrigger(entry, 1, true); }
+        else if (nested && event.key === "ArrowLeft") {
+          event.preventDefault(); parent.hidden = true; submenuTrigger.setAttribute("aria-expanded", "false"); submenuTrigger.focus();
+        } else if (!nested && event.key === "ArrowRight") { event.preventDefault(); moveTrigger(entry, 1, true); }
+        else if (!nested && event.key === "ArrowLeft") { event.preventDefault(); moveTrigger(entry, -1, true); }
+      });
+      parent.append(item);
+      menuItems.push({ item, command });
+      return item;
+    };
+
+    const commands = descriptors.filter((item) => item.group === group.id);
+    const subgroupDefinitions = MENU_SUBGROUPS[group.id] || [];
+    const rendered = new Set();
+    for (const command of commands) {
+      const subgroup = subgroupDefinitions.find(({ targets }) => targets.includes(command.targetId));
+      if (!subgroup) { appendCommand(command, menu); continue; }
+      if (rendered.has(subgroup.label)) continue;
+      rendered.add(subgroup.label);
+      const holder = document.createElement("div"); holder.className = "command-submenu";
+      const submenuTrigger = document.createElement("button"); submenuTrigger.type = "button";
+      submenuTrigger.className = "command-menu-item command-submenu-trigger";
+      submenuTrigger.dataset.label = subgroup.label;
+      submenuTrigger.setAttribute("role", "menuitem"); submenuTrigger.setAttribute("aria-haspopup", "menu");
+      submenuTrigger.setAttribute("aria-expanded", "false");
+      submenuTrigger.innerHTML = `<span class="command-label">${translate(subgroup.label)}</span><span aria-hidden="true">›</span>`;
+      const submenu = document.createElement("div"); submenu.className = "command-menu-panel command-submenu-panel";
+      submenu.setAttribute("role", "menu"); submenu.setAttribute("aria-label", translate(subgroup.label)); submenu.hidden = true;
+      const openSubmenu = () => {
+        for (const panel of menu.querySelectorAll(".command-submenu-panel")) if (panel !== submenu) panel.hidden = true;
+        for (const item of menu.querySelectorAll(".command-submenu-trigger")) if (item !== submenuTrigger) item.setAttribute("aria-expanded", "false");
+        submenu.hidden = false; submenuTrigger.setAttribute("aria-expanded", "true"); focusMenuItem(submenu, 0);
+      };
+      submenuTrigger.addEventListener("click", openSubmenu);
+      submenuTrigger.addEventListener("keydown", (event) => {
+        const available = directMenuItems(menu); const index = available.indexOf(submenuTrigger);
+        if (["ArrowRight", "Enter", " "].includes(event.key)) { event.preventDefault(); openSubmenu(); }
+        else if (event.key === "ArrowDown") { event.preventDefault(); focusMenuItem(menu, index + 1); }
+        else if (event.key === "ArrowUp") { event.preventDefault(); focusMenuItem(menu, index - 1); }
+        else if (event.key === "Escape") { event.preventDefault(); closeMenus({ focus: true }); }
         else if (event.key === "ArrowLeft") { event.preventDefault(); moveTrigger(entry, -1, true); }
       });
-      menu.append(item);
-      menuItems.push({ item, command });
+      for (const nestedCommand of commands.filter(({ targetId }) => subgroup.targets.includes(targetId))) {
+        appendCommand(nestedCommand, submenu, { nested: true, submenuTrigger });
+      }
+      holder.append(submenuTrigger, submenu); menu.append(holder);
     }
 
     trigger.addEventListener("click", () => openGroup === entry ? closeMenus() : openMenu(entry, null));
@@ -498,6 +561,10 @@ export function installCommandSurface(document, { translate = (value) => value }
     for (const entry of triggers) {
       entry.trigger.textContent = translate(entry.group.label);
       entry.menu.setAttribute("aria-label", translate(entry.group.label));
+      for (const submenuTrigger of entry.menu.querySelectorAll(".command-submenu-trigger")) {
+        submenuTrigger.querySelector(".command-label").textContent = translate(submenuTrigger.dataset.label);
+        submenuTrigger.nextElementSibling?.setAttribute("aria-label", translate(submenuTrigger.dataset.label));
+      }
     }
     renderPalette();
   });

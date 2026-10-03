@@ -59,7 +59,7 @@
         </button>
       </nav>
       <nav class="document-actions" aria-label="Document actions">
-        <button class="button button-primary" id="openButton" type="button">Open PSD</button>
+        <button class="button button-primary" id="openButton" type="button">Open</button>
         <button class="button" id="newButton" type="button">New</button>
         <button class="button" id="recoveryButton" type="button">Recovery <span id="recoveryCount">0</span></button>
         <button class="button" id="versionsButton" type="button" disabled>Versions</button>
@@ -129,6 +129,12 @@
         <button class="tool-button" id="selectAllButton" type="button" aria-label="Select all" title="Select all (Ctrl+A)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-select-all"></use></svg></button>
         <button class="tool-button" id="clearSelectionButton" type="button" aria-label="Clear selection" title="Clear selection (Ctrl+D)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-clear-selection"></use></svg></button>
         <span class="tool-spacer"></span>
+        <div class="color-swatches" aria-label="Foreground and background colors">
+          <input id="foregroundSwatchInput" type="color" value="#111111" aria-label="Foreground color" title="Foreground color">
+          <input id="backgroundSwatchInput" type="color" value="#ffffff" aria-label="Background color" title="Background color">
+          <button id="swapSwatchesButton" type="button" aria-label="Swap foreground and background colors" title="Swap colors">↔</button>
+          <button id="defaultSwatchesButton" type="button" aria-label="Reset foreground and background colors" title="Default colors">D</button>
+        </div>
         <button class="tool-button" id="togglePanelsButton" type="button" aria-label="Toggle panels" aria-pressed="false" title="Toggle panels"><svg class="ui-icon" aria-hidden="true"><use href="#icon-panels"></use></svg></button>
       </aside>
 
@@ -139,6 +145,20 @@
           <span id="documentName">Untitled</span>
           <span class="active-tool-context" id="activeToolContext">Rectangular selection</span>
           <span class="tool-options" id="toolOptions" role="toolbar" aria-label="Rectangular selection · Tool options">
+            <label class="selection-option" hidden>Selection <select id="selectionModeInput" aria-label="Selection combination">
+              <option value="replace">New</option><option value="add">Add</option>
+              <option value="subtract">Subtract</option><option value="intersect">Intersect</option>
+            </select></label>
+            <label class="selection-option" hidden>Feather <input id="selectionQuickFeatherInput" type="number" min="0" max="250" step="0.5" value="0"><span>px</span></label>
+            <label class="crop-option" hidden>Ratio <select id="cropRatioInput"><option value="free">Free</option><option value="original">Original</option><option value="1:1">1 : 1</option><option value="4:3">4 : 3</option><option value="16:9">16 : 9</option></select></label>
+            <span class="direct-operation-actions crop-option" hidden>
+              <button class="tool-option-button" id="cancelCropButton" type="button" disabled>Cancel</button>
+              <button class="tool-option-button tool-option-apply" id="applyCropButton" type="button" disabled>Apply crop</button>
+            </span>
+            <span class="direct-operation-actions transform-option" hidden>
+              <button class="tool-option-button" id="cancelTransformButton" type="button" disabled>Cancel</button>
+              <button class="tool-option-button tool-option-apply" id="applyTransformButton" type="button" disabled>Apply transform</button>
+            </span>
             <label>Size <input id="brushSizeInput" type="range" min="1" max="4096" value="24"><output id="brushSizeOutput">24 px</output></label>
             <label class="non-retouch-option">Color <input id="brushColorInput" type="color" value="#111111"></label>
             <label class="non-retouch-option standard-paint-option">Target <select id="paintTargetSelect" aria-label="Paint target">
@@ -184,22 +204,37 @@
             <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
             <canvas id="gestureCanvas" aria-hidden="true"></canvas>
             <div class="guides-overlay" id="guidesOverlay" aria-label="Document guides"></div>
-            <div class="selection-overlay" id="selectionOverlay" aria-hidden="true" hidden></div>
+            <svg class="selection-overlay" id="selectionOverlay" aria-hidden="true" hidden>
+              <path class="selection-shadow" id="selectionShadowPath" vector-effect="non-scaling-stroke"></path>
+              <path class="selection-march" id="selectionMarchPath" vector-effect="non-scaling-stroke"></path>
+            </svg>
+            <svg class="crop-overlay" id="cropOverlay" aria-label="Crop boundary" hidden>
+              <path class="crop-dim" id="cropDimPath" fill-rule="evenodd"></path>
+              <rect class="crop-boundary" id="cropBoundary" vector-effect="non-scaling-stroke"></rect>
+              <path class="crop-grid" id="cropGrid" vector-effect="non-scaling-stroke"></path>
+              <g id="cropHandles"></g>
+            </svg>
             <svg class="transform-overlay" id="transformOverlay" aria-label="Layer transform handles" hidden>
               <polygon id="transformPolygon" vector-effect="non-scaling-stroke"></polygon>
-              <circle data-transform-handle="0" role="button" aria-label="Top-left transform handle" tabindex="0"></circle>
-              <circle data-transform-handle="1" role="button" aria-label="Top-right transform handle" tabindex="0"></circle>
-              <circle data-transform-handle="2" role="button" aria-label="Bottom-right transform handle" tabindex="0"></circle>
-              <circle data-transform-handle="3" role="button" aria-label="Bottom-left transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="corner-0" role="button" aria-label="Top-left transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="edge-top" role="button" aria-label="Top transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="corner-1" role="button" aria-label="Top-right transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="edge-right" role="button" aria-label="Right transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="corner-2" role="button" aria-label="Bottom-right transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="edge-bottom" role="button" aria-label="Bottom transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="corner-3" role="button" aria-label="Bottom-left transform handle" tabindex="0"></circle>
+              <circle data-transform-handle="edge-left" role="button" aria-label="Left transform handle" tabindex="0"></circle>
+              <circle class="transform-pivot" id="transformPivot" aria-hidden="true"></circle>
             </svg>
+            <output class="geometry-hud" id="geometryHud" aria-live="polite" hidden></output>
           </div>
           <div class="empty-state" id="emptyState">
             <div class="empty-glyph" aria-hidden="true"><span></span></div>
             <p class="eyebrow">LOCAL-FIRST WORKSPACE</p>
-            <h1>Open a layered document.<br>Keep it on this device.</h1>
-            <p>PSD bytes stay inside the browser Worker. Editing state is owned by the Patchy engine.</p>
+            <h1>Open an image.<br>Edit it on this device.</h1>
+            <p>PSD, PNG, JPEG, WebP, AVIF and SVG stay inside the browser. Your document is not uploaded.</p>
             <div class="empty-actions">
-              <button class="button button-primary button-large" id="emptyOpenButton" type="button">Choose a PSD</button>
+              <button class="button button-primary button-large" id="emptyOpenButton" type="button">Open from computer</button>
               <button class="button button-large" id="emptyNewButton" type="button">Create a document</button>
               <button class="button button-large" id="gettingStartedButton" type="button">Getting started</button>
               <span>or drop it anywhere</span>
@@ -232,10 +267,11 @@
       </section>
 
       <aside class="inspector" id="inspector" aria-label="Document panels">
+        <div class="inspector-resizer" id="inspectorResizer" role="separator" aria-label="Resize document panels" aria-orientation="vertical" tabindex="0"></div>
         <div class="workspace-panel-tabs" role="tablist" aria-label="Workspace panels">
           <button id="workspacePanelLayersButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelLayers" data-panel-target="workspacePanelLayers" data-primary-tab hidden tabindex="-1">Layers</button>
-          <button id="workspacePanelPropertiesButton" type="button" role="tab" aria-selected="true" aria-controls="workspacePanelProperties" data-panel-target="workspacePanelProperties">Properties</button>
-          <button id="workspacePanelHistoryButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelHistory" data-panel-target="workspacePanelHistory" tabindex="-1">History</button>
+          <button id="workspacePanelPropertiesButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelProperties" data-panel-target="workspacePanelProperties" tabindex="-1">Properties</button>
+          <button id="workspacePanelHistoryButton" type="button" role="tab" aria-selected="true" aria-controls="workspacePanelHistory" data-panel-target="workspacePanelHistory">History</button>
           <button id="workspacePanelStructureButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelStructure" data-panel-target="workspacePanelStructure" tabindex="-1">Channels</button>
           <button id="workspacePanelInfoButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelInfo" data-panel-target="workspacePanelInfo" tabindex="-1">Info</button>
         </div>
@@ -244,8 +280,19 @@
             <div><p class="eyebrow">STRUCTURE</p><h2>Layers</h2></div>
             <span class="layer-count" id="layerCount">0</span>
           </header>
+          <div class="layer-quick-controls" aria-label="Common layer appearance">
+            <label><span>Blend</span><select id="quickLayerBlendSelect" aria-label="Layer blend mode" disabled>
+              <option value="0">Pass through</option><option value="1">Normal</option><option value="2">Multiply</option>
+              <option value="3">Screen</option><option value="4">Overlay</option><option value="5">Darken</option>
+              <option value="6">Lighten</option><option value="11">Difference</option><option value="27">Dissolve</option>
+            </select></label>
+            <label><span>Opacity</span><input id="quickLayerOpacityInput" aria-label="Layer opacity" type="number" min="0" max="100" step="1" value="100" disabled></label>
+            <label><span>Fill</span><input id="quickLayerFillInput" aria-label="Layer fill opacity" type="number" min="0" max="100" step="1" value="100" disabled></label>
+            <label class="quick-layer-lock"><input id="quickLayerLockInput" type="checkbox" disabled><span>Lock</span></label>
+          </div>
           <div class="layer-actions" role="group" aria-label="Layer actions">
             <button type="button" id="importLayerButton" disabled>Import pixels</button>
+            <button type="button" id="layerViaCopyButton" disabled>Layer via copy</button>
             <button type="button" id="groupLayerButton" disabled>Group</button>
             <button type="button" id="ungroupLayerButton" disabled>Ungroup</button>
             <button type="button" id="removeLayerButton" disabled>Delete</button>
@@ -281,7 +328,7 @@
           <div class="layer-list" id="layerList" role="list" aria-label="Layers"></div>
           <div class="panel-empty" id="layersEmpty">Open a document to inspect its layers.</div>
         </section>
-        <section class="panel properties-panel" id="workspacePanelProperties" role="tabpanel" aria-labelledby="workspacePanelPropertiesButton" data-workspace-panel data-secondary-panel>
+        <section class="panel properties-panel" id="workspacePanelProperties" role="tabpanel" aria-labelledby="workspacePanelPropertiesButton" data-workspace-panel data-secondary-panel hidden>
           <header class="panel-header"><div><p class="eyebrow">APPEARANCE</p><h2 id="propertiesTitle">Selected layer</h2></div></header>
           <div class="property-fields">
             <label><span>Name</span><input id="layerNameInput" type="text" maxlength="256" disabled></label>
@@ -309,7 +356,7 @@
             <button id="editLayerTypeButton" type="button" disabled hidden>Edit layer contents…</button>
           </div>
         </section>
-        <section class="panel history-panel" id="workspacePanelHistory" role="tabpanel" aria-labelledby="workspacePanelHistoryButton" data-workspace-panel data-secondary-panel hidden>
+        <section class="panel history-panel" id="workspacePanelHistory" role="tabpanel" aria-labelledby="workspacePanelHistoryButton" data-workspace-panel data-secondary-panel>
           <header class="panel-header">
             <div><p class="eyebrow">DOCUMENT</p><h2 id="historyTitle">History</h2></div>
             <span class="layer-count" id="historyCount">0</span>
@@ -369,7 +416,22 @@
       <div><strong id="errorTitle">Could not open document</strong><span id="errorMessage"></span></div>
       <button class="icon-button" id="dismissErrorButton" type="button" aria-label="Dismiss error">×</button>
     </div>
-    <input id="fileInput" aria-label="Open PSD or PSB" type="file" accept=".psd,.psb,application/octet-stream" hidden>
+    <output class="action-toast" id="actionToast" role="status" aria-live="polite" aria-atomic="true" hidden></output>
+    <div class="canvas-context-menu" id="canvasContextMenu" role="menu" aria-label="Canvas actions" hidden>
+      <button type="button" role="menuitem" data-target-proxy="clearSelectionButton">Deselect <kbd>Ctrl+D</kbd></button>
+      <button type="button" role="menuitem" data-target-proxy="invertSelectionButton">Invert selection</button>
+      <button type="button" role="menuitem" data-target-proxy="expandSelectionButton">Expand 4 px</button>
+      <button type="button" role="menuitem" data-target-proxy="contractSelectionButton">Contract 4 px</button>
+      <button type="button" role="menuitem" data-target-proxy="borderSelectionButton">Border 4 px</button>
+      <button type="button" role="menuitem" data-target-proxy="smoothSelectionButton">Select and Mask…</button>
+      <button type="button" role="menuitem" data-target-proxy="saveChannelButton">Save channel</button>
+      <button type="button" role="menuitem" data-target-proxy="savePathButton">Save path</button>
+      <hr role="separator">
+      <button type="button" role="menuitem" data-command-proxy="layer.layerViaCopy">Layer via copy <kbd>Ctrl+J</kbd></button>
+      <button type="button" role="menuitem" data-target-proxy="layerTransformButton">Free Transform</button>
+      <button type="button" role="menuitem" data-target-proxy="fillToolButton">Fill selection</button>
+    </div>
+    <input id="fileInput" aria-label="Open document or image" type="file" accept=".psd,.psb,.png,.jpg,.jpeg,.webp,.avif,.svg,application/octet-stream,image/png,image/jpeg,image/webp,image/avif,image/svg+xml" hidden>
     <input id="imageInput" aria-label="Import image pixels" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
     <input id="smartObjectInput" aria-label="Place Smart Object" type="file" accept=".psd,.psb,image/png,image/jpeg,image/webp,image/avif,image/svg+xml,.svg" hidden>
     <dialog class="document-dialog recovery-dialog" id="recoveryDialog" aria-labelledby="recoveryDialogTitle">

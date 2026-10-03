@@ -34,6 +34,19 @@ test("native open binds the selected handle to the opened document", async () =>
   assert.equal(lifecycle.hasHandle(7), true);
 });
 
+test("native open picker offers layered and raster documents", async () => {
+  let options;
+  const openedHandle = handle("photo.jpg");
+  openedHandle.getFile = async () => new Blob(["jpg"], { type: "image/jpeg" });
+  const lifecycle = new BrowserFileLifecycle({ scope: {
+    showOpenFilePicker: async (value) => { options = value; return [openedHandle]; },
+    showSaveFilePicker() {},
+  } });
+  assert.equal((await lifecycle.pickOpen()).kind, "handle");
+  assert.equal(options.types.length, 2);
+  assert.deepEqual(options.types[1].accept["image/jpeg"], [".jpg", ".jpeg"]);
+});
+
 test("durable persistence is reported only after writable close", async () => {
   const target = handle();
   const lifecycle = new BrowserFileLifecycle({ scope: { showOpenFilePicker() {},

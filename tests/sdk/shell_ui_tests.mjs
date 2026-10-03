@@ -216,7 +216,7 @@ test("production shell exposes keyboard, localization, responsive and motion con
   assert.match(css, /@media \(max-width: 820px\)/);
   assert.match(css, /@media \(max-width: 560px\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
-  assert.match(css, /\.spinner, \.selection-overlay \{ animation: none !important; \}/);
+  assert.match(css, /\.spinner, \.selection-march \{ animation: none !important; \}/);
   assert.match(css, /transition-duration: \.001ms !important/);
   assert.match(editor, /locale: localizer\.locale/);
   assert.match(editor, /localizer\.setLocale/);
