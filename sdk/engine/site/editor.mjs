@@ -56,7 +56,7 @@ inspectorResizer.addEventListener("pointerdown", (event) => {
   inspectorResizer.addEventListener("pointercancel", finish);
 });
 inspectorResizer.addEventListener("keydown", (event) => {
-  if (![/ArrowLeft/, /ArrowRight/].some((pattern) => pattern.test(event.key))) return;
+  if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
   event.preventDefault();
   const current = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--inspector-width")) || 316;
   setInspectorWidth(current + (event.key === "ArrowLeft" ? (event.shiftKey ? 40 : 10) : -(event.shiftKey ? 40 : 10)));
@@ -4869,10 +4869,14 @@ $("rotateArbitraryButton").addEventListener("click", () => {
 });
 
 const cropHandleGroup = $("cropHandles");
+const cropHandleLabels = ["Top-left crop handle", "Top crop handle", "Top-right crop handle",
+  "Right crop handle", "Bottom-right crop handle", "Bottom crop handle",
+  "Bottom-left crop handle", "Left crop handle"];
 for (let index = 0; index < 8; ++index) {
   const handle = document.createElementNS(cropHandleGroup.namespaceURI, "circle");
   handle.dataset.cropHandle = String(index); handle.setAttribute("role", "button");
-  handle.setAttribute("aria-label", `Crop handle ${index + 1}`); handle.setAttribute("tabindex", "0");
+  localizer.setAttribute(handle, "aria-label", cropHandleLabels[index]);
+  handle.setAttribute("tabindex", "0");
   cropHandleGroup.append(handle);
   let drag = null;
   handle.addEventListener("pointerdown", (event) => {

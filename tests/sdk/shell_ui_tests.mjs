@@ -351,3 +351,13 @@ test("authored error details, generated labels and accessible names are inventor
     assert.notEqual(translateMessage(value, "ru"), value, value);
   }
 });
+
+test("direct crop handles have complete Russian accessible labels", async () => {
+  const editor = await source("sdk/engine/site/editor.mjs");
+  for (const label of ["Top-left crop handle", "Top crop handle", "Top-right crop handle",
+    "Right crop handle", "Bottom-right crop handle", "Bottom crop handle",
+    "Bottom-left crop handle", "Left crop handle"]) {
+    assert.match(editor, new RegExp(label));
+    assert.notEqual(translateMessage(label, "ru"), label);
+  }
+});
