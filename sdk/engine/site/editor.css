@@ -182,9 +182,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tool-button[aria-pressed="true"] { color: var(--accent); border-color: #d7ff5566; background: #d7ff550b; }
 .tool-cluster { position: relative; flex: 0 0 auto; width: 36px; height: 34px; }
 .tool-cluster > .tool-button { position: static; width: 36px; min-width: 36px; border-radius: var(--radius); }
-.tool-group-toggle { position: absolute; z-index: 2; right: 1px; bottom: 1px; width: 12px; height: 12px;
+.tool-group-toggle { position: absolute; z-index: 2; right: -4px; bottom: -4px; width: 24px; height: 24px;
   padding: 0; border: 0; border-radius: 2px; color: var(--text-faint); background: transparent; font-size: 0; cursor: pointer; }
-.tool-group-toggle::after { content: ""; display: block; width: 0; height: 0; margin: 4px;
+.tool-group-toggle::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 0; height: 0;
   border-left: 4px solid transparent; border-top: 4px solid currentColor; }
 .tool-group-toggle:hover, .tool-group-toggle[aria-expanded="true"] { color: var(--text); }
 .tool-group-menu { position: absolute; z-index: 70; top: -4px; left: 42px; width: 228px; display: grid;
@@ -210,10 +210,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   border-radius: 2px; background: var(--surface-1); cursor: pointer; }
 #foregroundSwatchInput { z-index: 2; left: 1px; top: 1px; }
 #backgroundSwatchInput { z-index: 1; right: 1px; bottom: 1px; }
-.color-swatches button { position: absolute; width: 12px; height: 12px; padding: 0; border: 0; color: var(--text-faint);
+.color-swatches button { position: absolute; z-index: 3; width: 24px; height: 24px; padding: 0; border: 0; color: var(--text-faint);
   background: transparent; font-size: 8px; line-height: 1; cursor: pointer; }
-#swapSwatchesButton { top: 0; right: 0; }
-#defaultSwatchesButton { bottom: 0; left: 0; }
+#swapSwatchesButton { top: -6px; right: -6px; }
+#defaultSwatchesButton { bottom: -6px; left: -6px; }
 
 .stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) 30px; overflow: hidden; background: #0e1012; position: relative; }
 .document-tabs { min-width: 0; min-height: 32px; display: flex; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--surface-0); scrollbar-width: thin; }
@@ -399,7 +399,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .structure-editor { border-top: 1px solid var(--line); padding-top: 10px; }
 .path-anchor-editor { padding: 0 12px 12px; }
 .path-anchor-editor button { align-self: end; min-height: 30px; }
-.layer-row { display: grid; grid-template-columns: 26px 30px minmax(0, 1fr) 20px 20px; gap: 3px; align-items: center; height: 40px; padding: 3px; border: 1px solid transparent; border-radius: 4px; color: var(--text-muted); }
+.layer-row { display: grid; grid-template-columns: 26px 30px minmax(0, 1fr) 24px 24px; gap: 3px; align-items: center; height: 40px; padding: 3px; border: 1px solid transparent; border-radius: 4px; color: var(--text-muted); }
 .layer-row:hover { background: var(--surface-1); }
 .layer-row[data-active="true"] { background: #d7ff5509; border-color: #d7ff5538; color: var(--text); }
 .visibility-button, .reorder-button { position: relative; border: 0; background: transparent; color: inherit;

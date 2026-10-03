@@ -86,12 +86,20 @@ try {
   await dragCanvas("cropToolButton", { x: 3.2, y: 4.1 }, { x: 12.7, y: 15.4 });
   check(byId("cropToolButton").getAttribute("aria-pressed") === "true",
     "production Crop tool did not become active");
-  await waitFor(() => byId("documentDialog").open && Number(byId("cropWidthInput").value) > 0 &&
-    Number(byId("cropHeightInput").value) > 0, "visual Crop gesture did not open bounded geometry controls");
-  check(byId("cropXInput").value === "3" && byId("cropYInput").value === "4" &&
-    byId("cropWidthInput").value === "10" && byId("cropHeightInput").value === "12",
+  await waitFor(() => !byId("cropOverlay").hasAttribute("hidden") &&
+    Number(byId("cropBoundary").getAttribute("width")) > 0 &&
+    Number(byId("cropBoundary").getAttribute("height")) > 0,
+  "visual Crop gesture did not open direct bounded geometry controls");
+  check(byId("cropBoundary").getAttribute("x") === "3" &&
+    byId("cropBoundary").getAttribute("y") === "4" &&
+    byId("cropBoundary").getAttribute("width") === "10" &&
+    byId("cropBoundary").getAttribute("height") === "12",
   "visual Crop gesture did not retain document-space coordinates");
-  byId("documentDialog").close();
+  check(byId("cropHandles").querySelectorAll("circle").length === 8,
+    "visual Crop gesture did not expose all direct resize handles");
+  before = revision(); byId("cancelCropButton").click();
+  await waitFor(() => revision() === before && byId("cropOverlay").hasAttribute("hidden"),
+    "direct Crop cancel changed the document or retained its overlay");
 
   before = revision();
   await dragCanvas("marqueeToolButton", { x: 2.2, y: 3.2 }, { x: 10.6, y: 14.6 });

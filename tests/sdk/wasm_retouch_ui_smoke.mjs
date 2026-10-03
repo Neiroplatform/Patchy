@@ -89,7 +89,7 @@ try {
   drag({ x: 8, y: 15 }, { x: 25, y: 34 }, 102);
   await waitFor(() => idle() && revision() === before + 1n && !byId("selectionOverlay").hidden,
     "Patch selection fixture did not commit");
-  const selectionLeft = byId("selectionOverlay").style.left;
+  const selectionPath = byId("selectionMarchPath").getAttribute("d");
   byId("patchToolButton").click();
   byId("patchModeInput").value = "2";
   byId("patchModeInput").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
@@ -102,15 +102,15 @@ try {
   release({ x: 40, y: 24 }, 103);
   await waitFor(() => { failOnEditorError(); return idle() && revision() === before + 1n; },
     "Patch Destination did not commit exactly one canonical revision");
-  check(byId("selectionOverlay").style.left !== selectionLeft,
+  check(byId("selectionMarchPath").getAttribute("d") !== selectionPath,
     "Patch Destination did not move the selection atomically");
   const patchedPixels = byId("documentCanvas").toDataURL();
-  const patchedSelectionLeft = byId("selectionOverlay").style.left;
+  const patchedSelectionPath = byId("selectionMarchPath").getAttribute("d");
   byId("undoButton").click();
-  await waitFor(() => idle() && byId("selectionOverlay").style.left === selectionLeft,
+  await waitFor(() => idle() && byId("selectionMarchPath").getAttribute("d") === selectionPath,
     "Undo did not restore Patch pixels and selection together");
   byId("redoButton").click();
-  await waitFor(() => idle() && byId("selectionOverlay").style.left === patchedSelectionLeft &&
+  await waitFor(() => idle() && byId("selectionMarchPath").getAttribute("d") === patchedSelectionPath &&
     byId("documentCanvas").toDataURL() === patchedPixels,
   "Redo did not restore Patch pixels and selection together");
   body.dataset.result = "PASS"; body.dataset.revision = String(revision());
