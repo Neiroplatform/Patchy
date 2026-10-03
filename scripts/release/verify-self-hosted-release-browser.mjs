@@ -373,6 +373,120 @@ async function verifyBetaGuide(page) {
   console.log(`BETA-GUIDE-PHASE browser=${browserName} phase=keyboard-reflow`);
 }
 
+async function verifyReadableIconography(page) {
+  const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+  const inventory = await page.evaluate(() => [...document.querySelectorAll(".tool-button")].map((button) => {
+    const icon = button.querySelector(".ui-icon");
+    const use = icon?.querySelector("use");
+    const box = icon?.getBBox();
+    return {
+      id: button.id,
+      label: button.getAttribute("aria-label"),
+      title: button.title,
+      href: use?.getAttribute("href"),
+      width: box?.width ?? 0,
+      height: box?.height ?? 0,
+      visible: getComputedStyle(button).display !== "none",
+      stroke: icon ? getComputedStyle(icon).stroke : "",
+      color: getComputedStyle(button).color,
+    };
+  }));
+  assert.equal(inventory.length, 31, "packaged tool icon census drifted");
+  assert.equal(new Set(inventory.map(({ href }) => href)).size, 31,
+    "packaged tools no longer have distinct icon silhouettes");
+  for (const icon of inventory) {
+    assert.ok(icon.id && icon.label && icon.title, `tool icon lost its accessible name: ${JSON.stringify(icon)}`);
+    assert.match(icon.href, /^#icon-/);
+    if (icon.visible) assert.ok(icon.width >= 9 && icon.height >= 9,
+      `${icon.id} has an empty or illegible packaged SVG box`);
+    assert.equal(icon.stroke, icon.color, `${icon.id} does not follow currentColor`);
+  }
+
+  const topActions = await page.locator(
+    "#undoButton, #redoButton, #copyPixelsButton, #pastePixelsButton",
+  ).evaluateAll((buttons) => buttons.map((button) => ({
+    label: button.getAttribute("aria-label"),
+    title: button.title,
+    href: button.querySelector(".ui-icon use")?.getAttribute("href"),
+  })));
+  assert.equal(topActions.length, 4);
+  assert.equal(new Set(topActions.map(({ href }) => href)).size, 4,
+    "top editing actions no longer have distinct icons");
+  assert.equal(topActions.every(({ label, title, href }) => label && title && /^#icon-/.test(href)), true,
+    "top editing action lost its icon or accessible name");
+
+  for (const group of ["transform", "selection", "paint", "retouch", "tone", "fill", "draw", "navigation"]) {
+    const cluster = page.locator(`[data-tool-group="${group}"]`);
+    const toggle = cluster.locator(":scope > .tool-group-toggle");
+    const primary = cluster.locator(":scope > .tool-button");
+    assert.ok(await toggle.getAttribute("aria-label"), `${group} disclosure lost its accessible name`);
+    await primary.hover();
+    await page.waitForTimeout(150);
+    const tooltip = await primary.evaluate((button) => ({
+      content: getComputedStyle(button, "::after").content,
+      opacity: getComputedStyle(button, "::after").opacity,
+    }));
+    assert.equal(tooltip.content.replaceAll('"', ""), await primary.getAttribute("aria-label"));
+    assert.equal(tooltip.opacity, "1", `${group} primary tool lost its visible hover label`);
+    await toggle.click();
+    assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+    assert.equal(await cluster.locator(".tool-group-menu .tool-button").evaluateAll((buttons) =>
+      buttons.every((button) => {
+        const label = getComputedStyle(button, "::after").content.replaceAll('"', "");
+        const box = button.getBoundingClientRect();
+        return label === button.getAttribute("aria-label") && box.height >= 24 && box.width >= 24;
+      })), true, `${group} flyout lost a readable label or target floor`);
+    await toggle.click();
+  }
+
+  for (const viewport of [
+    { width: 1440, height: 900 }, { width: 820, height: 1180 },
+    { width: 390, height: 844 }, { width: 320, height: 720 },
+  ]) {
+    await page.setViewportSize(viewport);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
+      `iconography creates horizontal overflow at ${viewport.width}x${viewport.height}`);
+    const selectionToggle = page.locator('[data-tool-group="selection"] > .tool-group-toggle');
+    await selectionToggle.click();
+    assert.equal(await page.locator('[data-tool-group="selection"] .tool-group-menu').evaluate((menu) => {
+      const box = menu.getBoundingClientRect();
+      return box.left >= 0 && box.right <= innerWidth + .5;
+    }), true, `selection icon menu overflows ${viewport.width}px`);
+    await selectionToggle.click();
+  }
+
+  await page.setViewportSize(originalViewport);
+  await page.click("#emptyNewButton");
+  await page.click('[data-starter-preset="blank"]');
+  await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "document" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
+  assert.equal(await page.locator(".visibility-button").count(), 1);
+  assert.equal(await page.locator(".reorder-button").count(), 2);
+  const dynamicIcons = await page.evaluate(() => {
+    const closeButton = document.querySelector('#documentTabs .document-tab[data-active="true"] button:last-child');
+    const visibility = document.querySelector(".visibility-button");
+    const reorder = document.querySelector(".reorder-button");
+    return {
+      closeBefore: getComputedStyle(closeButton, "::before").content,
+      closeAfter: getComputedStyle(closeButton, "::after").content,
+      visibilityBefore: getComputedStyle(visibility, "::before").content,
+      reorderBefore: getComputedStyle(reorder, "::before").content,
+    };
+  });
+  assert.deepEqual(dynamicIcons, {
+    closeBefore: '\"\"', closeAfter: '\"\"', visibilityBefore: '\"\"', reorderBefore: '\"\"',
+  }, "dynamic document and layer controls lost their conventional icon shapes");
+  await closeActiveDocument(page);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  assert.ok(await page.evaluate(() =>
+    Number.parseFloat(getComputedStyle(document.querySelector(".tool-button")).transitionDuration) <= .000001),
+  "reduced motion no longer reaches icon controls");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  console.log(`ICONOGRAPHY browser=${browserName} tools=31 top-actions=4 groups=8 viewports=4 dynamic-controls=4`);
+}
+
 async function waitForEditorIdle(page) {
   await page.waitForFunction(() =>
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
@@ -772,8 +886,12 @@ try {
   assert.equal(browserManifest.sourceSha, manifest.sourceSha);
 
   const betaGuideDialogsBefore = acceptedDialogs;
+  await verifyReadableIconography(page);
+  const iconographyAcceptedDialogs = acceptedDialogs - betaGuideDialogsBefore;
+  assert.equal(iconographyAcceptedDialogs, 0,
+    "iconography verification must not invent confirmations for unchanged documents");
   await verifyBetaGuide(page);
-  const betaGuideAcceptedDialogs = acceptedDialogs - betaGuideDialogsBefore;
+  const betaGuideAcceptedDialogs = acceptedDialogs - betaGuideDialogsBefore - iconographyAcceptedDialogs;
   assert.equal(betaGuideAcceptedDialogs, 0,
     "beta guide must not invent confirmations for unchanged documents");
   console.log(`BETA-GUIDE browser=${browserName} local-first=1 starter-presets=4 quick-actions=3 help-shortcut=1 responsive=390x844`);

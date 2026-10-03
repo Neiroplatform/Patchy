@@ -32,6 +32,33 @@ test("tool rail exposes every existing tool through bounded semantic groups", ()
     "textToolButton", "panToolButton"]) assert.ok(members.includes(targetId), targetId);
 });
 
+test("icon-only actions use a complete readable first-party SVG vocabulary", async () => {
+  const [html, css] = await Promise.all([
+    source("sdk/engine/site/patchy.html"), source("sdk/engine/site/editor.css"),
+  ]);
+  const symbols = [...html.matchAll(/<symbol id="(icon-[^"]+)"/g)].map((match) => match[1]);
+  const tools = [...html.matchAll(/<button class="tool-button"([^>]*)>([\s\S]*?)<\/button>/g)];
+  assert.equal(tools.length, 31);
+  const toolIcons = [];
+  for (const [, attributes, body] of tools) {
+    assert.match(attributes, /aria-label="[^"]+"/);
+    assert.match(attributes, /title="[^"]+"/);
+    assert.match(body, /<svg class="ui-icon" aria-hidden="true"><use href="#(icon-[^"]+)"><\/use><\/svg>/);
+    toolIcons.push(body.match(/href="#(icon-[^"]+)"/)?.[1]);
+    assert.equal(body.replace(/<[^>]+>/g, "").trim(), "");
+  }
+  assert.equal(new Set(toolIcons).size, 31, "every rail action needs a distinct silhouette");
+  for (const icon of toolIcons) assert.ok(symbols.includes(icon), icon);
+  for (const id of ["undoButton", "redoButton", "copyPixelsButton", "pastePixelsButton"]) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*><svg class="ui-icon" aria-hidden="true">`));
+  }
+  assert.match(css, /\.ui-icon \{[\s\S]+stroke: currentColor/);
+  assert.match(css, /\.tool-cluster > \.tool-button::after[\s\S]+content: attr\(aria-label\)/);
+  assert.match(css, /\.visibility-button\[aria-label\^="Hide"\]::after/);
+  assert.match(css, /\.layer-row \.reorder-button:nth-last-child\(2\)::before/);
+  assert.match(css, /\.history-row\[aria-selected="true"\] \.history-marker::before/);
+});
+
 test("command filtering requires every normalized term and preserves source order", () => {
   const commands = [
     { label: "Place Smart Object", groupLabel: "Layer", shortcut: "" },

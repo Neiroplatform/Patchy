@@ -10,6 +10,43 @@
 </head>
 <body>
   <a class="skip-link" href="#workspace">Skip to editor workspace</a>
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="icon-undo" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M5 12h8a7 7 0 0 1 7 7"/></symbol>
+    <symbol id="icon-redo" viewBox="0 0 24 24"><path d="m15 7 5 5-5 5m4-5h-8a7 7 0 0 0-7 7"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="1.5"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></symbol>
+    <symbol id="icon-paste" viewBox="0 0 24 24"><path d="M9 5h6m-5-2h4a1 1 0 0 1 1 1v2H9V4a1 1 0 0 1 1-1Z"/><path d="M8 5H6.5A1.5 1.5 0 0 0 5 6.5v12A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5v-12A1.5 1.5 0 0 0 17.5 5H16"/><path d="M9 11h6m-6 4h6"/></symbol>
+    <symbol id="icon-move" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3 9 6m3-3 3 3m6 6-3-3m3 3-3 3M12 21l-3-3m3 3 3-3M3 12l3-3m-3 3 3 3"/></symbol>
+    <symbol id="icon-crop" viewBox="0 0 24 24"><path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12"/></symbol>
+    <symbol id="icon-marquee" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1" stroke-dasharray="3 2"/></symbol>
+    <symbol id="icon-lasso" viewBox="0 0 24 24"><path d="M18.5 6.2c3.1 2.8 1.4 8.2-3.7 9.7-5.2 1.5-10.7-.5-10.4-4.7.2-3.7 4.7-6.5 9-6.2 2 .1 3.8.7 5.1 1.2Z"/><path d="M14.8 15.9c-.3 2.2-1.7 4-3.8 4.1-1.5.1-2.5-.7-2.3-1.6.2-.8 1.5-1.1 2.7-.5"/></symbol>
+    <symbol id="icon-polygon-lasso" viewBox="0 0 24 24"><path d="m5 7 6-3 8 4-2 8-8 2-5-5Z" stroke-dasharray="3 2"/><circle cx="5" cy="7" r="1"/><circle cx="19" cy="8" r="1"/><path d="M9 18c.5 2 2 2.7 3.5 1.8"/></symbol>
+    <symbol id="icon-magic" viewBox="0 0 24 24"><path d="m5 19 9-9m-7-2 9 9M4 4v3M2.5 5.5h3M18 3v4m-2-2h4m-1 13v3m-1.5-1.5h3"/></symbol>
+    <symbol id="icon-quick-select" viewBox="0 0 24 24"><path d="M5 8.5a7 7 0 1 0 10.5-2.1" stroke-dasharray="2.2 2.2"/><path d="m14 4 6 6m-8.5 5.5 6-6 2 2-6 6-3 .8Z"/></symbol>
+    <symbol id="icon-magnetic" viewBox="0 0 24 24"><path d="M6 5v7a6 6 0 0 0 12 0V5h-4v7a2 2 0 0 1-4 0V5Z"/><path d="M6 8h4m4 0h4"/><circle cx="4" cy="17" r="1"/><circle cx="8" cy="20" r="1"/><circle cx="13" cy="20" r="1"/></symbol>
+    <symbol id="icon-quick-mask" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1.5"/><circle cx="12" cy="12" r="5"/></symbol>
+    <symbol id="icon-pan" viewBox="0 0 24 24"><path d="M8 11V6a1.5 1.5 0 0 1 3 0v4-6a1.5 1.5 0 0 1 3 0v6-5a1.5 1.5 0 0 1 3 0v6-3a1.5 1.5 0 0 1 3 0v6c0 4-2.5 7-7 7h-1c-2.5 0-4-1.5-5.4-3.6L4 13.5A1.6 1.6 0 0 1 6.6 12L8 13.5Z"/></symbol>
+    <symbol id="icon-brush" viewBox="0 0 24 24"><path d="m14 14 6.3-6.3a2.1 2.1 0 0 0-3-3L11 11"/><path d="M14 14c-2-2.6-5.2-3.3-7.1-1.4-1.5 1.5-1 3.2-2.9 5.4 3.5.8 6.4.8 8.3-1.1.8-.8 1.4-1.8 1.7-2.9Z"/></symbol>
+    <symbol id="icon-mixer" viewBox="0 0 24 24"><path d="M13 4a8 8 0 1 0 7 11c.6-1.5-.4-2.5-1.8-2.2l-1.5.3c-1.7.3-2.8-1.4-1.8-2.8l1.4-2C17.5 6.6 15.7 4 13 4Z"/><circle cx="8" cy="9" r="1"/><circle cx="7" cy="13" r="1"/><path d="m14 18 6-6"/></symbol>
+    <symbol id="icon-pattern-stamp" viewBox="0 0 24 24"><path d="M8 4h8v5l2 3v2H6v-2l2-3Z"/><path d="M5 17h14v3H5Z"/><path d="M8 17v3m4-3v3m4-3v3"/></symbol>
+    <symbol id="icon-eraser" viewBox="0 0 24 24"><path d="m5 14 7.5-9a2 2 0 0 1 2.8-.2l4 3.4a2 2 0 0 1 .2 2.8l-7.5 9H7l-2-1.8a3 3 0 0 1 0-4.2Z"/><path d="m9 10 7 6m-4 4h9"/></symbol>
+    <symbol id="icon-clone" viewBox="0 0 24 24"><path d="M9 4h6l1 6 3 3v3H5v-3l3-3Z"/><path d="M4 19h16v2H4Z"/></symbol>
+    <symbol id="icon-heal" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="8" rx="4" transform="rotate(-35 12 12)"/><path d="m9 8 6 8M10.5 11h.01m3-2h.01m-2 6h.01m3-2h.01"/></symbol>
+    <symbol id="icon-spot-heal" viewBox="0 0 24 24"><rect x="3" y="9" width="13" height="7" rx="3.5" transform="rotate(-35 9.5 12.5)"/><path d="m7 10 5 5M18 4v4m-2-2h4m-1 10v3m-1.5-1.5h3"/></symbol>
+    <symbol id="icon-patch" viewBox="0 0 24 24"><path d="M6 5h12l2 4-2 10H6L4 9Z" stroke-dasharray="2.5 2"/><path d="m8 14 2-2 2 2 4-4"/></symbol>
+    <symbol id="icon-smudge" viewBox="0 0 24 24"><path d="M5 18c3-5 4-9 6-9 1.5 0 1.2 2 .5 3.5 2-2.5 3-6.5 4.7-6.5 1.7 0 .8 4.5 0 6 1.3-1.6 2.3-3 3.3-2.4 1.5 1-2.1 9.4-7.5 10.4-2.8.5-5.2-.4-7-2Z"/></symbol>
+    <symbol id="icon-dodge" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m14.5 14.5 5 5"/></symbol>
+    <symbol id="icon-burn" viewBox="0 0 24 24"><path d="M13 3c1 5-4 6-4 10 0 1.7 1.3 3 3 3 2.5 0 4-2 3-4.5 3 2 4 4 3 6.5-1 2.4-3.4 3-6 3-4.4 0-7-2.7-7-6.5C5 9 11 8 13 3Z"/></symbol>
+    <symbol id="icon-sponge" viewBox="0 0 24 24"><path d="M5 7c0-1.7 1.3-3 3-3h8c1.7 0 3 1.3 3 3v10c0 1.7-1.3 3-3 3H8c-1.7 0-3-1.3-3-3Z"/><circle cx="9" cy="9" r="1"/><circle cx="15" cy="8" r="1"/><circle cx="12" cy="14" r="1.2"/><circle cx="16" cy="16" r=".8"/><circle cx="8" cy="17" r=".8"/></symbol>
+    <symbol id="icon-blur" viewBox="0 0 24 24"><path d="M12 3S6 10 6 15a6 6 0 0 0 12 0c0-5-6-12-6-12Z"/></symbol>
+    <symbol id="icon-sharpen" viewBox="0 0 24 24"><path d="m12 4 8 16H4Z"/><path d="m12 9 3 7H9Z"/></symbol>
+    <symbol id="icon-gradient" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1"/><path d="M8 5v14m4-14v14m4-14v14" opacity=".7"/></symbol>
+    <symbol id="icon-fill" viewBox="0 0 24 24"><path d="m7 4 10 10-6 6-7-7 6-6m-2-1 2 2"/><path d="M4 13h13m2 2s-2 2.3-2 3.5a2 2 0 0 0 4 0c0-1.2-2-3.5-2-3.5Z"/></symbol>
+    <symbol id="icon-pen" viewBox="0 0 24 24"><path d="m12 3 7 7-4 10H9L5 10Z"/><circle cx="12" cy="11" r="1.5"/><path d="M12 12.5V20"/></symbol>
+    <symbol id="icon-text" viewBox="0 0 24 24"><path d="M5 5h14M12 5v14m-4 0h8"/></symbol>
+    <symbol id="icon-select-all" viewBox="0 0 24 24"><path d="M7 4H4v3m13-3h3v3M4 17v3h3m13-3v3h-3"/><rect x="7" y="7" width="10" height="10" stroke-dasharray="2 2"/></symbol>
+    <symbol id="icon-clear-selection" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1" stroke-dasharray="3 2"/><path d="m8 8 8 8m0-8-8 8"/></symbol>
+    <symbol id="icon-panels" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M15 4v16M6 8h6m-6 4h6m-6 4h6"/></symbol>
+  </svg>
   <div class="editor-shell" data-state="starting">
     <header class="topbar">
       <a class="brand" href="#workspace" aria-label="Patchy editor home">
@@ -29,8 +66,8 @@
         <button class="button" id="assetsButton" type="button">Assets</button>
         <button class="button" id="diagnosticsButton" type="button">Diagnostics</button>
         <span class="action-divider" aria-hidden="true"></span>
-        <button class="icon-button" id="undoButton" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>↶</button>
-        <button class="icon-button" id="redoButton" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button>
+        <button class="icon-button" id="undoButton" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-undo"></use></svg></button>
+        <button class="icon-button" id="redoButton" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-redo"></use></svg></button>
         <button class="button" id="transformButton" type="button" disabled>Canvas</button>
         <select id="saveFormatSelect" aria-label="Layered document format" disabled>
           <option value="psd">PSD</option><option value="psb">PSB</option>
@@ -42,8 +79,8 @@
           <option value="webp">WebP</option><option value="svg">SVG (flattened)</option>
         </select>
         <button class="button" id="exportButton" type="button" disabled>Export</button>
-        <button class="icon-button" id="copyPixelsButton" type="button" aria-label="Copy selected editable layer" title="Copy selected layer (Ctrl+C)" disabled>⎘</button>
-        <button class="icon-button" id="pastePixelsButton" type="button" aria-label="Paste layer or image" title="Paste layer or image (Ctrl+V)" disabled>⎙</button>
+        <button class="icon-button" id="copyPixelsButton" type="button" aria-label="Copy selected editable layer" title="Copy selected layer (Ctrl+C)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-copy"></use></svg></button>
+        <button class="icon-button" id="pastePixelsButton" type="button" aria-label="Paste layer or image" title="Paste layer or image (Ctrl+V)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-paste"></use></svg></button>
       </nav>
       <div class="session-tools">
         <button class="system-check-link" id="helpButton" type="button">Getting started</button>
@@ -61,38 +98,38 @@
 
     <main class="workspace" id="workspace">
       <aside class="tool-rail" role="toolbar" aria-orientation="vertical" aria-label="Workspace tools">
-        <button class="tool-button" id="moveToolButton" type="button" aria-label="Move layer" aria-pressed="false" title="Move layer (V)">↗</button>
-        <button class="tool-button" id="cropToolButton" type="button" aria-label="Crop document" aria-pressed="false" title="Crop document (C)">⌗</button>
-        <button class="tool-button" id="marqueeToolButton" type="button" aria-label="Rectangular selection" aria-pressed="true" title="Rectangular selection (M)">□</button>
-        <button class="tool-button" id="lassoToolButton" type="button" aria-label="Freehand lasso" aria-pressed="false" title="Freehand lasso (L)">⌑</button>
-        <button class="tool-button" id="polygonToolButton" type="button" aria-label="Polygonal lasso" aria-pressed="false" title="Polygonal lasso (Shift+L)">⬠</button>
-        <button class="tool-button" id="magicToolButton" type="button" aria-label="Magic selection" aria-pressed="false" title="Magic selection (W)">✦</button>
-        <button class="tool-button" id="quickSelectToolButton" type="button" aria-label="Quick Select" aria-pressed="false" title="Quick Select (Shift+W)">◉</button>
-        <button class="tool-button" id="magneticToolButton" type="button" aria-label="Magnetic Lasso" aria-pressed="false" title="Magnetic Lasso (Shift+L)">⌁</button>
-        <button class="tool-button" id="quickMaskToolButton" type="button" aria-label="Quick Mask" aria-pressed="false" title="Quick Mask (Q)">◐</button>
-        <button class="tool-button" id="panToolButton" type="button" aria-label="Pan canvas" aria-pressed="false" title="Pan canvas (H)">✋</button>
-        <button class="tool-button" id="brushToolButton" type="button" aria-label="Brush" aria-pressed="false" title="Brush (B)">●</button>
-        <button class="tool-button" id="mixerToolButton" type="button" aria-label="Mixer Brush" aria-pressed="false" title="Mixer Brush">◉</button>
-        <button class="tool-button" id="patternStampToolButton" type="button" aria-label="Pattern Stamp" aria-pressed="false" title="Pattern Stamp">▖</button>
-        <button class="tool-button" id="eraserToolButton" type="button" aria-label="Eraser" aria-pressed="false" title="Eraser (E)">◇</button>
-        <button class="tool-button" id="cloneToolButton" type="button" aria-label="Clone stamp" aria-pressed="false" title="Clone stamp (S)">♙</button>
-        <button class="tool-button" id="healToolButton" type="button" aria-label="Healing brush" aria-pressed="false" title="Healing brush">✚</button>
-        <button class="tool-button" id="spotHealingToolButton" type="button" aria-label="Spot Healing Brush" aria-pressed="false" title="Spot Healing Brush (J)">⊕</button>
-        <button class="tool-button" id="patchToolButton" type="button" aria-label="Patch Tool" aria-pressed="false" title="Patch Tool (Shift+J)">⬡</button>
-        <button class="tool-button" id="smudgeToolButton" type="button" aria-label="Smudge Brush" aria-pressed="false" title="Smudge Brush">≋</button>
-        <button class="tool-button" id="dodgeToolButton" type="button" aria-label="Dodge Brush" aria-pressed="false" title="Dodge Brush">☼</button>
-        <button class="tool-button" id="burnToolButton" type="button" aria-label="Burn Brush" aria-pressed="false" title="Burn Brush">◒</button>
-        <button class="tool-button" id="spongeToolButton" type="button" aria-label="Sponge Brush" aria-pressed="false" title="Sponge Brush">◍</button>
-        <button class="tool-button" id="blurToolButton" type="button" aria-label="Blur Brush" aria-pressed="false" title="Blur Brush">◌</button>
-        <button class="tool-button" id="sharpenToolButton" type="button" aria-label="Sharpen Brush" aria-pressed="false" title="Sharpen Brush">◆</button>
-        <button class="tool-button" id="gradientToolButton" type="button" aria-label="Gradient" aria-pressed="false" title="Gradient (G)">◩</button>
-        <button class="tool-button" id="fillToolButton" type="button" aria-label="Fill selection" title="Fill selection">▰</button>
-        <button class="tool-button" id="penToolButton" type="button" aria-label="Pen path" aria-pressed="false" title="Pen path (P)">⌁</button>
-        <button class="tool-button" id="textToolButton" type="button" aria-label="Text" aria-pressed="false" title="Text (T)">T</button>
-        <button class="tool-button" id="selectAllButton" type="button" aria-label="Select all" title="Select all (Ctrl+A)" disabled>▣</button>
-        <button class="tool-button" id="clearSelectionButton" type="button" aria-label="Clear selection" title="Clear selection (Ctrl+D)" disabled>×</button>
+        <button class="tool-button" id="moveToolButton" type="button" aria-label="Move layer" aria-pressed="false" title="Move layer (V)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-move"></use></svg></button>
+        <button class="tool-button" id="cropToolButton" type="button" aria-label="Crop document" aria-pressed="false" title="Crop document (C)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-crop"></use></svg></button>
+        <button class="tool-button" id="marqueeToolButton" type="button" aria-label="Rectangular selection" aria-pressed="true" title="Rectangular selection (M)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-marquee"></use></svg></button>
+        <button class="tool-button" id="lassoToolButton" type="button" aria-label="Freehand lasso" aria-pressed="false" title="Freehand lasso (L)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-lasso"></use></svg></button>
+        <button class="tool-button" id="polygonToolButton" type="button" aria-label="Polygonal lasso" aria-pressed="false" title="Polygonal lasso (Shift+L)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-polygon-lasso"></use></svg></button>
+        <button class="tool-button" id="magicToolButton" type="button" aria-label="Magic selection" aria-pressed="false" title="Magic selection (W)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-magic"></use></svg></button>
+        <button class="tool-button" id="quickSelectToolButton" type="button" aria-label="Quick Select" aria-pressed="false" title="Quick Select (Shift+W)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-quick-select"></use></svg></button>
+        <button class="tool-button" id="magneticToolButton" type="button" aria-label="Magnetic Lasso" aria-pressed="false" title="Magnetic Lasso (Shift+L)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-magnetic"></use></svg></button>
+        <button class="tool-button" id="quickMaskToolButton" type="button" aria-label="Quick Mask" aria-pressed="false" title="Quick Mask (Q)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-quick-mask"></use></svg></button>
+        <button class="tool-button" id="panToolButton" type="button" aria-label="Pan canvas" aria-pressed="false" title="Pan canvas (H)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-pan"></use></svg></button>
+        <button class="tool-button" id="brushToolButton" type="button" aria-label="Brush" aria-pressed="false" title="Brush (B)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-brush"></use></svg></button>
+        <button class="tool-button" id="mixerToolButton" type="button" aria-label="Mixer Brush" aria-pressed="false" title="Mixer Brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-mixer"></use></svg></button>
+        <button class="tool-button" id="patternStampToolButton" type="button" aria-label="Pattern Stamp" aria-pressed="false" title="Pattern Stamp"><svg class="ui-icon" aria-hidden="true"><use href="#icon-pattern-stamp"></use></svg></button>
+        <button class="tool-button" id="eraserToolButton" type="button" aria-label="Eraser" aria-pressed="false" title="Eraser (E)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-eraser"></use></svg></button>
+        <button class="tool-button" id="cloneToolButton" type="button" aria-label="Clone stamp" aria-pressed="false" title="Clone stamp (S)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-clone"></use></svg></button>
+        <button class="tool-button" id="healToolButton" type="button" aria-label="Healing brush" aria-pressed="false" title="Healing brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-heal"></use></svg></button>
+        <button class="tool-button" id="spotHealingToolButton" type="button" aria-label="Spot Healing Brush" aria-pressed="false" title="Spot Healing Brush (J)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-spot-heal"></use></svg></button>
+        <button class="tool-button" id="patchToolButton" type="button" aria-label="Patch Tool" aria-pressed="false" title="Patch Tool (Shift+J)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-patch"></use></svg></button>
+        <button class="tool-button" id="smudgeToolButton" type="button" aria-label="Smudge Brush" aria-pressed="false" title="Smudge Brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-smudge"></use></svg></button>
+        <button class="tool-button" id="dodgeToolButton" type="button" aria-label="Dodge Brush" aria-pressed="false" title="Dodge Brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-dodge"></use></svg></button>
+        <button class="tool-button" id="burnToolButton" type="button" aria-label="Burn Brush" aria-pressed="false" title="Burn Brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-burn"></use></svg></button>
+        <button class="tool-button" id="spongeToolButton" type="button" aria-label="Sponge Brush" aria-pressed="false" title="Sponge Brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-sponge"></use></svg></button>
+        <button class="tool-button" id="blurToolButton" type="button" aria-label="Blur Brush" aria-pressed="false" title="Blur Brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-blur"></use></svg></button>
+        <button class="tool-button" id="sharpenToolButton" type="button" aria-label="Sharpen Brush" aria-pressed="false" title="Sharpen Brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-sharpen"></use></svg></button>
+        <button class="tool-button" id="gradientToolButton" type="button" aria-label="Gradient" aria-pressed="false" title="Gradient (G)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-gradient"></use></svg></button>
+        <button class="tool-button" id="fillToolButton" type="button" aria-label="Fill selection" title="Fill selection"><svg class="ui-icon" aria-hidden="true"><use href="#icon-fill"></use></svg></button>
+        <button class="tool-button" id="penToolButton" type="button" aria-label="Pen path" aria-pressed="false" title="Pen path (P)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-pen"></use></svg></button>
+        <button class="tool-button" id="textToolButton" type="button" aria-label="Text" aria-pressed="false" title="Text (T)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-text"></use></svg></button>
+        <button class="tool-button" id="selectAllButton" type="button" aria-label="Select all" title="Select all (Ctrl+A)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-select-all"></use></svg></button>
+        <button class="tool-button" id="clearSelectionButton" type="button" aria-label="Clear selection" title="Clear selection (Ctrl+D)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-clear-selection"></use></svg></button>
         <span class="tool-spacer"></span>
-        <button class="tool-button" id="togglePanelsButton" type="button" aria-label="Toggle panels" aria-pressed="false" title="Toggle panels">◫</button>
+        <button class="tool-button" id="togglePanelsButton" type="button" aria-label="Toggle panels" aria-pressed="false" title="Toggle panels"><svg class="ui-icon" aria-hidden="true"><use href="#icon-panels"></use></svg></button>
       </aside>
 
       <section class="stage" aria-labelledby="workspaceTitle">
