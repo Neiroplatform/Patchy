@@ -461,6 +461,10 @@ async function verifyReadableIconography(page) {
   await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "document" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
   { timeout: 90_000 });
+  await page.click("#textLayerButton");
+  await page.fill("#textValueInput", "Icon verification");
+  await page.click("#commitTextButton");
+  await page.waitForSelector(".layer-row", { state: "visible", timeout: 30_000 });
   assert.equal(await page.locator(".visibility-button").count(), 1);
   assert.equal(await page.locator(".reorder-button").count(), 2);
   const dynamicIcons = await page.evaluate(() => {
@@ -888,8 +892,8 @@ try {
   const betaGuideDialogsBefore = acceptedDialogs;
   await verifyReadableIconography(page);
   const iconographyAcceptedDialogs = acceptedDialogs - betaGuideDialogsBefore;
-  assert.equal(iconographyAcceptedDialogs, 0,
-    "iconography verification must not invent confirmations for unchanged documents");
+  assert.equal(iconographyAcceptedDialogs, 1,
+    "iconography verification must confirm exactly one intentionally changed document");
   await verifyBetaGuide(page);
   const betaGuideAcceptedDialogs = acceptedDialogs - betaGuideDialogsBefore - iconographyAcceptedDialogs;
   assert.equal(betaGuideAcceptedDialogs, 0,
@@ -1001,7 +1005,8 @@ try {
   assert.deepEqual(forbiddenRequests, []);
   assert.deepEqual(pageCrashes, []);
   assert.equal(disconnected, false);
-  assert.equal(acceptedDialogs - performanceAcceptedDialogs - betaGuideAcceptedDialogs, iterations,
+  assert.equal(acceptedDialogs - performanceAcceptedDialogs - betaGuideAcceptedDialogs - iconographyAcceptedDialogs,
+    iterations,
     "each dirty local document must require explicit close confirmation");
   if (summaryPath) await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
   console.log(`PASS browser=${browserName} release=${manifest.releaseId} capability=${capabilityTier} files=${manifest.files.length} iterations=${iterations} elapsedMs=${summary.elapsedMs} downloadedBytes=${downloadedBytes}`);
