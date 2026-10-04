@@ -20,6 +20,7 @@ test("workspace contexts cover every shipped persistent and one-shot tool family
   for (const [tool, context] of Object.entries(WORKSPACE_TOOL_CONTEXTS)) {
     assert.ok(context.label, tool);
     assert.ok(context.target, tool);
+    assert.ok(context.interaction, tool);
     assert.equal(new Set(context.controls).size, context.controls.length, tool);
     assert.ok(Object.isFrozen(context));
     assert.ok(Object.isFrozen(context.controls));
@@ -44,22 +45,26 @@ test("selection, paint, retouch and tone contexts expose only relevant existing 
 test("renderer removes irrelevant controls from layout and the accessibility tree", () => {
   const toolbar = { dataset: {}, attributes: new Map(), setAttribute(name, value) { this.attributes.set(name, value); } };
   const heading = { textContent: "" };
+  const instruction = { textContent: "" };
   const labels = new Map(WORKSPACE_OPTION_CONTROL_IDS.map((id) => [id, { dataset: {}, hidden: false }]));
   const controls = new Map([...labels].map(([id, label]) => [id, { closest: () => label }]));
   const document = { getElementById(id) {
     if (id === "toolOptions") return toolbar;
     if (id === "activeToolContext") return heading;
+    if (id === "toolInstruction") return instruction;
     return controls.get(id) || null;
-  } };
+  }, addEventListener() {} };
   const renderer = installWorkspaceContext(document, { translate: (value) => `t:${value}` });
   renderer.render("spotHealing");
   assert.equal(heading.textContent, "t:Spot Healing Brush");
+  assert.match(instruction.textContent, /^t:Drag over an imperfection/);
   assert.equal(toolbar.dataset.tool, "spotHealing");
   assert.equal(toolbar.dataset.empty, "false");
   assert.equal(labels.get("retouchSoftnessInput").hidden, false);
   assert.equal(labels.get("selectionToleranceInput").hidden, true);
   renderer.render("pan");
-  assert.equal(toolbar.dataset.empty, "true");
+  assert.equal(toolbar.dataset.empty, "false");
+  assert.match(instruction.textContent, /^t:Drag the workspace/);
   assert.ok([...labels.values()].every(({ hidden }) => hidden));
 });
 

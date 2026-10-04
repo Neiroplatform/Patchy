@@ -171,11 +171,36 @@ async function openCanvasMenu(position = { x: 0.55, y: 0.55 }) {
   await page.waitForSelector("#canvasContextMenu:not([hidden])");
 }
 
+async function assertApplicationMenus() {
+  const triggers = page.locator(".command-menu-trigger");
+  assert.equal(await triggers.count(), 9, "the complete application menubar must be present");
+  for (let index = 0; index < await triggers.count(); ++index) {
+    const trigger = triggers.nth(index);
+    const label = await trigger.textContent();
+    await trigger.click();
+    const menu = page.locator(".command-menu-panel:not([hidden])");
+    assert.equal(await menu.count(), 1, `${label} did not open exactly one menu`);
+    assert.equal(await menu.isVisible(), true, `${label} menu is visually clipped`);
+    assert.equal(await menu.evaluate((panel) => {
+      const box = panel.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0 || box.left < 0 || box.top < 0 ||
+          box.right > innerWidth + .5 || box.bottom > innerHeight + .5) return false;
+      return document.elementFromPoint(box.left + Math.min(8, box.width / 2),
+        box.top + Math.min(8, box.height / 2))?.closest(".command-menu-panel") === panel;
+    }), true, `${label} menu is outside the hit-testable viewport`);
+    assert.equal(await trigger.getAttribute("aria-expanded"), "true");
+    await page.keyboard.press("Escape");
+    assert.equal(await trigger.getAttribute("aria-expanded"), "false");
+  }
+}
+
 try {
   await page.goto(editorUrl, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "ready" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
   { timeout: 90_000 });
+
+  await assertApplicationMenus();
 
   await page.setInputFiles("#fileInput", {
     name: "reference-photo.png", mimeType: "image/png", buffer: referencePng(),
@@ -374,6 +399,7 @@ try {
     await page.setViewportSize(viewport);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
       `${viewport.width}x${viewport.height} has horizontal overflow`);
+    if (viewport.width === 820) await assertApplicationMenus();
     await openCanvasMenu({ x: .98, y: .98 });
     assert.equal(await page.locator("#canvasContextMenu").evaluate((menu) => {
       const box = menu.getBoundingClientRect();

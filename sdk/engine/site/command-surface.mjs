@@ -83,6 +83,27 @@ export const COMMAND_GROUPS = Object.freeze(GROUPS.map((group) => Object.freeze(
     Object.freeze({ id: `${group.id}.${targetId}`, group: group.id, targetId, label, shortcut }))),
 })));
 
+function placeFloatingMenu(panel, anchor, { submenu = false } = {}) {
+  panel.hidden = false;
+  panel.style.visibility = "hidden";
+  panel.style.left = "0px";
+  panel.style.top = "0px";
+  const anchorBox = anchor.getBoundingClientRect();
+  const panelBox = panel.getBoundingClientRect();
+  const viewportWidth = panel.ownerDocument.defaultView?.innerWidth ?? panelBox.width;
+  const viewportHeight = panel.ownerDocument.defaultView?.innerHeight ?? panelBox.height;
+  const gap = submenu ? 5 : 3;
+  const preferredLeft = submenu ? anchorBox.right + gap : anchorBox.left;
+  const fallbackLeft = submenu ? anchorBox.left - panelBox.width - gap : preferredLeft;
+  const left = preferredLeft + panelBox.width <= viewportWidth - 4
+    ? preferredLeft : Math.max(4, Math.min(fallbackLeft, viewportWidth - panelBox.width - 4));
+  const preferredTop = submenu ? anchorBox.top - 5 : anchorBox.bottom + gap;
+  const top = Math.max(4, Math.min(preferredTop, viewportHeight - panelBox.height - 4));
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+  panel.style.visibility = "";
+}
+
 export const TOOL_GROUPS = Object.freeze([
   { id: "transform", label: "Move and crop tools", members: ["moveToolButton", "cropToolButton"] },
   { id: "selection", label: "Selection tools", members: ["marqueeToolButton", "lassoToolButton",
@@ -388,7 +409,7 @@ export function installCommandSurface(document, { translate = (value) => value }
     closeMenus();
     openGroup = entry;
     entry.trigger.setAttribute("aria-expanded", "true");
-    entry.menu.hidden = false;
+    placeFloatingMenu(entry.menu, entry.trigger);
     for (const { item, command } of menuItems) syncItem(item, command);
     if (edge) focusMenuItem(entry.menu, edge === "last" ? -1 : 0);
   };
@@ -466,7 +487,8 @@ export function installCommandSurface(document, { translate = (value) => value }
       const openSubmenu = () => {
         for (const panel of menu.querySelectorAll(".command-submenu-panel")) if (panel !== submenu) panel.hidden = true;
         for (const item of menu.querySelectorAll(".command-submenu-trigger")) if (item !== submenuTrigger) item.setAttribute("aria-expanded", "false");
-        submenu.hidden = false; submenuTrigger.setAttribute("aria-expanded", "true"); focusMenuItem(submenu, 0);
+        placeFloatingMenu(submenu, submenuTrigger, { submenu: true });
+        submenuTrigger.setAttribute("aria-expanded", "true"); focusMenuItem(submenu, 0);
       };
       submenuTrigger.addEventListener("click", openSubmenu);
       submenuTrigger.addEventListener("keydown", (event) => {

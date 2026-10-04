@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { COMMAND_GROUPS, TOOL_GROUPS, filterCommandItems } from "../../sdk/engine/site/command-surface.mjs";
+import { WORKSPACE_TOOL_BUTTONS, WORKSPACE_TOOL_CONTEXTS } from "../../sdk/engine/site/workspace-context.mjs";
 
 const root = new URL("../../", import.meta.url);
 const source = (path) => readFile(new URL(path, root), "utf8");
@@ -31,6 +32,14 @@ test("tool rail exposes every existing tool through bounded semantic groups", ()
   for (const targetId of ["moveToolButton", "cropToolButton", "quickMaskToolButton",
     "brushToolButton", "spotHealingToolButton", "sharpenToolButton", "fillToolButton",
     "textToolButton", "panToolButton"]) assert.ok(members.includes(targetId), targetId);
+  assert.deepEqual(new Set(Object.values(WORKSPACE_TOOL_BUTTONS)), new Set(members));
+  assert.deepEqual(new Set(Object.keys(WORKSPACE_TOOL_CONTEXTS)),
+    new Set(Object.keys(WORKSPACE_TOOL_BUTTONS)));
+  for (const [tool, context] of Object.entries(WORKSPACE_TOOL_CONTEXTS)) {
+    assert.ok(context.label, `${tool} is missing a readable label`);
+    assert.ok(context.interaction, `${tool} is missing an interaction contract`);
+    assert.ok(context.target, `${tool} is missing a target contract`);
+  }
 });
 
 test("icon-only actions use a complete readable first-party SVG vocabulary", async () => {

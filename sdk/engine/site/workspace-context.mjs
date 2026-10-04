@@ -1,40 +1,69 @@
-const descriptor = (family, label, controls = [], target = "document") => ({ family, label, controls, target });
+const descriptor = (family, label, controls = [], target = "document", interaction = "") =>
+  ({ family, label, controls, target, interaction });
 
 const contexts = {
-  move: descriptor("transform", "Move layer", ["cancelTransformButton", "applyTransformButton"]),
-  crop: descriptor("transform", "Crop document", ["cropRatioInput", "cancelCropButton", "applyCropButton"]),
-  marquee: descriptor("selection", "Rectangular selection", ["selectionModeInput", "selectionQuickFeatherInput"]),
-  lasso: descriptor("selection", "Freehand lasso", ["selectionModeInput", "selectionQuickFeatherInput"]),
-  polygon: descriptor("selection", "Polygonal lasso", ["selectionModeInput", "selectionQuickFeatherInput"]),
-  magic: descriptor("selection", "Magic selection", ["selectionModeInput", "selectionQuickFeatherInput", "selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"]),
-  quickSelect: descriptor("selection", "Quick Select", ["brushSizeInput", "selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"]),
-  magnetic: descriptor("selection", "Magnetic Lasso", ["selectionModeInput", "selectionQuickFeatherInput", "edgeContrastInput"]),
-  quickMask: descriptor("selection", "Quick Mask", ["brushSizeInput"], "selection-mask"),
-  pan: descriptor("navigation", "Pan canvas"),
-  brush: descriptor("paint", "Brush", ["brushSizeInput", "brushColorInput", "paintTargetSelect"], "layer-or-mask"),
-  eraser: descriptor("paint", "Eraser", ["brushSizeInput", "paintTargetSelect"], "layer-or-mask"),
+  move: descriptor("transform", "Move layer", ["cancelTransformButton", "applyTransformButton"], "document",
+    "Drag the selected layer on the canvas; release commits one move."),
+  crop: descriptor("transform", "Crop document", ["cropRatioInput", "cancelCropButton", "applyCropButton"], "document",
+    "Drag a crop frame, adjust its handles, then Apply or press Enter; Cancel or Escape preserves the document."),
+  marquee: descriptor("selection", "Rectangular selection", ["selectionModeInput", "selectionQuickFeatherInput"], "document",
+    "Drag a rectangle on the canvas; release commits the selection."),
+  lasso: descriptor("selection", "Freehand lasso", ["selectionModeInput", "selectionQuickFeatherInput"], "document",
+    "Drag around an area; release closes and commits the freehand selection."),
+  polygon: descriptor("selection", "Polygonal lasso", ["selectionModeInput", "selectionQuickFeatherInput"], "document",
+    "Click corner points, then press Enter or double-click to commit; Escape cancels the draft."),
+  magic: descriptor("selection", "Magic selection", ["selectionModeInput", "selectionQuickFeatherInput", "selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"], "document",
+    "Click a color region to commit a connected selection with the current tolerance."),
+  quickSelect: descriptor("selection", "Quick Select", ["brushSizeInput", "selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"], "document",
+    "Drag over the subject to grow the selection; hold Alt to subtract."),
+  magnetic: descriptor("selection", "Magnetic Lasso", ["selectionModeInput", "selectionQuickFeatherInput", "edgeContrastInput"], "document",
+    "Click edge anchors, then press Enter or double-click to close; Escape cancels the draft."),
+  quickMask: descriptor("selection", "Quick Mask", ["brushSizeInput"], "selection-mask",
+    "Drag to paint the selection mask; hold Alt to remove mask coverage."),
+  pan: descriptor("navigation", "Pan canvas", [], "document",
+    "Drag the workspace to pan without changing document pixels."),
+  brush: descriptor("paint", "Brush", ["brushSizeInput", "brushColorInput", "paintTargetSelect"], "layer-or-mask",
+    "Drag to paint the selected pixel layer or mask; an empty document creates its first paint layer."),
+  eraser: descriptor("paint", "Eraser", ["brushSizeInput", "paintTargetSelect"], "layer-or-mask",
+    "Drag to erase the selected pixel layer or reveal its mask."),
   mixer: descriptor("paint", "Mixer Brush", ["brushSizeInput", "advancedPaintSoftnessInput", "advancedPaintFlowInput",
-    "mixerWetInput", "mixerLoadInput", "mixerMixInput", "mixerSampleAllInput"], "layer"),
+    "mixerWetInput", "mixerLoadInput", "mixerMixInput", "mixerSampleAllInput"], "layer",
+    "Drag on a selected pixel layer to mix loaded color with existing pixels; release commits once."),
   patternStamp: descriptor("paint", "Pattern Stamp", ["brushSizeInput", "brushColorInput", "advancedPaintSoftnessInput",
     "advancedPaintFlowInput", "advancedPatternInput", "advancedPatternSizeInput", "advancedPatternSecondaryInput",
-    "advancedPatternAlignedInput"], "layer"),
-  clone: descriptor("retouch", "Clone stamp", ["brushSizeInput"], "layer"),
-  heal: descriptor("retouch", "Healing brush", ["brushSizeInput"], "layer"),
-  spotHealing: descriptor("retouch", "Spot Healing Brush", ["brushSizeInput", "retouchSoftnessInput", "retouchSampleAllInput"], "layer"),
-  patch: descriptor("retouch", "Patch Tool", ["patchModeInput", "retouchSampleAllInput", "patchTransparentInput"], "selection"),
-  smudge: descriptor("tone", "Smudge Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput"], "layer"),
-  blur: descriptor("tone", "Blur Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput"], "layer"),
-  sharpen: descriptor("tone", "Sharpen Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput"], "layer"),
+    "advancedPatternAlignedInput"], "layer",
+    "Drag on a selected pixel layer to stamp the chosen local pattern; release commits once."),
+  clone: descriptor("retouch", "Clone stamp", ["brushSizeInput"], "layer",
+    "Alt-click to set a source, then drag on the selected pixel layer to clone it."),
+  heal: descriptor("retouch", "Healing brush", ["brushSizeInput"], "layer",
+    "Alt-click to set a source, then drag to blend that source into the selected pixel layer."),
+  spotHealing: descriptor("retouch", "Spot Healing Brush", ["brushSizeInput", "retouchSoftnessInput", "retouchSampleAllInput"], "layer",
+    "Drag over an imperfection; release computes and commits one repair."),
+  patch: descriptor("retouch", "Patch Tool", ["patchModeInput", "retouchSampleAllInput", "patchTransparentInput"], "selection",
+    "Create a selection first, then drag it between source and destination; release commits the repair."),
+  smudge: descriptor("tone", "Smudge Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput"], "layer",
+    "Drag on a selected pixel layer to push nearby color; release commits once."),
+  blur: descriptor("tone", "Blur Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput"], "layer",
+    "Drag on a selected pixel layer to soften local detail; release commits once."),
+  sharpen: descriptor("tone", "Sharpen Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput"], "layer",
+    "Drag on a selected pixel layer to increase local contrast; release commits once."),
   dodge: descriptor("tone", "Dodge Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput",
-    "localToneRangeInput", "localProtectTonesInput"], "layer"),
+    "localToneRangeInput", "localProtectTonesInput"], "layer",
+    "Drag on a selected pixel layer to lighten the chosen tonal range; release commits once."),
   burn: descriptor("tone", "Burn Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput",
-    "localToneRangeInput", "localProtectTonesInput"], "layer"),
+    "localToneRangeInput", "localProtectTonesInput"], "layer",
+    "Drag on a selected pixel layer to darken the chosen tonal range; release commits once."),
   sponge: descriptor("tone", "Sponge Brush", ["brushSizeInput", "localBrushSoftnessInput", "localBrushStrengthInput",
-    "localSpongeModeInput", "localSpongeVibranceInput"], "layer"),
-  gradient: descriptor("fill", "Gradient", ["brushColorInput", "paintTargetSelect", "paintPresetSelect"], "layer-or-mask"),
-  fill: descriptor("fill", "Fill selection", ["brushColorInput", "paintTargetSelect", "paintPresetSelect"], "layer-or-mask"),
-  pen: descriptor("draw", "Pen path", [], "path"),
-  text: descriptor("draw", "Text", [], "text-layer"),
+    "localSpongeModeInput", "localSpongeVibranceInput"], "layer",
+    "Drag on a selected pixel layer to change local saturation; release commits once."),
+  gradient: descriptor("fill", "Gradient", ["brushColorInput", "paintTargetSelect", "paintPresetSelect"], "layer-or-mask",
+    "Drag from the gradient start to end point on a selected pixel layer; release commits once."),
+  fill: descriptor("fill", "Fill selection", ["brushColorInput", "paintTargetSelect", "paintPresetSelect"], "layer-or-mask",
+    "Activate to fill the current selection, or the selected pixel layer when no selection exists."),
+  pen: descriptor("draw", "Pen path", [], "path",
+    "Click at least three anchor points, then press Enter; Shift-double-click creates a closed path and Escape cancels."),
+  text: descriptor("draw", "Text", [], "text-layer",
+    "Activate to open the text editor; Apply creates or updates one editable text layer."),
 };
 
 export const WORKSPACE_TOOL_CONTEXTS = Object.freeze(Object.fromEntries(
@@ -45,6 +74,20 @@ export const WORKSPACE_TOOL_CONTEXTS = Object.freeze(Object.fromEntries(
 export const WORKSPACE_OPTION_CONTROL_IDS = Object.freeze([...new Set(
   Object.values(WORKSPACE_TOOL_CONTEXTS).flatMap(({ controls }) => controls))]);
 
+export const WORKSPACE_TOOL_BUTTONS = Object.freeze({
+  move: "moveToolButton", crop: "cropToolButton", marquee: "marqueeToolButton",
+  lasso: "lassoToolButton", polygon: "polygonToolButton", magic: "magicToolButton",
+  quickSelect: "quickSelectToolButton", magnetic: "magneticToolButton",
+  quickMask: "quickMaskToolButton", pan: "panToolButton", brush: "brushToolButton",
+  mixer: "mixerToolButton", patternStamp: "patternStampToolButton",
+  eraser: "eraserToolButton", clone: "cloneToolButton", heal: "healToolButton",
+  spotHealing: "spotHealingToolButton", patch: "patchToolButton",
+  smudge: "smudgeToolButton", blur: "blurToolButton", sharpen: "sharpenToolButton",
+  dodge: "dodgeToolButton", burn: "burnToolButton", sponge: "spongeToolButton",
+  gradient: "gradientToolButton", fill: "fillToolButton", pen: "penToolButton",
+  text: "textToolButton",
+});
+
 export function workspaceContextForTool(tool) {
   return WORKSPACE_TOOL_CONTEXTS[tool] || WORKSPACE_TOOL_CONTEXTS.marquee;
 }
@@ -52,8 +95,10 @@ export function workspaceContextForTool(tool) {
 export function installWorkspaceContext(document, { translate = (value) => value } = {}) {
   const toolbar = document.getElementById("toolOptions");
   const label = document.getElementById("activeToolContext");
-  if (!toolbar || !label) return null;
+  const instruction = document.getElementById("toolInstruction");
+  if (!toolbar || !label || !instruction) return null;
   const optionNodes = new Map();
+  let currentTool = "marquee";
   for (const id of WORKSPACE_OPTION_CONTROL_IDS) {
     const control = document.getElementById(id);
     const node = control?.closest("label, .direct-operation-actions");
@@ -61,15 +106,32 @@ export function installWorkspaceContext(document, { translate = (value) => value
     node.dataset.toolOption = id;
     optionNodes.set(id, node);
   }
+  const renderButtonContracts = () => {
+    for (const [tool, buttonId] of Object.entries(WORKSPACE_TOOL_BUTTONS)) {
+      const button = document.getElementById(buttonId);
+      const context = WORKSPACE_TOOL_CONTEXTS[tool];
+      if (!button || !context) continue;
+      button.dataset.toolContract = tool;
+      button.setAttribute("aria-description", translate(context.interaction));
+    }
+  };
+  renderButtonContracts();
   const render = (tool) => {
+    currentTool = tool;
     const descriptor = workspaceContextForTool(tool);
     const visible = new Set(descriptor.controls);
     label.textContent = translate(descriptor.label);
+    instruction.textContent = translate(descriptor.interaction);
     toolbar.setAttribute("aria-label", `${translate(descriptor.label)} · ${translate("Tool options")}`);
+    toolbar.setAttribute("aria-description", translate(descriptor.interaction));
     toolbar.dataset.tool = tool;
     for (const [id, node] of optionNodes) node.hidden = !visible.has(id);
-    toolbar.dataset.empty = String(visible.size === 0);
+    toolbar.dataset.empty = "false";
     return descriptor;
   };
+  document.addEventListener("patchy:localechange", () => {
+    renderButtonContracts();
+    render(currentTool);
+  });
   return { render };
 }

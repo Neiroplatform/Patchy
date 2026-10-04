@@ -2567,6 +2567,39 @@ async function newDocument(input = starterPreset("blank")) {
   finally { setBusy(false); }
 }
 
+async function activateRasterTool(tool) {
+  if (busy || !snapshot) return;
+  if (selectedLayer()?.kind === 0) { setCanvasTool(tool); return; }
+  if (snapshot.layers.length) return;
+  clearError();
+  setBusy(true, "Creating paint layer", "Adding a transparent layer for painting");
+  try {
+    ensureMemorySafe(snapshot, "Paint layer");
+    const pixelCount = snapshot.width * snapshot.height;
+    if (!Number.isSafeInteger(pixelCount * 4)) throw new Error("Paint layer dimensions cannot be represented safely");
+    const before = snapshot;
+    const next = await client.addPixelLayer({
+      name: `${localizer.text("Layer")} 1`, width: before.width, height: before.height,
+      bounds: { x: 0, y: 0, width: before.width, height: before.height },
+      rgba: new Uint8Array(pixelCount * 4),
+    }, { transferOwnership: true });
+    recordHistoryMutation(before, next, "Creating paint layer");
+    const previousIds = new Set(before.layers.map((item) => item.id));
+    const created = next.layers.find((item) => item.kind === 0 && !previousIds.has(item.id));
+    if (created) setSingleLayerSelection(created.id);
+    await acceptSnapshot(next); scheduleCheckpoint(next); setCanvasTool(tool);
+    showToast("Paint layer created");
+  } catch (error) {
+    showError("Could not create paint layer", error);
+    return DIAGNOSTIC_COMMAND_FAILED;
+  } finally { setBusy(false); }
+}
+
+function activatePenTool() {
+  setCanvasTool("pen");
+  showToast("Click at least three anchors, then press Enter");
+}
+
 function setStarterError(error = null) {
   const output = $("starterError");
   output.hidden = !error;
@@ -4384,25 +4417,27 @@ registerCommand("layer.layerViaCopy", "layerViaCopyButton", layerViaCopy, () => 
 registerCommand("history.undo", "undoButton", () => navigateHistory(-1), () => !busy && Boolean(snapshot?.canUndo));
 registerCommand("history.redo", "redoButton", () => navigateHistory(1), () => !busy && Boolean(snapshot?.canRedo));
 registerCommand("document.canvas", "transformButton", openDocumentDialog, () => !busy && Boolean(snapshot));
-registerCommand("tool.move", "moveToolButton", () => setCanvasTool("move"));
+registerCommand("tool.move", "moveToolButton", () => setCanvasTool("move"),
+  () => !busy && Boolean(selectedLayer()));
 registerCommand("tool.crop", "cropToolButton", () => setCanvasTool("crop"),
   () => !busy && Boolean(snapshot));
-registerCommand("tool.marquee", "marqueeToolButton", () => setCanvasTool("marquee"));
-registerCommand("tool.lasso", "lassoToolButton", () => setCanvasTool("lasso"));
-registerCommand("tool.polygon", "polygonToolButton", () => setCanvasTool("polygon"));
-registerCommand("tool.magic", "magicToolButton", () => setCanvasTool("magic"));
-registerCommand("tool.quickSelect", "quickSelectToolButton", () => setCanvasTool("quickSelect"));
-registerCommand("tool.magnetic", "magneticToolButton", () => setCanvasTool("magnetic"));
-registerCommand("tool.quickMask", "quickMaskToolButton", () => setCanvasTool("quickMask"));
-registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"));
-registerCommand("tool.brush", "brushToolButton", () => setCanvasTool("brush"));
+for (const tool of ["marquee", "lasso", "polygon", "magic", "quickSelect", "magnetic", "quickMask"])
+  registerCommand(`tool.${tool}`, `${tool}ToolButton`, () => setCanvasTool(tool),
+    () => !busy && Boolean(snapshot));
+registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"),
+  () => !busy && Boolean(snapshot));
+registerCommand("tool.brush", "brushToolButton", () => activateRasterTool("brush"),
+  () => !busy && Boolean(snapshot) && (selectedLayer()?.kind === 0 || snapshot.layers.length === 0));
 registerCommand("tool.mixer", "mixerToolButton", () => setCanvasTool("mixer"),
   () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.patternStamp", "patternStampToolButton", () => setCanvasTool("patternStamp"),
   () => !busy && selectedLayer()?.kind === 0);
-registerCommand("tool.eraser", "eraserToolButton", () => setCanvasTool("eraser"));
-registerCommand("tool.clone", "cloneToolButton", () => setCanvasTool("clone"));
-registerCommand("tool.heal", "healToolButton", () => setCanvasTool("heal"));
+registerCommand("tool.eraser", "eraserToolButton", () => activateRasterTool("eraser"),
+  () => !busy && Boolean(snapshot) && (selectedLayer()?.kind === 0 || snapshot.layers.length === 0));
+registerCommand("tool.clone", "cloneToolButton", () => setCanvasTool("clone"),
+  () => !busy && selectedLayer()?.kind === 0);
+registerCommand("tool.heal", "healToolButton", () => setCanvasTool("heal"),
+  () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.spotHealing", "spotHealingToolButton", () => setCanvasTool("spotHealing"),
   () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.patch", "patchToolButton", () => setCanvasTool("patch"),
@@ -4411,10 +4446,12 @@ for (const tool of ["smudge", "dodge", "burn", "sponge", "blur", "sharpen"]) {
   registerCommand(`tool.${tool}`, `${tool}ToolButton`, () => setCanvasTool(tool),
     () => !busy && selectedLayer()?.kind === 0);
 }
-registerCommand("tool.gradient", "gradientToolButton", () => setCanvasTool("gradient"));
+registerCommand("tool.gradient", "gradientToolButton", () => activateRasterTool("gradient"),
+  () => !busy && Boolean(snapshot) && (selectedLayer()?.kind === 0 || snapshot.layers.length === 0));
 registerCommand("tool.fill", "fillToolButton", fillSelectedPixels, () => !busy && selectedLayer()?.kind === 0);
-registerCommand("tool.pen", "penToolButton", () => setCanvasTool("pen"));
-registerCommand("tool.text", "textToolButton", () => { setCanvasTool("text"); openTextDialog(); });
+registerCommand("tool.pen", "penToolButton", activatePenTool, () => !busy && Boolean(snapshot));
+registerCommand("tool.text", "textToolButton", () => { setCanvasTool("text"); openTextDialog(); },
+  () => !busy && Boolean(snapshot));
 registerCommand("selection.all", "selectAllButton", () => {
   return mutate("Selecting all", () => client.setSelection([{ x: 0, y: 0, width: snapshot.width, height: snapshot.height }]));
 }, () => !busy && Boolean(snapshot));
