@@ -373,6 +373,16 @@ try {
   check(byId("detailRevision").textContent === transformRevision, "dialog Escape committed document state");
 
   smokeStage = "native-file-lifecycle";
+  const originalOpenFilePicker = Object.getOwnPropertyDescriptor(
+    frame.contentWindow, "showOpenFilePicker");
+  const originalSaveFilePicker = Object.getOwnPropertyDescriptor(
+    frame.contentWindow, "showSaveFilePicker");
+  const setFilePicker = (name, value) => Object.defineProperty(frame.contentWindow, name, {
+    configurable: true, writable: true, value,
+  });
+  const restoreFilePicker = (name, descriptor) => descriptor
+    ? Object.defineProperty(frame.contentWindow, name, descriptor)
+    : delete frame.contentWindow[name];
   const fileWrites = [];
   let writableClosed = 0;
   let saveTarget = {
@@ -388,8 +398,8 @@ try {
       async abort() { throw new Error("successful native Save called abort"); },
     }; },
   };
-  frame.contentWindow.showOpenFilePicker = async () => [];
-  frame.contentWindow.showSaveFilePicker = async () => saveTarget;
+  setFilePicker("showOpenFilePicker", async () => []);
+  setFilePicker("showSaveFilePicker", async () => saveTarget);
   byId("saveButton").click();
   await waitFor(() => writableClosed === 1 &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
@@ -434,8 +444,8 @@ try {
   check(byId("detailState").textContent === "Изменён",
     "native write failure falsely advanced the durable savepoint");
   byId("dismissErrorButton").click();
-  delete frame.contentWindow.showOpenFilePicker;
-  delete frame.contentWindow.showSaveFilePicker;
+  setFilePicker("showOpenFilePicker", undefined);
+  setFilePicker("showSaveFilePicker", undefined);
   let fallbackBlob = null; let fallbackName = null;
   const originalLifecycleCreateObjectUrl = frame.contentWindow.URL.createObjectURL;
   const originalLifecycleRevokeObjectUrl = frame.contentWindow.URL.revokeObjectURL;
@@ -628,8 +638,8 @@ try {
   const reopenedFile = new frame.contentWindow.File([fileWrites[0]], "Native reopen.psd",
     { type: "application/octet-stream" });
   const reopenedHandle = { name: reopenedFile.name, async getFile() { return reopenedFile; } };
-  frame.contentWindow.showOpenFilePicker = async () => [reopenedHandle];
-  frame.contentWindow.showSaveFilePicker = async () => saveTarget;
+  setFilePicker("showOpenFilePicker", async () => [reopenedHandle]);
+  setFilePicker("showSaveFilePicker", async () => saveTarget);
   byId("openButton").click();
   await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length === 2 &&
     byId("documentTabs").querySelector('[role="tab"][aria-selected="true"]')?.title ===
@@ -640,8 +650,8 @@ try {
   await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length === 1 &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
   "native-opened document did not release its tab and handle binding");
-  delete frame.contentWindow.showOpenFilePicker;
-  delete frame.contentWindow.showSaveFilePicker;
+  restoreFilePicker("showOpenFilePicker", originalOpenFilePicker);
+  restoreFilePicker("showSaveFilePicker", originalSaveFilePicker);
 
   byId("localeSelect").value = "en";
   byId("localeSelect").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
