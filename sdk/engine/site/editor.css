@@ -61,7 +61,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .brand-mark i:nth-child(2) { transform: translateY(4px); opacity: .75; }
 .brand-mark i:nth-child(3) { transform: translateY(8px); opacity: .45; }
 
-.command-menubar { display: flex; align-items: center; gap: 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.command-menubar { display: flex; align-items: center; gap: 0; min-width: 0; overflow: visible; scrollbar-width: none; }
 .command-menubar::-webkit-scrollbar { display: none; }
 .command-menu { position: relative; }
 .command-menu-trigger, .command-palette-trigger {
@@ -76,7 +76,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .command-palette-trigger kbd { color: var(--text-faint); font-size: 9px; }
 .command-menu-panel { position: fixed; z-index: 60; top: 0; left: 0; width: max-content;
   min-width: 244px; max-height: min(72vh, 560px); overflow-y: auto; padding: 5px; border: 1px solid var(--line-strong);
-  border-radius: 5px; background: #24272bf7; box-shadow: 0 16px 42px #000b; backdrop-filter: blur(16px); }
+  border-radius: 5px; background: #24272b; box-shadow: 0 16px 42px #000b; }
 .command-menu-item { width: 100%; min-height: 34px; display: grid; grid-template-columns: minmax(0, 1fr) auto;
   align-items: center; gap: 18px; padding: 0 9px; border: 0; border-radius: 5px; color: var(--text);
   background: transparent; text-align: left; font-size: 11px; cursor: pointer; }

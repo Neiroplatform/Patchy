@@ -100,6 +100,11 @@ test("production shell stages and publishes the accessible command surface", asy
   ]) assert.match(html, contract);
   assert.match(css, /\.command-menu-panel/);
   assert.match(css, /\.command-submenu-panel/);
+  assert.match(css, /\.command-menubar \{[^}]+overflow: visible/,
+    "desktop menus must escape the menubar hit-test boundary in WebKit");
+  const menuPanelRule = css.match(/\.command-menu-panel \{[^}]+\}/)?.[0] ?? "";
+  assert.doesNotMatch(menuPanelRule, /backdrop-filter/,
+    "a filtered menu panel becomes a containing block and offsets fixed submenus in WebKit");
   assert.match(css, /\.tool-group-menu/);
   assert.match(css, /\.tool-cluster[\s\S]+width: 36px/);
   assert.match(css, /\.tool-group-toggle[\s\S]+position: absolute/);
