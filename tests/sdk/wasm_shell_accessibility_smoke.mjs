@@ -52,21 +52,23 @@ try {
   await delay(300);
 
   const toolbar = doc.querySelector(".tool-rail");
-  const initialTool = toolbar.querySelector('button[tabindex="0"]');
-  check(initialTool, "toolbar has no reachable roving item");
+  check([...toolbar.querySelectorAll("button[data-tool-contract]")].every((button) => button.disabled),
+    "document tools were enabled before their document precondition existed");
+
+  smokeStage = "guides-and-move";
+  byId("newButton").click();
+  await waitFor(() => byId("detailRevision").textContent === "0" && !byId("importLayerButton").disabled,
+    "New did not create a production document");
+  const initialTool = toolbar.querySelector('button[tabindex="0"]:not(:disabled)');
+  check(initialTool, "document toolbar has no reachable roving item");
   initialTool.focus();
   initialTool.dispatchEvent(new frame.contentWindow.KeyboardEvent("keydown", {
     key: "ArrowDown", bubbles: true, cancelable: true,
   }));
   check(doc.activeElement !== initialTool && doc.activeElement?.closest(".tool-rail"),
     "toolbar ArrowDown did not move focus");
-  check(toolbar.querySelectorAll('button[tabindex="0"]').length === 1,
-    "toolbar roving focus exposed multiple tab stops");
-
-  smokeStage = "guides-and-move";
-  byId("newButton").click();
-  await waitFor(() => byId("detailRevision").textContent === "0" && !byId("importLayerButton").disabled,
-    "New did not create a production document");
+  check(toolbar.querySelectorAll('button[tabindex="0"]:not(:disabled)').length === 1,
+    "toolbar roving focus exposed multiple enabled tab stops");
   byId("addVerticalGuideButton").click(); byId("addHorizontalGuideButton").click();
   let guides = [...byId("guidesOverlay").querySelectorAll(".guide-line")];
   check(guides.length === 2 && guides.every((guide) => /[Нн]аправляющая/.test(guide.getAttribute("aria-label"))),
