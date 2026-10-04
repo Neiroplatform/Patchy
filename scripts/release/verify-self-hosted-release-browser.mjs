@@ -119,6 +119,14 @@ async function runPaletteCommand(page, targetId) {
   await page.click(`#commandResults [data-command-target="${targetId}"]:not(:disabled)`);
 }
 
+async function runMenuCommand(page, groupId, targetId, { subgroup } = {}) {
+  await page.click(`.command-menu-trigger[aria-controls="commandMenu-${groupId}"]`);
+  if (subgroup) {
+    await page.click(`#commandMenu-${groupId} > .command-submenu > .command-submenu-trigger[data-label="${subgroup}"]`);
+  }
+  await page.click(`#commandMenu-${groupId} [data-command-target="${targetId}"]:not(:disabled)`);
+}
+
 async function createStarterPreset(page, id, width, height) {
   await page.click("#emptyNewButton");
   await page.click(`[data-starter-preset="${id}"]`);
@@ -461,7 +469,7 @@ async function verifyReadableIconography(page) {
   await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "document" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
   { timeout: 90_000 });
-  await page.click("#textLayerButton");
+  await runMenuCommand(page, "layer", "textLayerButton", { subgroup: "Create" });
   await page.fill("#textValueInput", "Icon verification");
   await page.click("#commitTextButton");
   await page.waitForSelector(".layer-row", { state: "visible", timeout: 30_000 });
