@@ -294,6 +294,8 @@ export class PatchyWorkerClient {
     clipping?: boolean; path: VectorPathInput }): Promise<DocumentProjection>;
   rasterizeLayer(layerId: bigint): Promise<DocumentProjection>;
   mergeVisibleCopy(name?: string): Promise<DocumentProjection>;
+  mergeLayers(layerIds: bigint[], name?: string): Promise<DocumentProjection>;
+  cutLayerPixels(layerId: bigint): Promise<DocumentProjection>;
   createLayerMask(layerId: bigint): Promise<DocumentProjection>;
   toggleLayerMask(layerId: bigint): Promise<DocumentProjection>;
   invertLayerMask(layerId: bigint): Promise<DocumentProjection>;

@@ -14,6 +14,7 @@
     <symbol id="icon-undo" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M5 12h8a7 7 0 0 1 7 7"/></symbol>
     <symbol id="icon-redo" viewBox="0 0 24 24"><path d="m15 7 5 5-5 5m4-5h-8a7 7 0 0 0-7 7"/></symbol>
     <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="1.5"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></symbol>
+    <symbol id="icon-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="m8.5 7.5 11 8.5M8.5 16.5 19.5 8"/></symbol>
     <symbol id="icon-paste" viewBox="0 0 24 24"><path d="M9 5h6m-5-2h4a1 1 0 0 1 1 1v2H9V4a1 1 0 0 1 1-1Z"/><path d="M8 5H6.5A1.5 1.5 0 0 0 5 6.5v12A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5v-12A1.5 1.5 0 0 0 17.5 5H16"/><path d="M9 11h6m-6 4h6"/></symbol>
     <symbol id="icon-move" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3 9 6m3-3 3 3m6 6-3-3m3 3-3 3M12 21l-3-3m3 3 3-3M3 12l3-3m-3 3 3 3"/></symbol>
     <symbol id="icon-crop" viewBox="0 0 24 24"><path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12"/></symbol>
@@ -80,6 +81,7 @@
         </select>
         <button class="button" id="exportButton" type="button" disabled>Export</button>
         <button class="icon-button" id="copyPixelsButton" type="button" aria-label="Copy selected editable layer" title="Copy selected layer (Ctrl+C)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-copy"></use></svg></button>
+        <button class="icon-button" id="cutPixelsButton" type="button" aria-label="Cut selected pixels" title="Cut selected pixels (Ctrl+X)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-cut"></use></svg></button>
         <button class="icon-button" id="pastePixelsButton" type="button" aria-label="Paste layer or image" title="Paste layer or image (Ctrl+V)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-paste"></use></svg></button>
       </nav>
       <div class="session-tools">
@@ -199,8 +201,10 @@
           <span id="documentMetrics"></span>
         </div>
         <div class="canvas-viewport" id="canvasViewport" role="region" aria-label="Document canvas" tabindex="0">
-          <canvas class="ruler ruler-horizontal" id="horizontalRuler" aria-hidden="true"></canvas>
-          <canvas class="ruler ruler-vertical" id="verticalRuler" aria-hidden="true"></canvas>
+          <canvas class="ruler ruler-horizontal" id="horizontalRuler" role="button" tabindex="0"
+            aria-label="Horizontal ruler. Drag down to create a horizontal guide."></canvas>
+          <canvas class="ruler ruler-vertical" id="verticalRuler" role="button" tabindex="0"
+            aria-label="Vertical ruler. Drag right to create a vertical guide."></canvas>
           <div class="canvas-frame" id="canvasFrame">
             <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
             <canvas id="gestureCanvas" aria-hidden="true"></canvas>
@@ -292,6 +296,7 @@
             <label class="quick-layer-lock"><input id="quickLayerLockInput" type="checkbox" disabled><span>Lock</span></label>
           </div>
           <div class="layer-actions" role="group" aria-label="Layer actions">
+            <button type="button" id="createPixelLayerButton" disabled>New layer</button>
             <button type="button" id="importLayerButton" disabled>Import pixels</button>
             <button type="button" id="layerViaCopyButton" disabled>Layer via copy</button>
             <button type="button" id="groupLayerButton" disabled>Group</button>
@@ -320,6 +325,8 @@
             </select>
             <button type="button" id="arrangeLayersButton" disabled>Arrange layers</button>
             <button type="button" id="createMaskButton" disabled>Add mask</button>
+            <button type="button" id="toggleClippingButton" disabled>Create clipping mask</button>
+            <button type="button" id="mergeLayersButton" disabled>Merge layers</button>
             <button type="button" id="toggleMaskButton" disabled>Disable mask</button>
             <button type="button" id="linkMaskButton" disabled>Unlink mask</button>
             <button type="button" id="invertMaskButton" disabled>Invert mask</button>
@@ -521,6 +528,8 @@
             <div><dt>Open file</dt><dd><kbd>Ctrl</kbd> + <kbd>O</kbd></dd></div>
             <div><dt>Save or download</dt><dd><kbd>Ctrl</kbd> + <kbd>S</kbd></dd></div>
             <div><dt>Undo / redo</dt><dd><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd></dd></div>
+            <div><dt>Copy / cut / paste</dt><dd><kbd>Ctrl</kbd> + <kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd></dd></div>
+            <div><dt>New / merge layer</dt><dd><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>N</kbd> / <kbd>Ctrl</kbd> + <kbd>E</kbd></dd></div>
             <div><dt>Fit / actual pixels</dt><dd><kbd>0</kbd> / <kbd>1</kbd></dd></div>
             <div><dt>Pan temporarily</dt><dd><kbd>Space</kbd></dd></div>
             <div><dt>Brush / Eraser / Move</dt><dd><kbd>B</kbd> / <kbd>E</kbd> / <kbd>V</kbd></dd></div>

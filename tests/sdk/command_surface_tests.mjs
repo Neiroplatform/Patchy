@@ -17,7 +17,8 @@ test("command surface exposes one deterministic route to high-value editor actio
   assert.equal(new Set(commands.map(({ targetId }) => targetId)).size, commands.length);
   for (const targetId of [
     "openButton", "newButton", "saveButton", "undoButton", "redoButton",
-    "filterLayerButton", "layerTransformButton", "createMaskButton",
+    "filterLayerButton", "layerTransformButton", "createMaskButton", "createPixelLayerButton",
+    "toggleClippingButton", "mergeLayersButton", "cutPixelsButton",
     "layerViaCopyButton",
     "selectAllButton", "smoothSelectionButton", "zoomFitButton", "helpButton",
     "transformButton", "workspacePanelLayersButton", "workspacePanelHistoryButton",
@@ -59,7 +60,7 @@ test("icon-only actions use a complete readable first-party SVG vocabulary", asy
   }
   assert.equal(new Set(toolIcons).size, 31, "every rail action needs a distinct silhouette");
   for (const icon of toolIcons) assert.ok(symbols.includes(icon), icon);
-  for (const id of ["undoButton", "redoButton", "copyPixelsButton", "pastePixelsButton"]) {
+  for (const id of ["undoButton", "redoButton", "copyPixelsButton", "cutPixelsButton", "pastePixelsButton"]) {
     assert.match(html, new RegExp(`id="${id}"[^>]*><svg class="ui-icon" aria-hidden="true">`));
   }
   assert.match(css, /\.ui-icon \{[\s\S]+stroke: currentColor/);

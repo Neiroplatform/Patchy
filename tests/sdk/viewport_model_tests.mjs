@@ -41,6 +41,13 @@ test("ruler ticks use deterministic 1-2-5 steps and a finite cap", () => {
     { value: 300, screen: 217, major: true },
   ]);
   assert.equal(rulerTicks({ start: 0, end: 1e9, zoom: .05, maximum: 9 }).length, 9);
+  assert.deepEqual(rulerTicks({ start: -220, end: 220, zoom: 1, screenOrigin: 0 }), [
+    { value: -200, screen: 20, major: true },
+    { value: -100, screen: 120, major: true },
+    { value: 0, screen: 220, major: true },
+    { value: 100, screen: 320, major: true },
+    { value: 200, screen: 420, major: true },
+  ]);
 });
 
 test("production viewport contract is staged and navigation is render-free", async () => {
@@ -57,5 +64,6 @@ test("production viewport contract is staged and navigation is render-free", asy
   assert.match(editor, /__patchyViewportDiagnostics/);
   assert.match(editor, /documentViewports\.clear\(\)/);
   assert.match(editor, /scheduleViewportUpdate/);
+  assert.match(editor, /const start = -documentOrigin \/ zoom/);
   assert.match(css, /canvas-frame::before/);
 });

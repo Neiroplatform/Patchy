@@ -72,7 +72,7 @@ export function rulerTicks({ start, end, zoom, screenOrigin = 0, maximum = 512 }
   if (![first, last, screenOrigin].every(finite) || last < first) return [];
   const step = rulerStep(scale);
   const limit = Math.max(1, Math.min(2048, Math.trunc(Number(maximum) || 512)));
-  const initial = Math.max(0, Math.ceil(first / step) * step);
+  const initial = Math.ceil(first / step) * step;
   const ticks = [];
   for (let value = initial; value <= last && ticks.length < limit; value += step) {
     ticks.push({ value, screen: screenOrigin + (value - first) * scale, major: true });

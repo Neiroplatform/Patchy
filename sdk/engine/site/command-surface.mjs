@@ -1,7 +1,7 @@
 const GROUPS = [
   { id: "file", label: "File", commands: [
     ["openButton", "Open…", "Ctrl+O"], ["newButton", "New document…"],
-    ["saveButton", "Save", "Ctrl+S"], ["saveAsButton", "Save as…"],
+    ["saveButton", "Save", "Ctrl+S"], ["saveAsButton", "Save as…", "Ctrl+Shift+S"],
     ["exportButton", "Export…"], ["recoveryButton", "Recovery"],
     ["versionsButton", "Versions"], ["assetsButton", "Assets"],
     ["diagnosticsButton", "Diagnostics"],
@@ -9,6 +9,7 @@ const GROUPS = [
   { id: "edit", label: "Edit", commands: [
     ["undoButton", "Undo", "Ctrl+Z"], ["redoButton", "Redo", "Ctrl+Shift+Z"],
     ["copyPixelsButton", "Copy selected layer", "Ctrl+C"],
+    ["cutPixelsButton", "Cut selected pixels", "Ctrl+X"],
     ["pastePixelsButton", "Paste layer or image", "Ctrl+V"],
   ] },
   { id: "image", label: "Image", commands: [
@@ -16,6 +17,7 @@ const GROUPS = [
     ["cropToolButton", "Crop tool", "C"],
   ] },
   { id: "layer", label: "Layer", commands: [
+    ["createPixelLayerButton", "New pixel layer", "Ctrl+Shift+N"],
     ["importLayerButton", "Import pixels…"], ["layerViaCopyButton", "Layer via copy", "Ctrl+J"],
     ["groupLayerButton", "Group layers"],
     ["ungroupLayerButton", "Ungroup layers"], ["removeLayerButton", "Delete layer"],
@@ -25,8 +27,10 @@ const GROUPS = [
     ["openSmartObjectButton", "Open Smart Object contents"],
     ["layerTransformButton", "Transform…"],
     ["layerWarpButton", "Warp…"], ["arrangeLayersButton", "Arrange layers"],
+    ["toggleClippingButton", "Create or release clipping mask"],
     ["createMaskButton", "Add layer mask"], ["createVectorMaskButton", "Add vector mask"],
-    ["rasterizeLayerButton", "Rasterize layer"], ["mergeVisibleButton", "Merge visible copy"],
+    ["rasterizeLayerButton", "Rasterize layer"], ["mergeLayersButton", "Merge selected layers", "Ctrl+E"],
+    ["mergeVisibleButton", "Merge visible copy"],
   ] },
   { id: "select", label: "Select", commands: [
     ["selectAllButton", "Select all", "Ctrl+A"],
@@ -67,10 +71,10 @@ const MENU_SUBGROUPS = Object.freeze({
     { label: "Geometry", targets: ["transformButton", "cropToolButton"] },
   ],
   layer: [
-    { label: "Create", targets: ["importLayerButton", "textLayerButton", "shapeLayerButton",
+    { label: "Create", targets: ["createPixelLayerButton", "importLayerButton", "textLayerButton", "shapeLayerButton",
       "adjustmentLayerButton", "smartObjectButton"] },
     { label: "Transform", targets: ["layerTransformButton", "layerWarpButton", "arrangeLayersButton"] },
-    { label: "Masks", targets: ["createMaskButton", "createVectorMaskButton"] },
+    { label: "Masks", targets: ["toggleClippingButton", "createMaskButton", "createVectorMaskButton"] },
   ],
   select: [
     { label: "Modify", targets: ["expandSelectionButton", "contractSelectionButton", "borderSelectionButton"] },

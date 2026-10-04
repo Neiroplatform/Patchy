@@ -64,7 +64,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const nodeServer = await readFile(new URL("scripts/wasm/serve.mjs", root), "utf8");
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
-    "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "pastePixelsButton", "paintPresetSelect",
+    "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "cutPixelsButton", "pastePixelsButton", "paintPresetSelect",
     "paintTargetSelect", "linkMaskButton", "spotHealingToolButton", "patchToolButton",
     "mixerToolButton", "patternStampToolButton", "advancedPaintSoftnessInput",
     "advancedPaintFlowInput", "mixerWetInput", "mixerLoadInput", "mixerMixInput",
@@ -75,7 +75,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "blurToolButton", "sharpenToolButton", "localBrushSoftnessInput",
     "localBrushStrengthInput", "localToneRangeInput", "localProtectTonesInput",
     "localSpongeModeInput", "localSpongeVibranceInput",
-    "importLayerButton", "groupLayerButton", "removeLayerButton", "layerNameInput",
+    "createPixelLayerButton", "importLayerButton", "groupLayerButton", "removeLayerButton",
+    "toggleClippingButton", "mergeLayersButton", "layerNameInput",
     "layerOpacityInput", "layerBlendSelect", "invertLayerButton", "transformButton",
     "liquifyLayerButton", "liquifyDialog", "liquifyCanvas", "liquifyMaskCanvas",
     "liquifyToolInput", "liquifySizeInput", "liquifyPressureInput", "liquifyDensityInput",
@@ -166,7 +167,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.selectChannel", "client.selectPath",
     "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
-    "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy",
+    "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy", "client.mergeLayers",
+    "client.cutLayerPixels",
     "client.historyTravel", "client.renderFrame", "client.saveBlob", "client.saveDocument",
     "client.markSaved",
     "client.setMemoryBudget", "client.openBlob", "client.inspectBlob", "client.placePsdSmartObject"]) {
@@ -839,6 +841,15 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
       assert.deepEqual([state, revision], [9n, 4n]);
       assert.equal(new TextDecoder().decode(heap.subarray(name, name + nameSize)), "Merged"); return 1;
     },
+    _patchy_engine_session_merge_layers(session, input, name, nameSize) {
+      assert.equal(view.getUint32(input, true), 32);
+      assert.equal(view.getUint32(input + 28, true), 2);
+      assert.equal(new TextDecoder().decode(heap.subarray(name, name + nameSize)), "Merged selected");
+      return 1;
+    },
+    _patchy_engine_session_cut_layer_pixels(session, state, revision, layerId) {
+      assert.deepEqual([state, revision, layerId], [9n, 4n, 7n]); return 1;
+    },
     _patchy_engine_session_render_region(session, x, y, width, height, output) {
       assert.deepEqual([x, y, width, height], [0, 0, 3, 2]);
       const data = alloc(24); heap.fill(17, data, data + 24);
@@ -1066,6 +1077,8 @@ test("Emscripten adapter owns buffers and decodes wasm32 projections", () => {
   engine.updateDocumentPath(session, snapshot, 41n, { name: "Path", kind: 0, path });
   engine.rasterizeLayer(session, snapshot, 7n);
   engine.mergeVisibleCopy(session, snapshot, "Merged");
+  engine.mergeLayers(session, snapshot, [7n, 8n], "Merged selected");
+  engine.cutLayerPixels(session, snapshot, 7n);
   engine.addVectorShape(session, snapshot, { name: "Shape", path, fill: [1, 2, 3],
     strokeEnabled: true, stroke: [4, 5, 6], strokeWidth: 2 });
   engine.updateVectorShape(session, snapshot, 7n, { name: "Shape", path, fill: [1, 2, 3],
@@ -1520,6 +1533,8 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     updateDocumentPath(session, before, id, input) { calls.push(["updatePath", id, input.path.anchors.length]); revision++; },
     rasterizeLayer(session, before, id) { calls.push(["rasterize", id]); revision++; },
     mergeVisibleCopy(session, before, name) { calls.push(["mergeVisible", name]); revision++; },
+    mergeLayers(session, before, ids, name) { calls.push(["mergeLayers", ids, name]); revision++; },
+    cutLayerPixels(session, before, id) { calls.push(["cutLayerPixels", id]); revision++; },
     setLayerMask(session, before, layerId, next) {
       calls.push(["mask", layerId, next]);
       mask = next ? { bounds: next.bounds, defaultColor: next.defaultColor,
@@ -1640,6 +1655,8 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     input: { path: { anchors: [{}, {}, {}] } } });
   await host.dispatch({ method: "rasterizeLayer", layerId: "7" });
   await host.dispatch({ method: "mergeVisibleCopy", name: "Merged" });
+  await host.dispatch({ method: "mergeLayers", layerIds: ["7", "8"], name: "Merged selected" });
+  await host.dispatch({ method: "cutLayerPixels", layerId: "7" });
   assert.equal((await host.dispatch({ method: "createLayerMask", layerId: "7" })).layers[0].mask.defaultColor, 0);
   assert.equal((await host.dispatch({ method: "setLayerMaskLinked", layerId: "7",
     linked: false })).layers[0].mask.linked, false);

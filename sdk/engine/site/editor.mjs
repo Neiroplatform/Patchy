@@ -9,7 +9,8 @@ import { browserWorkingSetLimit, chooseRenderRegion, cropGeometrySize,
   rotatedGeometrySize } from "./engine/memory-policy.mjs";
 import { encodeFlatDocument } from "./engine/flat-export.mjs";
 import { BrowserFileLifecycle } from "./engine/file-lifecycle.mjs";
-import { normalizeGuides, snapTranslatedQuad } from "./guide-model.mjs";
+import { guidePositionFromPointer, normalizeGuides, pointInGuideParentRuler,
+  snapTranslatedQuad } from "./guide-model.mjs";
 import { anchoredScrollDelta, clampScrollPosition, clampZoom, fitZoom,
   rulerTicks } from "./viewport-model.mjs";
 import { applyParagraphStyleRange, justifiedSpaceAdvance } from "./text-layout.mjs";
@@ -208,6 +209,19 @@ function selectedLayer() {
 function selectedLayers() {
   if (!snapshot) return [];
   return snapshot.layers.filter((layer) => selectedLayerIds.has(layer.id));
+}
+
+function canToggleLayerClipping(layer) {
+  if (!snapshot || !layer || layer.kind === 1) return false;
+  if (layer.clipped) return true;
+  const siblings = snapshot.layers.filter((candidate) => candidate.parentId === layer.parentId);
+  let index = siblings.findIndex((candidate) => candidate.id === layer.id);
+  while (index > 0) {
+    const candidate = siblings[index - 1];
+    if (candidate.clipped && candidate.kind !== 1) { index--; continue; }
+    return candidate.kind === 0;
+  }
+  return false;
 }
 
 function setSingleLayerSelection(layerId) {
@@ -466,6 +480,7 @@ function updateControls() {
   $("exportFormatSelect").disabled = busy || !snapshot;
   $("exportButton").disabled = busy || !snapshot;
   $("copyPixelsButton").disabled = busy || !snapshot;
+  $("cutPixelsButton").disabled = busy || !single || layer?.kind !== 0 || !layer.visible || Boolean(layer.lockFlags);
   $("pastePixelsButton").disabled = busy || !snapshot ||
     (!layerClipboard && !clipboardImageBlob && !navigator.clipboard?.read);
   $("undoButton").disabled = busy || !snapshot?.canUndo;
@@ -480,6 +495,7 @@ function updateControls() {
   $("createVersionButton").disabled = busy || !snapshot || !workspaceAvailable;
   $("memoryBudgetSelect").disabled = busy;
   $("importLayerButton").disabled = busy || !snapshot;
+  $("createPixelLayerButton").disabled = busy || !snapshot;
   $("layerViaCopyButton").disabled = busy || !snapshot?.selection?.length || !single ||
     layer?.kind !== 0 || !layer.visible;
   $("groupLayerButton").disabled = busy || !layers.length;
@@ -520,6 +536,16 @@ function updateControls() {
   $("createVectorMaskButton").disabled = busy || !single || !layer || layer.kind === 1 ||
     layer.kind === 4 || !hasVectorMaskSource;
   $("createMaskButton").disabled = busy || !single || layer?.kind !== 0 || Boolean(layer?.mask);
+  const canToggleClipping = single && canToggleLayerClipping(layer);
+  $("toggleClippingButton").disabled = busy || !canToggleClipping;
+  localizer.setText($("toggleClippingButton"), layer?.clipped ? "Release clipping mask" : "Create clipping mask");
+  localizer.setAttribute($("toggleClippingButton"), "title", canToggleClipping
+    ? (layer?.clipped ? "Release clipping mask" : "Create clipping mask")
+    : "A clipping mask needs a pixel layer below it");
+  const mergeRoots = selectedLayerIdsTopToBottom({ rootsOnly: true });
+  const mergeParents = new Set(layers.map((item) => String(item.parentId)));
+  $("mergeLayersButton").disabled = busy || mergeRoots.length < 2 || mergeParents.size !== 1 ||
+    layers.some((item) => !item.visible);
   $("toggleMaskButton").disabled = busy || !single || !layer?.mask;
   localizer.setText($("toggleMaskButton"), layer?.mask?.disabled ? "Enable mask" : "Disable mask");
   $("linkMaskButton").disabled = busy || !single || !layer?.mask;
@@ -1289,6 +1315,7 @@ function renderLayers() {
     if (selectedLayerId === layer.id) row.setAttribute("aria-current", "true");
     row.style.paddingLeft = `${5 + layerDepth(layer, byId) * 12}px`;
     row.innerHTML = `
+      <span class="layer-drag-handle" aria-hidden="true" title="Drag to reorder">⠿</span>
       <button class="visibility-button" type="button" aria-label="${layer.visible ? "Hide" : "Show"} ${escapeHtml(layer.name)}">${layer.visible ? "◉" : "○"}</button>
       <canvas class="layer-thumb" width="32" height="32" aria-hidden="true"></canvas>
       <button class="layer-copy layer-select-button" type="button"><span class="layer-name"></span><span class="layer-kind"></span></button>
@@ -1296,7 +1323,7 @@ function renderLayers() {
       <button class="reorder-button" type="button" aria-label="Move layer down" ${index === layers.length - 1 ? "disabled" : ""}>↓</button>`;
     if (layer.name) row.querySelector(".layer-name").textContent = layer.name;
     else localizer.setText(row.querySelector(".layer-name"), "Unnamed layer");
-    row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}${layer.adjustment ? ` · ${adjustmentName(layer.adjustment.kind)}` : ""}${layer.smartObject ? ` · ${layer.smartObject.filename}` : ""}`;
+    row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.clipped ? ` · ${localizer.text("Clipped")}` : ""}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}${layer.adjustment ? ` · ${adjustmentName(layer.adjustment.kind)}` : ""}${layer.smartObject ? ` · ${layer.smartObject.filename}` : ""}`;
     const selectButton = row.querySelector(".layer-select-button");
     selectButton.tabIndex = rovingLayerId === layer.id ? 0 : -1;
     selectButton.setAttribute("aria-pressed", String(selectedLayerIds.has(layer.id)));
@@ -1716,13 +1743,12 @@ function drawRuler(target, horizontal, viewportRect, frameRect) {
   ruler.clearRect(0, 0, width, height);
   if (!snapshot || frameRect.width <= 0 || frameRect.height <= 0) return;
   const frameStart = horizontal ? frameRect.left : frameRect.top;
-  const viewportStart = horizontal ? viewportRect.left : viewportRect.top;
-  const viewportLength = horizontal ? viewportRect.width : viewportRect.height;
-  const documentLength = horizontal ? snapshot.width : snapshot.height;
-  const start = Math.max(0, (viewportStart - frameStart) / zoom);
-  const end = Math.min(documentLength, (viewportStart + viewportLength - frameStart) / zoom);
-  const origin = frameStart - viewportStart + start * zoom - (horizontal ? 18 : 18);
-  const ticks = rulerTicks({ start, end, zoom, screenOrigin: origin });
+  const rulerStart = (horizontal ? viewportRect.left : viewportRect.top) + 18;
+  const rulerLength = horizontal ? width : height;
+  const documentOrigin = frameStart - rulerStart;
+  const start = -documentOrigin / zoom;
+  const end = (rulerLength - documentOrigin) / zoom;
+  const ticks = rulerTicks({ start, end, zoom, screenOrigin: 0 });
   ruler.strokeStyle = "#7f8992"; ruler.fillStyle = "#aeb6bd";
   ruler.lineWidth = 1; ruler.font = "8px system-ui, sans-serif";
   ruler.beginPath();
@@ -1808,6 +1834,80 @@ function removeGuide(guide) {
   setActiveGuides(activeGuides().filter((candidate) => candidate !== guide));
 }
 
+function parentRulerRects() {
+  return {
+    horizontal: $("horizontalRuler").getBoundingClientRect(),
+    vertical: $("verticalRuler").getBoundingClientRect(),
+  };
+}
+
+function beginGuideDrag(guide, event, captureTarget, { created = false } = {}) {
+  if (!snapshot || event.button !== 0) return;
+  event.preventDefault(); event.stopPropagation();
+  const originalPosition = guide.position;
+  let enteredCanvas = !created;
+  let removeOnRelease = false;
+  captureTarget.dataset.dragging = "true";
+  captureTarget.setPointerCapture?.(event.pointerId);
+  const lineForGuide = [...$("guidesOverlay").querySelectorAll(".guide-line")].find((candidate) =>
+    candidate.dataset.orientation === guide.orientation && Number(candidate.dataset.position) === guide.position);
+  const update = (nextEvent) => {
+    const rulers = parentRulerRects();
+    removeOnRelease = pointInGuideParentRuler(guide.orientation,
+      { x: nextEvent.clientX, y: nextEvent.clientY }, rulers.horizontal, rulers.vertical);
+    if (!removeOnRelease) {
+      enteredCanvas = true;
+      guide.position = guidePositionFromPointer(guide.orientation,
+        { x: nextEvent.clientX, y: nextEvent.clientY }, canvas.getBoundingClientRect(), snapshot);
+    }
+    const line = lineForGuide;
+    if (line) {
+      line.dataset.remove = String(removeOnRelease);
+      line.dataset.position = String(guide.position);
+      const limit = guide.orientation === "vertical" ? snapshot.width : snapshot.height;
+      line.style[guide.orientation === "vertical" ? "left" : "top"] = `${guide.position / limit * 100}%`;
+      line.setAttribute("aria-label", guideAccessibleText(guide));
+      line.title = removeOnRelease ? localizer.text("Release to remove guide") : guideAccessibleText(guide, true);
+    }
+  };
+  const cleanup = () => {
+    captureTarget.removeEventListener("pointermove", update);
+    captureTarget.removeEventListener("pointerup", finish);
+    captureTarget.removeEventListener("pointercancel", cancel);
+    window.removeEventListener("keydown", keydown, true);
+    delete captureTarget.dataset.dragging;
+  };
+  const cancel = () => {
+    cleanup();
+    if (created) removeGuide(guide);
+    else { guide.position = originalPosition; setActiveGuides(activeGuides()); }
+  };
+  const finish = (nextEvent) => {
+    update(nextEvent); cleanup();
+    if (!enteredCanvas || removeOnRelease) removeGuide(guide);
+    else setActiveGuides(activeGuides());
+  };
+  const keydown = (keyEvent) => {
+    if (keyEvent.key !== "Escape") return;
+    keyEvent.preventDefault(); cancel();
+  };
+  captureTarget.addEventListener("pointermove", update);
+  captureTarget.addEventListener("pointerup", finish);
+  captureTarget.addEventListener("pointercancel", cancel);
+  window.addEventListener("keydown", keydown, true);
+}
+
+function createGuideFromRuler(orientation, event) {
+  if (!snapshot || busy || event.button !== 0) return;
+  guidesVisible = true;
+  const position = guidePositionFromPointer(orientation,
+    { x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect(), snapshot);
+  setActiveGuides([...activeGuides(true), { orientation, position }]);
+  const guide = activeGuides().find((candidate) =>
+    candidate.orientation === orientation && candidate.position === position);
+  if (guide) beginGuideDrag(guide, event, event.currentTarget, { created: true });
+}
+
 function guideAccessibleText(guide, includeHint = false) {
   const orientation = localizer.text(
     guide.orientation === "vertical" ? "Vertical guide" : "Horizontal guide");
@@ -1829,6 +1929,7 @@ function renderGuides() {
     const line = document.createElement("button");
     line.type = "button"; line.className = "guide-line";
     line.dataset.orientation = guide.orientation;
+    line.dataset.position = String(guide.position);
     line.setAttribute("aria-label", guideAccessibleText(guide));
     line.title = guideAccessibleText(guide, true);
     line.style[guide.orientation === "vertical" ? "left" : "top"] =
@@ -1839,27 +1940,7 @@ function renderGuides() {
     });
     line.addEventListener("dblclick", (event) => { event.stopPropagation(); removeGuide(guide); });
     line.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      event.stopPropagation(); line.setPointerCapture(event.pointerId);
-      const move = (nextEvent) => {
-        const point = canvasPointUnclamped(nextEvent);
-        const limit = guide.orientation === "vertical" ? snapshot.width : snapshot.height;
-        guide.position = Math.max(0, Math.min(limit,
-          Math.round(guide.orientation === "vertical" ? point.x : point.y)));
-        line.style[guide.orientation === "vertical" ? "left" : "top"] =
-          `${guide.position / limit * 100}%`;
-        line.setAttribute("aria-label", guideAccessibleText(guide));
-        line.title = guideAccessibleText(guide, true);
-      };
-      const finish = () => {
-        line.removeEventListener("pointermove", move);
-        line.removeEventListener("pointerup", finish);
-        line.removeEventListener("pointercancel", finish);
-        setActiveGuides(activeGuides());
-      };
-      line.addEventListener("pointermove", move);
-      line.addEventListener("pointerup", finish);
-      line.addEventListener("pointercancel", finish);
+      beginGuideDrag(guide, event, line);
     });
     overlay.append(line);
   }
@@ -2567,32 +2648,41 @@ async function newDocument(input = starterPreset("blank")) {
   finally { setBusy(false); }
 }
 
+async function createPixelLayer({ activateTool = null } = {}) {
+  if (busy || !snapshot) return;
+  clearError();
+  setBusy(true, "Creating pixel layer", "Adding a transparent full-canvas layer");
+  try {
+    ensureMemorySafe(snapshot, "Pixel layer");
+    const pixelCount = snapshot.width * snapshot.height;
+    if (!Number.isSafeInteger(pixelCount * 4)) throw new Error("Pixel layer dimensions cannot be represented safely");
+    const before = snapshot;
+    const usedNames = new Set(before.layers.map((item) => item.name));
+    const baseName = localizer.text("Layer"); let suffix = 1;
+    while (usedNames.has(`${baseName} ${suffix}`)) suffix++;
+    const next = await client.addPixelLayer({
+      name: `${baseName} ${suffix}`, width: before.width, height: before.height,
+      bounds: { x: 0, y: 0, width: before.width, height: before.height },
+      rgba: new Uint8Array(pixelCount * 4),
+    }, { transferOwnership: true });
+    recordHistoryMutation(before, next, "Creating pixel layer");
+    const previousIds = new Set(before.layers.map((item) => item.id));
+    const created = next.layers.find((item) => item.kind === 0 && !previousIds.has(item.id));
+    if (created) setSingleLayerSelection(created.id);
+    await acceptSnapshot(next); scheduleCheckpoint(next);
+    if (activateTool) setCanvasTool(activateTool);
+    showToast("Pixel layer created");
+  } catch (error) {
+    showError("Could not create pixel layer", error);
+    return DIAGNOSTIC_COMMAND_FAILED;
+  } finally { setBusy(false); }
+}
+
 async function activateRasterTool(tool) {
   if (busy || !snapshot) return;
   if (selectedLayer()?.kind === 0) { setCanvasTool(tool); return; }
   if (snapshot.layers.length) return;
-  clearError();
-  setBusy(true, "Creating paint layer", "Adding a transparent layer for painting");
-  try {
-    ensureMemorySafe(snapshot, "Paint layer");
-    const pixelCount = snapshot.width * snapshot.height;
-    if (!Number.isSafeInteger(pixelCount * 4)) throw new Error("Paint layer dimensions cannot be represented safely");
-    const before = snapshot;
-    const next = await client.addPixelLayer({
-      name: `${localizer.text("Layer")} 1`, width: before.width, height: before.height,
-      bounds: { x: 0, y: 0, width: before.width, height: before.height },
-      rgba: new Uint8Array(pixelCount * 4),
-    }, { transferOwnership: true });
-    recordHistoryMutation(before, next, "Creating paint layer");
-    const previousIds = new Set(before.layers.map((item) => item.id));
-    const created = next.layers.find((item) => item.kind === 0 && !previousIds.has(item.id));
-    if (created) setSingleLayerSelection(created.id);
-    await acceptSnapshot(next); scheduleCheckpoint(next); setCanvasTool(tool);
-    showToast("Paint layer created");
-  } catch (error) {
-    showError("Could not create paint layer", error);
-    return DIAGNOSTIC_COMMAND_FAILED;
-  } finally { setBusy(false); }
+  return createPixelLayer({ activateTool: tool });
 }
 
 function activatePenTool() {
@@ -2787,6 +2877,29 @@ async function copyRenderedPixels() {
     }
     updateControls(); setSessionState("document", "Pixels copied locally");
   } catch (error) { showError("Could not copy pixels", error); return DIAGNOSTIC_COMMAND_FAILED; }
+}
+
+async function cutSelectedPixels() {
+  const layer = selectedLayer();
+  if (busy || !snapshot || selectedLayers().length !== 1 || layer?.kind !== 0 ||
+      !layer.visible || layer.lockFlags) return;
+  clearError(); setBusy(true, "Cutting selected pixels", "Copying pixels and committing one cleared layer revision");
+  try {
+    const before = snapshot;
+    clipboardImageBlob = await canvasBlob(renderedSelectionCanvas(), "image/png");
+    layerClipboard = null;
+    if (navigator.clipboard?.write && globalThis.ClipboardItem) {
+      try { await navigator.clipboard.write([new ClipboardItem({ "image/png": clipboardImageBlob })]); }
+      catch { /* The in-memory pixel clipboard remains available. */ }
+    }
+    const next = await client.cutLayerPixels(layer.id);
+    recordHistoryMutation(before, next, "Cutting selected pixels");
+    await acceptSnapshot(next); scheduleCheckpoint(next);
+    showToast("Selected pixels cut");
+  } catch (error) {
+    showError("Could not cut selected pixels", error);
+    return DIAGNOSTIC_COMMAND_FAILED;
+  } finally { setBusy(false); }
 }
 
 async function pastePixels() {
@@ -3181,7 +3294,7 @@ async function commitShape() {
   if ([x, y, width, height].some((value) => value == null) || !Number.isFinite(strokeWidth) || strokeWidth < 0) return;
   const bounds = { x, y, width, height };
   const layer = selectedLayer();
-  const input = { name: layer?.name || "Shape",
+  const input = { name: layer?.kind === 4 ? layer.name : "Shape",
     path: geometricShapePath($("shapeKindInput").value, bounds),
     fill: colorBytes($("shapeFillInput").value), strokeEnabled: strokeWidth > 0,
     stroke: colorBytes($("shapeStrokeInput").value), strokeWidth };
@@ -4409,8 +4522,24 @@ registerCommand("layer.liquify", "liquifyLayerButton", openLiquifyDialog,
   () => !busy && selectedLayer()?.kind === 0);
 registerCommand("document.export", "exportButton", exportDocument, () => !busy && Boolean(snapshot));
 registerCommand("document.copyPixels", "copyPixelsButton", copyRenderedPixels, () => !busy && Boolean(snapshot));
+registerCommand("document.cutPixels", "cutPixelsButton", cutSelectedPixels, () => !busy &&
+  selectedLayers().length === 1 && selectedLayer()?.kind === 0 && selectedLayer()?.visible &&
+  !selectedLayer()?.lockFlags);
 registerCommand("document.pastePixels", "pastePixelsButton", pastePixels, () => !busy && Boolean(snapshot) &&
   Boolean(layerClipboard || clipboardImageBlob || navigator.clipboard?.read));
+registerCommand("layer.newPixel", "createPixelLayerButton", createPixelLayer,
+  () => !busy && Boolean(snapshot));
+registerCommand("layer.toggleClipping", "toggleClippingButton", () => {
+  const layer = selectedLayer();
+  return layer ? mutate(layer.clipped ? "Releasing clipping mask" : "Creating clipping mask",
+    () => client.setLayerClipping(layer.id, !layer.clipped)) : undefined;
+}, () => !busy && selectedLayers().length === 1 && canToggleLayerClipping(selectedLayer()));
+registerCommand("layer.mergeSelected", "mergeLayersButton", () => {
+  const ids = selectedLayerIdsTopToBottom({ rootsOnly: true });
+  return ids.length >= 2 ? mutate("Merging selected layers", () => client.mergeLayers(ids, "Merged")) : undefined;
+}, () => !busy && selectedLayerIdsTopToBottom({ rootsOnly: true }).length >= 2 &&
+  new Set(selectedLayers().map((item) => String(item.parentId))).size === 1 &&
+  selectedLayers().every((item) => item.visible));
 registerCommand("layer.layerViaCopy", "layerViaCopyButton", layerViaCopy, () => !busy &&
   Boolean(snapshot?.selection?.length) && selectedLayers().length === 1 &&
   selectedLayer()?.kind === 0 && selectedLayer()?.visible);
@@ -5438,6 +5567,14 @@ $("canvasViewport").addEventListener("wheel", (event) => {
   setZoom(zoom * (event.deltaY < 0 ? 1.15 : 1 / 1.15), { x: event.clientX, y: event.clientY });
 }, { passive: false });
 $("canvasViewport").addEventListener("scroll", () => scheduleViewportUpdate("scroll"), { passive: true });
+$("horizontalRuler").addEventListener("pointerdown", (event) => createGuideFromRuler("horizontal", event));
+$("verticalRuler").addEventListener("pointerdown", (event) => createGuideFromRuler("vertical", event));
+for (const [id, orientation] of [["horizontalRuler", "horizontal"], ["verticalRuler", "vertical"]]) {
+  $(id).addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key) || !snapshot) return;
+    event.preventDefault(); addCenteredGuide(orientation);
+  });
+}
 window.addEventListener("resize", () => scheduleViewportUpdate("resize"));
 $("layerList").addEventListener("scroll", scheduleLayerWindowRender, { passive: true });
 window.addEventListener("beforeunload", (event) => {
@@ -5502,14 +5639,22 @@ window.addEventListener("keydown", (event) => {
   const editingField = isEditableTarget(event);
   if (editingField) return;
   if (key === "o") { event.preventDefault(); executeCommand("document.open"); }
-  if (key === "s") { event.preventDefault(); executeCommand("document.save"); }
+  if (key === "s") {
+    event.preventDefault(); executeCommand(event.shiftKey ? "document.saveAs" : "document.save");
+  }
   if (key === "c" && snapshot) { event.preventDefault(); executeCommand("document.copyPixels"); }
+  if (key === "x" && snapshot) { event.preventDefault(); executeCommand("document.cutPixels"); }
   if (key === "v" && snapshot) { event.preventDefault(); executeCommand("document.pastePixels"); }
   if (key === "z") {
     event.preventDefault();
     const redo = event.shiftKey;
     executeCommand(redo ? "history.redo" : "history.undo");
   }
+  if (key === "y") { event.preventDefault(); executeCommand("history.redo"); }
+  if (key === "n" && event.shiftKey && snapshot) {
+    event.preventDefault(); executeCommand("layer.newPixel");
+  }
+  if (key === "e" && snapshot) { event.preventDefault(); executeCommand("layer.mergeSelected"); }
   if (key === "a") { event.preventDefault(); executeCommand("selection.all"); }
   if (key === "d") { event.preventDefault(); executeCommand("selection.clear"); }
   if (key === "j" && snapshot?.selection?.length) {
@@ -5519,6 +5664,10 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || isEditableTarget(event)) return;
+  if ((event.key === "Delete" || event.key === "Backspace") &&
+      event.target instanceof Element && event.target.closest("#layerList")) {
+    event.preventDefault(); $("removeLayerButton").click(); return;
+  }
   const viewport = $("canvasViewport");
   const viewportFocused = event.target === viewport || viewport.contains(event.target);
   if (snapshot && viewportFocused && event.key === " ") {

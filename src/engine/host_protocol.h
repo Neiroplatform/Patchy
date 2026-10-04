@@ -1642,6 +1642,14 @@ int patchy_engine_session_merge_visible_copy(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, const char *name, size_t name_size,
     patchy_engine_event *event, patchy_engine_error *error);
+int patchy_engine_session_merge_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    const char *name, size_t name_size, patchy_engine_event *event,
+    patchy_engine_error *error);
+int patchy_engine_session_cut_layer_pixels(
+    patchy_engine_session *session, uint64_t expected_state_id,
+    uint64_t expected_revision, uint64_t layer_id,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_add_vector_shape(
     patchy_engine_session *session,
     const patchy_engine_vector_shape_input *input,

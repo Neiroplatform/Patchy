@@ -609,6 +609,14 @@ export class PatchyWorkerHost {
       case "mergeVisibleCopy":
         this.#engine.mergeVisibleCopy(this.#requireSession(), this.#snapshot(), message.name);
         return this.#snapshot();
+      case "mergeLayers":
+        this.#engine.mergeLayers(this.#requireSession(), this.#snapshot(),
+          message.layerIds.map(BigInt), message.name);
+        return this.#snapshot();
+      case "cutLayerPixels":
+        this.#engine.cutLayerPixels(this.#requireSession(), this.#snapshot(),
+          BigInt(message.layerId));
+        return this.#snapshot();
       case "createLayerMask": {
         const before = this.#snapshot();
         const mask = selectionMask(before);

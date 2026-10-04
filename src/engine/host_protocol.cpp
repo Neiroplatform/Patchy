@@ -3,6 +3,7 @@
 #include "engine/document_session.hpp"
 #include "core/adjustment_layer.hpp"
 #include "core/layer_metadata.hpp"
+#include "core/layer_tree.hpp"
 #include "core/layer_transform.hpp"
 #include "core/layer_warp.hpp"
 #include "core/liquify.hpp"
@@ -4105,6 +4106,188 @@ int patchy_engine_session_merge_visible_copy(
   } catch (...) {
     return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
                 "unknown merge-visible failure");
+  }
+}
+
+int patchy_engine_session_merge_layers(
+    patchy_engine_session *session, const patchy_engine_layer_batch *input,
+    const char *name, std::size_t name_size, patchy_engine_event *event,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || input == nullptr ||
+      input->struct_size != sizeof(*input) || input->reserved != 0U) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and a complete layer batch are required");
+  }
+  if (!expected_state(session, input->expected_state_id,
+                      input->expected_revision, error)) {
+    return 0;
+  }
+  std::vector<patchy::LayerId> layer_ids;
+  if (!copy_layer_ids(input->layer_ids, input->layer_count, layer_ids, error) ||
+      layer_ids.size() < 2U) {
+    if (layer_ids.size() < 2U && error != nullptr && error->code == PATCHY_ENGINE_ERROR_NONE) {
+      fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+           "merge requires at least two selected layers");
+    }
+    return 0;
+  }
+  std::string layer_name;
+  if (!copy_command_text(name, name_size, 256U, layer_name, error)) {
+    return 0;
+  }
+  try {
+    const auto roots = patchy::root_drop_layer_ids(
+        session->value->document().layers(), layer_ids);
+    if (roots.size() != layer_ids.size()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "merged layers must be non-overlapping roots");
+    }
+    const std::set<patchy::LayerId> selected(layer_ids.begin(), layer_ids.end());
+    const std::vector<patchy::Layer> *common_siblings = nullptr;
+    std::size_t highest_index = 0U;
+    std::size_t selected_below_highest = 0U;
+    for (const auto id : layer_ids) {
+      const auto *layer = session->value->document().find_layer(id);
+      if (layer == nullptr || !layer->visible()) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "merged layers must exist and be visible");
+      }
+      const auto location = patchy::find_layer_location(
+          session->value->document().layers(), id);
+      if (!location.has_value() ||
+          (common_siblings != nullptr && common_siblings != location->siblings)) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "merged layers must share one parent");
+      }
+      common_siblings = location->siblings;
+      highest_index = std::max(highest_index, location->index);
+    }
+    for (const auto id : layer_ids) {
+      const auto location = patchy::find_layer_location(
+          session->value->document().layers(), id);
+      if (location->index < highest_index) ++selected_below_highest;
+    }
+    std::vector<patchy::LayerId> parent_path;
+    (void)patchy::collect_layer_ancestor_groups(
+        session->value->document().layers(), layer_ids.front(), parent_path);
+    auto isolated = session->value->document();
+    const auto retain_selected = [&](auto &&self, std::vector<patchy::Layer> &layers,
+                                     bool ancestor_selected) -> bool {
+      for (auto iterator = layers.begin(); iterator != layers.end();) {
+        const bool chosen = ancestor_selected || selected.contains(iterator->id());
+        bool retained_child = false;
+        if (!iterator->children().empty()) {
+          retained_child = self(self, iterator->children(), chosen);
+        }
+        if (!chosen && !retained_child) {
+          iterator = layers.erase(iterator);
+        } else {
+          ++iterator;
+        }
+      }
+      return !layers.empty();
+    };
+    retain_selected(retain_selected, isolated.layers(), false);
+    const auto pixels = patchy::flatten_document_rgba8(isolated);
+    auto prepared = session->value->document();
+    for (const auto id : layer_ids) {
+      if (!prepared.remove_layer(id)) {
+        return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                    "merged layer set contains overlapping or missing roots");
+      }
+    }
+    const auto layer_id = prepared.allocate_layer_id();
+    auto *destination = &prepared.layers();
+    if (!parent_path.empty()) {
+      auto *parent = prepared.find_layer(parent_path.back());
+      if (parent == nullptr || parent->kind() != patchy::LayerKind::Group) {
+        return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                    "merged layer parent disappeared");
+      }
+      destination = &parent->children();
+    }
+    const auto insertion_index = std::min(
+        highest_index - selected_below_highest, destination->size());
+    destination->insert(destination->begin() + static_cast<std::ptrdiff_t>(insertion_index),
+                        patchy::Layer(layer_id, std::move(layer_name), pixels));
+    prepared.set_active_layer(layer_id);
+    auto result = session->value->execute(
+        patchy::engine::CommitPreparedDocumentState{
+            patchy::engine::PreparedDocumentMutationKind::MergeRasterize,
+            input->expected_state_id, std::move(prepared),
+            patchy::Rect::from_size(pixels.width(), pixels.height())});
+    if (!result) return fail(error, result.error);
+    result.affected_layer_id = layer_id;
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate merged selected layers");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown selected-layer merge failure");
+  }
+}
+
+int patchy_engine_session_cut_layer_pixels(
+    patchy_engine_session *session, std::uint64_t expected_state_id,
+    std::uint64_t expected_revision, std::uint64_t layer_id,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || layer_id == 0U) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and a pixel layer are required");
+  }
+  if (!expected_state(session, expected_state_id, expected_revision, error)) {
+    return 0;
+  }
+  try {
+    const auto *layer = session->value->document().find_layer(layer_id);
+    if (layer == nullptr || layer->kind() != patchy::LayerKind::Pixel ||
+        layer->lock_flags() != 0U || layer->pixels().format() != patchy::PixelFormat::rgba8()) {
+      return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                  "cut requires one unlocked RGBA8 pixel layer");
+    }
+    auto pixels = layer->pixels();
+    const auto bounds = layer->bounds();
+    const auto &selection = session->value->selection();
+    const bool has_selection = !selection.selection.empty() || !selection.mask_alpha.empty();
+    const auto mask = has_selection ? materialize_selection_mask(
+        selection, session->value->document().width(),
+        session->value->document().height()) : std::vector<std::uint8_t>{};
+    for (std::int32_t y = 0; y < bounds.height; ++y) {
+      for (std::int32_t x = 0; x < bounds.width; ++x) {
+        const auto document_x = bounds.x + x;
+        const auto document_y = bounds.y + y;
+        std::uint8_t coverage = has_selection ? 0U : 255U;
+        if (has_selection && document_x >= 0 && document_y >= 0 &&
+            document_x < session->value->document().width() &&
+            document_y < session->value->document().height()) {
+          coverage = mask[static_cast<std::size_t>(document_y) *
+                              session->value->document().width() + document_x];
+        }
+        auto *pixel = pixels.pixel(x, y);
+        pixel[3] = static_cast<std::uint8_t>(
+            (static_cast<std::uint32_t>(pixel[3]) * (255U - coverage) + 127U) /
+            255U);
+      }
+    }
+    auto result = session->value->execute(patchy::engine::ReplaceLayerPixels{
+        layer_id, std::move(pixels), bounds, false});
+    if (!result) return fail(error, result.error);
+    publish_event(*session->value, result, event);
+    return 1;
+  } catch (const std::bad_alloc &) {
+    return fail(error, PATCHY_ENGINE_ERROR_ALLOCATION,
+                "could not allocate cut pixel state");
+  } catch (const std::exception &exception) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL, exception.what());
+  } catch (...) {
+    return fail(error, PATCHY_ENGINE_ERROR_INTERNAL,
+                "unknown cut pixel failure");
   }
 }
 

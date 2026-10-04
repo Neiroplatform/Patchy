@@ -46,6 +46,8 @@
   "_patchy_engine_session_add_document_path",
   "_patchy_engine_session_update_document_path",
   "_patchy_engine_session_merge_visible_copy",
+  "_patchy_engine_session_merge_layers",
+  "_patchy_engine_session_cut_layer_pixels",
   "_patchy_engine_session_add_smart_object",
   "_patchy_engine_session_replace_smart_object",
   "_patchy_engine_session_smart_object",

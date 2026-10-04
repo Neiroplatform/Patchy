@@ -749,6 +749,24 @@ export class EmscriptenPatchyEngine {
     } finally { this.#module._free(pointer); }
   }
 
+  mergeLayers(session, snapshot, layerIds, name = "Merged") {
+    const symbol = "_patchy_engine_session_merge_layers";
+    const bytes = this.#text(name);
+    const pointer = this.#alloc(bytes.byteLength || 1);
+    try {
+      this.#module.HEAPU8.set(bytes, pointer);
+      return this.#multiLayerMutation(symbol, session, snapshot, layerIds,
+        (input, event, error) => this.#module[symbol](
+          session, input, pointer, bytes.byteLength, event, error));
+    } finally { this.#module._free(pointer); }
+  }
+
+  cutLayerPixels(session, snapshot, layerId) {
+    return this.#mutation((event, error) =>
+      this.#module._patchy_engine_session_cut_layer_pixels(
+        session, snapshot.stateId, snapshot.revision, layerId, event, error));
+  }
+
   copyLayerToSession(targetSession, targetSnapshot, sourceSession,
                      sourceSnapshot, sourceLayerId) {
     if (typeof sourceLayerId !== "bigint" || sourceLayerId <= 0n) {

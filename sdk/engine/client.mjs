@@ -404,6 +404,12 @@ export class PatchyWorkerClient {
   }
   rasterizeLayer(layerId) { return this.#request("rasterizeLayer", { layerId: String(layerId) }); }
   mergeVisibleCopy(name) { return this.#request("mergeVisibleCopy", { name }); }
+  mergeLayers(layerIds, name = "Merged") {
+    return this.#request("mergeLayers", { layerIds: layerIds.map(String), name });
+  }
+  cutLayerPixels(layerId) {
+    return this.#request("cutLayerPixels", { layerId: String(layerId) });
+  }
   createLayerMask(layerId) {
     return this.#request("createLayerMask", { layerId: String(layerId) });
   }

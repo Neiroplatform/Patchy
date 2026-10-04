@@ -133,7 +133,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .document-actions::-webkit-scrollbar { display: none; }
 .document-actions :is(#recoveryButton, #versionsButton, #assetsButton, #diagnosticsButton, #transformButton,
-  #saveAsButton, #exportFormatSelect, #exportButton, #copyPixelsButton, #pastePixelsButton) { display: none; }
+  #copyPixelsButton, #cutPixelsButton, #pastePixelsButton) { display: none; }
 .document-actions > select, .tool-options select {
   min-height: 34px; max-width: 132px; padding: 0 8px; color: var(--text-muted);
   border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-1);
@@ -248,6 +248,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .guide-line::after { content: ""; position: absolute; background: #39a9ff; box-shadow: 0 0 0 1px #06182acc; }
 .guide-line:hover, .guide-line:focus-visible { opacity: 1; outline: 2px solid #fff; outline-offset: -2px; }
 .guide-line:hover::after, .guide-line:focus-visible::after { background: #78c7ff; }
+.guide-line[data-remove="true"]::after { background: #ff6d6d; box-shadow: 0 0 0 1px #3a0909cc; }
 .guide-line[data-orientation="vertical"] { top: 0; bottom: 0; width: 24px; cursor: ew-resize; transform: translateX(-12px); }
 .guide-line[data-orientation="vertical"]::after { top: 0; bottom: 0; left: 12px; width: 1px; }
 .guide-line[data-orientation="horizontal"] { left: 0; right: 0; height: 24px; cursor: ns-resize; transform: translateY(-12px); }
@@ -273,10 +274,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .transform-corners { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .transform-corners label { display: grid; gap: 4px; color: var(--text-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 .transform-corners input { width: 100%; }
-.ruler { position: absolute; z-index: 5; pointer-events: none; opacity: 0; transition: opacity 120ms var(--ease); background: #171a1df2; }
+.ruler { position: absolute; z-index: 5; pointer-events: auto; opacity: 0; transition: opacity 120ms var(--ease); background: #171a1df2; touch-action: none; }
 [data-state="document"] .ruler { opacity: .8; }
-.ruler-horizontal { top: 0; left: 18px; height: 18px; border-bottom: 1px solid var(--line); }
-.ruler-vertical { top: 18px; left: 0; width: 18px; border-right: 1px solid var(--line); }
+.ruler:hover, .ruler:focus-visible { opacity: 1; outline: 1px solid var(--accent); outline-offset: -1px; }
+.ruler-horizontal { top: 0; left: 18px; height: 18px; border-bottom: 1px solid var(--line); cursor: ns-resize; }
+.ruler-vertical { top: 18px; left: 0; width: 18px; border-right: 1px solid var(--line); cursor: ew-resize; }
+.ruler[data-dragging="true"] { opacity: 1; }
 .guide-controls { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
 .guide-controls button { min-height: 26px; padding: 0 7px; }
 .guide-controls button[aria-pressed="false"] { color: var(--text-faint); text-decoration: line-through; }
@@ -370,9 +373,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .layer-actions select:disabled { opacity: .35; }
 .layer-actions button:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .layers-panel > .layer-actions > * { display: none; }
-.layers-panel > .layer-actions > :is(#importLayerButton, #textLayerButton, #shapeLayerButton,
-  #adjustmentLayerButton, #createMaskButton, #removeLayerButton) { display: block; }
-.layers-panel > .layer-actions { grid-template-columns: repeat(6, minmax(72px, 1fr)); overflow-x: auto; padding: 0 7px 6px; }
+.layers-panel > .layer-actions > :is(#createPixelLayerButton, #groupLayerButton, #toggleClippingButton,
+  #createMaskButton, #mergeLayersButton, #removeLayerButton) { display: block; }
+.layers-panel > .layer-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 7px 7px; }
+.layers-panel > .layer-actions button { min-height: 34px; padding: 4px 6px; line-height: 1.15; white-space: normal; }
 .layers-panel > .panel-header { order: 0; }
 .layers-panel > .layer-quick-controls { order: 1; }
 .layers-panel > .layer-list, .layers-panel > .panel-empty { order: 2; }
@@ -402,7 +406,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .structure-editor { border-top: 1px solid var(--line); padding-top: 10px; }
 .path-anchor-editor { padding: 0 12px 12px; }
 .path-anchor-editor button { align-self: end; min-height: 30px; }
-.layer-row { display: grid; grid-template-columns: 26px 30px minmax(0, 1fr) 24px 24px; gap: 3px; align-items: center; height: 40px; padding: 3px; border: 1px solid transparent; border-radius: 4px; color: var(--text-muted); }
+.layer-row { display: grid; grid-template-columns: 12px 26px 30px minmax(0, 1fr) 24px 24px; gap: 3px; align-items: center; height: 40px; padding: 3px; border: 1px solid transparent; border-radius: 4px; color: var(--text-muted); }
+.layer-drag-handle { color: var(--text-faint); font-size: 13px; line-height: 1; cursor: grab; user-select: none; }
+.layer-row:active .layer-drag-handle { cursor: grabbing; }
 .layer-row:hover { background: var(--surface-1); }
 .layer-row[data-active="true"] { background: #d7ff5509; border-color: #d7ff5538; color: var(--text); }
 .visibility-button, .reorder-button { position: relative; border: 0; background: transparent; color: inherit;

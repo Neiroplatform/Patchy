@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { normalizeGuides, snapTranslatedQuad } from "../../sdk/engine/site/guide-model.mjs";
+import { guidePositionFromPointer, normalizeGuides, pointInGuideParentRuler,
+  snapTranslatedQuad } from "../../sdk/engine/site/guide-model.mjs";
 
 test("guides are bounded, de-duplicated and deterministic", () => {
   assert.deepEqual(normalizeGuides([
@@ -50,6 +51,23 @@ test("invalid document geometry drops guides fail closed", () => {
   }
 });
 
+test("ruler pointer placement and return-to-parent removal geometry are deterministic", () => {
+  const canvas = { left: 100, top: 80, width: 800, height: 400 };
+  assert.equal(guidePositionFromPointer("vertical", { x: 300, y: 10 }, canvas,
+    { width: 1600, height: 1000 }), 400);
+  assert.equal(guidePositionFromPointer("horizontal", { x: 10, y: 180 }, canvas,
+    { width: 1600, height: 1000 }), 250);
+  assert.equal(guidePositionFromPointer("horizontal", { x: 10, y: -40 }, canvas,
+    { width: 1600, height: 1000 }), 0);
+  assert.throws(() => guidePositionFromPointer("diagonal", { x: 0, y: 0 }, canvas,
+    { width: 10, height: 10 }), /valid orientation/);
+  const horizontal = { left: 18, top: 0, width: 982, height: 18 };
+  const vertical = { left: 0, top: 18, width: 18, height: 582 };
+  assert.equal(pointInGuideParentRuler("horizontal", { x: 400, y: 9 }, horizontal, vertical), true);
+  assert.equal(pointInGuideParentRuler("horizontal", { x: 9, y: 200 }, horizontal, vertical), false);
+  assert.equal(pointInGuideParentRuler("vertical", { x: 9, y: 200 }, horizontal, vertical), true);
+});
+
 test("production shell stages accessible guide controls and snap integration", async () => {
   const root = new URL("../../", import.meta.url);
   const [cmake, html, editor, css] = await Promise.all([
@@ -65,5 +83,7 @@ test("production shell stages accessible guide controls and snap integration", a
   }
   assert.match(editor, /snapTranslatedQuad\(moveDraft\.originalQuad/);
   assert.match(editor, /bypass: event\.altKey/);
+  assert.match(editor, /createGuideFromRuler\("horizontal"/);
+  assert.match(editor, /pointInGuideParentRuler/);
   assert.match(css, /\.guide-line:focus-visible/);
 });

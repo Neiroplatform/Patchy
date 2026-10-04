@@ -6541,6 +6541,90 @@ void core_layer_warp_authors_and_preserves_smart_object_metadata() {
         warped_metadata);
 }
 
+void engine_host_protocol_merges_selected_layers_atomically() {
+  patchy_engine_error error{};
+  auto *runtime = patchy_engine_runtime_create(
+      PATCHY_ENGINE_HOST_PROTOCOL_VERSION, &error);
+  CHECK(runtime != nullptr);
+  auto *session = patchy_engine_session_create_rgba8(runtime, 4, 3, &error);
+  CHECK(session != nullptr);
+  const auto project = [&]() {
+    patchy_engine_document_projection document{};
+    document.struct_size = sizeof(document);
+    CHECK(patchy_engine_session_document(session, &document, &error) == 1);
+    return document;
+  };
+  const auto add_layer = [&](std::string name, patchy_engine_rect bounds,
+                             std::array<std::uint8_t, 4> color) {
+    std::vector<std::uint8_t> rgba(
+        static_cast<std::size_t>(bounds.width * bounds.height) * 4U);
+    for (std::size_t index = 0; index < rgba.size(); index += 4U) {
+      std::copy(color.begin(), color.end(), rgba.begin() + index);
+    }
+    const auto before = project();
+    patchy_engine_pixel_layer_input input{};
+    input.struct_size = sizeof(input);
+    input.expected_state_id = before.state_id;
+    input.expected_revision = before.revision;
+    input.bounds = bounds; input.width = bounds.width; input.height = bounds.height;
+    input.rgba = rgba.data(); input.rgba_size = rgba.size();
+    input.name = name.data(); input.name_size = name.size();
+    patchy_engine_event event{};
+    CHECK(patchy_engine_session_add_rgba8_layer(session, &input, &event, &error) == 1);
+    return event.affected_layer_id;
+  };
+  const auto red = add_layer("Red", {0, 0, 2, 2}, {255, 0, 0, 255});
+  const auto green = add_layer("Green", {1, 0, 2, 2}, {0, 255, 0, 255});
+  const auto blue = add_layer("Unselected", {3, 2, 1, 1}, {0, 0, 255, 255});
+  const std::array<std::uint64_t, 2> ids{red, green};
+  const auto before = project();
+  patchy_engine_layer_batch batch{};
+  batch.struct_size = sizeof(batch);
+  batch.expected_state_id = before.state_id;
+  batch.expected_revision = before.revision;
+  batch.layer_ids = ids.data(); batch.layer_count = ids.size();
+  const std::string name = "Merged";
+  patchy_engine_event event{};
+  CHECK(patchy_engine_session_merge_layers(session, &batch, name.data(), name.size(),
+                                           &event, &error) == 1);
+  CHECK(event.revision == before.revision + 1U);
+  CHECK(event.affected_layer_id != red);
+  CHECK(event.affected_layer_id != green);
+  const auto merged_id = event.affected_layer_id;
+  CHECK(project().layer_count == 2U);
+  bool saw_merged = false; bool saw_unselected = false;
+  for (std::size_t index = 0; index < 2U; ++index) {
+    patchy_engine_layer_projection layer{};
+    CHECK(patchy_engine_session_layer_at(session, index, &layer, &error) == 1);
+    const auto projected_name = std::string(layer.name, layer.name_size);
+    saw_merged = saw_merged || projected_name == name;
+    saw_unselected = saw_unselected || layer.id == blue;
+  }
+  CHECK(saw_merged); CHECK(saw_unselected);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(project().layer_count == 3U);
+  CHECK(patchy_engine_session_redo(session, &event, &error) == 1);
+  CHECK(project().layer_count == 2U);
+  CHECK(patchy_engine_session_merge_layers(session, &batch, name.data(), name.size(),
+                                           &event, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_STALE_STATE);
+  const auto before_cut = project();
+  CHECK(patchy_engine_session_cut_layer_pixels(
+            session, before_cut.state_id, before_cut.revision, merged_id,
+            &event, &error) == 1);
+  CHECK(event.revision == before_cut.revision + 1U);
+  patchy_engine_buffer cleared{};
+  CHECK(patchy_engine_session_render(session, {0, 0, 1, 1}, &cleared,
+                                     &event, &error) == 1);
+  CHECK(cleared.size == 4U);
+  CHECK(cleared.data[3] == 0U);
+  patchy_engine_buffer_release(&cleared);
+  CHECK(patchy_engine_session_undo(session, &event, &error) == 1);
+  CHECK(project().layer_count == 2U);
+  patchy_engine_session_destroy(session);
+  patchy_engine_runtime_destroy(runtime);
+}
+
 } // namespace
 
 std::vector<TestCase> document_session_tests() {
@@ -6619,6 +6703,8 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_authors_layers_and_document_geometry},
       {"engine_host_protocol_batches_layer_authoring_atomically",
        engine_host_protocol_batches_layer_authoring_atomically},
+      {"engine_host_protocol_merges_selected_layers_atomically",
+       engine_host_protocol_merges_selected_layers_atomically},
       {"engine_host_protocol_authors_pixels_channels_and_selection",
        engine_host_protocol_authors_pixels_channels_and_selection},
       {"engine_host_protocol_runs_mask_filter_async_lifecycle",
