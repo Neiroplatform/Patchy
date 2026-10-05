@@ -247,6 +247,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .path-overlay path { fill: none; stroke: #69b7ff; stroke-width: 1.5px; }
 .path-overlay .path-rubber-band { stroke: #d7eaff; stroke-width: 1px; stroke-dasharray: 4 4; }
 .path-overlay circle { fill: #f4f6f7; stroke: #1671b8; stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.path-overlay circle.path-close-target { fill: #b8eeff; stroke: #fff; stroke-width: 2.5px; }
 .guides-overlay { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 .guide-line { position: absolute; z-index: 3; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; pointer-events: auto; opacity: .82; }
 .guide-line::after { content: ""; position: absolute; background: #39a9ff; }
@@ -294,6 +295,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .canvas-viewport[data-tool="pan"][data-panning="true"] { cursor: grabbing; }
 .canvas-viewport[data-panning="true"] { cursor: grabbing; }
 .canvas-viewport[data-tool="move"] .canvas-frame { cursor: move; }
+.canvas-viewport[data-tool="pen"] .canvas-frame { cursor: crosshair; }
+.canvas-viewport[data-tool="pen"][data-pen-close="true"] .canvas-frame { cursor: pointer; }
 .canvas-viewport[data-tool="brush"] .canvas-frame { cursor: crosshair; }
 .canvas-viewport[data-tool="eraser"] .canvas-frame { cursor: cell; }
 .canvas-viewport[data-tool="clone"] .canvas-frame, .canvas-viewport[data-tool="heal"] .canvas-frame,

@@ -2339,6 +2339,16 @@ function vectorPathData(subpaths) {
   return commands.join(" ");
 }
 
+function penCloseTarget(point) {
+  if (!point || !snapshot || (penDraft?.points.length || 0) < 3) return false;
+  const first = penDraft.points[0];
+  const bounds = canvas.getBoundingClientRect();
+  if (!(bounds.width > 0) || !(bounds.height > 0)) return false;
+  const screenX = (point.x - first.x) * bounds.width / snapshot.width;
+  const screenY = (point.y - first.y) * bounds.height / snapshot.height;
+  return Math.hypot(screenX, screenY) <= 10;
+}
+
 function renderPenPath() {
   const overlay = $("pathOverlay");
   const committed = canvasTool === "pen" ? selectedPath() : null;
@@ -2346,6 +2356,10 @@ function renderPenPath() {
     ? [{ anchors: penDraft.points, closed: Boolean(penDraft.closed) }]
     : committed?.subpaths;
   const anchors = (subpaths || []).flatMap((subpath) => subpath.anchors || []);
+  const closeTarget = penCloseTarget(penHoverPoint);
+  overlay.dataset.closeTarget = String(closeTarget);
+  if (closeTarget) $("canvasViewport").dataset.penClose = "true";
+  else delete $("canvasViewport").dataset.penClose;
   if (!snapshot || canvasTool !== "pen" || !anchors.length) {
     overlay.setAttribute("hidden", ""); $("pathOverlayLine").setAttribute("d", "");
     $("pathOverlayRubberBand").setAttribute("d", "");
@@ -2354,12 +2368,14 @@ function renderPenPath() {
   overlay.setAttribute("viewBox", `0 0 ${snapshot.width} ${snapshot.height}`);
   $("pathOverlayLine").setAttribute("d", vectorPathData(subpaths));
   const rubberStart = penDraft?.points.at(-1);
-  $("pathOverlayRubberBand").setAttribute("d", rubberStart && penHoverPoint
-    ? `M${rubberStart.x} ${rubberStart.y}L${penHoverPoint.x} ${penHoverPoint.y}` : "");
+  const rubberEnd = closeTarget ? penDraft.points[0] : penHoverPoint;
+  $("pathOverlayRubberBand").setAttribute("d", rubberStart && rubberEnd
+    ? `M${rubberStart.x} ${rubberStart.y}L${rubberEnd.x} ${rubberEnd.y}` : "");
   const radius = Math.max(2.5, 4 / Math.max(zoom, .05));
-  const nodes = anchors.map((anchor) => {
+  const nodes = anchors.map((anchor, index) => {
     const circle = document.createElementNS(overlay.namespaceURI, "circle");
     circle.setAttribute("cx", String(anchor.x)); circle.setAttribute("cy", String(anchor.y));
+    if (index === 0 && closeTarget) circle.setAttribute("class", "path-close-target");
     circle.setAttribute("r", String(radius)); return circle;
   });
   $("pathOverlayAnchors").replaceChildren(...nodes); overlay.removeAttribute("hidden");
@@ -5606,7 +5622,9 @@ canvas.addEventListener("pointerdown", (event) => {
   if (canvasTool === "pen") {
     const point = canvasPoint(event);
     penDraft ??= { points: [], closed: false };
-    if (event.detail > 1 && penDraft.points.length >= 3) {
+    if (penCloseTarget(point)) {
+      commitPenPath(true);
+    } else if (event.detail > 1 && penDraft.points.length >= 3) {
       commitPenPath(event.shiftKey);
     } else {
       penDraft.points.push(point); penHoverPoint = point; renderPenPath(); updateControls();

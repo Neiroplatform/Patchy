@@ -64,7 +64,7 @@ const contexts = {
     "Activate to fill the current selection, or the selected pixel layer when no selection exists."),
   pen: descriptor("draw", "Pen path", ["cancelPenPathButton", "finishPenPathButton", "closePenPathButton",
     "makePenSelectionButton"], "path",
-    "Click anchors while the dotted rubber band previews the next segment. Close the path to make a selection, fill, stroke or vector mask."),
+    "Click anchors while the dotted rubber band previews the next segment. Click the first anchor to close the path, then make a selection, fill, stroke or vector mask."),
   text: descriptor("draw", "Text", [], "text-layer",
     "Activate to open the text editor; Apply creates or updates one editable text layer."),
 };

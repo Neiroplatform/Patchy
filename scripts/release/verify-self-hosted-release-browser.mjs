@@ -217,6 +217,50 @@ async function verifyScaledSelectedEraser(page) {
   await closeActiveDocument(page);
 }
 
+async function verifyPenAnchorClose(page) {
+  await dropSvg(page, { name: "pen-anchor-close.svg", width: 320, height: 240,
+    fill: "#0f172a" });
+  const clickPoint = async (point, pointerId) => page.evaluate(({ point, pointerId }) => {
+    const canvas = document.getElementById("documentCanvas");
+    const rect = canvas.getBoundingClientRect();
+    const event = (type, buttons) => new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId, pointerType: "mouse", isPrimary: true,
+      button: 0, buttons, clientX: rect.left + rect.width * point.x,
+      clientY: rect.top + rect.height * point.y,
+    });
+    canvas.dispatchEvent(event("pointerdown", 1));
+    canvas.dispatchEvent(event("pointerup", 0));
+  }, { point, pointerId });
+  await page.click("#penToolButton");
+  const points = [{ x: .2, y: .2 }, { x: .8, y: .2 }, { x: .8, y: .8 }, { x: .2, y: .8 }];
+  for (const [index, point] of points.entries()) await clickPoint(point, 701 + index);
+  await page.evaluate((point) => {
+    const canvas = document.getElementById("documentCanvas");
+    const rect = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true, cancelable: true, pointerId: 705, pointerType: "mouse", isPrimary: true,
+      buttons: 0, clientX: rect.left + rect.width * point.x,
+      clientY: rect.top + rect.height * point.y,
+    }));
+  }, points[0]);
+  assert.equal(await page.locator("#pathOverlay").getAttribute("data-close-target"), "true");
+  assert.equal(await page.locator("#pathOverlayAnchors circle").first().getAttribute("class"),
+    "path-close-target");
+  const revisionBefore = Number((await page.locator("#detailRevision").textContent()).trim());
+  await clickPoint(points[0], 706);
+  await page.waitForFunction((before) =>
+    Number(document.querySelector("#detailRevision")?.textContent) === before + 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
+    [...document.querySelectorAll("#historyList .history-label")]
+      .some((node) => node.textContent === "Creating Pen path"),
+  revisionBefore, { timeout: 90_000 });
+  assert.match(await page.locator("#pathOverlayLine").getAttribute("d"), /Z$/);
+  assert.equal(await page.locator("#pathList button").count(), 1);
+  assert.equal(await page.locator("#errorBanner").isHidden(), true);
+  console.log(`PEN-CLOSE browser=${browserName} anchors=4 target=first closed=1`);
+  await closeActiveDocument(page);
+}
+
 async function verifyBetaGuide(page) {
   const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Getting started");
@@ -973,6 +1017,12 @@ try {
   assert.equal(eraserAcceptedDialogs, 1,
     "selected Eraser verification must confirm exactly one dirty document close");
 
+  const penDialogsBefore = acceptedDialogs;
+  await verifyPenAnchorClose(page);
+  const penAcceptedDialogs = acceptedDialogs - penDialogsBefore;
+  assert.equal(penAcceptedDialogs, 1,
+    "Pen anchor-close verification must confirm exactly one dirty document close");
+
   const performanceDialogsBefore = acceptedDialogs;
   const performance = performanceDurationMs > 0
     ? await runPerformanceAudit(page, browserName, manifest)
@@ -1079,7 +1129,7 @@ try {
   assert.deepEqual(pageCrashes, []);
   assert.equal(disconnected, false);
   assert.equal(acceptedDialogs - performanceAcceptedDialogs - betaGuideAcceptedDialogs -
-    iconographyAcceptedDialogs - eraserAcceptedDialogs,
+    iconographyAcceptedDialogs - eraserAcceptedDialogs - penAcceptedDialogs,
     iterations,
     "each dirty local document must require explicit close confirmation");
   if (summaryPath) await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);

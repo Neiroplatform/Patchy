@@ -333,8 +333,17 @@ try {
 
   await clickCanvasPoints("penToolButton", [[.08, .15], [.48, .15], [.48, .85], [.08, .85]]);
   assert.equal(await page.locator("#closePenPathButton").isEnabled(), true);
+  await page.evaluate(() => {
+    const canvas = document.getElementById("documentCanvas"); const box = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse",
+      isPrimary: true, buttons: 0, clientX: box.left + box.width * .08,
+      clientY: box.top + box.height * .15 }));
+  });
+  assert.equal(await page.locator("#pathOverlay").getAttribute("data-close-target"), "true");
+  assert.equal(await page.locator("#pathOverlayAnchors circle").first().getAttribute("class"),
+    "path-close-target");
   before = await revision();
-  await page.click("#closePenPathButton");
+  await clickCanvasPoints("penToolButton", [[.08, .15]]);
   await waitForMutation(before, "Creating Pen path");
   assert.equal(await page.locator("#pathList button").count(), 2);
   assert.match(await page.locator("#pathOverlayLine").getAttribute("d"), /Z$/);
@@ -421,7 +430,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-open-closed-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,

@@ -243,7 +243,7 @@ const RU = new Map(Object.entries({
   "Activate to fill the current selection, or the selected pixel layer when no selection exists.": "Активируйте, чтобы залить текущее выделение или выбранный пиксельный слой, если выделения нет.",
   "Click at least three anchor points, then press Enter; Shift-double-click creates a closed path and Escape cancels.": "Поставьте не менее трёх опорных точек и нажмите Enter; Shift с двойным щелчком создаст замкнутый контур, Escape отменит.",
   "Click at least three anchor points, then Finish for an open path or Close path; Enter finishes and Escape cancels.": "Поставьте не менее трёх опорных точек, затем нажмите «Завершить» для открытого или «Замкнуть» для замкнутого контура; Enter завершает, Escape отменяет.",
-  "Click anchors while the dotted rubber band previews the next segment. Close the path to make a selection, fill, stroke or vector mask.": "Ставьте опорные точки: пунктир показывает следующий сегмент. Замкните контур, чтобы создать выделение, заливку, обводку или векторную маску.",
+  "Click anchors while the dotted rubber band previews the next segment. Click the first anchor to close the path, then make a selection, fill, stroke or vector mask.": "Ставьте опорные точки: пунктир показывает следующий сегмент. Щёлкните первую точку, чтобы замкнуть контур, затем создайте выделение, заливку, обводку или векторную маску.",
   "Activate to open the text editor; Apply creates or updates one editable text layer.": "Активируйте, чтобы открыть редактор текста; «Применить» создаст или обновит один редактируемый текстовый слой.",
   "Creating paint layer": "Создание слоя для рисования",
   "Adding a transparent layer for painting": "Добавление прозрачного слоя для рисования",
