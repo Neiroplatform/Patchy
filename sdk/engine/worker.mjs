@@ -86,6 +86,11 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ id, ok: true, value }, [value.rgba.buffer]);
       return;
     }
+    if (method === "captureLayerPixels") {
+      const value = await host.dispatch({ method, ...payload });
+      self.postMessage({ id, ok: true, value }, [value.rgba.buffer]);
+      return;
+    }
     const value = await host.dispatch({ method, ...payload,
       progress: (progress) => self.postMessage({ id, progress }) });
     const transfer = value instanceof Uint8Array ? [value.buffer] : [];

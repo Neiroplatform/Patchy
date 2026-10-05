@@ -122,9 +122,11 @@ try {
   const russianContracts = await page.locator("[data-tool-contract]").evaluateAll((buttons) =>
     buttons.map((button) => button.getAttribute("aria-description") || ""));
   assert.equal(russianContracts.length, 28);
-  assert.equal(russianContracts.every((value, index) => value.length >= 24 &&
-    value !== interactionContracts[index].interaction), true,
-  "every tool contract must be readable and translated in Russian");
+  const untranslatedContracts = russianContracts.flatMap((value, index) =>
+    value.length < 24 || value === interactionContracts[index].interaction
+      ? [{ index, value, english: interactionContracts[index].interaction }] : []);
+  assert.deepEqual(untranslatedContracts, [],
+    "every tool contract must be readable and translated in Russian");
   await page.selectOption("#localeSelect", "en");
 
   for (const group of ["transform", "selection", "paint", "retouch", "tone", "fill", "draw", "navigation"]) {

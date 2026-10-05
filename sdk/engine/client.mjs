@@ -438,6 +438,10 @@ export class PatchyWorkerClient {
   copyLayerSelection(layerId, name) {
     return this.#request("copyLayerSelection", { layerId: String(layerId), name });
   }
+  captureLayerPixels(layerId, expectedStateId, expectedRevision) {
+    return this.#request("captureLayerPixels", { layerId: String(layerId),
+      expectedStateId: String(expectedStateId), expectedRevision: String(expectedRevision) });
+  }
   layerPixels(layerId) { return this.#request("layerPixels", { layerId: String(layerId) }); }
   layerThumbnail(layerId, maximumEdge, expectedStateId, expectedRevision) {
     return this.#request("layerThumbnail", { layerId: String(layerId), maximumEdge,

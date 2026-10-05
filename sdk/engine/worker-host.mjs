@@ -683,6 +683,31 @@ export class PatchyWorkerHost {
         });
         return this.#snapshot();
       }
+      case "captureLayerPixels": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Pixel clipboard request is stale");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        const layer = before.layers.find((candidate) => candidate.id === BigInt(message.layerId));
+        if (!layer || layer.kind !== 0 || !layer.visible) {
+          throw new Error("Pixel clipboard requires one visible pixel layer");
+        }
+        const source = this.#engine.layerPixels(this.#requireSession(), layer.id);
+        let payload;
+        if (before.selection?.length || before.selectionMask) {
+          const mask = selectionGray(before);
+          const selectionBounds = before.selectionMask?.bounds || selectionMask(before).bounds;
+          payload = copyLayerSelection({ layer, rgba: source, selectionMask: mask, selectionBounds,
+            documentWidth: before.width, documentHeight: before.height });
+          if (!payload) throw new Error("The active selection contains no pixels from this layer");
+        } else {
+          payload = { bounds: { ...layer.bounds }, rgba: source };
+        }
+        return { width: payload.bounds.width, height: payload.bounds.height,
+          bounds: payload.bounds, rgba: payload.rgba };
+      }
       case "layerPixels":
         return this.#engine.layerPixels(
           this.#requireSession(), BigInt(message.layerId));

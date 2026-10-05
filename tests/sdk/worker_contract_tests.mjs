@@ -65,6 +65,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
     "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "cutPixelsButton", "pastePixelsButton", "paintPresetSelect",
+    "brushPresetSelect", "brushSoftnessInput", "brushOpacityInput",
     "paintTargetSelect", "linkMaskButton", "spotHealingToolButton", "patchToolButton",
     "mixerToolButton", "patternStampToolButton", "advancedPaintSoftnessInput",
     "advancedPaintFlowInput", "mixerWetInput", "mixerLoadInput", "mixerMixInput",
@@ -89,7 +90,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "canvasFrame", "selectionOverlay", "cropToolButton", "marqueeToolButton", "panToolButton",
     "zoomOutButton", "zoomFitButton", "zoomInButton", "createMaskButton",
     "toggleMaskButton", "invertMaskButton", "removeMaskButton",
-    "gestureCanvas", "transformOverlay", "moveToolButton", "brushToolButton",
+    "gestureCanvas", "pathOverlay", "finishPenPathButton", "closePenPathButton", "cancelPenPathButton",
+    "transformOverlay", "moveToolButton", "brushToolButton",
     "lassoToolButton", "polygonToolButton", "magicToolButton", "quickSelectToolButton",
     "magneticToolButton", "quickMaskToolButton", "selectionToleranceInput", "edgeContrastInput",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton", "layerWarpButton",
@@ -168,7 +170,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameChannel", "client.invertChannel", "client.removeChannel", "client.moveChannel",
     "client.renamePath", "client.removePath", "client.movePath", "client.setClippingPath",
     "client.updateDocumentPath", "client.rasterizeLayer", "client.mergeVisibleCopy", "client.mergeLayers",
-    "client.cutLayerPixels",
+    "client.cutLayerPixels", "client.captureLayerPixels",
     "client.historyTravel", "client.renderFrame", "client.saveBlob", "client.saveDocument",
     "client.markSaved",
     "client.setMemoryBudget", "client.openBlob", "client.inspectBlob", "client.placePsdSmartObject"]) {
@@ -202,6 +204,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(worker, /method === "saveBlob"/);
   assert.match(worker, /createRenderFrame\(bytes, payload\.region\)/);
   assert.match(script, /context\.drawImage\(frame\.bitmap/);
+  assert.match(script, /context\.clearRect\(region\.x, region\.y, region\.width, region\.height\);\s*context\.drawImage\(frame\.bitmap/);
   assert.match(script, /frame\.bitmap\.close\(\)/);
   assert.match(script, /transferOwnership: true/);
   assert.match(script, /loadPreferences/);
@@ -1627,6 +1630,12 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   assert.deepEqual(calls.find((call) => call[0] === "crop"),
     ["crop", { x: -1, y: 1, width: 4, height: 3 }, -2.5, [7, 8, 9, 0], false]);
   await host.dispatch({ method: "setSelection", rects: [{ x: 0, y: 0, width: 1, height: 1 }] });
+  const clipboardBefore = await host.dispatch({ method: "snapshot" });
+  const clipboard = await host.dispatch({ method: "captureLayerPixels", layerId: "7",
+    expectedStateId: String(clipboardBefore.stateId),
+    expectedRevision: String(clipboardBefore.revision) });
+  assert.deepEqual(clipboard.bounds, { x: 0, y: 0, width: 1, height: 1 });
+  assert.equal(clipboard.rgba.byteLength, 4);
   await host.dispatch({ method: "copyLayerSelection", layerId: "7", name: "Layer 1" });
   assert.deepEqual(calls.find((call) => call[0] === "pixels"), ["pixels", "Layer 1", 4]);
   await host.dispatch({ method: "setSelectionMask", bounds: { x: 0, y: 0, width: 3, height: 2 },

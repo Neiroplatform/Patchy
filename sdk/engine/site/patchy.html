@@ -80,7 +80,7 @@
           <option value="webp">WebP</option><option value="svg">SVG (flattened)</option>
         </select>
         <button class="button" id="exportButton" type="button" disabled>Export</button>
-        <button class="icon-button" id="copyPixelsButton" type="button" aria-label="Copy selected editable layer" title="Copy selected layer (Ctrl+C)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-copy"></use></svg></button>
+        <button class="icon-button" id="copyPixelsButton" type="button" aria-label="Copy selected pixels or editable layer" title="Copy selected pixels or layer (Ctrl+C)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-copy"></use></svg></button>
         <button class="icon-button" id="cutPixelsButton" type="button" aria-label="Cut selected pixels" title="Cut selected pixels (Ctrl+X)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-cut"></use></svg></button>
         <button class="icon-button" id="pastePixelsButton" type="button" aria-label="Paste layer or image" title="Paste layer or image (Ctrl+V)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-paste"></use></svg></button>
       </nav>
@@ -162,8 +162,20 @@
               <button class="tool-option-button" id="cancelTransformButton" type="button" disabled>Cancel</button>
               <button class="tool-option-button tool-option-apply" id="applyTransformButton" type="button" disabled>Apply transform</button>
             </span>
+            <span class="direct-operation-actions pen-option" hidden>
+              <button class="tool-option-button" id="cancelPenPathButton" type="button" disabled>Cancel path</button>
+              <button class="tool-option-button" id="finishPenPathButton" type="button" disabled>Finish path</button>
+              <button class="tool-option-button tool-option-apply" id="closePenPathButton" type="button" disabled>Close path</button>
+            </span>
             <label>Size <input id="brushSizeInput" type="range" min="1" max="4096" value="24"><output id="brushSizeOutput">24 px</output></label>
             <label class="non-retouch-option">Color <input id="brushColorInput" type="color" value="#111111"></label>
+            <label class="standard-brush-option" hidden>Brush <select id="brushPresetSelect" aria-label="Brush preset">
+              <option value="hard-round">Hard Round</option><option value="soft-round">Soft Round</option>
+              <option value="pencil">Pencil</option><option value="marker">Marker</option>
+              <option value="custom">Custom</option>
+            </select></label>
+            <label class="standard-brush-option" hidden>Softness <input id="brushSoftnessInput" type="range" min="0" max="100" value="0"><output id="brushSoftnessOutput">0%</output></label>
+            <label class="standard-brush-option" hidden>Opacity <input id="brushOpacityInput" type="range" min="1" max="100" value="100"><output id="brushOpacityOutput">100%</output></label>
             <label class="non-retouch-option standard-paint-option">Target <select id="paintTargetSelect" aria-label="Paint target">
               <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
             </select></label>
@@ -208,6 +220,10 @@
           <div class="canvas-frame" id="canvasFrame">
             <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
             <canvas id="gestureCanvas" aria-hidden="true"></canvas>
+            <svg class="path-overlay" id="pathOverlay" aria-label="Pen path" hidden>
+              <path id="pathOverlayLine" vector-effect="non-scaling-stroke"></path>
+              <g id="pathOverlayAnchors"></g>
+            </svg>
             <div class="guides-overlay" id="guidesOverlay" aria-label="Document guides"></div>
             <svg class="selection-overlay" id="selectionOverlay" aria-hidden="true" hidden>
               <path class="selection-shadow" id="selectionShadowPath" vector-effect="non-scaling-stroke"></path>
@@ -296,12 +312,12 @@
             <label class="quick-layer-lock"><input id="quickLayerLockInput" type="checkbox" disabled><span>Lock</span></label>
           </div>
           <div class="layer-actions" role="group" aria-label="Layer actions">
-            <button type="button" id="createPixelLayerButton" disabled>New layer</button>
+            <button type="button" id="createPixelLayerButton" title="Create pixel layer" disabled><span aria-hidden="true">＋</span> New layer</button>
             <button type="button" id="importLayerButton" disabled>Import pixels</button>
             <button type="button" id="layerViaCopyButton" disabled>Layer via copy</button>
             <button type="button" id="groupLayerButton" disabled>Group</button>
             <button type="button" id="ungroupLayerButton" disabled>Ungroup</button>
-            <button type="button" id="removeLayerButton" disabled>Delete</button>
+            <button type="button" id="removeLayerButton" title="Delete selected layer" disabled><span aria-hidden="true">⌫</span> Delete</button>
             <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
             <button type="button" id="filterLayerButton" disabled>Filters</button>
             <button type="button" id="liquifyLayerButton" disabled>Liquify…</button>

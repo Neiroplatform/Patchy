@@ -26,6 +26,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -948,10 +949,19 @@ std::optional<patchy::LayerArrangeRequest> layer_arrange_request(
 std::optional<patchy::RasterStrokeRequest> raster_stroke_request(
     const patchy_engine_session *session,
     const patchy_engine_raster_stroke *input, patchy_engine_error *error) {
-  if (input == nullptr || input->struct_size != sizeof(*input) ||
+  constexpr auto kRasterStrokeWithoutSoftness =
+      static_cast<std::uint32_t>(offsetof(patchy_engine_raster_stroke,
+                                          brush_softness));
+  const auto valid_size = input != nullptr &&
+      (input->struct_size == kRasterStrokeWithoutSoftness ||
+       input->struct_size == sizeof(*input));
+  const auto has_softness = input != nullptr &&
+      input->struct_size == sizeof(*input);
+  if (!valid_size ||
       input->layer_id == 0 || input->mode > PATCHY_ENGINE_RASTER_HEAL ||
       input->points == nullptr || input->point_count == 0 ||
-      input->point_count > 65536U) {
+      input->point_count > 65536U ||
+      (has_softness && (input->brush_softness > 100 || input->reserved != 0U))) {
     fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
          "a bounded versioned raster stroke is required");
     return std::nullopt;
@@ -959,6 +969,7 @@ std::optional<patchy::RasterStrokeRequest> raster_stroke_request(
   patchy::RasterStrokeRequest request;
   request.mode = static_cast<patchy::RasterStrokeMode>(input->mode);
   request.brush_size = input->brush_size;
+  request.brush_softness = has_softness ? input->brush_softness : 0;
   request.color = {input->red, input->green, input->blue, input->alpha};
   request.source = {input->source_x, input->source_y};
   request.points.reserve(input->point_count);

@@ -139,7 +139,8 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
     return fail(error, "raster stroke target pixels are locked");
   }
   if (request.points.empty() || request.points.size() > kMaximumStrokePoints ||
-      request.brush_size < 1 || request.brush_size > kMaximumBrushSize) {
+      request.brush_size < 1 || request.brush_size > kMaximumBrushSize ||
+      request.brush_softness < 0 || request.brush_softness > 100) {
     return fail(error, "raster stroke geometry exceeds its bounded contract");
   }
   for (const auto& point : request.points) {
@@ -167,6 +168,7 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
   EditOptions options;
   options.primary = request.color;
   options.brush_size = request.brush_size;
+  options.brush_softness = request.brush_softness;
   options.lock_transparent_pixels =
       (layer->lock_flags() & kLayerLockTransparentPixels) != 0U;
   if (options.lock_transparent_pixels) {
@@ -252,6 +254,7 @@ bool apply_layer_mask_stroke(Document& document, LayerId layer_id,
   }
   if (request.points.empty() || request.points.size() > kMaximumStrokePoints ||
       request.brush_size < 1 || request.brush_size > kMaximumBrushSize ||
+      request.brush_softness < 0 || request.brush_softness > 100 ||
       std::any_of(request.points.begin(), request.points.end(),
                   [](const RasterStrokePoint& point) {
                     return !std::isfinite(point.x) || !std::isfinite(point.y);
@@ -397,6 +400,7 @@ bool apply_layer_mask_stroke(Document& document, LayerId layer_id,
     EditOptions options;
     options.primary = {target, target, target, request.color.a};
     options.brush_size = request.brush_size;
+    options.brush_softness = request.brush_softness;
     options.lock_transparent_pixels = true;
     options.progress_callback = continue_or_cancel;
     options.selection_coverage =

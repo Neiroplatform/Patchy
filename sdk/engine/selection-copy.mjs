@@ -20,7 +20,21 @@ export function copyLayerSelection({ layer, rgba, selectionMask, selectionBounds
     throw new TypeError("Selected layer pixels do not match their bounds");
   }
   const documentBounds = { x: 0, y: 0, width: documentWidth, height: documentHeight };
-  const copyBounds = intersect(intersect(bounds, selectionBounds), documentBounds);
+  const searchBounds = intersect(selectionBounds, documentBounds);
+  let left = searchBounds.x + searchBounds.width;
+  let top = searchBounds.y + searchBounds.height;
+  let right = searchBounds.x;
+  let bottom = searchBounds.y;
+  for (let y = searchBounds.y; y < searchBounds.y + searchBounds.height; ++y) {
+    for (let x = searchBounds.x; x < searchBounds.x + searchBounds.width; ++x) {
+      if (selectionMask[y * documentWidth + x] === 0) continue;
+      left = Math.min(left, x); top = Math.min(top, y);
+      right = Math.max(right, x + 1); bottom = Math.max(bottom, y + 1);
+    }
+  }
+  if (right <= left || bottom <= top) return null;
+  const coverageBounds = { x: left, y: top, width: right - left, height: bottom - top };
+  const copyBounds = intersect(bounds, coverageBounds);
   if (copyBounds.width <= 0 || copyBounds.height <= 0) return null;
 
   const output = new Uint8Array(copyBounds.width * copyBounds.height * 4);

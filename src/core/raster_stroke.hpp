@@ -28,6 +28,7 @@ struct RasterStrokeRequest {
   RasterStrokeMode mode{RasterStrokeMode::Brush};
   std::vector<RasterStrokePoint> points{};
   std::int32_t brush_size{12};
+  std::int32_t brush_softness{0};
   EditColor color{};
   RasterStrokePoint source{};
   std::vector<Rect> selection{};

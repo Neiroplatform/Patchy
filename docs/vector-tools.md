@@ -43,6 +43,12 @@ active one per Combine); other modes route to the work path. The
 construction overlay draws in canvas_widget_vector_tools.cpp
 (canvas_widget_pen.cpp is TABLET input, not this tool).
 
+The self-hosted editor renders its simpler Pen draft and selected committed
+path in a document-space SVG overlay. Three or more anchors enable explicit
+Finish (open) and Close path actions; Enter finishes and Escape cancels. The
+committed path remains selected and visible, and SVG visibility is controlled
+through the actual `hidden` attribute rather than an HTML-only property.
+
 A badge crosshair cursor advertises the click action (insert/delete/convert/
 close); one classifier (`pen_hover_hit_raw`, narrowed per tool and by the
 Auto Add/Delete option) drives cursor, click editor, and right-click menu so

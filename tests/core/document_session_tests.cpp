@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -5522,6 +5523,30 @@ void core_raster_stroke_respects_selection_and_immutable_clone_source() {
   CHECK(document.find_layer(layer_id)->pixels().pixel(13, 0)[3] > 0);
   CHECK(document.find_layer(layer_id)->pixels().pixel(13, 0)[3] < 255);
 
+  auto invalid_softness = brush;
+  invalid_softness.brush_softness = 101;
+  CHECK(!patchy::apply_raster_stroke(document, layer_id, invalid_softness,
+                                     nullptr, &error));
+  CHECK(error == "raster stroke geometry exceeds its bounded contract");
+
+  Document feathered_document(12, 8, PixelFormat::rgba8());
+  PixelBuffer feathered_pixels(12, 8, PixelFormat::rgba8());
+  feathered_pixels.clear(0);
+  const auto feathered_layer_id = feathered_document.add_pixel_layer(
+      "Feathered", std::move(feathered_pixels)).id();
+  auto feathered = brush;
+  feathered.brush_size = 8;
+  feathered.brush_softness = 100;
+  feathered.selection.clear();
+  feathered.points = {{6.0, 4.0}};
+  CHECK(patchy::apply_raster_stroke(feathered_document, feathered_layer_id,
+                                    feathered, &result, &error));
+  const auto& feathered_result =
+      feathered_document.find_layer(feathered_layer_id)->pixels();
+  CHECK(feathered_result.pixel(6, 4)[3] == 255);
+  CHECK(feathered_result.pixel(9, 4)[3] > 0);
+  CHECK(feathered_result.pixel(9, 4)[3] < 255);
+
   document.find_layer(layer_id)->set_lock_flags(patchy::kLayerLockTransparentPixels);
   auto transparent_locked = brush;
   transparent_locked.points = {{0.0, 3.0}}; transparent_locked.selection.clear();
@@ -5748,9 +5773,25 @@ void engine_host_protocol_previews_and_commits_one_raster_stroke() {
   const std::array<patchy_engine_stroke_point, 2> points{{{1.0, 1.0}, {6.0, 1.0}}};
   patchy_engine_raster_stroke stroke{}; stroke.struct_size = sizeof(stroke);
   stroke.mode = PATCHY_ENGINE_RASTER_BRUSH; stroke.layer_id = layer_id;
-  stroke.brush_size = 2; stroke.red = 220; stroke.alpha = 255;
+  stroke.brush_size = 2; stroke.brush_softness = 100;
+  stroke.red = 220; stroke.alpha = 255;
   stroke.points = points.data(); stroke.point_count = points.size();
   patchy_engine_rect region{}; patchy_engine_buffer preview{};
+  auto invalid_stroke = stroke;
+  invalid_stroke.brush_softness = 101;
+  CHECK(patchy_engine_session_preview_raster_stroke(
+            session, ready.state_id, ready.revision, &invalid_stroke, nullptr,
+            nullptr, &region, &preview, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  auto legacy_stroke = stroke;
+  legacy_stroke.struct_size = static_cast<std::uint32_t>(
+      offsetof(patchy_engine_raster_stroke, brush_softness));
+  legacy_stroke.brush_softness = 101;
+  legacy_stroke.reserved = 1;
+  CHECK(patchy_engine_session_preview_raster_stroke(
+            session, ready.state_id, ready.revision, &legacy_stroke, nullptr,
+            nullptr, &region, &preview, &error) == 1);
+  patchy_engine_buffer_release(&preview);
   const auto cancel = [](std::int32_t, std::int32_t, void*) { return 0; };
   CHECK(patchy_engine_session_preview_raster_stroke(
             session, ready.state_id, ready.revision, &stroke, cancel, nullptr,

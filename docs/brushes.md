@@ -10,6 +10,15 @@ Deep reference for the brush-tip stamping engine, tip library/UI, brush dynamics
 
 Brush, Pattern Stamp, and Eraser can stamp bitmap **brush tips** in addition to the procedural round/soft brush.
 
+The self-hosted Worker editor exposes Eraser as a permanent primary rail tool
+and shares one procedural Size/Softness/Opacity contract with Brush. Its
+discoverable presets are Hard Round (24/0/100), Soft Round (80/100/100),
+Pencil (4/0/100), and Marker (36/30/45); changing any of those controls selects
+Custom. Softness crosses the versioned raster-stroke C ABI and applies equally
+to preview and commit. Partial `ImageBitmap` frames replace their dirty canvas
+region (clear then draw), so newly transparent Eraser pixels cannot be hidden
+by source-over composition of the previous frame.
+
 ## Core stamping engine
 
 - Core stamping: `src/core/brush_tip.hpp/.cpp` (`BrushTip` = 8-bit grayscale coverage mask + default spacing; `BrushTipMipChain` box-filtered halvings built once per tip; `ScaledBrushTip` resampled per brush size) and `src/core/pixel_tools.cpp` (`paint_tip_dab`, `paint_tip_segment`). `EditOptions::brush_tip` (non-owning `const ScaledBrushTip*`, null = procedural) plus `brush_tip_spacing` select the stamp path. Rotation/roundness/subpixel apply per-dab in the inverse map, so the scaled cache depends only on size (pressure size quantizes to 2px steps while a tip is active; an 8-entry LRU caches scaled stamps). The stateful `paint_brush_segment(..., BrushTipStrokeState&)` overload carries dab spacing across the stroke smoother's short segments; state resets in `CanvasWidget::clear_brush_stroke_tracking()`.

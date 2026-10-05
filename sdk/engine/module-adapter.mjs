@@ -39,7 +39,7 @@ const DOCUMENT_PATH_INPUT_SIZE = 56;
 const DOCUMENT_PATH_PROJECTION_SIZE = 288;
 const PATH_SUBPATH_PROJECTION_SIZE = 16;
 const LAYER_TRANSFORM_SIZE = 80;
-const RASTER_STROKE_SIZE = 48;
+const RASTER_STROKE_SIZE = 56;
 const RASTER_FILL_SIZE = 64;
 const LAYER_WARP_SIZE = 48;
 const LIQUIFY_INPUT_SIZE = 24;
@@ -2558,6 +2558,8 @@ export class EmscriptenPatchyEngine {
     if (typeof input.layerId !== "bigint" || input.layerId <= 0n ||
         ![0, 1, 2, 3].includes(input.mode) || !Number.isInteger(input.brushSize) ||
         input.brushSize < 1 || input.brushSize > 4096 ||
+        !Number.isInteger(input.softness ?? 0) || (input.softness ?? 0) < 0 ||
+        (input.softness ?? 0) > 100 ||
         !Array.isArray(input.points) || input.points.length < 1 ||
         input.points.length > 65536 ||
         input.points.some((point) => !Array.isArray(point) || point.length !== 2 ||
@@ -2587,6 +2589,7 @@ export class EmscriptenPatchyEngine {
       color.forEach((component, index) => view.setUint8(20 + index, component));
       view.setFloat64(24, source[0], true); view.setFloat64(32, source[1], true);
       view.setUint32(40, points, true); view.setUint32(44, input.points.length, true);
+      view.setInt32(48, input.softness ?? 0, true); view.setUint32(52, 0, true);
       return { stroke, points };
     } catch (error) { this.#module._free(points); throw error; }
   }

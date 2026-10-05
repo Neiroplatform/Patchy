@@ -42,3 +42,19 @@ test("layer via copy rejects incomplete inputs and returns null for empty overla
     selectionMask: new Uint8Array(1), selectionBounds: layer.bounds,
     documentWidth: 1, documentHeight: 1 }), null);
 });
+
+test("layer via copy tightens a broad canonical mask bound to nonzero coverage", () => {
+  const selectionMask = new Uint8Array(6 * 4);
+  selectionMask[1 * 6 + 2] = 255;
+  selectionMask[2 * 6 + 3] = 128;
+  const result = copyLayerSelection({
+    layer: { kind: 0, visible: true, bounds: { x: 0, y: 0, width: 6, height: 4 } },
+    rgba: new Uint8Array(6 * 4 * 4).fill(255), selectionMask,
+    selectionBounds: { x: 0, y: 0, width: 6, height: 4 },
+    documentWidth: 6, documentHeight: 4,
+  });
+  assert.deepEqual(result.bounds, { x: 2, y: 1, width: 2, height: 2 });
+  assert.equal(result.rgba.byteLength, 16);
+  assert.deepEqual([result.rgba[3], result.rgba[7], result.rgba[11], result.rgba[15]],
+    [255, 0, 0, 128]);
+});

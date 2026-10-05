@@ -113,7 +113,7 @@ export const TOOL_GROUPS = Object.freeze([
   { id: "selection", label: "Selection tools", members: ["marqueeToolButton", "lassoToolButton",
     "polygonToolButton", "magicToolButton", "quickSelectToolButton", "magneticToolButton", "quickMaskToolButton"] },
   { id: "paint", label: "Paint tools", members: ["brushToolButton", "mixerToolButton",
-    "patternStampToolButton", "eraserToolButton"] },
+    "patternStampToolButton", "eraserToolButton"], alwaysVisible: ["eraserToolButton"] },
   { id: "retouch", label: "Retouch tools", members: ["healToolButton", "spotHealingToolButton",
     "patchToolButton", "cloneToolButton"] },
   { id: "tone", label: "Local adjustment tools", members: ["smudgeToolButton", "dodgeToolButton",
@@ -121,7 +121,11 @@ export const TOOL_GROUPS = Object.freeze([
   { id: "fill", label: "Fill tools", members: ["gradientToolButton", "fillToolButton"] },
   { id: "draw", label: "Drawing tools", members: ["penToolButton", "textToolButton"] },
   { id: "navigation", label: "Navigation tools", members: ["panToolButton"] },
-].map((group) => Object.freeze({ ...group, members: Object.freeze(group.members) })));
+].map((group) => Object.freeze({
+  ...group,
+  members: Object.freeze(group.members),
+  ...(group.alwaysVisible ? { alwaysVisible: Object.freeze(group.alwaysVisible) } : {}),
+})));
 
 const normalized = (value) => String(value ?? "").normalize("NFKD").toLocaleLowerCase().trim();
 
@@ -169,7 +173,9 @@ function installToolGroups(document, translate) {
   };
 
   for (const group of TOOL_GROUPS) {
-    const buttons = group.members.map((id) => document.getElementById(id)).filter(Boolean);
+    const alwaysVisible = new Set(group.alwaysVisible || []);
+    const buttons = group.members.filter((id) => !alwaysVisible.has(id))
+      .map((id) => document.getElementById(id)).filter(Boolean);
     if (!buttons.length) continue;
     const [primary, ...secondary] = buttons;
     const wrapper = document.createElement("div");

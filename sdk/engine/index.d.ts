@@ -306,6 +306,9 @@ export class PatchyWorkerClient {
   addPixelLayer(input: { name: string; width: number; height: number;
     bounds: Rect; rgba: Uint8Array }, options?: TransferOptions): Promise<DocumentProjection>;
   copyLayerSelection(layerId: bigint, name: string): Promise<DocumentProjection>;
+  captureLayerPixels(layerId: bigint, expectedStateId: bigint,
+    expectedRevision: bigint): Promise<{ width: number; height: number;
+      bounds: Rect; rgba: Uint8Array }>;
   layerPixels(layerId: bigint): Promise<Uint8Array>;
   layerThumbnail(layerId: bigint, maximumEdge: number, expectedStateId: bigint,
     expectedRevision: bigint): Promise<{

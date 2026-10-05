@@ -257,6 +257,8 @@ typedef struct patchy_engine_raster_stroke {
   double source_y;
   const patchy_engine_stroke_point *points;
   size_t point_count;
+  int32_t brush_softness;
+  uint32_t reserved;
 } patchy_engine_raster_stroke;
 
 enum patchy_engine_raster_fill_mode {
