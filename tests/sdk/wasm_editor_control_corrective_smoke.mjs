@@ -38,18 +38,18 @@ function pngChunk(type, data) {
 
 const WIDTH = 160;
 const HEIGHT = 100;
-function splitColorPng() {
+function splitColorPng(width = WIDTH, height = HEIGHT) {
   const header = Buffer.alloc(13);
-  header.writeUInt32BE(WIDTH, 0); header.writeUInt32BE(HEIGHT, 4);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4);
   header[8] = 8; header[9] = 6;
-  const rows = Buffer.alloc((WIDTH * 4 + 1) * HEIGHT);
-  for (let y = 0; y < HEIGHT; ++y) {
-    const row = y * (WIDTH * 4 + 1); rows[row] = 0;
-    for (let x = 0; x < WIDTH; ++x) {
+  const rows = Buffer.alloc((width * 4 + 1) * height);
+  for (let y = 0; y < height; ++y) {
+    const row = y * (width * 4 + 1); rows[row] = 0;
+    for (let x = 0; x < width; ++x) {
       const pixel = row + 1 + x * 4;
-      rows[pixel] = x < WIDTH / 2 ? 230 : 30;
+      rows[pixel] = x < width / 2 ? 230 : 30;
       rows[pixel + 1] = 35;
-      rows[pixel + 2] = x < WIDTH / 2 ? 40 : 225;
+      rows[pixel + 2] = x < width / 2 ? 40 : 225;
       rows[pixel + 3] = 255;
     }
   }
@@ -382,6 +382,35 @@ try {
   await page.click("#pathVectorMaskButton");
   await waitForMutation(before, "Creating vector mask");
 
+  await page.setInputFiles("#fileInput", {
+    name: "scaled-selection-erase.png", mimeType: "image/png", buffer: splitColorPng(756, 718),
+  });
+  await ready();
+  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "756 × 718" &&
+    document.querySelectorAll("#layerList .layer-row").length === 1, null, { timeout: 90_000 });
+  const scaledCanvas = await page.evaluate(() => {
+    const canvas = document.getElementById("documentCanvas");
+    const box = canvas.getBoundingClientRect();
+    return { intrinsicWidth: canvas.width, intrinsicHeight: canvas.height,
+      cssWidth: box.width, cssHeight: box.height };
+  });
+  assert.ok(scaledCanvas.cssHeight < scaledCanvas.intrinsicHeight, JSON.stringify(scaledCanvas));
+  before = await revision();
+  await dragCanvas("marqueeToolButton", { x: .08, y: .12 }, { x: .48, y: .68 }, 80);
+  await waitForMutation(before, "Selecting area");
+  await page.click("#eraserToolButton");
+  await page.locator("#brushSizeInput").evaluate((input) => {
+    input.value = "24"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const selectedEraseBefore = await canvasPixel(189, 215);
+  before = await revision();
+  await dragCanvas("eraserToolButton", { x: .25, y: .3 }, { x: .25, y: .3 }, 81);
+  await waitForMutation(before, "Erasing pixels");
+  const selectedEraseAfter = await canvasPixel(189, 215);
+  assert.ok(selectedEraseAfter[3] < selectedEraseBefore[3],
+    `scaled selected erase did not lower alpha: before=${selectedEraseBefore} after=${selectedEraseAfter}`);
+  assert.equal(await page.locator("#errorBanner").isHidden(), true);
+
   if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
     await mkdir(process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR, { recursive: true });
     await page.screenshot({
@@ -392,7 +421,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-open-closed-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties brush=preset-softness-opacity mixer-pattern=pass eraser=pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-open-closed-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,
