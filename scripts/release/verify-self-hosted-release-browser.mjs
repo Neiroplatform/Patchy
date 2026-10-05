@@ -158,6 +158,65 @@ async function createCustomStarter(page, width, height, format, { keyboard = fal
   return page.locator("#recoveryLabel").getAttribute("data-state");
 }
 
+async function verifyScaledSelectedEraser(page) {
+  await dropSvg(page, { name: "scaled-selected-eraser.svg", width: 756, height: 718,
+    fill: "#7c3aed" });
+  const canvasGeometry = await page.evaluate(() => {
+    const canvas = document.querySelector("#documentCanvas");
+    const rect = canvas.getBoundingClientRect();
+    return { width: canvas.width, height: canvas.height,
+      cssWidth: rect.width, cssHeight: rect.height };
+  });
+  assert.ok(canvasGeometry.cssHeight < canvasGeometry.height,
+    `eraser fixture did not exercise Fit scaling: ${JSON.stringify(canvasGeometry)}`);
+
+  const drag = async (toolButtonId, from, to, pointerId) => page.evaluate(
+    ({ toolButtonId, from, to, pointerId }) => {
+      document.getElementById(toolButtonId).click();
+      const canvas = document.getElementById("documentCanvas");
+      const rect = canvas.getBoundingClientRect();
+      canvas.setPointerCapture = () => {};
+      const dispatch = (type, point, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId, pointerType: "mouse", isPrimary: true,
+        button: 0, buttons, clientX: rect.left + rect.width * point.x,
+        clientY: rect.top + rect.height * point.y,
+      }));
+      dispatch("pointerdown", from, 1);
+      if (from.x !== to.x || from.y !== to.y) dispatch("pointermove", to, 1);
+      dispatch("pointerup", to, 0);
+      delete canvas.setPointerCapture;
+    }, { toolButtonId, from, to, pointerId });
+  const revision = async () => Number((await page.locator("#detailRevision").textContent()).trim());
+  const waitForRevision = (before, historyLabel) => page.waitForFunction(
+    ({ before, historyLabel }) =>
+      Number(document.querySelector("#detailRevision")?.textContent) === before + 1 &&
+      document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
+      [...document.querySelectorAll("#historyList .history-label")]
+        .some((node) => node.textContent === historyLabel),
+    { before, historyLabel }, { timeout: 90_000 });
+
+  let before = await revision();
+  await drag("marqueeToolButton", { x: .08, y: .12 }, { x: .48, y: .68 }, 501);
+  await waitForRevision(before, "Selecting area");
+  await page.click("#eraserToolButton");
+  await page.locator("#brushSizeInput").evaluate((input) => {
+    input.value = "24";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const pixel = async () => page.evaluate(() => [...document.querySelector("#documentCanvas")
+    .getContext("2d").getImageData(189, 215, 1, 1).data]);
+  const pixelBefore = await pixel();
+  before = await revision();
+  await drag("eraserToolButton", { x: .25, y: .3 }, { x: .25, y: .3 }, 502);
+  await waitForRevision(before, "Erasing pixels");
+  const pixelAfter = await pixel();
+  assert.ok(pixelAfter[3] < pixelBefore[3],
+    `selected Eraser did not replace the dirty frame: before=${pixelBefore} after=${pixelAfter}`);
+  assert.equal(await page.locator("#errorBanner").isHidden(), true);
+  console.log(`ERASER browser=${browserName} fit=1 selection=rect size=24 alpha=${pixelBefore[3]}->${pixelAfter[3]}`);
+  await closeActiveDocument(page);
+}
+
 async function verifyBetaGuide(page) {
   const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
   assert.equal((await page.locator("#helpButton").textContent()).trim(), "Getting started");
@@ -908,6 +967,12 @@ try {
     "beta guide must not invent confirmations for unchanged documents");
   console.log(`BETA-GUIDE browser=${browserName} local-first=1 starter-presets=4 quick-actions=3 help-shortcut=1 responsive=390x844`);
 
+  const eraserDialogsBefore = acceptedDialogs;
+  await verifyScaledSelectedEraser(page);
+  const eraserAcceptedDialogs = acceptedDialogs - eraserDialogsBefore;
+  assert.equal(eraserAcceptedDialogs, 1,
+    "selected Eraser verification must confirm exactly one dirty document close");
+
   const performanceDialogsBefore = acceptedDialogs;
   const performance = performanceDurationMs > 0
     ? await runPerformanceAudit(page, browserName, manifest)
@@ -1013,7 +1078,8 @@ try {
   assert.deepEqual(forbiddenRequests, []);
   assert.deepEqual(pageCrashes, []);
   assert.equal(disconnected, false);
-  assert.equal(acceptedDialogs - performanceAcceptedDialogs - betaGuideAcceptedDialogs - iconographyAcceptedDialogs,
+  assert.equal(acceptedDialogs - performanceAcceptedDialogs - betaGuideAcceptedDialogs -
+    iconographyAcceptedDialogs - eraserAcceptedDialogs,
     iterations,
     "each dirty local document must require explicit close confirmation");
   if (summaryPath) await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
