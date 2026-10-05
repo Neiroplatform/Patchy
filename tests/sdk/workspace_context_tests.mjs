@@ -35,6 +35,8 @@ test("selection, paint, retouch and tone contexts expose only relevant existing 
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.brush.controls,
     ["brushPresetSelect", "brushSizeInput", "brushSoftnessInput", "brushOpacityInput",
       "brushColorInput", "paintTargetSelect"]);
+  assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.pen.controls,
+    ["cancelPenPathButton", "finishPenPathButton", "closePenPathButton", "makePenSelectionButton"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.patch.controls,
     ["patchModeInput", "retouchSampleAllInput", "patchTransparentInput"]);
   assert.ok(WORKSPACE_TOOL_CONTEXTS.dodge.controls.includes("localToneRangeInput"));

@@ -148,6 +148,39 @@ try {
   await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "160 × 100" &&
     document.querySelectorAll("#layerList .layer-row").length === 1, null, { timeout: 90_000 });
 
+  await page.click('[aria-controls="commandMenu-layer"]');
+  await page.click('#commandMenu-layer .command-submenu-trigger[data-label="Masks"]');
+  const submenuStack = await page.evaluate(() => {
+    const panel = document.querySelector('#commandMenu-layer .command-submenu-panel:not([hidden])');
+    const box = panel.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + Math.min(24, box.width / 2),
+      box.top + Math.min(24, box.height / 2));
+    return { panel: Boolean(panel), containsHit: panel?.contains(hit) || false,
+      topbarZ: getComputedStyle(document.querySelector(".topbar")).zIndex,
+      rulerZ: getComputedStyle(document.getElementById("horizontalRuler")).zIndex };
+  });
+  assert.deepEqual(submenuStack, { panel: true, containsHit: true, topbarZ: "100", rulerZ: "5" });
+  if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
+    await mkdir(process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({
+      path: `${process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR}/${browserName}-submenu-stacking.png`,
+      fullPage: true,
+    });
+  }
+  await page.keyboard.press("Escape");
+
+  await page.click("#addVerticalGuideButton");
+  const guideVisual = await page.evaluate(() => {
+    const guide = document.querySelector('.guide-line[data-orientation="vertical"]');
+    const line = getComputedStyle(guide, "::after");
+    return { targetWidth: getComputedStyle(guide).width, lineWidth: line.width,
+      shadow: line.boxShadow };
+  });
+  assert.equal(guideVisual.targetWidth, "24px");
+  assert.equal(guideVisual.lineWidth, "1px");
+  assert.equal(guideVisual.shadow, "none");
+  await page.click("#clearGuidesButton");
+
   const footer = await page.evaluate(() => {
     const panel = document.getElementById("workspacePanelLayers").getBoundingClientRect();
     const actions = document.querySelector("#workspacePanelLayers > .layer-actions").getBoundingClientRect();
@@ -247,9 +280,41 @@ try {
     index % 4 === 3 && value < pixelsBeforeErase[index] ? count + 1 : count, 0);
   assert.ok(erasedAlphaCount > 0, `eraser did not lower alpha in any rendered pixel; center=${paintedAfter}`);
 
+  await page.click('[data-tool-group="paint"] .tool-group-toggle');
+  await page.click("#mixerToolButton");
+  assert.equal(await page.locator("#mixerWetInput").isVisible(), true);
+  before = await revision();
+  await dragCanvas("mixerToolButton", { x: .18, y: .32 }, { x: .4, y: .32 }, 75);
+  await waitForMutation(before, "Applying Mixer Brush");
+  assert.equal(await page.locator("#errorBanner").isHidden(), true);
+  await page.click('[data-tool-group="paint"] .tool-group-toggle');
+  await page.click("#patternStampToolButton");
+  assert.equal(await page.locator("#advancedPatternInput").isVisible(), true);
+  before = await revision();
+  await dragCanvas("patternStampToolButton", { x: .55, y: .68 }, { x: .78, y: .68 }, 76);
+  await waitForMutation(before, "Applying Pattern Stamp");
+  assert.equal(await page.locator("#errorBanner").isHidden(), true);
+
   await page.click("#penToolButton");
   assert.equal(await page.locator("#finishPenPathButton").isVisible(), true);
-  await clickCanvasPoints("penToolButton", [[.18, .2], [.42, .72], [.7, .28]]);
+  await clickCanvasPoints("penToolButton", [[.18, .2]]);
+  await page.evaluate(() => {
+    const canvas = document.getElementById("documentCanvas"); const box = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse",
+      isPrimary: true, buttons: 0, clientX: box.left + box.width * .42,
+      clientY: box.top + box.height * .72 }));
+  });
+  assert.match(await page.locator("#pathOverlayRubberBand").getAttribute("d"), /^M.+L.+/);
+  assert.notEqual(await page.locator("#pathOverlayRubberBand").evaluate((node) =>
+    getComputedStyle(node).strokeDasharray), "none");
+  if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
+    await mkdir(process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({
+      path: `${process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR}/${browserName}-pen-rubber-band.png`,
+      fullPage: true,
+    });
+  }
+  await clickCanvasPoints("penToolButton", [[.42, .72], [.7, .28]]);
   const penOverlay = await page.evaluate(() => {
     const overlay = document.getElementById("pathOverlay"); const box = overlay.getBoundingClientRect();
     return { tool: document.getElementById("canvasViewport").dataset.tool, hidden: overlay.hidden,
@@ -266,7 +331,7 @@ try {
   assert.equal(await page.locator("#pathList button").count(), 1);
   assert.equal(await page.locator("#pathList button").getAttribute("aria-pressed"), "true");
 
-  await clickCanvasPoints("penToolButton", [[.22, .25], [.46, .76], [.74, .34]]);
+  await clickCanvasPoints("penToolButton", [[.08, .15], [.48, .15], [.48, .85], [.08, .85]]);
   assert.equal(await page.locator("#closePenPathButton").isEnabled(), true);
   before = await revision();
   await page.click("#closePenPathButton");
@@ -275,8 +340,8 @@ try {
   assert.match(await page.locator("#pathOverlayLine").getAttribute("d"), /Z$/);
 
   before = await revision();
-  await dragCanvas("marqueeToolButton", { x: .06, y: .16 }, { x: .4, y: .84 }, 74);
-  await waitForMutation(before, "Selecting area");
+  await page.click("#makePenSelectionButton");
+  await waitForMutation(before, "Loading path selection");
   await page.locator("#canvasViewport").focus();
   await page.keyboard.press("Control+c");
   await page.waitForFunction(() => /selected pixels copied locally/.test(
@@ -300,6 +365,23 @@ try {
   assert.ok(selectedPixel[3] > 0, `selected area lost: ${selectedPixel}`);
   assert.equal(outsidePixel[3], 0, `copy/paste leaked the full source layer: ${outsidePixel}`);
 
+  await page.click("#workspacePanelStructureButton");
+  assert.equal(await page.locator("#pathSelectionButton").isEnabled(), true);
+  assert.equal(await page.locator("#pathStrokeButton").isEnabled(), true);
+  assert.equal(await page.locator("#pathFillButton").isEnabled(), true);
+  assert.equal(await page.locator("#pathVectorMaskButton").isEnabled(), true);
+  before = await revision();
+  await page.click("#pathStrokeButton");
+  await waitForMutation(before, "Stroking path");
+  before = await revision();
+  await page.click("#pathFillButton");
+  await page.waitForFunction((before) => Number(document.querySelector("#detailRevision")?.textContent) >= before + 1 &&
+    [...document.querySelectorAll("#historyList .history-label")].some((node) => node.textContent === "Filling path") &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", before, { timeout: 90_000 });
+  before = await revision();
+  await page.click("#pathVectorMaskButton");
+  await waitForMutation(before, "Creating vector mask");
+
   if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
     await mkdir(process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR, { recursive: true });
     await page.screenshot({
@@ -310,7 +392,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} pen=open-closed clipboard=selection-only layers=add-delete opacity-fill=quick-properties brush=preset-softness-opacity eraser=pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-open-closed-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties brush=preset-softness-opacity mixer-pattern=pass eraser=pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,

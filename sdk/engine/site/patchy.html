@@ -166,6 +166,7 @@
               <button class="tool-option-button" id="cancelPenPathButton" type="button" disabled>Cancel path</button>
               <button class="tool-option-button" id="finishPenPathButton" type="button" disabled>Finish path</button>
               <button class="tool-option-button tool-option-apply" id="closePenPathButton" type="button" disabled>Close path</button>
+              <button class="tool-option-button" id="makePenSelectionButton" type="button" disabled>Make selection</button>
             </span>
             <label>Size <input id="brushSizeInput" type="range" min="1" max="4096" value="24"><output id="brushSizeOutput">24 px</output></label>
             <label class="non-retouch-option">Color <input id="brushColorInput" type="color" value="#111111"></label>
@@ -222,6 +223,7 @@
             <canvas id="gestureCanvas" aria-hidden="true"></canvas>
             <svg class="path-overlay" id="pathOverlay" aria-label="Pen path" hidden>
               <path id="pathOverlayLine" vector-effect="non-scaling-stroke"></path>
+              <path class="path-rubber-band" id="pathOverlayRubberBand" vector-effect="non-scaling-stroke"></path>
               <g id="pathOverlayAnchors"></g>
             </svg>
             <div class="guides-overlay" id="guidesOverlay" aria-label="Document guides"></div>
@@ -416,6 +418,10 @@
               <button id="pathUpButton" type="button" disabled>Path up</button>
               <button id="pathDownButton" type="button" disabled>Path down</button>
               <button id="pathDeleteButton" type="button" disabled>Delete path</button>
+              <button id="pathSelectionButton" type="button" disabled>Make selection</button>
+              <button id="pathFillButton" type="button" disabled>Fill path</button>
+              <button id="pathStrokeButton" type="button" disabled>Stroke path</button>
+              <button id="pathVectorMaskButton" type="button" disabled>Vector mask</button>
             </div>
             <div class="field-row path-anchor-editor">
               <label><span>First anchor X</span><input id="pathAnchorXInput" type="number" step="0.25" disabled></label>

@@ -135,6 +135,7 @@ let gradientDraft = null;
 let lassoDraft = null;
 let polygonDraft = null;
 let penDraft = null;
+let penHoverPoint = null;
 let quickSelectDraft = null;
 let magneticDraft = null;
 let quickMaskDraft = null;
@@ -590,8 +591,17 @@ function updateControls() {
   $("mergeVisibleButton").disabled = busy || !snapshot?.layers?.length;
   for (const id of ["channelRenameButton", "channelInvertButton", "channelUpButton",
     "channelDownButton", "channelDeleteButton"]) $(id).disabled = busy || !selectedChannel();
+  const path = selectedPath();
+  const closedPath = Boolean(path?.subpaths?.some((subpath) =>
+    subpath.closed && (subpath.anchors?.length || 0) >= 3));
   for (const id of ["pathRenameButton", "pathClipButton", "pathUpButton", "pathDownButton",
-    "pathDeleteButton", "pathAnchorApplyButton"]) $(id).disabled = busy || !selectedPath();
+    "pathDeleteButton", "pathAnchorApplyButton"]) $(id).disabled = busy || !path;
+  $("pathSelectionButton").disabled = busy || !closedPath;
+  $("makePenSelectionButton").disabled = busy || !closedPath || Boolean(penDraft?.points.length);
+  $("pathFillButton").disabled = busy || !closedPath || layer?.kind !== 0 || Boolean(layer?.lockFlags);
+  $("pathStrokeButton").disabled = busy || !path || layer?.kind !== 0 || Boolean(layer?.lockFlags);
+  $("pathVectorMaskButton").disabled = busy || !closedPath || !single || !layer ||
+    layer.kind === 1 || layer.kind === 4;
   $("pathAnchorXInput").disabled = busy || !selectedPath()?.anchors?.length;
   $("pathAnchorYInput").disabled = busy || !selectedPath()?.anchors?.length;
   syncCommands();
@@ -1615,7 +1625,6 @@ function renderStructure() {
     button.addEventListener("click", () => {
       selectedPathId = path.id; renderStructure(); updateControls();
       renderPenPath();
-      mutate("Loading path selection", () => client.selectPath(path.id));
     });
     pathList.append(button);
   }
@@ -2064,7 +2073,7 @@ function renderQuickMask(gray = null) {
 }
 
 function setCanvasTool(tool) {
-  if (tool !== "pen" && penDraft) { penDraft = null; previewPolygon([]); }
+  if (tool !== "pen") { penDraft = null; penHoverPoint = null; previewPolygon([]); }
   if (tool !== "magnetic") magneticDraft = null;
   if (tool !== "quickSelect") quickSelectDraft = null;
   if (tool !== "quickMask") quickMaskDraft = null;
@@ -2339,10 +2348,14 @@ function renderPenPath() {
   const anchors = (subpaths || []).flatMap((subpath) => subpath.anchors || []);
   if (!snapshot || canvasTool !== "pen" || !anchors.length) {
     overlay.setAttribute("hidden", ""); $("pathOverlayLine").setAttribute("d", "");
+    $("pathOverlayRubberBand").setAttribute("d", "");
     $("pathOverlayAnchors").replaceChildren(); return;
   }
   overlay.setAttribute("viewBox", `0 0 ${snapshot.width} ${snapshot.height}`);
   $("pathOverlayLine").setAttribute("d", vectorPathData(subpaths));
+  const rubberStart = penDraft?.points.at(-1);
+  $("pathOverlayRubberBand").setAttribute("d", rubberStart && penHoverPoint
+    ? `M${rubberStart.x} ${rubberStart.y}L${penHoverPoint.x} ${penHoverPoint.y}` : "");
   const radius = Math.max(2.5, 4 / Math.max(zoom, .05));
   const nodes = anchors.map((anchor) => {
     const circle = document.createElementNS(overlay.namespaceURI, "circle");
@@ -3177,11 +3190,98 @@ function geometricShapePath(kind, bounds) {
   }) };
 }
 
+function pathHasClosedArea(path) {
+  return Boolean(path?.subpaths?.some((subpath) =>
+    subpath.closed && (subpath.anchors?.length || 0) >= 3));
+}
+
+function cubicCoordinate(start, controlA, controlB, end, time) {
+  const inverse = 1 - time;
+  return inverse ** 3 * start + 3 * inverse ** 2 * time * controlA +
+    3 * inverse * time ** 2 * controlB + time ** 3 * end;
+}
+
+function sampledPathSubpath(subpath, brushSize) {
+  const anchors = subpath?.anchors || [];
+  if (anchors.length < 2) return [];
+  const points = [{ x: anchors[0].x, y: anchors[0].y }];
+  const segmentCount = anchors.length - 1 + (subpath.closed ? 1 : 0);
+  for (let index = 0; index < segmentCount; ++index) {
+    const start = anchors[index]; const end = anchors[(index + 1) % anchors.length];
+    const controlA = { x: start.outX ?? start.x, y: start.outY ?? start.y };
+    const controlB = { x: end.inX ?? end.x, y: end.inY ?? end.y };
+    const controlLength = Math.hypot(controlA.x - start.x, controlA.y - start.y) +
+      Math.hypot(controlB.x - controlA.x, controlB.y - controlA.y) +
+      Math.hypot(end.x - controlB.x, end.y - controlB.y);
+    const steps = Math.max(2, Math.min(256,
+      Math.ceil(controlLength / Math.max(1, brushSize / 3))));
+    for (let step = 1; step <= steps; ++step) {
+      const time = step / steps;
+      points.push({
+        x: cubicCoordinate(start.x, controlA.x, controlB.x, end.x, time),
+        y: cubicCoordinate(start.y, controlA.y, controlB.y, end.y, time),
+      });
+    }
+  }
+  return points.slice(0, 65536);
+}
+
+async function makeSelectedPathSelection() {
+  const path = selectedPath();
+  if (!pathHasClosedArea(path)) return null;
+  const feather = Number($("selectionQuickFeatherInput").value);
+  const combine = selectionCombineValue($("selectionModeInput").value || "replace");
+  return mutate("Loading path selection", () => client.selectPath(path.id,
+    Number.isFinite(feather) ? feather : 0, combine, true));
+}
+
+async function fillSelectedPath() {
+  const selected = await makeSelectedPathSelection();
+  if (!selected || selected === DIAGNOSTIC_COMMAND_FAILED) return;
+  const layer = selectedLayer();
+  if (layer?.kind !== 0) return;
+  const draft = { layer, preset: "solid",
+    color: [...colorBytes($("brushColorInput").value), 255],
+    start: { x: layer.bounds.x, y: layer.bounds.y },
+    end: { x: layer.bounds.x + layer.bounds.width, y: layer.bounds.y },
+    stateId: snapshot.stateId, revision: snapshot.revision };
+  return mutate("Filling path", () => client.applyRasterFill(rasterFillPayload(draft)));
+}
+
+async function strokeSelectedPath() {
+  const path = selectedPath(); const layer = selectedLayer();
+  if (!path || layer?.kind !== 0) return;
+  const brushSize = Math.round(Number($("brushSizeInput").value));
+  const softness = Math.round(Number($("brushSoftnessInput").value));
+  const opacity = Math.round(Number($("brushOpacityInput").value));
+  if (!Number.isInteger(brushSize) || brushSize < 1 || brushSize > 4096 ||
+      !Number.isInteger(softness) || softness < 0 || softness > 100 ||
+      !Number.isInteger(opacity) || opacity < 1 || opacity > 100) return;
+  for (const subpath of path.subpaths || []) {
+    const points = sampledPathSubpath(subpath, brushSize);
+    if (points.length < 2) continue;
+    const before = snapshot;
+    const next = await mutate("Stroking path", () => client.applyRasterStroke({
+      layerId: layer.id, mode: 0, brushSize, softness,
+      color: [...colorBytes($("brushColorInput").value), Math.round(opacity * 2.55)],
+      points: points.map(({ x, y }) => [x, y]), source: [0, 0],
+      expectedStateId: before.stateId, expectedRevision: before.revision,
+    }));
+    if (!next || next === DIAGNOSTIC_COMMAND_FAILED) return;
+  }
+}
+
+function createVectorMaskFromSelectedPath() {
+  const layer = selectedLayer(); const path = selectedPath();
+  if (layer && pathHasClosedArea(path)) return mutate("Creating vector mask", () =>
+    client.setVectorMask(layer.id, { path: { subpaths: path.subpaths }, feather: 0, density: 255 }));
+}
+
 async function commitPenPath(closed = penDraft?.closed ?? false) {
   const draft = penDraft;
   if (!draft || draft.points.length < 3) return;
   const priorIds = new Set(snapshot.paths.map((path) => path.id));
-  penDraft = null; previewPolygon([]); renderPenPath(); updateControls();
+  penDraft = null; penHoverPoint = null; previewPolygon([]); renderPenPath(); updateControls();
   const next = await mutate("Creating Pen path", () => client.addDocumentPath({
     name: `Path ${snapshot.paths.length + 1}`, kind: 0,
     path: { subpaths: [{ anchors: draft.points, shapeGroup: 0,
@@ -5131,7 +5231,8 @@ $("removeMaskButton").addEventListener("click", () => {
 });
 $("createVectorMaskButton").addEventListener("click", () => {
   const layer = selectedLayer(); const saved = selectedPath();
-  const path = saved?.subpaths?.length ? { subpaths: saved.subpaths } : selectionPath();
+  if (saved?.subpaths?.length) { createVectorMaskFromSelectedPath(); return; }
+  const path = selectionPath();
   if (layer && path) mutate("Creating vector mask", () => client.setVectorMask(layer.id,
     { path, feather: 0, density: 255 }));
 });
@@ -5233,7 +5334,7 @@ $("applyCropButton").addEventListener("click", commitCropDraft);
 $("finishPenPathButton").addEventListener("click", () => commitPenPath(false));
 $("closePenPathButton").addEventListener("click", () => commitPenPath(true));
 $("cancelPenPathButton").addEventListener("click", () => {
-  penDraft = null; previewPolygon([]); renderPenPath(); updateControls();
+  penDraft = null; penHoverPoint = null; previewPolygon([]); renderPenPath(); updateControls();
 });
 $("cropRatioInput").addEventListener("change", () => {
   if (!cropDraft || !cropRatio()) return;
@@ -5441,6 +5542,11 @@ $("pathClipButton").addEventListener("click", () => {
 $("pathDeleteButton").addEventListener("click", () => {
   const path = selectedPath(); if (path) mutate("Deleting path", () => client.removePath(path.id));
 });
+$("pathSelectionButton").addEventListener("click", makeSelectedPathSelection);
+$("makePenSelectionButton").addEventListener("click", makeSelectedPathSelection);
+$("pathFillButton").addEventListener("click", fillSelectedPath);
+$("pathStrokeButton").addEventListener("click", strokeSelectedPath);
+$("pathVectorMaskButton").addEventListener("click", createVectorMaskFromSelectedPath);
 for (const [id, delta] of [["pathUpButton", -1], ["pathDownButton", 1]]) {
   $(id).addEventListener("click", () => {
     const path = selectedPath(); const index = snapshot.paths.findIndex((item) => item.id === path?.id);
@@ -5503,7 +5609,7 @@ canvas.addEventListener("pointerdown", (event) => {
     if (event.detail > 1 && penDraft.points.length >= 3) {
       commitPenPath(event.shiftKey);
     } else {
-      penDraft.points.push(point); renderPenPath(); updateControls();
+      penDraft.points.push(point); penHoverPoint = point; renderPenPath(); updateControls();
     }
     return;
   }
@@ -5607,6 +5713,9 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (canvasTool === "pen" && penDraft?.points.length && event.buttons === 0) {
+    penHoverPoint = canvasPoint(event); renderPenPath();
+  }
   movePaint(event);
   moveRetouch(event);
   moveLocalBrush(event);
@@ -5643,6 +5752,11 @@ canvas.addEventListener("pointermove", (event) => {
     : moveDraft.originalQuad.map((coordinate, index) => coordinate + (index % 2 ? dy : dx));
   renderTransformOverlay();
   scheduleTransformPreview(moveDraft.target, moveDraft.quad);
+});
+
+canvas.addEventListener("pointerleave", () => {
+  if (canvasTool !== "pen" || !penHoverPoint) return;
+  penHoverPoint = null; renderPenPath();
 });
 canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
@@ -5889,7 +6003,8 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && magneticDraft) { magneticDraft = null; previewPolygon([]); }
   if (event.key === "Enter" && penDraft) { event.preventDefault(); commitPenPath(false); }
   if (event.key === "Escape" && penDraft) {
-    event.preventDefault(); penDraft = null; previewPolygon([]); renderPenPath(); updateControls();
+    event.preventDefault(); penDraft = null; penHoverPoint = null;
+    previewPolygon([]); renderPenPath(); updateControls();
   }
 });
 

@@ -62,8 +62,9 @@ const contexts = {
     "Drag from the gradient start to end point on a selected pixel layer; release commits once."),
   fill: descriptor("fill", "Fill selection", ["brushColorInput", "paintTargetSelect", "paintPresetSelect"], "layer-or-mask",
     "Activate to fill the current selection, or the selected pixel layer when no selection exists."),
-  pen: descriptor("draw", "Pen path", ["cancelPenPathButton", "finishPenPathButton", "closePenPathButton"], "path",
-    "Click at least three anchor points, then Finish for an open path or Close path; Enter finishes and Escape cancels."),
+  pen: descriptor("draw", "Pen path", ["cancelPenPathButton", "finishPenPathButton", "closePenPathButton",
+    "makePenSelectionButton"], "path",
+    "Click anchors while the dotted rubber band previews the next segment. Close the path to make a selection, fill, stroke or vector mask."),
   text: descriptor("draw", "Text", [], "text-layer",
     "Activate to open the text editor; Apply creates or updates one editable text layer."),
 };

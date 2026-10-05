@@ -43,11 +43,25 @@ active one per Combine); other modes route to the work path. The
 construction overlay draws in canvas_widget_vector_tools.cpp
 (canvas_widget_pen.cpp is TABLET input, not this tool).
 
-The self-hosted editor renders its simpler Pen draft and selected committed
-path in a document-space SVG overlay. Three or more anchors enable explicit
-Finish (open) and Close path actions; Enter finishes and Escape cancels. The
-committed path remains selected and visible, and SVG visibility is controlled
-through the actual `hidden` attribute rather than an HTML-only property.
+The self-hosted editor renders its Pen draft and selected committed path in a
+document-space SVG overlay. After the first anchor, a dotted Rubber Band
+segment follows the pointer until the next anchor is placed. Three or more
+anchors enable explicit Finish (open) and Close path actions; Enter finishes
+and Escape cancels. The committed path remains selected and visible, and SVG
+visibility is controlled through the actual `hidden` attribute rather than an
+HTML-only property.
+
+Selecting a saved path does not implicitly change the pixel selection. The
+Paths panel and Pen options expose explicit Make Selection, Fill Path, Stroke
+Path and Vector Mask actions. Make Selection uses the current selection
+combine and feather controls; a closed path can then drive the exact-state
+selected-pixel clipboard. Fill uses the foreground color on the active pixel
+layer. Stroke samples every cubic segment and uses the current procedural
+Brush size, softness, opacity and foreground color. Vector Mask keeps the
+path editable on the selected compatible layer. These are the supported
+self-hosted subset of Photoshop's path treatments; path component boolean
+operations, Direct Selection editing and clipping-path export remain separate
+capabilities rather than hidden fallbacks.
 
 A badge crosshair cursor advertises the click action (insert/delete/convert/
 close); one classifier (`pen_hover_hit_raw`, narrowed per tool and by the
