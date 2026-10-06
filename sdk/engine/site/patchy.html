@@ -448,6 +448,8 @@
     </div>
     <output class="action-toast" id="actionToast" role="status" aria-live="polite" aria-atomic="true" hidden></output>
     <div class="canvas-context-menu" id="canvasContextMenu" role="menu" aria-label="Canvas actions" hidden>
+      <button type="button" role="menuitem" data-target-proxy="makePenSelectionButton" data-pen-path-action="make-selection" hidden>Make selection</button>
+      <hr role="separator" data-pen-path-action="make-selection" hidden>
       <button type="button" role="menuitem" data-target-proxy="clearSelectionButton">Deselect <kbd>Ctrl+D</kbd></button>
       <button type="button" role="menuitem" data-target-proxy="invertSelectionButton">Invert selection</button>
       <button type="button" role="menuitem" data-target-proxy="expandSelectionButton">Expand 4 px</button>

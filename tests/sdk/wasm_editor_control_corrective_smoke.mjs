@@ -64,6 +64,7 @@ const launchOptions = process.env.PATCHY_BROWSER_EXECUTABLE
   ? { executablePath: process.env.PATCHY_BROWSER_EXECUTABLE }
   : browserName === "chromium" && process.env.PATCHY_BROWSER_CHANNEL
     ? { channel: process.env.PATCHY_BROWSER_CHANNEL } : {};
+if (browserName === "firefox") launchOptions.firefoxUserPrefs = { "network.proxy.type": 0 };
 const browser = await playwright[browserName].launch({ headless: true, ...launchOptions });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 const page = await context.newPage();
@@ -330,6 +331,12 @@ try {
   await waitForMutation(before, "Creating Pen path");
   assert.equal(await page.locator("#pathList button").count(), 1);
   assert.equal(await page.locator("#pathList button").getAttribute("aria-pressed"), "true");
+  assert.equal(await page.locator("#pathList button").textContent(), "Work Path");
+
+  before = await revision();
+  await dragCanvas("marqueeToolButton", { x: .65, y: .3 }, { x: .92, y: .7 }, 77);
+  await waitForMutation(before, "Selecting area");
+  await page.selectOption("#selectionModeInput", "add");
 
   await clickCanvasPoints("penToolButton", [[.08, .15], [.48, .15], [.48, .85], [.08, .85]]);
   assert.equal(await page.locator("#closePenPathButton").isEnabled(), true);
@@ -345,12 +352,23 @@ try {
   before = await revision();
   await clickCanvasPoints("penToolButton", [[.08, .15]]);
   await waitForMutation(before, "Creating Pen path");
-  assert.equal(await page.locator("#pathList button").count(), 2);
+  assert.equal(await page.locator("#pathList button").count(), 1);
+  assert.equal(await page.locator("#pathList button").textContent(), "Work Path");
   assert.match(await page.locator("#pathOverlayLine").getAttribute("d"), /Z$/);
 
   before = await revision();
-  await page.click("#makePenSelectionButton");
+  await page.evaluate(() => {
+    const canvas = document.getElementById("documentCanvas"); const box = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true,
+      button: 2, buttons: 2, clientX: box.left + box.width * .25,
+      clientY: box.top + box.height * .5 }));
+  });
+  const makeSelectionAction = page.locator('button[data-pen-path-action="make-selection"]');
+  assert.equal(await makeSelectionAction.isVisible(), true);
+  assert.equal(await makeSelectionAction.isEnabled(), true);
+  await makeSelectionAction.click();
   await waitForMutation(before, "Loading path selection");
+  assert.equal(await page.inputValue("#selectionModeInput"), "replace");
   await page.locator("#canvasViewport").focus();
   await page.keyboard.press("Control+c");
   await page.waitForFunction(() => /selected pixels copied locally/.test(

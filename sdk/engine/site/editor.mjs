@@ -3242,11 +3242,11 @@ function sampledPathSubpath(subpath, brushSize) {
   return points.slice(0, 65536);
 }
 
-async function makeSelectedPathSelection() {
+async function makeSelectedPathSelection({ combine: combineOverride = null } = {}) {
   const path = selectedPath();
   if (!pathHasClosedArea(path)) return null;
   const feather = Number($("selectionQuickFeatherInput").value);
-  const combine = selectionCombineValue($("selectionModeInput").value || "replace");
+  const combine = combineOverride ?? selectionCombineValue($("selectionModeInput").value || "replace");
   return mutate("Loading path selection", () => client.selectPath(path.id,
     Number.isFinite(feather) ? feather : 0, combine, true));
 }
@@ -3296,15 +3296,19 @@ function createVectorMaskFromSelectedPath() {
 async function commitPenPath(closed = penDraft?.closed ?? false) {
   const draft = penDraft;
   if (!draft || draft.points.length < 3) return;
+  const workPath = snapshot.paths.find((path) => path.kind === 1);
   const priorIds = new Set(snapshot.paths.map((path) => path.id));
   penDraft = null; penHoverPoint = null; previewPolygon([]); renderPenPath(); updateControls();
-  const next = await mutate("Creating Pen path", () => client.addDocumentPath({
-    name: `Path ${snapshot.paths.length + 1}`, kind: 0,
+  const input = { name: "Work Path", kind: 1,
     path: { subpaths: [{ anchors: draft.points, shapeGroup: 0,
-      combine: 1, closed: Boolean(closed) }] } }));
+      combine: 1, closed: Boolean(closed) }] } };
+  const next = await mutate("Creating Pen path", () => workPath
+    ? client.updateDocumentPath(workPath.id, input) : client.addDocumentPath(input));
   if (next === DIAGNOSTIC_COMMAND_FAILED || !next) return;
-  const created = next.paths.find((path) => !priorIds.has(path.id));
-  if (created) selectedPathId = created.id;
+  const committed = workPath
+    ? next.paths.find((path) => path.id === workPath.id)
+    : next.paths.find((path) => path.kind === 1 && !priorIds.has(path.id));
+  if (committed) selectedPathId = committed.id;
   renderStructure(); renderPenPath(); updateControls();
 }
 
@@ -4879,21 +4883,30 @@ function closeCanvasContextMenu({ restoreFocus = false } = {}) {
   if (restoreFocus) $("canvasViewport").focus({ preventScroll: true });
 }
 function syncCanvasContextMenu() {
+  const penPathActionAvailable = canvasTool === "pen" && !penDraft?.points.length &&
+    pathHasClosedArea(selectedPath());
+  for (const item of canvasContextMenu.querySelectorAll('[data-pen-path-action="make-selection"]')) {
+    item.hidden = !penPathActionAvailable;
+  }
   for (const button of canvasContextMenu.querySelectorAll("button")) {
     const command = button.dataset.commandProxy && commandRegistry.get(button.dataset.commandProxy);
     const target = button.dataset.targetProxy && $(button.dataset.targetProxy);
-    button.disabled = command ? !command.enabled() : !target || target.disabled;
+    button.disabled = button.dataset.penPathAction ? !penPathActionAvailable :
+      command ? !command.enabled() : !target || target.disabled;
   }
 }
 canvasContextMenu.addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button || button.disabled) return;
   closeCanvasContextMenu();
-  if (button.dataset.commandProxy) executeCommand(button.dataset.commandProxy);
+  if (button.dataset.penPathAction === "make-selection") {
+    $("selectionModeInput").value = "replace";
+    makeSelectedPathSelection({ combine: 0 });
+  } else if (button.dataset.commandProxy) executeCommand(button.dataset.commandProxy);
   else $(button.dataset.targetProxy)?.click();
 });
 canvasContextMenu.addEventListener("keydown", (event) => {
-  const buttons = [...canvasContextMenu.querySelectorAll("button:not(:disabled)")];
+  const buttons = [...canvasContextMenu.querySelectorAll("button:not([hidden]):not(:disabled)")];
   const index = buttons.indexOf(document.activeElement);
   if (event.key === "Escape") { event.preventDefault(); closeCanvasContextMenu({ restoreFocus: true }); }
   if (["ArrowDown", "ArrowUp"].includes(event.key) && buttons.length) {
@@ -4908,7 +4921,7 @@ canvas.addEventListener("contextmenu", (event) => {
   const rect = canvasContextMenu.getBoundingClientRect();
   canvasContextMenu.style.left = `${Math.max(8, Math.min(event.clientX, innerWidth - rect.width - 8))}px`;
   canvasContextMenu.style.top = `${Math.max(8, Math.min(event.clientY, innerHeight - rect.height - 8))}px`;
-  canvasContextMenu.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
+  canvasContextMenu.querySelector("button:not([hidden]):not(:disabled)")?.focus({ preventScroll: true });
 });
 window.addEventListener("pointerdown", (event) => {
   if (!canvasContextMenu.hidden && !canvasContextMenu.contains(event.target)) closeCanvasContextMenu();
@@ -5558,8 +5571,8 @@ $("pathClipButton").addEventListener("click", () => {
 $("pathDeleteButton").addEventListener("click", () => {
   const path = selectedPath(); if (path) mutate("Deleting path", () => client.removePath(path.id));
 });
-$("pathSelectionButton").addEventListener("click", makeSelectedPathSelection);
-$("makePenSelectionButton").addEventListener("click", makeSelectedPathSelection);
+$("pathSelectionButton").addEventListener("click", () => makeSelectedPathSelection());
+$("makePenSelectionButton").addEventListener("click", () => makeSelectedPathSelection());
 $("pathFillButton").addEventListener("click", fillSelectedPath);
 $("pathStrokeButton").addEventListener("click", strokeSelectedPath);
 $("pathVectorMaskButton").addEventListener("click", createVectorMaskFromSelectedPath);

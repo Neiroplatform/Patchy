@@ -116,8 +116,11 @@ test("production shell stages and publishes the accessible command surface", asy
   assert.match(editor, /installRovingToolbar\([^\n]+"\.tool-button:not\(\[hidden\]\)"\)/);
   assert.match(await source("sdk/engine/site/command-surface.mjs"), /const MENU_SUBGROUPS/);
   assert.match(html, /id="canvasContextMenu" role="menu"/);
+  assert.match(html, /data-pen-path-action="make-selection"[^>]*>Make selection<\/button>/);
   assert.match(editor, /copyLayerSelection\(/);
   assert.match(editor, /addEventListener\("contextmenu"/);
+  assert.match(editor, /makeSelectedPathSelection\(\{ combine: 0 \}\)/);
+  assert.match(editor, /button:not\(\[hidden\]\):not\(:disabled\)/);
   assert.match(css, /\.canvas-context-menu/);
   assert.match(cmake, /sdk\/engine\/site\/command-surface\.mjs/);
   assert.match(release, /"command-surface\.mjs"/);
