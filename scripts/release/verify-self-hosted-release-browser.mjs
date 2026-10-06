@@ -256,8 +256,103 @@ async function verifyPenAnchorClose(page) {
   revisionBefore, { timeout: 90_000 });
   assert.match(await page.locator("#pathOverlayLine").getAttribute("d"), /Z$/);
   assert.equal(await page.locator("#pathList button").count(), 1);
+  assert.equal(await page.locator("#pathList button").textContent(), "Work Path");
   assert.equal(await page.locator("#errorBanner").isHidden(), true);
   console.log(`PEN-CLOSE browser=${browserName} anchors=4 target=first closed=1`);
+
+  const drag = async (toolButtonId, from, to, pointerId) => page.evaluate(
+    ({ toolButtonId, from, to, pointerId }) => {
+      document.getElementById(toolButtonId).click();
+      const canvas = document.getElementById("documentCanvas");
+      const rect = canvas.getBoundingClientRect();
+      canvas.setPointerCapture = () => {};
+      const dispatch = (type, point, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId, pointerType: "mouse", isPrimary: true,
+        button: 0, buttons, clientX: rect.left + rect.width * point.x,
+        clientY: rect.top + rect.height * point.y,
+      }));
+      dispatch("pointerdown", from, 1);
+      dispatch("pointermove", to, 1);
+      dispatch("pointerup", to, 0);
+      delete canvas.setPointerCapture;
+    }, { toolButtonId, from, to, pointerId });
+  let before = Number((await page.locator("#detailRevision").textContent()).trim());
+  await drag("marqueeToolButton", { x: .65, y: .3 }, { x: .92, y: .7 }, 707);
+  await page.waitForFunction((revision) =>
+    Number(document.querySelector("#detailRevision")?.textContent) === revision + 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  before, { timeout: 90_000 });
+  await page.selectOption("#selectionModeInput", "add");
+
+  await page.click("#penToolButton");
+  const replacement = [{ x: .08, y: .15 }, { x: .48, y: .15 },
+    { x: .48, y: .85 }, { x: .08, y: .85 }];
+  for (const [index, point] of replacement.entries()) await clickPoint(point, 708 + index);
+  await page.evaluate((point) => {
+    const canvas = document.getElementById("documentCanvas");
+    const rect = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true, cancelable: true, pointerId: 712, pointerType: "mouse", isPrimary: true,
+      buttons: 0, clientX: rect.left + rect.width * point.x,
+      clientY: rect.top + rect.height * point.y,
+    }));
+  }, replacement[0]);
+  before = Number((await page.locator("#detailRevision").textContent()).trim());
+  await clickPoint(replacement[0], 713);
+  await page.waitForFunction((revision) =>
+    Number(document.querySelector("#detailRevision")?.textContent) === revision + 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  before, { timeout: 90_000 });
+  assert.equal(await page.locator("#pathList button").count(), 1,
+    "a replacement Pen contour accumulated another path");
+  assert.equal(await page.locator("#pathList button").textContent(), "Work Path");
+
+  await page.evaluate(() => {
+    const canvas = document.getElementById("documentCanvas");
+    const rect = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true, button: 2, buttons: 2,
+      clientX: rect.left + rect.width * .25, clientY: rect.top + rect.height * .5,
+    }));
+  });
+  const makeSelection = page.locator('button[data-pen-path-action="make-selection"]');
+  assert.equal(await makeSelection.isVisible(), true);
+  assert.equal(await makeSelection.isEnabled(), true);
+  before = Number((await page.locator("#detailRevision").textContent()).trim());
+  await makeSelection.click();
+  await page.waitForFunction((revision) =>
+    Number(document.querySelector("#detailRevision")?.textContent) === revision + 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  before, { timeout: 90_000 });
+  assert.equal(await page.inputValue("#selectionModeInput"), "replace");
+
+  await page.locator("#canvasViewport").focus();
+  await page.keyboard.press("Control+c");
+  await page.waitForFunction(() => /selected pixels copied locally/.test(
+    document.querySelector("#sessionIndicator")?.lastElementChild?.textContent || ""),
+  null, { timeout: 30_000 });
+  before = Number((await page.locator("#detailRevision").textContent()).trim());
+  await page.keyboard.press("Control+v");
+  await page.waitForFunction((revision) =>
+    Number(document.querySelector("#detailRevision")?.textContent) === revision + 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  before, { timeout: 90_000 });
+  assert.equal(await page.locator("#layerList .layer-row").count(), 2);
+  const source = page.locator("#layerList .layer-row").filter({ hasText: "pen-anchor-close" });
+  assert.equal(await source.count(), 1);
+  await source.locator(".visibility-button").click();
+  await waitForEditorIdle(page);
+  const pixels = await page.evaluate(() => {
+    const context = document.querySelector("#documentCanvas").getContext("2d");
+    return {
+      inside: [...context.getImageData(80, 120, 1, 1).data],
+      outside: [...context.getImageData(250, 120, 1, 1).data],
+    };
+  });
+  assert.ok(pixels.inside[3] > 0, `path selection lost selected pixels: ${pixels.inside}`);
+  assert.equal(pixels.outside[3], 0,
+    `replacement path selection leaked the stale selection or full layer: ${pixels.outside}`);
+  console.log(`PEN-WORK-PATH browser=${browserName} paths=1 context-selection=replace clipboard=bounded`);
   await closeActiveDocument(page);
 }
 
