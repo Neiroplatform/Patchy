@@ -55,17 +55,24 @@ async function waitForMutation(before, label) {
       .some((node) => node.textContent === label), { before, label }, { timeout: 90_000 });
 }
 
-async function selectTool(buttonId) {
+async function revealTool(buttonId) {
   const button = page.locator(`#${buttonId}`);
   if (!await button.isVisible()) {
     const group = await button.evaluate((node) => node.closest(".tool-cluster")?.dataset.toolGroup);
     assert.ok(group, `${buttonId} is hidden outside a tool group`);
     await page.click(`[data-tool-group="${group}"] .tool-group-toggle`);
   }
+  return button;
+}
+
+async function selectTool(buttonId) {
+  const button = await revealTool(buttonId);
   await page.click(`#${buttonId}`);
   assert.equal(await button.getAttribute("aria-pressed"), "true", `${buttonId} did not activate`);
   assert.ok((await page.textContent("#toolInstruction")).trim().length > 0,
     `${buttonId} has no usage description`);
+  assert.equal(await page.locator("#errorBanner").isHidden(), true,
+    `${buttonId} surfaced ${await page.textContent("#errorMessage")}`);
 }
 
 async function dragCanvas(from, to, { steps = 12, modifiers = [] } = {}) {
@@ -149,6 +156,28 @@ try {
   await page.setViewportSize({ width: 1280, height: 900 });
   assertOptionsLayout(await measureOptionsLayout());
 
+  const toolInventory = await page.locator("[data-tool-contract]").evaluateAll((buttons) =>
+    buttons.map((button) => ({ id: button.id, contract: button.dataset.toolContract,
+      description: button.getAttribute("aria-description") || "" })));
+  assert.equal(toolInventory.length, 28, "the browser tool catalog changed without runtime coverage");
+  assert.equal(new Set(toolInventory.map(({ contract }) => contract)).size, 28,
+    "the browser tool catalog contains duplicate contracts");
+  assert.equal(toolInventory.every(({ id, contract, description }) =>
+    id && contract && description.trim().length > 0), true,
+  `a browser tool lacks its usage contract: ${JSON.stringify(toolInventory)}`);
+  for (const buttonId of [
+    "moveToolButton", "cropToolButton", "marqueeToolButton", "lassoToolButton",
+    "polygonToolButton", "magicToolButton", "quickSelectToolButton", "magneticToolButton",
+    "quickMaskToolButton", "panToolButton", "brushToolButton", "mixerToolButton",
+    "patternStampToolButton", "eraserToolButton", "cloneToolButton", "healToolButton",
+    "spotHealingToolButton", "smudgeToolButton", "dodgeToolButton", "burnToolButton",
+    "spongeToolButton", "blurToolButton", "sharpenToolButton", "gradientToolButton",
+    "penToolButton",
+  ]) await selectTool(buttonId);
+  await selectTool("textToolButton");
+  await page.locator("#textDialog").press("Escape");
+  await page.waitForFunction(() => !document.querySelector("#textDialog")?.open);
+
   await page.locator("#brushSizeInput").evaluate((input) => {
     input.value = "17"; input.dispatchEvent(new Event("input", { bubbles: true }));
   });
@@ -193,11 +222,25 @@ try {
   await waitForMutation(before, "Selecting area");
   await runPixelTool({ buttonId: "patchToolButton", label: "Applying Patch",
     from: { x: .3, y: .3 }, to: { x: .48, y: .48 } });
+  await runPixelTool({ buttonId: "gradientToolButton", label: "Applying gradient",
+    from: { x: .2, y: .22 }, to: { x: .4, y: .4 } });
+
+  const beforeFillRevision = await revision();
+  const beforeFillPixels = await canvasDigest();
+  await page.locator("#brushColorInput").evaluate((input) => {
+    input.value = "#ff00aa"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await revealTool("fillToolButton");
+  await page.click("#fillToolButton");
+  await waitForMutation(beforeFillRevision, "Filling pixels");
+  assert.notEqual(await canvasDigest(), beforeFillPixels, "Fill committed without changing rendered pixels");
+  assert.equal(await page.locator("#errorBanner").isHidden(), true,
+    `fillToolButton surfaced ${await page.textContent("#errorMessage")}`);
 
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);
-  console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained ` +
-    "paint=brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern real-pointer=pass");
+  console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained tools=28-described-activated ` +
+    "paint=brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill real-pointer=pass");
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,
