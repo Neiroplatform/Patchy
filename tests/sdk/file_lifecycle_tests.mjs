@@ -29,8 +29,9 @@ test("native open binds the selected handle to the opened document", async () =>
   const lifecycle = new BrowserFileLifecycle({ scope: { showOpenFilePicker: async () => [openedHandle],
     showSaveFilePicker: async () => openedHandle } });
   const picked = await lifecycle.pickOpen();
-  assert.equal(picked.kind, "handle");
-  lifecycle.bindOpened(7, picked.handle, projection(1, false), "psd");
+  assert.equal(picked.kind, "handles");
+  assert.equal(picked.items.length, 1);
+  lifecycle.bindOpened(7, picked.items[0].handle, projection(1, false), "psd");
   assert.equal(lifecycle.hasHandle(7), true);
 });
 
@@ -42,9 +43,24 @@ test("native open picker offers layered and raster documents", async () => {
     showOpenFilePicker: async (value) => { options = value; return [openedHandle]; },
     showSaveFilePicker() {},
   } });
-  assert.equal((await lifecycle.pickOpen()).kind, "handle");
+  const picked = await lifecycle.pickOpen();
+  assert.equal(picked.kind, "handles");
+  assert.equal(options.multiple, true);
   assert.equal(options.types.length, 2);
   assert.deepEqual(options.types[1].accept["image/jpeg"], [".jpg", ".jpeg"]);
+});
+
+test("native open returns every selected layered or raster handle in picker order", async () => {
+  const first = handle("one.png"); const second = handle("two.psd");
+  first.getFile = async () => new Blob(["png"], { type: "image/png" });
+  second.getFile = async () => new Blob(["psd"], { type: "application/octet-stream" });
+  const lifecycle = new BrowserFileLifecycle({ scope: {
+    showOpenFilePicker: async () => [first, second], showSaveFilePicker() {},
+  } });
+  const picked = await lifecycle.pickOpen();
+  assert.equal(picked.kind, "handles");
+  assert.deepEqual(picked.items.map((item) => item.handle.name), ["one.png", "two.psd"]);
+  assert.deepEqual(await Promise.all(picked.items.map((item) => item.file.text())), ["png", "psd"]);
 });
 
 test("durable persistence is reported only after writable close", async () => {

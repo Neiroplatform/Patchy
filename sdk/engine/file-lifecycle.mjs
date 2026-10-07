@@ -51,11 +51,14 @@ export class BrowserFileLifecycle {
   async pickOpen() {
     if (!this.supported) return { kind: "fallback" };
     try {
-      const handles = await this.#scope.showOpenFilePicker({ multiple: false, types: OPEN_TYPES,
+      const handles = await this.#scope.showOpenFilePicker({ multiple: true, types: OPEN_TYPES,
         excludeAcceptAllOption: true });
-      const handle = handles?.[0];
-      if (!handle || typeof handle.getFile !== "function") throw new TypeError("Open picker returned no file handle");
-      return { kind: "handle", handle, file: await handle.getFile() };
+      if (!Array.isArray(handles) || !handles.length ||
+          handles.some((handle) => typeof handle?.getFile !== "function")) {
+        throw new TypeError("Open picker returned no file handles");
+      }
+      return { kind: "handles", items: await Promise.all(handles.map(async (handle) =>
+        ({ handle, file: await handle.getFile() }))) };
     } catch (error) {
       if (abortError(error)) return { kind: "cancelled" };
       throw error;

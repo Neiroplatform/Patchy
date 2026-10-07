@@ -261,6 +261,11 @@ test("preferences round-trip with validation and malformed-data fallback", async
     { tool: "spotHealing", brushSize: 4096 });
   assert.deepEqual(await store.savePreferences({ tool: "patch", brushSize: 24 }),
     { tool: "patch", brushSize: 24 });
+  for (const tool of ["smudge", "dodge", "burn", "sponge", "blur", "sharpen",
+    "mixer", "patternStamp"]) {
+    assert.deepEqual(await store.savePreferences({ tool, brushSize: 24 }),
+      { tool, brushSize: 24 });
+  }
   await assert.rejects(store.savePreferences({ brushSize: 4097 }), /between 1 and 4096/);
   await assert.rejects(store.savePreferences({ tool: "unknown" }), /Invalid preferred tool/);
   await assert.rejects(store.savePreferences({ locale: "de" }), /Invalid preferred locale/);

@@ -4731,8 +4731,16 @@ async function openPicker() {
   try {
     const picked = await fileLifecycle.pickOpen();
     if (picked.kind === "fallback") $("fileInput").click();
-    else if (picked.kind === "handle") await openFile(picked.file, picked.handle);
+    else if (picked.kind === "handles") await openFiles(picked.items);
   } catch (error) { showError("Could not open document", error); }
+}
+
+async function openFiles(items) {
+  for (const item of items || []) {
+    if (!item?.file) continue;
+    await openFile(item.file, item.handle || null);
+    if (!$("errorBanner").hidden) break;
+  }
 }
 registerCommand("document.open", "openButton", openPicker, () => !busy);
 registerCommand("document.new", "newButton", newDocument, () => !busy);
@@ -4871,7 +4879,11 @@ $("saveFormatSelect").addEventListener("change", () => {
   documentSaveFormats.set(snapshot.documentId, $("saveFormatSelect").value);
   updateControls(); scheduleCheckpoint(snapshot);
 });
-$("fileInput").addEventListener("change", () => { openFile($("fileInput").files[0]); $("fileInput").value = ""; });
+$("fileInput").addEventListener("change", async () => {
+  const files = [...$("fileInput").files];
+  $("fileInput").value = "";
+  await openFiles(files.map((file) => ({ file })));
+});
 $("dismissErrorButton").addEventListener("click", clearError);
 $("importLayerButton").addEventListener("click", () => { if (!busy && snapshot) $("imageInput").click(); });
 $("imageInput").addEventListener("change", () => { importPixelLayer($("imageInput").files[0]); $("imageInput").value = ""; });
@@ -6056,14 +6068,12 @@ for (const type of ["dragenter", "dragover"]) {
   });
 }
 window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropState").hidden = true; } });
-window.addEventListener("drop", (event) => {
+window.addEventListener("drop", async (event) => {
   if (event.dataTransfer?.types?.includes("application/x-patchy-layer")) return;
   event.preventDefault(); dragDepth = 0; $("dropState").hidden = true;
-  const file = event.dataTransfer?.files?.[0];
-  if (!file) return;
-  if (openFileKind(file) === "layered") openFile(file);
-  else if (openFileKind(file) === "raster") importPixelLayer(file, !snapshot);
-  else showError("Unsupported drop", new Error("Drop a PSD, PSB, PNG, JPEG, WebP, AVIF, or SVG file."));
+  const files = [...(event.dataTransfer?.files || [])];
+  if (!files.length) return;
+  await openFiles(files.map((file) => ({ file })));
 });
 
 try {
