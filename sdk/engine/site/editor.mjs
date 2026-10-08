@@ -4409,12 +4409,13 @@ function drawPaintSegment(draft, from, to) {
     "source-over");
 }
 
-function advancedBrushSettings(revision = 0n) {
+function advancedBrushSettings(revision = 0n, opacity = 100) {
   const percent = (id) => Number($(id).value) / 100;
   const seed = (Number($("brushSeedInput").value) >>> 0) ^ Number(BigInt(revision) & 0xffffffffn);
+  const alpha = Math.round(opacity * 2.55);
   const settings = { roundness: Math.round(Number($("brushRoundnessInput").value)),
     angle: Number($("brushAngleInput").value), spacing: Number($("brushSpacingInput").value) / 100,
-    seed, secondaryColor: [...colorBytes($("backgroundSwatchInput").value), 255],
+    seed, secondaryColor: [...colorBytes($("backgroundSwatchInput").value), alpha],
     sizeJitter: percent("brushSizeJitterInput"), angleJitter: percent("brushAngleJitterInput"),
     roundnessJitter: percent("brushRoundnessJitterInput"),
     flipXJitter: $("brushFlipXInput").checked, flipYJitter: $("brushFlipYInput").checked,
@@ -4574,7 +4575,7 @@ function beginPaint(event) {
     stateId: snapshot.stateId, revision: snapshot.revision,
     brushSize: Math.round(Number($("brushSizeInput").value)), softness, opacity,
     color: [...colorBytes($("brushColorInput").value), Math.round(opacity * 2.55)],
-    advanced: canvasTool === "brush" ? advancedBrushSettings(snapshot.revision) : undefined,
+    advanced: canvasTool === "brush" ? advancedBrushSettings(snapshot.revision, opacity) : undefined,
     overlay: $("gestureCanvas").getContext("2d") };
   paintDraft = draft;
   drawPaintSegment(draft, point, point); scheduleRasterPreview(draft);

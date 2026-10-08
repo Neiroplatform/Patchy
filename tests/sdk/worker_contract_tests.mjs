@@ -63,6 +63,9 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   const types = await readFile(new URL("sdk/engine/index.d.ts", root), "utf8");
   const nodeServer = await readFile(new URL("scripts/wasm/serve.mjs", root), "utf8");
   const pythonServer = await readFile(new URL("scripts/wasm/serve.py", root), "utf8");
+  assert.match(script, /const alpha = Math\.round\(opacity \* 2\.55\)/);
+  assert.match(script, /secondaryColor: \[\.\.\.colorBytes\(\$\("backgroundSwatchInput"\)\.value\), alpha\]/);
+  assert.match(script, /advancedBrushSettings\(snapshot\.revision, opacity\)/);
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
     "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "cutPixelsButton", "pastePixelsButton", "paintPresetSelect",
     "brushPresetSelect", "brushSoftnessInput", "brushOpacityInput",

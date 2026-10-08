@@ -204,12 +204,17 @@ try {
   assert.ok(hoverRing && Math.abs(hoverRing.width - 17 * hoverZoom) < 1.5,
     `brush hover radius is not tied to the selected size: ${JSON.stringify({ hoverRing, hoverZoom })}`);
   assert.equal(await revision(), hoverRevision, "hovering the brush mutated the document");
-  await page.locator("#brushPresetSelect").selectOption("spray");
+  await page.locator("#brushPresetSelect").selectOption("color-scatter");
+  await page.locator("#brushOpacityInput").evaluate((input) => {
+    input.value = "10"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   await page.click("#brushSettingsButton");
   assert.equal(await page.locator("#brushSettingsDialog").getAttribute("open"), "",
     "Brush settings did not open in the contextual inspector");
-  assert.equal(await page.locator("#brushScatterInput").inputValue(), "200");
-  assert.equal(await page.locator("#brushCountInput").inputValue(), "6");
+  assert.equal(await page.locator("#brushColorDynamicsEnabledInput").isChecked(), true);
+  assert.equal(await page.locator("#brushForegroundBackgroundJitterInput").inputValue(), "60");
+  assert.equal(await page.locator("#brushOpacityInput").inputValue(), "10",
+    "Color Dynamics replaced the selected Brush Opacity cap");
   await page.locator('#brushSettingsDialog button[value="cancel"]').click();
   await page.mouse.move(1, 1);
   await page.waitForFunction(() => document.querySelector("#brushCursorOverlay")?.hidden);
@@ -401,6 +406,7 @@ try {
   assert.deepEqual(failedRequests, []);
   console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained tools=30-described-activated ` +
     "hover=idle-brush-radius wand=contiguous-all-layers-active-layer-svg gradient=preset-guard-noop-neutral " +
+    "brush=color-dynamics-opacity-cap " +
     "paint=advanced-brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill " +
     "authoring=eyedropper-shape-text real-pointer=pass");
 } catch (error) {
