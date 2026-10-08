@@ -136,6 +136,7 @@ let lassoDraft = null;
 let polygonDraft = null;
 let penDraft = null;
 let penHoverPoint = null;
+let brushHoverPoint = null;
 let quickSelectDraft = null;
 let magneticDraft = null;
 let quickMaskDraft = null;
@@ -762,6 +763,8 @@ function preferenceSnapshot() {
     paintPreset: $("paintPresetSelect").value,
     font: $("textFontInput").value.trim() || "Arial",
     selectionTolerance: Number($("selectionToleranceInput").value),
+    wandContiguous: $("wandContiguousInput").checked,
+    wandSampleAllLayers: $("wandSampleAllInput").checked,
     historyBudgetMiB: Number($("memoryBudgetSelect").value),
     panelsHidden: shell.classList.contains("panels-hidden"),
     guidesVisible,
@@ -781,9 +784,12 @@ function renderAssetLibrary() {
   for (const asset of [...assetLibrary.gradients, ...assetLibrary.patterns]) {
     const option = document.createElement("option"); option.value = `asset:${asset.id}`;
     option.dataset.localAsset = "true";
-    option.textContent = `${assetLibrary.gradients.includes(asset) ? "Gradient" : "Pattern"}: ${asset.name}`;
+    option.dataset.presetKind = assetLibrary.gradients.includes(asset) ? "gradient" : "fill";
+    const kindLabel = assetLibrary.gradients.includes(asset) ? "Gradient" : "Pattern";
+    option.textContent = `${kindLabel}: ${asset.name}`;
     select.append(option);
   }
+  syncPaintPresetForTool(canvasTool);
   const advancedPattern = $("advancedPatternInput");
   const selectedAdvancedPattern = advancedPattern.value;
   for (const option of [...advancedPattern.querySelectorAll('option[data-local-asset="true"]')]) option.remove();
@@ -893,6 +899,8 @@ function applyPreferences(preferences) {
   $("textFontInput").value = preferences.font;
   $("selectionToleranceInput").value = String(preferences.selectionTolerance);
   $("selectionToleranceOutput").textContent = String(preferences.selectionTolerance);
+  $("wandContiguousInput").checked = preferences.wandContiguous !== false;
+  $("wandSampleAllInput").checked = preferences.wandSampleAllLayers !== false;
   $("memoryBudgetSelect").value = String(preferences.historyBudgetMiB);
   shell.classList.toggle("panels-hidden", preferences.panelsHidden);
   $("togglePanelsButton").setAttribute("aria-pressed", String(preferences.panelsHidden));
@@ -1752,6 +1760,7 @@ function applyViewport() {
   $("canvasFrame").style.width = `${Math.max(1, snapshot.width * zoom)}px`;
   $("canvasFrame").style.height = `${Math.max(1, snapshot.height * zoom)}px`;
   $("zoomLabel").textContent = zoomMode === "fit" ? `Fit · ${Math.round(zoom * 100)}%` : `${Math.round(zoom * 100)}%`;
+  renderBrushHover();
   renderGuides();
   renderRulers();
 }
@@ -2079,6 +2088,7 @@ function setCanvasTool(tool) {
   if (tool !== "quickMask") quickMaskDraft = null;
   if (tool !== "crop" && cropDraft) { cropDraft = null; renderCropOverlay(); }
   canvasTool = tool;
+  syncPaintPresetForTool(tool);
   $("canvasViewport").dataset.tool = tool;
   let activeToolButton = null;
   for (const [id, value] of [["moveToolButton", "move"], ["cropToolButton", "crop"],
@@ -2102,6 +2112,7 @@ function setCanvasTool(tool) {
   workspaceContext?.render(tool);
   renderCropOverlay();
   renderPenPath();
+  renderBrushHover();
   if (tool === "quickMask") renderQuickMask();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   syncToolRoving(document.querySelector('.tool-rail [aria-pressed="true"]') || document.activeElement);
@@ -2381,25 +2392,46 @@ function renderPenPath() {
   $("pathOverlayAnchors").replaceChildren(...nodes); overlay.removeAttribute("hidden");
 }
 
-function magicMask(point) {
-  const pixels = context.getImageData(0, 0, snapshot.width, snapshot.height).data;
-  const x = Math.min(snapshot.width - 1, Math.max(0, Math.floor(point.x)));
-  const y = Math.min(snapshot.height - 1, Math.max(0, Math.floor(point.y)));
-  const seed = (y * snapshot.width + x) * 4;
-  const target = [pixels[seed], pixels[seed + 1], pixels[seed + 2], pixels[seed + 3]];
-  const tolerance = Number($("selectionToleranceInput").value); const limit = tolerance * tolerance * 4;
-  const gray = new Uint8Array(snapshot.width * snapshot.height); const queue = [y * snapshot.width + x]; gray[queue[0]] = 255;
-  const matches = (index) => { let distance = 0; const offset = index * 4;
-    for (let channel = 0; channel < 4; ++channel) { const delta = pixels[offset + channel] - target[channel]; distance += delta * delta; }
-    return distance <= limit; };
-  for (let offset = 0; offset < queue.length; ++offset) {
-    const index = queue[offset]; const px = index % snapshot.width; const py = Math.floor(index / snapshot.width);
-    for (const next of [px > 0 ? index - 1 : -1, px + 1 < snapshot.width ? index + 1 : -1,
-      py > 0 ? index - snapshot.width : -1, py + 1 < snapshot.height ? index + snapshot.width : -1]) {
-      if (next >= 0 && gray[next] === 0 && matches(next)) { gray[next] = 255; queue.push(next); }
+async function selectWithMagicWand(event) {
+  const point = canvasPoint(event);
+  const mode = selectionMode(event);
+  const feather = Number($("selectionQuickFeatherInput").value);
+  return mutate("Selecting color with Magic Wand", async () => {
+    let next = await client.magicWand({
+      point: [point.x, point.y],
+      layerId: selectedLayer()?.id ?? null,
+      tolerance: Number($("selectionToleranceInput").value),
+      contiguous: $("wandContiguousInput").checked,
+      sampleAllLayers: $("wandSampleAllInput").checked,
+      combine: mode,
+      expectedStateId: snapshot.stateId,
+      expectedRevision: snapshot.revision,
+    });
+    if (Number.isFinite(feather) && feather > 0) {
+      next = await client.refineSelection({ smooth: 0, feather: Math.min(250, feather),
+        contrast: 0, shiftEdge: 0, output: "selection", layerId: null,
+        expectedStateId: next.stateId, expectedRevision: next.revision });
     }
+    return next;
+  });
+}
+
+const brushFootprintTools = new Set(["brush", "eraser", "clone", "heal", "spotHealing",
+  "smudge", "dodge", "burn", "sponge", "blur", "sharpen", "mixer", "patternStamp",
+  "quickSelect", "quickMask"]);
+
+function renderBrushHover() {
+  const overlay = $("brushCursorOverlay");
+  if (!snapshot || !brushHoverPoint || !brushFootprintTools.has(canvasTool)) {
+    overlay.hidden = true;
+    return;
   }
-  return gray;
+  const diameter = Math.max(2, Number($("brushSizeInput").value) * zoom);
+  overlay.style.left = `${brushHoverPoint.x * zoom}px`;
+  overlay.style.top = `${brushHoverPoint.y * zoom}px`;
+  overlay.style.width = `${diameter}px`;
+  overlay.style.height = `${diameter}px`;
+  overlay.hidden = false;
 }
 
 function quadFromBounds(bounds) {
@@ -4324,6 +4356,19 @@ function rasterFillPayload(draft) {
     expectedStateId: draft.stateId, expectedRevision: draft.revision };
 }
 
+function syncPaintPresetForTool(tool) {
+  const select = $("paintPresetSelect");
+  const gradientOnly = tool === "gradient";
+  for (const option of select.options) {
+    const incompatible = gradientOnly && option.dataset.presetKind !== "gradient";
+    option.disabled = incompatible;
+    option.hidden = incompatible;
+  }
+  if (gradientOnly && select.selectedOptions[0]?.dataset.presetKind !== "gradient") {
+    select.value = "foreground-transparent";
+  }
+}
+
 function scheduleRasterFillPreview(draft) {
   if (rasterPreviewCancellation) Atomics.store(rasterPreviewCancellation, 0, 1);
   rasterPreviewCancellation = new Int32Array(new SharedArrayBuffer(4));
@@ -4388,7 +4433,19 @@ async function finishGradient(event) {
   if (!draft || event.pointerId !== draft.pointerId) return;
   gradientDraft = null;
   clearRasterPreview();
-  await mutate("Applying gradient", () => client.applyRasterFill(rasterFillPayload(draft)));
+  if (busy || !snapshot) return;
+  clearError();
+  setBusy(true, "Applying gradient", "Committing one canonical engine revision");
+  try {
+    const before = snapshot;
+    const next = await client.applyRasterFill(rasterFillPayload(draft));
+    recordHistoryMutation(before, next, "Applying gradient");
+    await acceptSnapshot(next); scheduleCheckpoint(next); showToast("Applying gradient");
+  } catch (error) {
+    if (error?.message === "raster fill did not affect the target layer") {
+      showToast("Gradient made no pixel change — adjust the drag, colour, layer or selection");
+    } else showError("Applying gradient failed", error);
+  } finally { setBusy(false); }
 }
 
 function movePaint(event) {
@@ -5177,6 +5234,7 @@ for (const handle of $("transformOverlay").querySelectorAll("circle[data-transfo
 $("brushSizeInput").addEventListener("input", () => {
   $("brushSizeOutput").textContent = `${$("brushSizeInput").value} px`;
   if (["brush", "eraser"].includes(canvasTool)) $("brushPresetSelect").value = "custom";
+  renderBrushHover();
   persistPreferences();
 });
 for (const [input, output] of [
@@ -5202,6 +5260,7 @@ $("brushPresetSelect").addEventListener("change", (event) => {
   $("brushSoftnessOutput").textContent = `${preset.softness}%`;
   $("brushOpacityInput").value = String(preset.opacity);
   $("brushOpacityOutput").textContent = `${preset.opacity}%`;
+  renderBrushHover();
   persistPreferences();
 });
 $("retouchSoftnessInput").addEventListener("input", (event) => {
@@ -5240,7 +5299,10 @@ $("defaultSwatchesButton").addEventListener("click", () => {
   $("brushColorInput").value = "#111111"; persistPreferences();
 });
 $("paintTargetSelect").addEventListener("change", updateControls);
-$("paintPresetSelect").addEventListener("change", persistPreferences);
+$("paintPresetSelect").addEventListener("change", () => {
+  syncPaintPresetForTool(canvasTool);
+  persistPreferences();
+});
 $("textFontInput").addEventListener("change", persistPreferences);
 $("memoryBudgetSelect").addEventListener("change", async () => {
   if (busy) return;
@@ -5540,6 +5602,9 @@ $("selectionToleranceInput").addEventListener("input", () => {
   $("selectionToleranceOutput").textContent = $("selectionToleranceInput").value;
   persistPreferences();
 });
+for (const id of ["wandContiguousInput", "wandSampleAllInput"]) {
+  $(id).addEventListener("change", persistPreferences);
+}
 $("edgeContrastInput").addEventListener("input", () => {
   $("edgeContrastOutput").textContent = `${$("edgeContrastInput").value}%`;
 });
@@ -5680,8 +5745,7 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
   if (canvasTool === "magic") {
-    commitSelectionMask("Selecting connected color", combinedSelectionMask(
-      magicMask(canvasPoint(event)), selectionMode(event)));
+    void selectWithMagicWand(event);
     return;
   }
   if (canvasTool === "polygon") {
@@ -5756,6 +5820,10 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (event.pointerType !== "touch") {
+    brushHoverPoint = canvasPoint(event);
+    renderBrushHover();
+  }
   if (canvasTool === "pen" && penDraft?.points.length && event.buttons === 0) {
     penHoverPoint = canvasPoint(event); renderPenPath();
   }
@@ -5798,8 +5866,10 @@ canvas.addEventListener("pointermove", (event) => {
 });
 
 canvas.addEventListener("pointerleave", () => {
-  if (canvasTool !== "pen" || !penHoverPoint) return;
-  penHoverPoint = null; renderPenPath();
+  brushHoverPoint = null; renderBrushHover();
+  if (canvasTool === "pen" && penHoverPoint) {
+    penHoverPoint = null; renderPenPath();
+  }
 });
 canvas.addEventListener("pointerup", (event) => {
   finishPaint(event);
@@ -6084,7 +6154,8 @@ try {
     await loadLocalAssets();
     applyPreferences(await workspaceStore.loadPreferences({ locale: "en", tool: "marquee", brushSize: 24,
       color: "#111111", paintPreset: "solid", font: "Arial",
-      selectionTolerance: 32, historyBudgetMiB: 256, panelsHidden: false,
+      selectionTolerance: 32, wandContiguous: true, wandSampleAllLayers: true,
+      historyBudgetMiB: 256, panelsHidden: false,
       guidesVisible: true, snappingEnabled: true }));
     await refreshRecoveryList();
   } else {

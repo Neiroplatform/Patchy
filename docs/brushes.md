@@ -17,7 +17,10 @@ Pencil (4/0/100), and Marker (36/30/45); changing any of those controls selects
 Custom. Softness crosses the versioned raster-stroke C ABI and applies equally
 to preview and commit. Partial `ImageBitmap` frames replace their dirty canvas
 region (clear then draw), so newly transparent Eraser pixels cannot be hidden
-by source-over composition of the previous frame.
+by source-over composition of the previous frame. Every size-based browser
+brush shows a high-contrast circular footprint while merely hovering the
+document; its diameter follows the selected document size and current zoom,
+updates without pointer-down, and never mutates pixels, history or revision.
 
 ## Core stamping engine
 

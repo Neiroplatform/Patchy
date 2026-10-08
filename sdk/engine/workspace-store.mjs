@@ -644,6 +644,10 @@ function normalizePreferences(value, stored) {
     }
     result.selectionTolerance = tolerance;
   }
+  if (value.wandContiguous !== undefined) result.wandContiguous = Boolean(value.wandContiguous);
+  if (value.wandSampleAllLayers !== undefined) {
+    result.wandSampleAllLayers = Boolean(value.wandSampleAllLayers);
+  }
   if (value.historyBudgetMiB !== undefined) {
     const historyBudgetMiB = Number(value.historyBudgetMiB);
     if (![128, 256, 512, 1024].includes(historyBudgetMiB)) {

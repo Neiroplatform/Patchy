@@ -244,6 +244,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 [data-state="document"] .canvas-frame { display: block; }
 #documentCanvas { display: block; position: relative; z-index: 0; width: 100%; height: 100%; image-rendering: auto; }
 #gestureCanvas { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; pointer-events: none; }
+.brush-cursor-overlay { position: absolute; z-index: 8; box-sizing: border-box; border: 1px solid #050607;
+  border-radius: 50%; box-shadow: 0 0 0 1px rgba(255, 255, 255, .95); pointer-events: none;
+  transform: translate(-50%, -50%); will-change: left, top, width, height; }
 .path-overlay { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .path-overlay path { fill: none; stroke: #69b7ff; stroke-width: 1.5px; }
 .path-overlay .path-rubber-band { stroke: #d7eaff; stroke-width: 1px; stroke-dasharray: 4 4; }

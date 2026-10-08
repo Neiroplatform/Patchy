@@ -105,7 +105,7 @@
         <button class="tool-button" id="marqueeToolButton" type="button" aria-label="Rectangular selection" aria-pressed="true" title="Rectangular selection (M)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-marquee"></use></svg></button>
         <button class="tool-button" id="lassoToolButton" type="button" aria-label="Freehand lasso" aria-pressed="false" title="Freehand lasso (L)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-lasso"></use></svg></button>
         <button class="tool-button" id="polygonToolButton" type="button" aria-label="Polygonal lasso" aria-pressed="false" title="Polygonal lasso (Shift+L)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-polygon-lasso"></use></svg></button>
-        <button class="tool-button" id="magicToolButton" type="button" aria-label="Magic selection" aria-pressed="false" title="Magic selection (W)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-magic"></use></svg></button>
+        <button class="tool-button" id="magicToolButton" type="button" aria-label="Magic Wand" aria-pressed="false" title="Magic Wand (W)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-magic"></use></svg></button>
         <button class="tool-button" id="quickSelectToolButton" type="button" aria-label="Quick Select" aria-pressed="false" title="Quick Select (Shift+W)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-quick-select"></use></svg></button>
         <button class="tool-button" id="magneticToolButton" type="button" aria-label="Magnetic Lasso" aria-pressed="false" title="Magnetic Lasso (Shift+L)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-magnetic"></use></svg></button>
         <button class="tool-button" id="quickMaskToolButton" type="button" aria-label="Quick Mask" aria-pressed="false" title="Quick Mask (Q)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-quick-mask"></use></svg></button>
@@ -181,13 +181,15 @@
               <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
             </select></label>
             <label class="non-retouch-option standard-paint-option">Paint <select id="paintPresetSelect">
-              <option value="foreground-transparent">Foreground → transparent</option>
-              <option value="black-white">Black → white</option>
-              <option value="sunset">Sunset</option><option value="ocean">Ocean</option>
-              <option value="solid">Solid foreground</option>
-              <option value="checker">Checker pattern</option><option value="dots">Dot pattern</option>
+              <option value="foreground-transparent" data-preset-kind="gradient">Foreground → transparent</option>
+              <option value="black-white" data-preset-kind="gradient">Black → white</option>
+              <option value="sunset" data-preset-kind="gradient">Sunset</option><option value="ocean" data-preset-kind="gradient">Ocean</option>
+              <option value="solid" data-preset-kind="fill">Solid foreground</option>
+              <option value="checker" data-preset-kind="fill">Checker pattern</option><option value="dots" data-preset-kind="fill">Dot pattern</option>
             </select></label>
             <label class="non-retouch-option standard-paint-option">Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
+            <label id="wandContiguousOption" hidden><input id="wandContiguousInput" type="checkbox" checked> Contiguous</label>
+            <label id="wandSampleAllOption" hidden><input id="wandSampleAllInput" type="checkbox" checked> Sample all layers</label>
             <label class="non-retouch-option standard-paint-option">Edge <input id="edgeContrastInput" type="range" min="1" max="100" value="10"><output id="edgeContrastOutput">10%</output></label>
             <label class="non-retouch-option standard-paint-option"><input id="enhanceEdgeInput" type="checkbox"> Enhance edge</label>
             <label class="retouch-option retouch-spot-option" hidden>Softness <input id="retouchSoftnessInput" type="range" min="0" max="100" value="50"><output id="retouchSoftnessOutput">50%</output></label>
@@ -221,6 +223,7 @@
           <div class="canvas-frame" id="canvasFrame">
             <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
             <canvas id="gestureCanvas" aria-hidden="true"></canvas>
+            <div class="brush-cursor-overlay" id="brushCursorOverlay" aria-hidden="true" hidden></div>
             <svg class="path-overlay" id="pathOverlay" aria-label="Pen path" hidden>
               <path id="pathOverlayLine" vector-effect="non-scaling-stroke"></path>
               <path class="path-rubber-band" id="pathOverlayRubberBand" vector-effect="non-scaling-stroke"></path>

@@ -251,10 +251,12 @@ test("preferences round-trip with validation and malformed-data fallback", async
   const { root, store } = fixture();
   const saved = await store.savePreferences({ locale: "ru", tool: "brush", brushSize: 42,
     color: "#AABBCC", paintPreset: "ocean", font: "Georgia",
-    selectionTolerance: 31, historyBudgetMiB: 512, panelsHidden: true,
+    selectionTolerance: 31, wandContiguous: false, wandSampleAllLayers: false,
+    historyBudgetMiB: 512, panelsHidden: true,
     guidesVisible: false, snappingEnabled: false });
   assert.deepEqual(saved, { locale: "ru", tool: "brush", brushSize: 42, color: "#aabbcc",
     paintPreset: "ocean", font: "Georgia", selectionTolerance: 31,
+    wandContiguous: false, wandSampleAllLayers: false,
     historyBudgetMiB: 512, panelsHidden: true, guidesVisible: false, snappingEnabled: false });
   assert.deepEqual(await store.loadPreferences({ brushSize: 12 }), saved);
   assert.deepEqual(await store.savePreferences({ tool: "spotHealing", brushSize: 4096 }),

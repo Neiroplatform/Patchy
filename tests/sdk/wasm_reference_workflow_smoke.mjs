@@ -275,7 +275,7 @@ try {
   await page.waitForFunction((before) => Number(document.querySelector("#detailRevision")?.textContent) === before + 1,
     beforeMagic, { timeout: 90_000 });
   await ready();
-  assert.ok((await historyLabels()).includes("Selecting connected color"));
+  assert.ok((await historyLabels()).includes("Selecting color with Magic Wand"));
 
   const background = page.locator("#layerList .layer-row").filter({
     has: page.locator(".layer-name", { hasText: "reference-photo" }),

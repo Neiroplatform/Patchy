@@ -514,6 +514,19 @@ export class PatchyWorkerHost {
           bounds: message.bounds, gray: new Uint8Array(message.gray),
         });
         return this.#snapshot();
+      case "magicWand": {
+        const before = this.#snapshot();
+        if (before.stateId !== BigInt(message.expectedStateId) ||
+            before.revision !== BigInt(message.expectedRevision)) {
+          const error = new Error("Magic Wand was prepared from a stale document state");
+          error.name = "PatchyEngineError"; error.code = 6; throw error;
+        }
+        const gray = magicWandSelection(this.#engine, this.#requireSession(), before, message);
+        this.#engine.setSelectionMask(this.#requireSession(), before, {
+          bounds: { x: 0, y: 0, width: before.width, height: before.height }, gray,
+        });
+        return this.#snapshot();
+      }
       case "quickSelect": {
         const before = this.#snapshot();
         if (before.stateId !== BigInt(message.expectedStateId) ||
@@ -1050,6 +1063,118 @@ function selectionGray(snapshot) {
     for (let y = y0; y < y1; ++y) gray.fill(255, y * snapshot.width + x0, y * snapshot.width + x1);
   }
   return gray;
+}
+
+function magicWandSelection(engine, session, snapshot, input) {
+  const coordinates = Array.isArray(input.point)
+    ? input.point : [input.point?.x, input.point?.y];
+  const x = Math.floor(Number(coordinates[0]));
+  const y = Math.floor(Number(coordinates[1]));
+  const tolerance = Number(input.tolerance);
+  const combine = input.combine ?? "replace";
+  if (!Number.isFinite(coordinates[0]) || !Number.isFinite(coordinates[1]) ||
+      x < 0 || y < 0 || x >= snapshot.width || y >= snapshot.height) {
+    throw new RangeError("Magic Wand point must be inside the document");
+  }
+  if (!Number.isInteger(tolerance) || tolerance < 0 || tolerance > 255) {
+    throw new RangeError("Magic Wand tolerance must be an integer from 0 to 255");
+  }
+  if (!["replace", "add", "subtract", "intersect"].includes(combine)) {
+    throw new TypeError("Magic Wand selection combination is invalid");
+  }
+  const pixelCount = checkedMaskPixelCount(snapshot.width, snapshot.height);
+  let pixels;
+  if (input.sampleAllLayers !== false) {
+    pixels = engine.render(session, { x: 0, y: 0,
+      width: snapshot.width, height: snapshot.height });
+  } else {
+    const layerId = input.layerId == null ? null : BigInt(input.layerId);
+    const layer = snapshot.layers.find((candidate) => candidate.id === layerId);
+    if (!layer || layer.kind !== 0) {
+      throw new Error("Select a pixel layer or enable Sample all layers");
+    }
+    const source = engine.layerPixels(session, layer.id);
+    const layerPixelCount = layer.bounds.width * layer.bounds.height;
+    if (!Number.isSafeInteger(layerPixelCount) || layerPixelCount < 0) {
+      throw new RangeError("Magic Wand active-layer dimensions exceed the browser allocation limit");
+    }
+    const expected = layerPixelCount * 4;
+    if (source.byteLength !== expected) {
+      throw new Error("Magic Wand received inconsistent active-layer pixels");
+    }
+    pixels = new Uint8Array(pixelCount * 4);
+    const mask = layer.mask && !layer.mask.disabled ? {
+      ...layer.mask, gray: engine.layerMaskPixels(session, layer.id),
+    } : null;
+    const maskAt = (documentX, documentY) => {
+      if (!mask) return 255;
+      const localX = documentX - mask.bounds.x;
+      const localY = documentY - mask.bounds.y;
+      if (localX < 0 || localY < 0 || localX >= mask.bounds.width ||
+          localY >= mask.bounds.height) return mask.defaultColor ?? 255;
+      return mask.gray[localY * mask.bounds.width + localX];
+    };
+    for (let row = 0; row < layer.bounds.height; ++row) {
+      const documentY = layer.bounds.y + row;
+      if (documentY < 0 || documentY >= snapshot.height) continue;
+      const startX = Math.max(0, -layer.bounds.x);
+      const endX = Math.min(layer.bounds.width, snapshot.width - layer.bounds.x);
+      for (let localX = startX; localX < endX; ++localX) {
+        const documentX = layer.bounds.x + localX;
+        const sourceOffset = (row * layer.bounds.width + localX) * 4;
+        const targetOffset = (documentY * snapshot.width + documentX) * 4;
+        pixels.set(source.subarray(sourceOffset, sourceOffset + 4), targetOffset);
+        pixels[targetOffset + 3] = Math.round(pixels[targetOffset + 3] *
+          (layer.opacity ?? 1) * maskAt(documentX, documentY) / 255);
+      }
+    }
+  }
+  if (!(pixels instanceof Uint8Array) || pixels.byteLength !== pixelCount * 4) {
+    throw new Error("Magic Wand received inconsistent sample pixels");
+  }
+  const seed = (y * snapshot.width + x) * 4;
+  const target = pixels.subarray(seed, seed + 4);
+  const limit = tolerance * tolerance * 4;
+  const matches = (index) => {
+    const offset = index * 4;
+    let distance = 0;
+    for (let channel = 0; channel < 4; ++channel) {
+      const delta = pixels[offset + channel] - target[channel];
+      distance += delta * delta;
+    }
+    return distance <= limit;
+  };
+  const selected = new Uint8Array(pixelCount);
+  if (input.contiguous === false) {
+    for (let index = 0; index < pixelCount; ++index) {
+      if (matches(index)) selected[index] = 255;
+    }
+  } else {
+    const queue = new Uint32Array(pixelCount);
+    let read = 0; let write = 1;
+    queue[0] = y * snapshot.width + x;
+    selected[queue[0]] = 255;
+    while (read < write) {
+      const index = queue[read++];
+      const px = index % snapshot.width; const py = Math.floor(index / snapshot.width);
+      for (const next of [px > 0 ? index - 1 : -1,
+        px + 1 < snapshot.width ? index + 1 : -1,
+        py > 0 ? index - snapshot.width : -1,
+        py + 1 < snapshot.height ? index + snapshot.width : -1]) {
+        if (next >= 0 && selected[next] === 0 && matches(next)) {
+          selected[next] = 255; queue[write++] = next;
+        }
+      }
+    }
+  }
+  if (combine === "replace") return selected;
+  const current = selectionGray(snapshot);
+  for (let index = 0; index < pixelCount; ++index) {
+    if (combine === "add") selected[index] = Math.max(current[index], selected[index]);
+    else if (combine === "subtract") selected[index] = selected[index] ? 0 : current[index];
+    else selected[index] = Math.min(current[index], selected[index]);
+  }
+  return selected;
 }
 
 export async function createWorkerHost(moduleUrl, moduleOptions = {}) {

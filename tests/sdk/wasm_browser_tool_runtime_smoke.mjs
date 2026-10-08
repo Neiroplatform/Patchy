@@ -181,6 +181,21 @@ try {
   await page.locator("#brushSizeInput").evaluate((input) => {
     input.value = "17"; input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+  await selectTool("brushToolButton");
+  const hoverRevision = await revision();
+  const hoverCanvas = await page.locator("#documentCanvas").boundingBox();
+  assert.ok(hoverCanvas, "document canvas is not visible for brush hover");
+  await page.mouse.move(hoverCanvas.x + hoverCanvas.width * .52,
+    hoverCanvas.y + hoverCanvas.height * .48);
+  await page.waitForFunction(() => !document.querySelector("#brushCursorOverlay")?.hidden);
+  const hoverRing = await page.locator("#brushCursorOverlay").boundingBox();
+  const hoverZoom = hoverCanvas.width / await page.locator("#documentCanvas")
+    .evaluate((node) => node.width);
+  assert.ok(hoverRing && Math.abs(hoverRing.width - 17 * hoverZoom) < 1.5,
+    `brush hover radius is not tied to the selected size: ${JSON.stringify({ hoverRing, hoverZoom })}`);
+  assert.equal(await revision(), hoverRevision, "hovering the brush mutated the document");
+  await page.mouse.move(1, 1);
+  await page.waitForFunction(() => document.querySelector("#brushCursorOverlay")?.hidden);
   const tools = [
     { buttonId: "brushToolButton", label: "Painting pixels",
       from: { x: .18, y: .2 }, to: { x: .4, y: .2 } },
@@ -222,8 +237,28 @@ try {
   await waitForMutation(before, "Selecting area");
   await runPixelTool({ buttonId: "patchToolButton", label: "Applying Patch",
     from: { x: .3, y: .3 }, to: { x: .48, y: .48 } });
+  await page.locator("#paintPresetSelect").evaluate((select) => {
+    select.value = "solid"; select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   await runPixelTool({ buttonId: "gradientToolButton", label: "Applying gradient",
-    from: { x: .2, y: .22 }, to: { x: .4, y: .4 } });
+    from: { x: .2, y: .22 }, to: { x: .4, y: .4 }, prepare: async () => {
+      assert.equal(await page.locator("#paintPresetSelect").inputValue(), "foreground-transparent",
+        "Gradient kept an incompatible fill-only preset");
+      assert.equal(await page.locator('#paintPresetSelect option[value="solid"]')
+        .evaluate((option) => option.disabled && option.hidden), true,
+        "Gradient left the Solid fill preset enabled");
+      await page.locator("#paintPresetSelect").selectOption("black-white");
+    } });
+  const beforeRepeatedGradient = await revision();
+  await dragCanvas({ x: .2, y: .22 }, { x: .4, y: .4 });
+  await page.waitForFunction(() =>
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
+    document.querySelector("#actionToast")?.textContent?.startsWith("Gradient made no pixel change"),
+  null, { timeout: 90_000 });
+  assert.equal(await revision(), beforeRepeatedGradient,
+    "a repeated identical Gradient unexpectedly created a revision");
+  assert.equal(await page.locator("#errorBanner").isHidden(), true,
+    `repeated Gradient surfaced ${await page.textContent("#errorMessage")}`);
 
   const beforeFillRevision = await revision();
   const beforeFillPixels = await canvasDigest();
@@ -237,9 +272,50 @@ try {
   assert.equal(await page.locator("#errorBanner").isHidden(), true,
     `fillToolButton surfaced ${await page.textContent("#errorMessage")}`);
 
+  const wandFixture = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60" viewBox="0 0 120 60">' +
+    '<rect width="40" height="60" fill="#ef2020"/><rect x="40" width="40" height="60" fill="#2050ef"/>' +
+    '<rect x="80" width="40" height="60" fill="#ef2020"/></svg>');
+  await page.locator("#fileInput").setInputFiles({ name: "magic-wand-fixture.svg",
+    mimeType: "image/svg+xml", buffer: wandFixture });
+  await page.waitForFunction(() =>
+    document.querySelectorAll('#documentTabs [role="tab"]').length === 3 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
+  await idle();
+  await selectTool("magicToolButton");
+  assert.equal(await page.locator("#wandContiguousInput").isVisible(), true,
+    "Magic Wand did not expose the Contiguous option");
+  assert.equal(await page.locator("#wandSampleAllInput").isVisible(), true,
+    "Magic Wand did not expose the Sample all layers option");
+  before = await revision();
+  const wandCanvas = await page.locator("#documentCanvas").boundingBox();
+  assert.ok(wandCanvas, "document canvas is not visible for Magic Wand");
+  await page.locator("#selectionToleranceInput").evaluate((input) => {
+    input.value = "0"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.mouse.click(wandCanvas.x + wandCanvas.width * .16,
+    wandCanvas.y + wandCanvas.height * .5);
+  await waitForMutation(before, "Selecting color with Magic Wand");
+  assert.equal(await page.locator("#selectionOverlay").isHidden(), false,
+    "Magic Wand did not render its committed selection");
+  const contiguousPath = await page.locator("#selectionMarchPath").getAttribute("d");
+  assert.ok(contiguousPath, "contiguous Magic Wand selection has no visible boundary");
+  await page.locator("#wandContiguousInput").uncheck();
+  await page.locator("#wandSampleAllInput").uncheck();
+  before = await revision();
+  await page.mouse.click(wandCanvas.x + wandCanvas.width * .16,
+    wandCanvas.y + wandCanvas.height * .5);
+  await waitForMutation(before, "Selecting color with Magic Wand");
+  const nonContiguousPath = await page.locator("#selectionMarchPath").getAttribute("d");
+  assert.notEqual(nonContiguousPath, contiguousPath,
+    "non-contiguous Magic Wand did not add the disconnected matching colour");
+  assert.equal(await page.locator("#errorBanner").isHidden(), true,
+    `Magic Wand surfaced ${await page.textContent("#errorMessage")}`);
+
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);
   console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained tools=28-described-activated ` +
+    "hover=idle-brush-radius wand=contiguous-all-layers-active-layer-svg gradient=preset-guard-noop-neutral " +
     "paint=brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill real-pointer=pass");
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({

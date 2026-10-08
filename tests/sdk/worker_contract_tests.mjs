@@ -87,14 +87,15 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "geometryTransparentInput", "rotateLeftButton", "rotateRightButton",
     "rotateDegreesInput", "rotateArbitraryButton", "cropAngleInput", "cropExpandInput",
     "cropFromSelectionButton", "cropButton", "busyProgress", "cancelOperationButton",
-    "canvasFrame", "selectionOverlay", "cropToolButton", "marqueeToolButton", "panToolButton",
+    "canvasFrame", "selectionOverlay", "brushCursorOverlay", "cropToolButton", "marqueeToolButton", "panToolButton",
     "zoomOutButton", "zoomFitButton", "zoomInButton", "createMaskButton",
     "toggleMaskButton", "invertMaskButton", "removeMaskButton",
     "gestureCanvas", "pathOverlay", "pathOverlayRubberBand", "finishPenPathButton",
     "closePenPathButton", "cancelPenPathButton", "makePenSelectionButton",
     "transformOverlay", "moveToolButton", "brushToolButton",
     "lassoToolButton", "polygonToolButton", "magicToolButton", "quickSelectToolButton",
-    "magneticToolButton", "quickMaskToolButton", "selectionToleranceInput", "edgeContrastInput",
+    "magneticToolButton", "quickMaskToolButton", "selectionToleranceInput", "wandContiguousInput",
+    "wandSampleAllInput", "edgeContrastInput",
     "eraserToolButton", "textToolButton", "textLayerButton", "layerTransformButton", "layerWarpButton",
     "layerArrangeModeInput", "layerArrangeReferenceInput", "arrangeLayersButton",
     "textDialog", "textFontInput", "fontPresetList", "commitTextButton", "textRunList",
@@ -143,7 +144,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "client.renameLayer",
     "client.resizeImage", "client.resizeCanvas", "client.rotateCanvas",
     "client.cropDocument", "client.invertLayer",
-    "client.setSelection", "client.setSelectionMask", "client.quickSelect", "client.magneticLasso",
+    "client.setSelection", "client.setSelectionMask", "client.magicWand", "client.quickSelect", "client.magneticLasso",
     "client.previewSelectionRefinement", "client.refineSelection",
     "client.clearSelection", "client.createLayerMask",
     "client.toggleLayerMask", "client.invertLayerMask", "client.removeLayerMask",
@@ -258,7 +259,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /client\.applyLocalAdjustmentBrush/);
   assert.match(script, /client\.applyAdvancedPaintStroke/);
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
-    "quickSelect(", "magneticLasso(", "previewSelectionRefinement(", "refineSelection(",
+    "magicWand(", "quickSelect(", "magneticLasso(", "previewSelectionRefinement(", "refineSelection(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel(",
     "editLayers(", "moveLayers(", "groupLayers(", "removeLayers(", "copyLayersToDocument(",
@@ -275,6 +276,52 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(html, /role="alert"/);
   assert.match(nodeServer, /'\.css': 'text\/css; charset=utf-8'/);
   assert.match(pythonServer, /"\.css": "text\/css; charset=utf-8"/);
+});
+
+test("Worker Magic Wand samples canonical pixels and combines exact-state selections", async () => {
+  let revision = 1n;
+  let selectionMask = null;
+  const rgba = (...pixels) => new Uint8Array(pixels.flatMap((pixel) => [...pixel, 255]));
+  const red = [240, 20, 20]; const blue = [20, 20, 240]; const green = [20, 240, 20];
+  const composite = rgba(red, blue, red, red, blue, green);
+  const active = rgba(green, green, blue, blue, blue, blue);
+  const engine = {
+    capabilities: 0n,
+    create() { return 71; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId: revision,
+      selection: [], selectionMask: selectionMask && {
+        bounds: { x: 0, y: 0, width: 3, height: 2 }, gray: selectionMask.slice(),
+      } }; },
+    render() { return composite.slice(); },
+    layerPixels() { return active.slice(); },
+    setSelectionMask(session, before, input) { selectionMask = input.gray.slice(); revision++; },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  const created = await host.dispatch({ method: "create", width: 3, height: 2, name: "Wand.psd" });
+  const wand = async (overrides) => {
+    const before = await host.dispatch({ method: "snapshot" });
+    return host.dispatch({ method: "magicWand", point: [0, 0], layerId: "7", tolerance: 0,
+      contiguous: true, sampleAllLayers: true, combine: "replace",
+      expectedStateId: String(before.stateId), expectedRevision: String(before.revision),
+      ...overrides });
+  };
+  assert.equal(created.revision, 1n);
+  await wand({});
+  assert.deepEqual(Array.from(selectionMask), [255, 0, 0, 255, 0, 0]);
+  await wand({ contiguous: false });
+  assert.deepEqual(Array.from(selectionMask), [255, 0, 255, 255, 0, 0]);
+  await wand({ point: [0, 0], sampleAllLayers: false, contiguous: false, combine: "add" });
+  assert.deepEqual(Array.from(selectionMask), [255, 255, 255, 255, 0, 0]);
+  await wand({ point: [1, 0], contiguous: false, combine: "subtract" });
+  assert.deepEqual(Array.from(selectionMask), [255, 0, 255, 255, 0, 0]);
+  await wand({ point: [2, 1], contiguous: false, combine: "intersect" });
+  assert.deepEqual(Array.from(selectionMask), [0, 0, 0, 0, 0, 0]);
+  const before = await host.dispatch({ method: "snapshot" });
+  await assert.rejects(host.dispatch({ method: "magicWand", point: [0, 0], layerId: "7",
+    tolerance: 0, contiguous: true, sampleAllLayers: true, combine: "replace",
+    expectedStateId: "0", expectedRevision: String(before.revision) }), /stale/);
+  host.dispose();
 });
 
 test("Worker history travel is stale-guarded, bounded and returns one final projection", async () => {
@@ -1518,7 +1565,8 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     },
     setSelection(session, before, rects) { calls.push(["selection", rects]); selection = rects; revision++; },
     setSelectionMask(session, before, input) {
-      calls.push(["selectionMask", input.gray.byteLength]); selection = [{ x: 0, y: 0, width: 3, height: 2 }]; revision++;
+      calls.push(["selectionMask", input.gray.byteLength, Array.from(input.gray)]);
+      selection = [{ x: 0, y: 0, width: 3, height: 2 }]; revision++;
     },
     quickSelect(session, before, input) { calls.push(["quickSelect", input.points.length]); revision++; },
     magneticLasso(session, before, input) { calls.push(["magneticLasso", input.anchors.length]); revision++; },
@@ -1642,6 +1690,16 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
   assert.deepEqual(calls.find((call) => call[0] === "pixels"), ["pixels", "Layer 1", 4]);
   await host.dispatch({ method: "setSelectionMask", bounds: { x: 0, y: 0, width: 3, height: 2 },
     gray: new Uint8Array([0, 64, 255, 255, 64, 0]).buffer });
+  let wandBefore = await host.dispatch({ method: "snapshot" });
+  await host.dispatch({ method: "magicWand", point: [1, 1], layerId: "7", tolerance: 0,
+    contiguous: true, sampleAllLayers: true, combine: "replace",
+    expectedStateId: String(wandBefore.stateId), expectedRevision: String(wandBefore.revision) });
+  assert.deepEqual(calls.filter((call) => call[0] === "selectionMask").at(-1),
+    ["selectionMask", 6, [255, 255, 255, 255, 255, 255]]);
+  wandBefore = await host.dispatch({ method: "snapshot" });
+  await assert.rejects(host.dispatch({ method: "magicWand", point: [1, 1], layerId: "7",
+    tolerance: 0, contiguous: true, sampleAllLayers: true, combine: "replace",
+    expectedStateId: "0", expectedRevision: String(wandBefore.revision) }), /stale/);
   let advancedBefore = await host.dispatch({ method: "snapshot" });
   await host.dispatch({ method: "quickSelect", points: [[1, 1]], brushRadius: 4, spread: 50,
     expectedStateId: String(advancedBefore.stateId), expectedRevision: String(advancedBefore.revision) });

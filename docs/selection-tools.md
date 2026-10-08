@@ -28,6 +28,24 @@ intersection, and Ctrl/Cmd+V creates one positioned pixel layer. With no active
 selection, editable-layer copy retains its layer-preserving behavior; UI code
 never reads generic canonical layer pixels.
 
+## Self-hosted Magic Wand
+
+The browser editor exposes Magic Wand as an explicit one-click selection tool.
+Tolerance compares RGBA channel distance. Contiguous mode flood-fills the
+8-connected region containing the clicked pixel; disabling it selects every
+matching pixel. Sample All Layers reads one canonical engine composite. Active
+Layer mode instead composes the selected pixel layer into document space and
+applies its opacity and enabled raster mask before comparison. The browser never
+receives canonical layer pixels for classification.
+
+New, Add, Subtract and Intersect combine against the exact canonical selection
+owned by the Worker. Each request carries the expected state id and revision,
+is bounded by document dimensions, and publishes exactly one selection revision
+through the existing selection-mask ABI. Optional Feather is a subsequent
+canonical refinement. Browser coverage uses disconnected equal-colour regions
+to distinguish Contiguous from global matching and checks both composite and
+active-layer sampling.
+
 ## Quick Select: solve-on-release is a patent constraint, not a UX choice
 
 The Quick Select tool (`CanvasTool::QuickSelect`, Shift+W, flyout shared with the Magic Wand) segments each brush stroke ONCE on mouse-release: the drag only accumulates a seed footprint (`stamp_quick_select_segment`) and draws a translucent capsule overlay, then `finish_quick_select_stroke` runs the cut and commits one undo entry. **Do not add live per-mouse-move classification or selection preview before Nov 3, 2029**: Adobe's US 8050498 ("Live coherent image selection", term-adjusted) claims classify-and-display while brush input is being received. Related design rules, all deliberate: Enhance Edge is purely geometric majority smoothing (US 8013870 claims local-color-model edge opacity until 2028), the solve uses ONE window per stroke (US 8121407 claims overlapping-tile decomposition until 2030), and there is no input-driven auto-switching between segmentation algorithms (US 10698588). The foundations used are expired: Boykov-Jolly seeded min-cut (US 6973212), GrabCut color models (US 7660463), MSR Paint Selection (US 8452087, fee-lapsed). `ui_quick_select_stroke_selects_object_and_is_undoable` asserts the no-mid-drag-selection behavior, so a live-preview change will fail it.

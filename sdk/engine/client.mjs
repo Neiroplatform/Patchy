@@ -342,6 +342,12 @@ export class PatchyWorkerClient {
     const owned = transferableInput(gray, transferOwnership);
     return this.#request("setSelectionMask", { bounds, gray: owned.buffer }, [owned.buffer]);
   }
+  magicWand(input) {
+    return this.#request("magicWand", { ...input,
+      layerId: input.layerId == null ? null : String(input.layerId),
+      expectedStateId: String(input.expectedStateId),
+      expectedRevision: String(input.expectedRevision) });
+  }
   quickSelect(input) {
     return this.#request("quickSelect", { ...input,
       expectedStateId: String(input.expectedStateId),

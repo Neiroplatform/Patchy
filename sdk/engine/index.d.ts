@@ -259,6 +259,10 @@ export class PatchyWorkerClient {
   setSelection(rects: Rect[]): Promise<DocumentProjection>;
   setSelectionMask(bounds: Rect, gray: Uint8Array,
     options?: TransferOptions): Promise<DocumentProjection>;
+  magicWand(input: { point: [number, number] | { x: number; y: number };
+    layerId?: bigint | null; tolerance: number; contiguous?: boolean;
+    sampleAllLayers?: boolean; combine?: "replace" | "add" | "subtract" | "intersect";
+    expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   quickSelect(input: { points: Array<[number, number] | { x: number; y: number }>;
     brushRadius: number; spread: number; subtract?: boolean; enhanceEdge?: boolean;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
