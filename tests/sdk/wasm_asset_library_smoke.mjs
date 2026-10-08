@@ -56,6 +56,23 @@ function assignFile(input, file, view) {
   input.dispatchEvent(new view.Event("change", { bubbles: true }));
 }
 
+function clickDocument(byId, view, pointerId) {
+  const canvas = byId("documentCanvas");
+  const rect = canvas.getBoundingClientRect();
+  canvas.setPointerCapture = () => {};
+  canvas.dispatchEvent(new view.PointerEvent("pointerdown", {
+    bubbles: true, cancelable: true, pointerId, pointerType: "mouse", isPrimary: true,
+    button: 0, buttons: 1, clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2,
+  }));
+  canvas.dispatchEvent(new view.PointerEvent("pointerup", {
+    bubbles: true, cancelable: true, pointerId, pointerType: "mouse", isPrimary: true,
+    button: 0, buttons: 0, clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2,
+  }));
+  delete canvas.setPointerCapture;
+}
+
 try {
   await cleanup();
   let doc = await loadEditor("author");
@@ -113,15 +130,21 @@ try {
   await waitFor(() => idle() && !byId("fillToolButton").disabled, "asset fill target was not imported");
 
   byId("paintPresetSelect").value = `asset:${gradient.id}`;
+  byId("paintPresetSelect").dispatchEvent(new (view().Event)("change", { bubbles: true }));
   let before = revision();
   byId("fillToolButton").click();
-  await waitFor(() => idle() && revision() === before + 1n && byId("errorBanner").hidden,
-    "custom gradient fill did not commit one engine revision");
+  check(revision() === before, "selecting Fill unexpectedly committed the custom gradient");
+  clickDocument(byId, view(), 71);
+  await waitFor(() => idle() && revision() > before && byId("errorBanner").hidden,
+    "custom gradient fill did not commit from the canvas target");
   byId("paintPresetSelect").value = `asset:${pattern.id}`;
+  byId("paintPresetSelect").dispatchEvent(new (view().Event)("change", { bubbles: true }));
   before = revision();
   byId("fillToolButton").click();
-  await waitFor(() => idle() && revision() === before + 1n && byId("errorBanner").hidden,
-    "custom pattern fill did not commit one engine revision");
+  check(revision() === before, "selecting Fill unexpectedly committed the custom pattern");
+  clickDocument(byId, view(), 72);
+  await waitFor(() => idle() && revision() > before && byId("errorBanner").hidden,
+    "custom pattern fill did not commit from the canvas target");
   const committedPixels = byId("documentCanvas").toDataURL();
 
   doc = await loadEditor("reload");

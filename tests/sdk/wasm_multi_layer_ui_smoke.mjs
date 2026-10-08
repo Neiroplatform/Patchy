@@ -137,6 +137,21 @@ try {
   clickLayer("Merged");
   before = revision();
   byId("fillToolButton").click();
+  check(revision() === before, "selecting Fill unexpectedly changed the merged layer");
+  const fillCanvas = byId("documentCanvas");
+  const fillRect = fillCanvas.getBoundingClientRect();
+  fillCanvas.setPointerCapture = () => {};
+  fillCanvas.dispatchEvent(new view.PointerEvent("pointerdown", {
+    bubbles: true, cancelable: true, pointerId: 37, pointerType: "mouse", isPrimary: true,
+    button: 0, buttons: 1, clientX: fillRect.left + fillRect.width / 2,
+    clientY: fillRect.top + fillRect.height / 2,
+  }));
+  fillCanvas.dispatchEvent(new view.PointerEvent("pointerup", {
+    bubbles: true, cancelable: true, pointerId: 37, pointerType: "mouse", isPrimary: true,
+    button: 0, buttons: 0, clientX: fillRect.left + fillRect.width / 2,
+    clientY: fillRect.top + fillRect.height / 2,
+  }));
+  delete fillCanvas.setPointerCapture;
   await waitFor(() => idle() && revision() > before,
     "Fill did not prepare non-transparent pixels for the Cut shortcut");
   before = revision();

@@ -591,10 +591,13 @@ try {
   check(!toolControlVisible("brushColorInput") && !toolControlVisible("paintTargetSelect"),
     "narrow Quick Select context retained irrelevant paint controls");
   byId("gradientToolButton").click(); await delay();
-  check(["brushColorInput", "paintTargetSelect", "paintPresetSelect"].every(toolControlVisible),
+  check(["paintPresetSelect", "gradientTypeInput", "gradientStopInput",
+    "gradientStopColorInput", "gradientStopOpacityInput", "addGradientStopButton",
+    "removeGradientStopButton", "cancelGradientButton", "applyGradientButton"].every(toolControlVisible),
     "narrow Gradient context hid a relevant P0 control");
-  check(!toolControlVisible("selectionToleranceInput") && !toolControlVisible("edgeContrastInput"),
-    "narrow Gradient context retained irrelevant selection controls");
+  check(!toolControlVisible("brushColorInput") && !toolControlVisible("paintTargetSelect") &&
+    !toolControlVisible("selectionToleranceInput") && !toolControlVisible("edgeContrastInput"),
+  "narrow Gradient context retained irrelevant paint or selection controls");
   const hasReducedMotionRule = [...doc.styleSheets].some((sheet) => {
     try { return [...sheet.cssRules].some((rule) => rule.conditionText?.includes("prefers-reduced-motion")); }
     catch { return false; }

@@ -111,6 +111,14 @@ try {
     "production PNG decode/canonical render changed the opaque raster marker");
   await page.click('[aria-controls="toolGroup-draw"]');
   await page.click("#toolGroup-draw #textToolButton");
+  const textCanvas = await page.locator("#documentCanvas").boundingBox();
+  assert(textCanvas, "document canvas is unavailable for the Text gesture");
+  await page.mouse.move(textCanvas.x + textCanvas.width * .15,
+    textCanvas.y + textCanvas.height * .2);
+  await page.mouse.down();
+  await page.mouse.move(textCanvas.x + textCanvas.width * .72,
+    textCanvas.y + textCanvas.height * .45, { steps: 3 });
+  await page.mouse.up();
   await page.waitForSelector("#textDialog[open]");
   await page.fill("#textValueInput", "PRIVATE_TEXT_STORY_SENTINEL");
   await page.click("#commitTextButton");

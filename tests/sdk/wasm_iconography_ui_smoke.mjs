@@ -103,8 +103,8 @@ try {
       color: getComputedStyle(button).color,
     };
   }));
-  assert.equal(inventory.length, 31);
-  assert.equal(new Set(inventory.map(({ href }) => href)).size, 31);
+  assert.equal(inventory.length, 33);
+  assert.equal(new Set(inventory.map(({ href }) => href)).size, 33);
   for (const icon of inventory) {
     assert.ok(icon.id && icon.label && icon.title, JSON.stringify(icon));
     assert.match(icon.href, /^#icon-/);
@@ -113,15 +113,15 @@ try {
     assert.equal(icon.stroke, icon.color, `${icon.id} does not follow currentColor`);
   }
   const interactionContracts = inventory.filter(({ contract }) => contract);
-  assert.equal(interactionContracts.length, 28);
-  assert.equal(new Set(interactionContracts.map(({ contract }) => contract)).size, 28);
+  assert.equal(interactionContracts.length, 30);
+  assert.equal(new Set(interactionContracts.map(({ contract }) => contract)).size, 30);
   for (const tool of interactionContracts) {
     assert.ok(tool.interaction.length >= 24, `${tool.id} is missing a usable interaction description`);
   }
   await page.selectOption("#localeSelect", "ru");
   const russianContracts = await page.locator("[data-tool-contract]").evaluateAll((buttons) =>
     buttons.map((button) => button.getAttribute("aria-description") || ""));
-  assert.equal(russianContracts.length, 28);
+  assert.equal(russianContracts.length, 30);
   const untranslatedContracts = russianContracts.flatMap((value, index) =>
     value.length < 24 || value === interactionContracts[index].interaction
       ? [{ index, value, english: interactionContracts[index].interaction }] : []);
@@ -242,7 +242,7 @@ try {
     before = await revision();
     await clickToolPoints("penToolButton", [[.3, .3], [.7, .35], [.55, .72]]);
     await waitForMutation(before, "Creating Pen path");
-    await page.evaluate(() => document.getElementById("textToolButton").click());
+    await dragTool("textToolButton", { x: .18, y: .58 }, { x: .72, y: .78 });
     await page.waitForSelector("#textDialog[open]");
     await page.fill("#textValueInput", "Icon QA");
     await page.click("#commitTextButton");

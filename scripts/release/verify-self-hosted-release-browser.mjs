@@ -597,8 +597,8 @@ async function verifyReadableIconography(page) {
       color: getComputedStyle(button).color,
     };
   }));
-  assert.equal(inventory.length, 31, "packaged tool icon census drifted");
-  assert.equal(new Set(inventory.map(({ href }) => href)).size, 31,
+  assert.equal(inventory.length, 33, "packaged tool icon census drifted");
+  assert.equal(new Set(inventory.map(({ href }) => href)).size, 33,
     "packaged tools no longer have distinct icon silhouettes");
   for (const icon of inventory) {
     assert.ok(icon.id && icon.label && icon.title, `tool icon lost its accessible name: ${JSON.stringify(icon)}`);
@@ -694,7 +694,7 @@ async function verifyReadableIconography(page) {
     Number.parseFloat(getComputedStyle(document.querySelector(".tool-button")).transitionDuration) <= .000001),
   "reduced motion no longer reaches icon controls");
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  console.log(`ICONOGRAPHY browser=${browserName} tools=31 top-actions=4 groups=8 viewports=4 dynamic-controls=4`);
+  console.log(`ICONOGRAPHY browser=${browserName} tools=33 top-actions=4 groups=8 viewports=4 dynamic-controls=4`);
 }
 
 async function waitForEditorIdle(page) {
