@@ -201,10 +201,11 @@ test("large Worker Blob is passed to the writable without UI byte materializatio
 
 test("production shell stages the lifecycle and exposes open/save/save-as contracts", async () => {
   const root = new URL("../../", import.meta.url);
-  const [cmake, html, editor] = await Promise.all([
+  const [cmake, html, editor, browserSmoke] = await Promise.all([
     readFile(new URL("CMakeLists.txt", root), "utf8"),
     readFile(new URL("sdk/engine/site/patchy.html", root), "utf8"),
     readFile(new URL("sdk/engine/site/editor.mjs", root), "utf8"),
+    readFile(new URL("tests/sdk/wasm_shell_accessibility_smoke.mjs", root), "utf8"),
   ]);
   assert.match(cmake, /sdk\/engine\/file-lifecycle\.mjs/);
   assert.match(html, /id="saveAsButton"/);
@@ -218,4 +219,6 @@ test("production shell stages the lifecycle and exposes open/save/save-as contra
   assert.match(editor, /documentTab\.dirty/);
   assert.match(editor, /fileLifecycle\.remapAll\(/);
   assert.match(editor, /openDocuments\.map\(\(item\) => item\.documentId\)/);
+  assert.match(browserSmoke, /const NATIVE_FILE_LIFECYCLE_TIMEOUT = 180_000;/);
+  assert.equal((browserSmoke.match(/NATIVE_FILE_LIFECYCLE_TIMEOUT\);/g) || []).length, 6);
 });

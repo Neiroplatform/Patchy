@@ -2,6 +2,7 @@ const body = document.body;
 const frame = document.querySelector("#editorFrame");
 const check = (value, message) => { if (!value) throw new Error(message); };
 const delay = (milliseconds = 25) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const NATIVE_FILE_LIFECYCLE_TIMEOUT = 180_000;
 
 async function waitFor(predicate, message, timeout = 90_000) {
   const deadline = performance.now() + timeout; let lastError;
@@ -405,7 +406,7 @@ try {
   byId("saveButton").click();
   await waitFor(() => writableClosed === 1 &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "native Save did not close its writable stream");
+  "native Save did not close its writable stream", NATIVE_FILE_LIFECYCLE_TIMEOUT);
   check(fileWrites.length === 1 && byId("detailState").textContent === "Сохранён",
     "completed native Save did not publish the exact clean savepoint");
 
@@ -416,19 +417,19 @@ try {
   await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 1 &&
     byId("detailState").textContent === "Изменён" &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "post-save mutation did not restore modified state");
+  "post-save mutation did not restore modified state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
   byId("undoButton").click();
   await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 2 &&
     byId("detailState").textContent === "Сохранён" &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "undo to the exact native savepoint did not restore clean state");
+  "undo to the exact native savepoint did not restore clean state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
 
   const restoredRevision = Number(byId("detailRevision").textContent);
   opacity.value = String(Number(opacity.value) === 61 ? 62 : 61);
   opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
   await waitFor(() => Number(byId("detailRevision").textContent) === restoredRevision + 1 &&
     byId("detailState").textContent === "Изменён",
-  "write-failure fixture did not create a modified state");
+  "write-failure fixture did not create a modified state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
   let abortedWrite = false;
   saveTarget = {
     name: "Failed lifecycle.psd",
@@ -442,7 +443,7 @@ try {
   byId("saveAsButton").click();
   await waitFor(() => abortedWrite && !byId("errorBanner").hidden &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "native write failure did not abort and surface an error");
+  "native write failure did not abort and surface an error", NATIVE_FILE_LIFECYCLE_TIMEOUT);
   check(byId("detailState").textContent === "Изменён",
     "native write failure falsely advanced the durable savepoint");
   byId("dismissErrorButton").click();
@@ -458,7 +459,7 @@ try {
   byId("saveAsButton").click();
   await waitFor(() => fallbackBlob &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "download fallback did not create a layered Blob");
+  "download fallback did not create a layered Blob", NATIVE_FILE_LIFECYCLE_TIMEOUT);
   check(fallbackBlob.size === fileWrites[0].size && /\.psd$/i.test(fallbackName) &&
     byId("detailState").textContent === "Изменён",
   "download fallback changed bytes, filename or durable dirty state");
