@@ -381,8 +381,21 @@ try {
   before = await revision();
   await page.click("#commitTextButton");
   await waitForMutation(before, "Creating text");
+  await page.waitForFunction(() => !document.querySelector("#textDialog")?.open);
   assert.equal(await page.locator("#errorBanner").isHidden(), true,
     `Text surfaced ${await page.textContent("#errorMessage")}`);
+
+  const layerCountBeforeSecondText = await page.locator("#layerList [data-layer-id]").count();
+  await dragCanvas({ x: .74, y: .58 }, { x: .92, y: .76 });
+  await page.waitForFunction(() => document.querySelector("#textDialog")?.open);
+  assert.equal(await page.locator("#textDialogTitle").textContent(), "Create text layer",
+    "A new text gesture attempted to edit the selected text layer");
+  await page.locator("#textValueInput").fill("Second text layer");
+  before = await revision();
+  await page.click("#commitTextButton");
+  await waitForMutation(before, "Creating text");
+  assert.equal(await page.locator("#layerList [data-layer-id]").count(),
+    layerCountBeforeSecondText + 1, "The second text gesture did not create a new layer");
 
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);

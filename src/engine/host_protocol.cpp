@@ -972,6 +972,7 @@ std::optional<patchy::RasterStrokeRequest> raster_stroke_request(
       input->point_count > 65536U ||
       (has_softness && (input->brush_softness > 100 || input->reserved != 0U)) ||
       (has_advanced && (input->advanced_flags & ~UINT32_C(0x7f)) != 0U) ||
+      (advanced_enabled && input->mode != PATCHY_ENGINE_RASTER_BRUSH) ||
       (advanced_enabled &&
        (input->brush_roundness < 1 || input->brush_roundness > 100 ||
         !std::isfinite(input->brush_angle_degrees) ||

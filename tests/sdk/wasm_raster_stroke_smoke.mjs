@@ -27,6 +27,14 @@ try {
     stable.revision === authored.revision, "raster preview mutated or returned no pixels");
   const painted = await client.applyRasterStroke(input);
   check(painted.revision === authored.revision + 1n, "raster commit was not one revision");
+  let advancedEraserRejected = false;
+  try {
+    await client.applyRasterStroke({ ...input, mode: 1, advanced: { roundness: 50 },
+      expectedStateId: painted.stateId, expectedRevision: painted.revision });
+  } catch (error) {
+    advancedEraserRejected = /Brush strokes only/.test(String(error?.message));
+  }
+  check(advancedEraserRejected, "advanced settings were accepted for an Eraser stroke");
   const erased = await client.applyRasterStroke({ ...input, mode: 1, softness: 0,
     points: [[2, 1]], expectedStateId: painted.stateId, expectedRevision: painted.revision });
   const erasedPixels = await client.captureLayerPixels(layerId, erased.stateId, erased.revision);
@@ -37,7 +45,7 @@ try {
   check(undone.revision < redone.revision && reopened.layers.length === 1,
     "raster undo/redo/save/reopen failed");
   body.dataset.result = "PASS";
-  body.textContent = `PASS cancel=${cancelCode} preview=${preview.region.width}x${preview.region.height} erase=alpha0 dirty=${JSON.stringify(erased.dirtyRegion)} bytes=${saved.length}`;
+  body.textContent = `PASS cancel=${cancelCode} preview=${preview.region.width}x${preview.region.height} advanced-eraser=rejected erase=alpha0 dirty=${JSON.stringify(erased.dirtyRegion)} bytes=${saved.length}`;
 } catch (error) {
   body.dataset.result = "FAIL"; body.textContent = `FAIL ${error?.stack || error}`;
 } finally { client.terminate(); }

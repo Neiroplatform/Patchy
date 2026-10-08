@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <numbers>
 #include <string_view>
 
@@ -19,20 +21,35 @@ constexpr std::int32_t kMaximumBrushSize = 4096;
 constexpr std::uint64_t kMaximumLayerMaskStrokePixels = 268435456ULL;
 struct LayerMaskStrokeCancelled {};
 
-ScaledBrushTip procedural_advanced_tip(std::int32_t size, std::int32_t softness) {
-  ScaledBrushTip tip;
-  tip.width = size;
-  tip.height = size;
-  tip.anchor_x = static_cast<double>(size) / 2.0;
-  tip.anchor_y = static_cast<double>(size) / 2.0;
-  tip.mask.resize(static_cast<std::size_t>(size) * static_cast<std::size_t>(size));
+std::shared_ptr<const ScaledBrushTip> procedural_advanced_tip(
+    std::int32_t size, std::int32_t softness,
+    const std::function<bool()>& continue_operation) {
+  struct Cache {
+    std::mutex mutex;
+    std::int32_t size{-1};
+    std::int32_t softness{-1};
+    std::shared_ptr<const ScaledBrushTip> tip;
+  };
+  static Cache cache;
+  std::lock_guard lock(cache.mutex);
+  if (cache.tip && cache.size == size && cache.softness == softness) {
+    return cache.tip;
+  }
+  if (continue_operation && !continue_operation()) return {};
+  auto tip = std::make_shared<ScaledBrushTip>();
+  tip->width = size;
+  tip->height = size;
+  tip->anchor_x = static_cast<double>(size) / 2.0;
+  tip->anchor_y = static_cast<double>(size) / 2.0;
+  tip->mask.resize(static_cast<std::size_t>(size) * static_cast<std::size_t>(size));
   const auto radius = std::max(0.5, static_cast<double>(size) / 2.0);
   const auto edge = std::max(0.5, radius * std::clamp(softness, 0, 100) / 100.0);
   const auto inner = softness <= 0 ? radius : std::max(0.0, radius - edge);
   for (std::int32_t y = 0; y < size; ++y) {
+    if ((y & 31) == 0 && continue_operation && !continue_operation()) return {};
     for (std::int32_t x = 0; x < size; ++x) {
-      const auto dx = static_cast<double>(x) + 0.5 - tip.anchor_x;
-      const auto dy = static_cast<double>(y) + 0.5 - tip.anchor_y;
+      const auto dx = static_cast<double>(x) + 0.5 - tip->anchor_x;
+      const auto dy = static_cast<double>(y) + 0.5 - tip->anchor_y;
       const auto distance = std::hypot(dx, dy);
       double coverage = distance <= radius ? 1.0 : 0.0;
       if (softness > 0 && distance > inner) {
@@ -40,12 +57,15 @@ ScaledBrushTip procedural_advanced_tip(std::int32_t size, std::int32_t softness)
         const auto smooth = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
         coverage = 1.0 - smooth;
       }
-      tip.mask[static_cast<std::size_t>(y) * static_cast<std::size_t>(size) +
-               static_cast<std::size_t>(x)] =
+      tip->mask[static_cast<std::size_t>(y) * static_cast<std::size_t>(size) +
+                static_cast<std::size_t>(x)] =
           static_cast<std::uint8_t>(std::lround(std::clamp(coverage, 0.0, 1.0) * 255.0));
     }
   }
-  return tip;
+  cache.size = size;
+  cache.softness = softness;
+  cache.tip = std::move(tip);
+  return cache.tip;
 }
 bool fail(std::string* error, std::string_view message) {
   if (error != nullptr) *error = std::string(message);
@@ -205,7 +225,8 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
     return fail(error, "raster stroke geometry exceeds its bounded contract");
   }
   if (request.advanced_brush &&
-      (request.brush_roundness < 1 || request.brush_roundness > 100 ||
+      (request.mode != RasterStrokeMode::Brush ||
+       request.brush_roundness < 1 || request.brush_roundness > 100 ||
        !std::isfinite(request.brush_angle_degrees) ||
        !std::isfinite(request.brush_spacing) || request.brush_spacing < 0.01 ||
        request.brush_spacing > 10.0 || request.brush_dynamics.count < 1 ||
@@ -243,11 +264,13 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
   options.brush_angle_degrees = request.brush_angle_degrees;
   options.brush_tip_spacing = request.brush_spacing;
   options.brush_dynamics = request.brush_dynamics;
-  std::optional<ScaledBrushTip> advanced_tip;
+  std::shared_ptr<const ScaledBrushTip> advanced_tip;
   if (request.advanced_brush) {
     advanced_tip = procedural_advanced_tip(request.brush_size,
-                                           request.brush_softness);
-    options.brush_tip = &*advanced_tip;
+                                           request.brush_softness,
+                                           request.continue_operation);
+    if (!advanced_tip) return fail(error, "raster stroke was cancelled");
+    options.brush_tip = advanced_tip.get();
   }
   options.lock_transparent_pixels =
       (layer->lock_flags() & kLayerLockTransparentPixels) != 0U;

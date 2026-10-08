@@ -16,5 +16,7 @@
 - Extended ordinary Brush/Eraser stroke input with bounded procedural softness.
 - Extended Brush stroke input with optional bounded deterministic tip shape,
   shape/scatter/transfer dynamics, static generated texture and direct
-  foreground/background colour dynamics while retaining legacy struct sizes.
+  foreground/background colour dynamics while retaining legacy struct sizes;
+  advanced construction is cancellable, cached by size/softness and rejected
+  for Eraser/Clone/Heal modes.
 - Documented pre-1.0 compatibility, ownership and distribution policy.

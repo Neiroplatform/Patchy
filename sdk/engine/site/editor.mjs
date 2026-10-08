@@ -3646,7 +3646,7 @@ function finishTextBox(event, cancelled = false) {
     ? { x: Math.floor(draft.start.x), y: Math.floor(draft.start.y),
       width: Math.max(160, Math.round(snapshot.width * .35)), height: Math.max(80, Math.round(snapshot.height * .15)) }
     : bounds;
-  openTextDialog(pendingTextBounds);
+  openTextDialog(pendingTextBounds, true);
 }
 
 function commitFilter() {
@@ -4048,9 +4048,9 @@ function textLayerPayload(style, bounds, name, runs, paragraphs) {
     rgba: new Uint8Array(scratchContext.getImageData(0, 0, bounds.width, bounds.height).data) };
 }
 
-function openTextDialog(boundsOverride = null) {
+function openTextDialog(boundsOverride = null, forceCreate = false) {
   if (busy || !snapshot) return;
-  const layer = selectedLayer();
+  const layer = forceCreate ? null : selectedLayer();
   textEditingId = layer?.kind === 3 ? layer.id : null;
   const selectedBounds = snapshot.selection?.[0];
   const bounds = textEditingId ? layer.bounds : boundsOverride || pendingTextBounds || selectedBounds || {
@@ -4412,7 +4412,7 @@ function drawPaintSegment(draft, from, to) {
 function advancedBrushSettings(revision = 0n) {
   const percent = (id) => Number($(id).value) / 100;
   const seed = (Number($("brushSeedInput").value) >>> 0) ^ Number(BigInt(revision) & 0xffffffffn);
-  return { roundness: Math.round(Number($("brushRoundnessInput").value)),
+  const settings = { roundness: Math.round(Number($("brushRoundnessInput").value)),
     angle: Number($("brushAngleInput").value), spacing: Number($("brushSpacingInput").value) / 100,
     seed, secondaryColor: [...colorBytes($("backgroundSwatchInput").value), 255],
     sizeJitter: percent("brushSizeJitterInput"), angleJitter: percent("brushAngleJitterInput"),
@@ -4430,6 +4430,12 @@ function advancedBrushSettings(revision = 0n) {
     hueJitter: percent("brushHueJitterInput"), saturationJitter: percent("brushSaturationJitterInput"),
     brightnessJitter: percent("brushBrightnessJitterInput"), purity: percent("brushPurityInput"),
     colorPerTip: $("brushColorPerTipInput").checked };
+  const dynamic = settings.roundness !== 100 || settings.angle !== 0 || settings.spacing !== .25 ||
+    settings.sizeJitter !== 0 || settings.angleJitter !== 0 || settings.roundnessJitter !== 0 ||
+    settings.flipXJitter || settings.flipYJitter || settings.scatter !== 0 || settings.scatterBothAxes ||
+    settings.count !== 1 || settings.countJitter !== 0 || settings.opacityJitter !== 0 ||
+    settings.flowJitter !== 0 || settings.textureEnabled || settings.colorDynamicsEnabled;
+  return dynamic ? settings : undefined;
 }
 
 function rasterStrokePayload(draft) {

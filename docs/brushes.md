@@ -21,7 +21,10 @@ commit; the historical request sizes remain accepted and an omitted advanced
 object preserves the previous byte path. The browser deliberately does not
 expose ABR import, Dual Brush, Wet Edges, airbrush timing or tablet-control
 curves in this surface. Eraser remains on the procedural path without brush
-dynamics, matching the desktop contract. Partial `ImageBitmap` frames replace
+dynamics, matching the desktop contract. Default round settings omit the
+advanced object; non-default procedural tips are cooperatively cancellable
+during construction and reuse one bounded last-size/softness cache across
+preview and commit. Partial `ImageBitmap` frames replace
 their dirty canvas region (clear then draw), so newly transparent Eraser pixels
 cannot be hidden by source-over composition of the previous frame. Every
 size-based browser brush shows a high-contrast footprint while merely hovering

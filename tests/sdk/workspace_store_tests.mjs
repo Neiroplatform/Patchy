@@ -263,6 +263,10 @@ test("preferences round-trip with validation and malformed-data fallback", async
     { tool: "spotHealing", brushSize: 4096 });
   assert.deepEqual(await store.savePreferences({ tool: "patch", brushSize: 24 }),
     { tool: "patch", brushSize: 24 });
+  assert.deepEqual(await store.savePreferences({ tool: "eyedropper" }),
+    { tool: "eyedropper" });
+  assert.deepEqual(await store.savePreferences({ tool: "shape" }), { tool: "shape" });
+  assert.deepEqual(await store.savePreferences({ tool: "text" }), { tool: "text" });
   for (const tool of ["smudge", "dodge", "burn", "sponge", "blur", "sharpen",
     "mixer", "patternStamp"]) {
     assert.deepEqual(await store.savePreferences({ tool, brushSize: 24 }),

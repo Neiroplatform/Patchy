@@ -5608,6 +5608,14 @@ void core_advanced_raster_brush_is_deterministic_and_bounded() {
   std::string error;
   CHECK(!patchy::apply_raster_stroke(invalid_document, invalid_layer, invalid, nullptr, &error));
   CHECK(error == "advanced brush settings exceed their bounded contract");
+
+  auto cancelled = invalid;
+  cancelled.brush_roundness = 100;
+  cancelled.brush_size = 4096;
+  cancelled.continue_operation = [] { return false; };
+  CHECK(!patchy::apply_raster_stroke(invalid_document, invalid_layer, cancelled,
+                                     nullptr, &error));
+  CHECK(error == "raster stroke was cancelled");
 }
 
 void core_layer_mask_stroke_respects_selection_and_preserves_metadata() {
@@ -5844,6 +5852,19 @@ void engine_host_protocol_previews_and_commits_one_raster_stroke() {
             session, ready.state_id, ready.revision, &advanced_stroke, nullptr,
             nullptr, &region, &preview, &error) == 1);
   CHECK(region.width > 0 && region.height > 0 && preview.size > 0);
+  patchy_engine_buffer_release(&preview);
+  auto invalid_advanced_eraser = advanced_stroke;
+  invalid_advanced_eraser.mode = PATCHY_ENGINE_RASTER_ERASER;
+  CHECK(patchy_engine_session_preview_raster_stroke(
+            session, ready.state_id, ready.revision, &invalid_advanced_eraser,
+            nullptr, nullptr, &region, &preview, &error) == 0);
+  CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  auto softness_legacy_stroke = stroke;
+  softness_legacy_stroke.struct_size = static_cast<std::uint32_t>(
+      offsetof(patchy_engine_raster_stroke, advanced_flags));
+  CHECK(patchy_engine_session_preview_raster_stroke(
+            session, ready.state_id, ready.revision, &softness_legacy_stroke,
+            nullptr, nullptr, &region, &preview, &error) == 1);
   patchy_engine_buffer_release(&preview);
   auto legacy_stroke = stroke;
   legacy_stroke.struct_size = static_cast<std::uint32_t>(

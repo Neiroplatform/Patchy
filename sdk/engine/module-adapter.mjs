@@ -2576,11 +2576,15 @@ export class EmscriptenPatchyEngine {
       throw new TypeError("Raster stroke color must contain four bytes");
     }
     const advanced = input.advanced ?? {};
+    if (input.advanced && input.mode !== 0) {
+      throw new TypeError("Advanced brush settings are supported by Brush strokes only");
+    }
     const secondaryColor = advanced.secondaryColor ?? [255, 255, 255, 255];
     const fractionKeys = ["sizeJitter", "angleJitter", "roundnessJitter", "countJitter",
       "opacityJitter", "flowJitter", "textureDepth", "foregroundBackgroundJitter",
       "hueJitter", "saturationJitter", "brightnessJitter"];
-    const fractionValues = Object.fromEntries(fractionKeys.map((key) => [key, advanced[key] ?? 0]));
+    const fractionValues = Object.fromEntries(fractionKeys.map((key) =>
+      [key, advanced[key] ?? (key === "textureDepth" ? .5 : 0)]));
     const roundness = advanced.roundness ?? 100;
     const angle = advanced.angle ?? 0;
     const spacing = advanced.spacing ?? .25;
