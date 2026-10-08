@@ -191,11 +191,14 @@ export class PatchyWorkerClient {
     expectedRevision: bigint }): Promise<DocumentProjection>;
   previewRasterFill(input: { layerId: bigint; mode: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
     color: number[]; secondaryColor?: number[]; patternSize?: number;
-    start: number[]; end: number[]; cancellation?: Int32Array;
+    start: number[]; end: number[]; geometry?: 0 | 1 | 2 | 3 | 4;
+    stops?: Array<{ position: number; color: [number, number, number, number] }>;
+    cancellation?: Int32Array;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<{ region: Rect; rgba: Uint8Array }>;
   applyRasterFill(input: { layerId: bigint; mode: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
     color: number[]; secondaryColor?: number[]; patternSize?: number;
-    start: number[]; end: number[];
+    start: number[]; end: number[]; geometry?: 0 | 1 | 2 | 3 | 4;
+    stops?: Array<{ position: number; color: [number, number, number, number] }>;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   previewLayerWarp(input: { layerId: bigint;
     style: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;

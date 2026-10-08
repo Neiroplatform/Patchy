@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <string_view>
 
 namespace patchy {
@@ -88,9 +89,28 @@ EditColor fill_color(const RasterFillRequest& request, std::int32_t x,
   auto vy = request.end.y - request.start.y;
   auto length = vx * vx + vy * vy;
   if (length <= 0.0) { vx = 1.0; vy = 0.0; length = 1.0; }
-  const auto t = std::clamp(
-      ((x - request.start.x) * vx + (y - request.start.y) * vy) / length,
-      0.0, 1.0);
+  const auto projection =
+      ((x - request.start.x) * vx + (y - request.start.y) * vy) / length;
+  const auto magnitude = std::sqrt(length);
+  const auto cross = ((x - request.start.x) * -vy +
+                      (y - request.start.y) * vx) / length;
+  double raw = projection;
+  switch (request.gradient_geometry) {
+    case GradientGeometry::Radial:
+      raw = std::hypot(x - request.start.x, y - request.start.y) / magnitude;
+      break;
+    case GradientGeometry::Angle: {
+      const auto base = std::atan2(vy, vx);
+      auto angle = std::atan2(y - request.start.y, x - request.start.x) - base;
+      if (angle < 0.0) angle += 2.0 * std::numbers::pi;
+      raw = angle / (2.0 * std::numbers::pi);
+      break;
+    }
+    case GradientGeometry::Reflected: raw = std::abs(projection); break;
+    case GradientGeometry::Diamond: raw = std::abs(projection) + std::abs(cross); break;
+    case GradientGeometry::Linear: break;
+  }
+  const auto t = std::clamp(raw, 0.0, 1.0);
   const auto interpolate = [](EditColor a, EditColor b, double amount) {
     const auto channel = [amount](std::uint8_t x, std::uint8_t y) {
       return static_cast<std::uint8_t>(std::lround(x + (y - x) * amount));
@@ -98,6 +118,18 @@ EditColor fill_color(const RasterFillRequest& request, std::int32_t x,
     return EditColor{channel(a.r, b.r), channel(a.g, b.g), channel(a.b, b.b),
                      channel(a.a, b.a)};
   };
+  if (request.gradient_stops.size() >= 2) {
+    const auto upper = std::upper_bound(request.gradient_stops.begin(),
+        request.gradient_stops.end(), t,
+        [](double value, const RasterGradientStop& stop) { return value < stop.position; });
+    if (upper == request.gradient_stops.begin()) return upper->color;
+    if (upper == request.gradient_stops.end()) return request.gradient_stops.back().color;
+    const auto& right = *upper;
+    const auto& left = *(upper - 1);
+    const auto span = right.position - left.position;
+    return interpolate(left.color, right.color,
+                       span <= 0.0 ? 0.0 : (t - left.position) / span);
+  }
   switch (request.mode) {
     case RasterFillMode::ForegroundTransparent:
       return interpolate(request.color,

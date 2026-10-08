@@ -6046,6 +6046,20 @@ void core_raster_fill_respects_soft_selection_locks_and_presets() {
       custom_assets, custom_id, custom_gradient, &result, &error));
   CHECK(custom_assets.find_layer(custom_id)->pixels().pixel(0, 0)[0] == 10);
   CHECK(custom_assets.find_layer(custom_id)->pixels().pixel(3, 0)[0] == 210);
+  Document stop_gradient(3, 1, PixelFormat::rgba8());
+  PixelBuffer stop_pixels(3, 1, PixelFormat::rgba8()); stop_pixels.clear(0);
+  const auto stop_id = stop_gradient.add_pixel_layer("Stops", std::move(stop_pixels)).id();
+  patchy::RasterFillRequest stops;
+  stops.mode = patchy::RasterFillMode::CustomGradient;
+  stops.start = {0, 0}; stops.end = {2, 0};
+  stops.gradient_stops = {{0.0, {255, 0, 0, 255}},
+                          {0.5, {0, 255, 0, 128}},
+                          {1.0, {0, 0, 255, 255}}};
+  CHECK(patchy::apply_raster_fill(stop_gradient, stop_id, stops, &result, &error));
+  CHECK(stop_gradient.find_layer(stop_id)->pixels().pixel(0, 0)[0] == 255);
+  CHECK(stop_gradient.find_layer(stop_id)->pixels().pixel(1, 0)[1] == 255);
+  CHECK(stop_gradient.find_layer(stop_id)->pixels().pixel(1, 0)[3] == 128);
+  CHECK(stop_gradient.find_layer(stop_id)->pixels().pixel(2, 0)[2] == 255);
   patchy::RasterFillRequest custom_pattern;
   custom_pattern.mode = patchy::RasterFillMode::CustomChecker;
   custom_pattern.color = {1, 2, 3, 255};

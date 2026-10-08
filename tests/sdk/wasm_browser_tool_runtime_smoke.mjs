@@ -137,22 +137,35 @@ try {
       optionsClientWidth: document.querySelector("#toolOptions").clientWidth,
       optionsScrollWidth: document.querySelector("#toolOptions").scrollWidth,
       metricsLeft: metrics.left,
-      labels: labels.map((rect) => ({ left: rect.left, right: rect.right })) };
+      stageHeight: stage.height,
+      labels: labels.map((rect) => ({ left: rect.left, right: rect.right,
+        top: rect.top, bottom: rect.bottom })) };
   });
   const assertOptionsLayout = (optionsLayout) => {
     assert.ok(optionsLayout.optionsRight <= optionsLayout.stageRight + .5,
       `tool options escape the stage: ${JSON.stringify(optionsLayout)}`);
-    assert.ok(optionsLayout.optionsScrollWidth <= optionsLayout.optionsClientWidth + 1,
-      `brush controls require hidden horizontal scrolling: ${JSON.stringify(optionsLayout)}`);
     assert.ok(optionsLayout.labels.every((rect) => rect.left >= optionsLayout.optionsLeft - .5 &&
       rect.right <= optionsLayout.optionsRight + .5),
     `brush controls are clipped: ${JSON.stringify(optionsLayout.labels)}`);
-    for (let index = 1; index < optionsLayout.labels.length; ++index) {
-      assert.ok(optionsLayout.labels[index].left >= optionsLayout.labels[index - 1].right - .5,
+    for (let index = 0; index < optionsLayout.labels.length; ++index) {
+      for (let other = index + 1; other < optionsLayout.labels.length; ++other) {
+        const a = optionsLayout.labels[index]; const b = optionsLayout.labels[other];
+        assert.equal(a.left < b.right - .5 && a.right > b.left + .5 &&
+          a.top < b.bottom - .5 && a.bottom > b.top + .5, false,
         `brush controls overlap: ${JSON.stringify(optionsLayout.labels)}`);
+      }
     }
   };
   assertOptionsLayout(await measureOptionsLayout());
+  const stableStageHeight = (await measureOptionsLayout()).stageHeight;
+  await page.locator("#brushSizeInput").evaluate((input) => {
+    input.value = "1748"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  assert.equal((await measureOptionsLayout()).stageHeight, stableStageHeight,
+    "large brush radius moved the top options menu");
+  await page.locator("#brushSizeInput").evaluate((input) => {
+    input.value = "17"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   await page.setViewportSize({ width: 1280, height: 900 });
   assertOptionsLayout(await measureOptionsLayout());
 
@@ -240,23 +253,36 @@ try {
   await page.locator("#paintPresetSelect").evaluate((select) => {
     select.value = "solid"; select.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  await runPixelTool({ buttonId: "gradientToolButton", label: "Applying gradient",
-    from: { x: .2, y: .22 }, to: { x: .4, y: .4 }, prepare: async () => {
+  await selectTool("gradientToolButton");
+  await (async () => {
+    const beforeGradient = await revision();
+    {
       assert.equal(await page.locator("#paintPresetSelect").inputValue(), "foreground-transparent",
         "Gradient kept an incompatible fill-only preset");
       assert.equal(await page.locator('#paintPresetSelect option[value="solid"]')
         .evaluate((option) => option.disabled && option.hidden), true,
         "Gradient left the Solid fill preset enabled");
       await page.locator("#paintPresetSelect").selectOption("black-white");
-    } });
+      await page.locator("#gradientTypeInput").selectOption("1");
+      await dragCanvas({ x: .2, y: .22 }, { x: .4, y: .4 });
+      assert.equal(await revision(), beforeGradient, "Gradient committed before Apply");
+      assert.equal(await page.locator("#applyGradientButton").isEnabled(), true,
+        "Gradient draft did not enable Apply");
+      await dragCanvas({ x: .3, y: .31 }, { x: .3, y: .31 }, { steps: 1 });
+      assert.equal(await page.locator("#gradientStopInput option").count(), 3,
+        "Gradient line did not add a colour stop");
+      await page.locator("#gradientStopOpacityInput").evaluate((input) => {
+        input.value = "55"; input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await page.click("#applyGradientButton");
+      await waitForMutation(beforeGradient, "Applying gradient");
+    }
+  })();
   const beforeRepeatedGradient = await revision();
   await dragCanvas({ x: .2, y: .22 }, { x: .4, y: .4 });
-  await page.waitForFunction(() =>
-    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
-    document.querySelector("#actionToast")?.textContent?.startsWith("Gradient made no pixel change"),
-  null, { timeout: 90_000 });
+  await page.click("#cancelGradientButton");
   assert.equal(await revision(), beforeRepeatedGradient,
-    "a repeated identical Gradient unexpectedly created a revision");
+    "cancelling a Gradient unexpectedly created a revision");
   assert.equal(await page.locator("#errorBanner").isHidden(), true,
     `repeated Gradient surfaced ${await page.textContent("#errorMessage")}`);
 
@@ -267,13 +293,15 @@ try {
   });
   await revealTool("fillToolButton");
   await page.click("#fillToolButton");
+  assert.equal(await revision(), beforeFillRevision, "Fill ran while selecting the tool");
+  await dragCanvas({ x: .28, y: .28 }, { x: .28, y: .28 }, { steps: 1 });
   await waitForMutation(beforeFillRevision, "Filling pixels");
   assert.notEqual(await canvasDigest(), beforeFillPixels, "Fill committed without changing rendered pixels");
   assert.equal(await page.locator("#errorBanner").isHidden(), true,
     `fillToolButton surfaced ${await page.textContent("#errorMessage")}`);
 
   const wandFixture = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60" viewBox="0 0 120 60">' +
-    '<rect width="40" height="60" fill="#ef2020"/><rect x="40" width="40" height="60" fill="#2050ef"/>' +
+    '<rect width="40" height="60" fill="#ef2020"/><rect x="40" width="40" height="60" fill="#ffffff"/>' +
     '<rect x="80" width="40" height="60" fill="#ef2020"/></svg>');
   await page.locator("#fileInput").setInputFiles({ name: "magic-wand-fixture.svg",
     mimeType: "image/svg+xml", buffer: wandFixture });
@@ -309,6 +337,12 @@ try {
   const nonContiguousPath = await page.locator("#selectionMarchPath").getAttribute("d");
   assert.notEqual(nonContiguousPath, contiguousPath,
     "non-contiguous Magic Wand did not add the disconnected matching colour");
+  before = await revision();
+  await page.mouse.click(wandCanvas.x + wandCanvas.width * .5,
+    wandCanvas.y + wandCanvas.height * .5);
+  await waitForMutation(before, "Selecting color with Magic Wand");
+  assert.equal(await page.locator("#selectionOverlay").isHidden(), false,
+    "Magic Wand did not select the white region");
   assert.equal(await page.locator("#errorBanner").isHidden(), true,
     `Magic Wand surfaced ${await page.textContent("#errorMessage")}`);
 

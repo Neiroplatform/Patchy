@@ -23,6 +23,8 @@ enum class RasterFillMode : std::uint8_t {
   CustomChecker,
   CustomDots,
 };
+enum class GradientGeometry : std::uint8_t { Linear, Radial, Angle, Reflected, Diamond };
+struct RasterGradientStop { double position{0.0}; EditColor color{}; };
 struct RasterStrokePoint { double x{0.0}; double y{0.0}; };
 struct RasterStrokeRequest {
   RasterStrokeMode mode{RasterStrokeMode::Brush};
@@ -44,6 +46,8 @@ struct RasterFillRequest {
   std::int32_t pattern_size{8};
   RasterStrokePoint start{};
   RasterStrokePoint end{};
+  GradientGeometry gradient_geometry{GradientGeometry::Linear};
+  std::vector<RasterGradientStop> gradient_stops{};
   std::vector<Rect> selection{};
   Rect selection_mask_bounds{};
   std::optional<PixelBuffer> selection_mask{};

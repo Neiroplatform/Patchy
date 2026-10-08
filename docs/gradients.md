@@ -36,3 +36,13 @@ Gradient Overlay `GrFl` and gradient Stroke `FrFX` share the definition codec bu
 
 Factory reset writes a copied library entry first. In-memory gradients change only
 after the save succeeds, so a write failure leaves the current library intact.
+
+## Self-hosted Worker editor
+
+The browser Gradient tool is a two-phase operation. A pointer drag creates a
+non-committing vector preview; its direction and length define the mapping for
+Linear, Radial, Angle, Reflected, or Diamond geometry. The options bar exposes
+up to eight ordered color/opacity stops. Clicking the draft line inserts a
+stop, and Apply publishes exactly one engine revision; Cancel/Escape preserves
+the document. The host ABI accepts the original 64-byte raster-fill request and
+the additive 200-byte form carrying geometry plus fixed-capacity stops.

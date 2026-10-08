@@ -93,6 +93,14 @@ Patent review (July 15, 2026): this is the classic flat-stamp behavior Adobe doc
 
 The Mixer Brush's limited continuous-pickup engine, its Photoshop calibration record, Sample All Layers, the Useful Combinations dropdown, and the shared Brush/Mixer/Eraser stroke Smoothing stabilizer live in [mixer.md](mixer.md).
 
+The self-hosted options bar has a fixed two-row footprint, so large brush sizes
+do not move the canvas or hide controls. Browser pointer samples for local
+adjustment and advanced-paint brushes are distance-decimated relative to the
+selected diameter before the bounded engine request is committed. A
+mathematically valid no-op (uniform blur, matching pattern/mix, or a stroke
+outside the selection) is reported as actionable neutral feedback rather than
+as an engine failure.
+
 ## Healing family
 
 The Healing Brush, Spot Healing, the Patch tool, and the shared retouch Sample All Layers option live in [healing.md](healing.md), together with their binding legal envelope (classic user-directed frequency separation only; the shared `healing_sample` math is promoted to `canvas_widget_shared.cpp`).

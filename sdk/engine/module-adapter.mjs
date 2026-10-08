@@ -40,7 +40,7 @@ const DOCUMENT_PATH_PROJECTION_SIZE = 288;
 const PATH_SUBPATH_PROJECTION_SIZE = 16;
 const LAYER_TRANSFORM_SIZE = 80;
 const RASTER_STROKE_SIZE = 56;
-const RASTER_FILL_SIZE = 64;
+const RASTER_FILL_SIZE = 200;
 const LAYER_WARP_SIZE = 48;
 const LIQUIFY_INPUT_SIZE = 24;
 const LIQUIFY_STROKE_SIZE = 64;
@@ -2599,6 +2599,7 @@ export class EmscriptenPatchyEngine {
     const color = input.color ?? [0, 0, 0, 255];
     const secondaryColor = input.secondaryColor ?? [255, 255, 255, 255];
     const patternSize = input.patternSize ?? 8;
+    const geometry = input.geometry ?? 0; const stops = input.stops ?? [];
     if (typeof input.layerId !== "bigint" || input.layerId <= 0n ||
         ![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].includes(input.mode) ||
         !Array.isArray(start) || start.length !== 2 || !start.every(Number.isFinite) ||
@@ -2607,7 +2608,14 @@ export class EmscriptenPatchyEngine {
         !Array.isArray(secondaryColor) || secondaryColor.length !== 4 ||
         [...color, ...secondaryColor].some((component) => !Number.isInteger(component) ||
           component < 0 || component > 255) ||
-        !Number.isInteger(patternSize) || patternSize < 1 || patternSize > 256) {
+        !Number.isInteger(patternSize) || patternSize < 1 || patternSize > 256 ||
+        !Number.isInteger(geometry) || geometry < 0 || geometry > 4 ||
+        !Array.isArray(stops) || stops.length > 8 || stops.length === 1 ||
+        stops.some((stop, index) => !Number.isFinite(stop?.position) ||
+          stop.position < 0 || stop.position > 1 ||
+          (index > 0 && stop.position < stops[index - 1].position) ||
+          !Array.isArray(stop.color) || stop.color.length !== 4 ||
+          stop.color.some((component) => !Number.isInteger(component) || component < 0 || component > 255))) {
       throw new TypeError("A bounded raster fill is required");
     }
     const fill = this.#alloc(RASTER_FILL_SIZE); const view = this.#view(fill, RASTER_FILL_SIZE);
@@ -2618,6 +2626,13 @@ export class EmscriptenPatchyEngine {
     view.setUint32(24, patternSize, true);
     view.setFloat64(32, start[0], true); view.setFloat64(40, start[1], true);
     view.setFloat64(48, end[0], true); view.setFloat64(56, end[1], true);
+    view.setUint32(64, geometry, true); view.setUint32(68, stops.length, true);
+    stops.forEach((stop, index) => {
+      const offset = 72 + index * 16;
+      view.setFloat64(offset, stop.position, true);
+      stop.color.forEach((component, componentIndex) => view.setUint8(offset + 8 + componentIndex, component));
+      view.setUint32(offset + 12, 0, true);
+    });
     return fill;
   }
 

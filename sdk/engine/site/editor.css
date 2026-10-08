@@ -228,8 +228,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .document-tab > button:last-child::after { transform: rotate(-45deg); }
 .document-tab[data-active="true"] { background: var(--surface-2); box-shadow: inset 0 -2px var(--accent); }
 .document-tab[data-active="true"] > button:first-child { color: var(--text); }
-.stage-meta { min-width: 0; min-height: 66px; display: grid;
-  grid-template-columns: minmax(72px, 1fr) auto auto; grid-template-rows: 24px 34px;
+.stage-meta { min-width: 0; height: 96px; min-height: 96px; display: grid;
+  grid-template-columns: minmax(72px, 1fr) auto auto; grid-template-rows: 24px 64px;
   align-items: center; align-content: center; gap: 0 10px; padding: 4px 13px; overflow: hidden; border-bottom: 1px solid #23282c;
   color: var(--text-muted); font-size: 11px; }
 .stage-meta > span:first-child { min-width: 0; color: var(--text); font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -309,8 +309,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .canvas-viewport[data-tool="burn"] .canvas-frame, .canvas-viewport[data-tool="sponge"] .canvas-frame,
 .canvas-viewport[data-tool="blur"] .canvas-frame, .canvas-viewport[data-tool="sharpen"] .canvas-frame,
 .canvas-viewport[data-tool="gradient"] .canvas-frame { cursor: crosshair; }
-.tool-options { min-width: 0; width: 100%; max-width: 100%; display: flex; grid-column: 1 / -1; grid-row: 2;
-  align-items: center; gap: 12px; justify-self: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.tool-options { min-width: 0; width: 100%; max-width: 100%; height: 60px; display: grid; grid-column: 1 / -1; grid-row: 2;
+  grid-auto-flow: column; grid-template-rows: repeat(2, 28px); grid-auto-columns: max-content;
+  align-items: center; gap: 2px 12px; justify-self: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .tool-options[data-empty="true"] { display: none; }
 .tool-instruction { min-width: 120px; max-width: min(420px, 34vw); overflow: hidden;
   color: var(--text-muted); font-size: 10px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
@@ -607,8 +608,8 @@ kbd { display: inline-grid; min-width: 22px; min-height: 22px; padding: 2px 5px;
   .panel + .panel { border-top: 1px solid var(--line); border-left: 0; }
   .layer-list { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(210px, 1fr); overflow-x: auto; }
   .inspector-resizer { display: none; }
-  .stage-meta { min-height: 104px; grid-template-rows: 24px minmax(34px, auto); }
-  .tool-options { flex-wrap: wrap; max-height: 68px; overflow-x: hidden; overflow-y: auto; padding-bottom: 3px; }
+  .stage-meta { height: 104px; min-height: 104px; grid-template-rows: 24px 72px; }
+  .tool-options { height: 68px; overflow-x: auto; overflow-y: hidden; padding-bottom: 3px; }
   .tool-options label { flex: 0 1 auto; }
   #layerTransformDialog[open] { top: calc(var(--topbar-height) + 138px); left: calc(var(--rail-width) + 8px);
     width: calc(100vw - var(--rail-width) - 16px); }

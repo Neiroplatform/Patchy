@@ -125,7 +125,8 @@ static_assert(static_cast<std::uint32_t>(patchy::PathCombineOp::Intersect) ==
 static_assert(static_cast<std::uint32_t>(
                   patchy::engine::SelectionCombineMode::Intersect) ==
               PATCHY_ENGINE_SELECTION_INTERSECT);
-static_assert(sizeof(patchy_engine_raster_fill) == 64U);
+static_assert(sizeof(patchy_engine_gradient_stop) == 16U);
+static_assert(sizeof(patchy_engine_raster_fill) == 200U);
 static_assert(offsetof(patchy_engine_raster_fill, secondary_red) == 20U);
 static_assert(offsetof(patchy_engine_raster_fill, pattern_size) == 24U);
 static_assert(offsetof(patchy_engine_raster_fill, start_x) == 32U);
@@ -885,7 +886,7 @@ int copy_buffer(std::span<const std::uint8_t> source,
 
 std::optional<patchy::LayerTransformRequest> layer_transform_request(
     const patchy_engine_layer_transform *input, patchy_engine_error *error) {
-  if (input == nullptr || input->struct_size != sizeof(*input) ||
+  if (input == nullptr || (input->struct_size != 64U && input->struct_size != sizeof(*input)) ||
       input->layer_id == 0 ||
       input->interpolation > PATCHY_ENGINE_TRANSFORM_BILINEAR) {
     fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
@@ -1006,6 +1007,32 @@ std::optional<patchy::RasterFillRequest> raster_fill_request(
                              : static_cast<std::int32_t>(input->pattern_size);
   request.start = {input->start_x, input->start_y};
   request.end = {input->end_x, input->end_y};
+  if (input->struct_size == sizeof(*input)) {
+    if (input->gradient_geometry > PATCHY_ENGINE_GRADIENT_DIAMOND ||
+        input->gradient_stop_count > 8U) {
+      fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+           "a bounded gradient definition is required");
+      return std::nullopt;
+    }
+    request.gradient_geometry = static_cast<patchy::GradientGeometry>(input->gradient_geometry);
+    for (std::size_t index = 0; index < input->gradient_stop_count; ++index) {
+      const auto& stop = input->gradient_stops[index];
+      if (!std::isfinite(stop.position) || stop.position < 0.0 || stop.position > 1.0 ||
+          stop.reserved != 0U || (!request.gradient_stops.empty() &&
+          stop.position < request.gradient_stops.back().position)) {
+        fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+             "ordered gradient stops in the unit interval are required");
+        return std::nullopt;
+      }
+      request.gradient_stops.push_back({stop.position,
+          {stop.red, stop.green, stop.blue, stop.alpha}});
+    }
+    if (!request.gradient_stops.empty() && request.gradient_stops.size() < 2U) {
+      fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+           "at least two gradient stops are required");
+      return std::nullopt;
+    }
+  }
   const auto &selection = session->value->selection();
   request.selection = selection.selection;
   if (!selection.mask_alpha.empty()) {

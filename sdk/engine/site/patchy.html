@@ -187,6 +187,20 @@
               <option value="solid" data-preset-kind="fill">Solid foreground</option>
               <option value="checker" data-preset-kind="fill">Checker pattern</option><option value="dots" data-preset-kind="fill">Dot pattern</option>
             </select></label>
+            <label>Type <select id="gradientTypeInput" aria-label="Gradient type">
+              <option value="0">Linear</option><option value="1">Radial</option>
+              <option value="2">Angle</option><option value="3">Reflected</option>
+              <option value="4">Diamond</option>
+            </select></label>
+            <label>Stop <select id="gradientStopInput" aria-label="Gradient stop"></select></label>
+            <label>Stop color <input id="gradientStopColorInput" type="color" value="#111111"></label>
+            <label>Stop opacity <input id="gradientStopOpacityInput" type="range" min="0" max="100" value="100"><output id="gradientStopOpacityOutput">100%</output></label>
+            <span class="direct-operation-actions">
+              <button class="tool-option-button" id="addGradientStopButton" type="button">Add stop</button>
+              <button class="tool-option-button" id="removeGradientStopButton" type="button">Remove</button>
+              <button class="tool-option-button" id="cancelGradientButton" type="button" disabled>Cancel</button>
+              <button class="tool-option-button tool-option-apply" id="applyGradientButton" type="button" disabled>Apply</button>
+            </span>
             <label class="non-retouch-option standard-paint-option">Tolerance <input id="selectionToleranceInput" type="range" min="0" max="255" value="32"><output id="selectionToleranceOutput">32</output></label>
             <label id="wandContiguousOption" hidden><input id="wandContiguousInput" type="checkbox" checked> Contiguous</label>
             <label id="wandSampleAllOption" hidden><input id="wandSampleAllInput" type="checkbox" checked> Sample all layers</label>

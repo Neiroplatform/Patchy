@@ -132,6 +132,10 @@ let textDialogStyleDirty = false;
 let textDialogParagraphDirty = false;
 let cloneSource = null;
 let gradientDraft = null;
+let gradientStops = [
+  { position: 0, color: [17, 17, 17, 255] },
+  { position: 1, color: [17, 17, 17, 0] },
+];
 let lassoDraft = null;
 let polygonDraft = null;
 let penDraft = null;
@@ -2103,7 +2107,7 @@ function setCanvasTool(tool) {
     ["patchToolButton", "patch"], ["smudgeToolButton", "smudge"],
     ["dodgeToolButton", "dodge"], ["burnToolButton", "burn"],
     ["spongeToolButton", "sponge"], ["blurToolButton", "blur"],
-    ["sharpenToolButton", "sharpen"], ["gradientToolButton", "gradient"], ["penToolButton", "pen"],
+    ["sharpenToolButton", "sharpen"], ["gradientToolButton", "gradient"], ["fillToolButton", "fill"], ["penToolButton", "pen"],
     ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
     if (tool === value) activeToolButton = $(id);
@@ -2579,8 +2583,8 @@ function setZoom(next, anchor = null) {
 function canvasPoint(event) {
   const bounds = canvas.getBoundingClientRect();
   return {
-    x: Math.max(0, Math.min(snapshot.width, (event.clientX - bounds.left) / bounds.width * snapshot.width)),
-    y: Math.max(0, Math.min(snapshot.height, (event.clientY - bounds.top) / bounds.height * snapshot.height)),
+    x: Math.max(0, Math.min(snapshot.width - 1, (event.clientX - bounds.left) / bounds.width * snapshot.width)),
+    y: Math.max(0, Math.min(snapshot.height - 1, (event.clientY - bounds.top) / bounds.height * snapshot.height)),
   };
 }
 
@@ -4353,6 +4357,7 @@ function rasterFillPayload(draft) {
     color: custom?.color ?? draft.color,
     secondaryColor: custom?.secondaryColor, patternSize: custom?.patternSize,
     start: [draft.start.x, draft.start.y], end: [draft.end.x, draft.end.y],
+    geometry: draft.geometry ?? 0, stops: draft.stops ?? [],
     expectedStateId: draft.stateId, expectedRevision: draft.revision };
 }
 
@@ -4406,24 +4411,98 @@ function beginPaint(event) {
   drawPaintSegment(draft, point, point); scheduleRasterPreview(draft);
 }
 
-async function fillSelectedPixels() {
+async function fillSelectedPixels(event) {
   const layer = selectedLayer();
   if (busy || layer?.kind !== 0) return;
+  const point = canvasPoint(event);
+  if (!(snapshot.selection?.length || snapshot.selectionMask)) {
+    await mutate("Selecting fill target", () => client.magicWand({
+      x: Math.floor(point.x), y: Math.floor(point.y),
+      tolerance: Math.round(Number($("selectionToleranceInput").value)),
+      contiguous: true, sampleAllLayers: true, combine: 0,
+      expectedStateId: snapshot.stateId, expectedRevision: snapshot.revision,
+    }));
+  }
+  const currentLayer = selectedLayer();
   const draft = { layer, preset: $("paintPresetSelect").value,
     color: [...colorBytes($("brushColorInput").value), 255],
     start: { x: layer.bounds.x, y: layer.bounds.y },
     end: { x: layer.bounds.x + layer.bounds.width, y: layer.bounds.y },
     stateId: snapshot.stateId, revision: snapshot.revision };
+  draft.layer = currentLayer;
   return mutate("Filling pixels", () => client.applyRasterFill(rasterFillPayload(draft)));
+}
+
+function renderGradientDraft() {
+  const target = $("gestureCanvas").getContext("2d");
+  target.clearRect(0, 0, canvas.width, canvas.height);
+  if (!gradientDraft) return;
+  target.save(); target.lineWidth = Math.max(1, 1 / Math.max(zoom, .01));
+  target.strokeStyle = "#fff"; target.setLineDash([5 / zoom, 4 / zoom]);
+  target.beginPath(); target.moveTo(gradientDraft.start.x, gradientDraft.start.y);
+  target.lineTo(gradientDraft.end.x, gradientDraft.end.y); target.stroke();
+  target.setLineDash([]);
+  for (const stop of gradientStops) {
+    const x = gradientDraft.start.x + (gradientDraft.end.x - gradientDraft.start.x) * stop.position;
+    const y = gradientDraft.start.y + (gradientDraft.end.y - gradientDraft.start.y) * stop.position;
+    target.fillStyle = `rgba(${stop.color.join(",")})`;
+    target.beginPath(); target.arc(x, y, Math.max(4, 5 / zoom), 0, Math.PI * 2); target.fill();
+    target.strokeStyle = "#111"; target.stroke();
+  }
+  target.restore();
+  $("applyGradientButton").disabled = false; $("cancelGradientButton").disabled = false;
+}
+
+function syncGradientStops() {
+  const select = $("gradientStopInput"); const selected = Math.min(Number(select.value) || 0, gradientStops.length - 1);
+  select.replaceChildren(...gradientStops.map((stop, index) => {
+    const option = document.createElement("option"); option.value = String(index);
+    option.textContent = `${Math.round(stop.position * 100)}%`; return option;
+  }));
+  select.value = String(selected); const stop = gradientStops[selected];
+  $("gradientStopColorInput").value = `#${stop.color.slice(0, 3).map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+  $("gradientStopOpacityInput").value = String(Math.round(stop.color[3] / 2.55));
+  $("gradientStopOpacityOutput").value = `${Math.round(stop.color[3] / 2.55)}%`;
+  $("removeGradientStopButton").disabled = gradientStops.length <= 2;
+  renderGradientDraft();
+}
+
+function resetGradientStopsForPreset() {
+  const color = [...colorBytes($("brushColorInput").value), 255];
+  const presets = {
+    "foreground-transparent": [{ position: 0, color }, { position: 1, color: [...color.slice(0, 3), 0] }],
+    "black-white": [{ position: 0, color: [0, 0, 0, 255] }, { position: 1, color: [255, 255, 255, 255] }],
+    sunset: [{ position: 0, color: [255, 61, 119, 255] }, { position: .48, color: [255, 154, 61, 255] },
+      { position: 1, color: [255, 230, 109, 255] }],
+    ocean: [{ position: 0, color: [8, 47, 73, 255] }, { position: .5, color: [2, 132, 199, 255] },
+      { position: 1, color: [103, 232, 249, 255] }],
+  };
+  gradientStops = (presets[$("paintPresetSelect").value] || gradientStops)
+    .map((stop) => ({ position: stop.position, color: [...stop.color] }));
+  syncGradientStops();
 }
 
 async function beginGradient(event) {
   const layer = selectedLayer();
   if (busy || layer?.kind !== 0 || event.button !== 0) return;
-  const start = canvasPoint(event); canvas.setPointerCapture(event.pointerId);
+  const start = canvasPoint(event);
+  if (gradientDraft && gradientDraft.pointerId == null && gradientStops.length < 8) {
+    const vx = gradientDraft.end.x - gradientDraft.start.x;
+    const vy = gradientDraft.end.y - gradientDraft.start.y;
+    const length = vx * vx + vy * vy;
+    if (length > 0) {
+      const position = Math.max(0, Math.min(1,
+        ((start.x - gradientDraft.start.x) * vx + (start.y - gradientDraft.start.y) * vy) / length));
+      gradientStops.push({ position, color: [128, 128, 128, 255] });
+      gradientStops.sort((a, b) => a.position - b.position); syncGradientStops();
+      gradientDraft.stops = gradientStops; scheduleRasterFillPreview(gradientDraft); return;
+    }
+  }
+  canvas.setPointerCapture(event.pointerId);
   gradientDraft = { pointerId: event.pointerId, layer, start, end: start,
     preset: $("paintPresetSelect").value,
     color: [...colorBytes($("brushColorInput").value), 255],
+    geometry: Number($("gradientTypeInput").value), stops: gradientStops.map((stop) => ({ ...stop, color: [...stop.color] })),
     stateId: snapshot.stateId, revision: snapshot.revision };
   scheduleRasterFillPreview(gradientDraft);
 }
@@ -4431,9 +4510,16 @@ async function beginGradient(event) {
 async function finishGradient(event) {
   const draft = gradientDraft;
   if (!draft || event.pointerId !== draft.pointerId) return;
-  gradientDraft = null;
-  clearRasterPreview();
-  if (busy || !snapshot) return;
+  gradientDraft.pointerId = null;
+  renderGradientDraft();
+}
+
+async function applyGradientDraft() {
+  const draft = gradientDraft;
+  if (!draft || busy || !snapshot) return;
+  draft.geometry = Number($("gradientTypeInput").value);
+  draft.stops = gradientStops.map((stop) => ({ ...stop, color: [...stop.color] }));
+  gradientDraft = null; clearRasterPreview(); renderGradientDraft();
   clearError();
   setBusy(true, "Applying gradient", "Committing one canonical engine revision");
   try {
@@ -4641,7 +4727,7 @@ function moveLocalBrush(event) {
   const draft = localBrushDraft;
   if (!draft || draft.pointerId !== event.pointerId) return;
   const point = localBrushPoint(event);
-  if (Math.hypot(point.x - draft.last.x, point.y - draft.last.y) < .5 ||
+  if (Math.hypot(point.x - draft.last.x, point.y - draft.last.y) < Math.max(.5, draft.brushSize / 16) ||
       draft.points.length >= 4096) return;
   drawLocalBrushFeedback(draft, draft.last, point);
   draft.last = point; draft.points.push(point);
@@ -4665,6 +4751,8 @@ async function commitLocalBrush(draft) {
     recordHistoryMutation(before, next, title); await acceptSnapshot(next); scheduleCheckpoint(next);
   } catch (error) {
     if (error?.code === 7) setSessionState("document", "Local brush cancelled");
+    else if (error?.message === "local-adjustment stroke made no pixel change")
+      showToast("The brush sampled a uniform or unaffected area — move across visible detail or clear the selection");
     else showError("Local brush failed", error);
   } finally { setBusy(false); }
 }
@@ -4741,7 +4829,7 @@ function moveAdvancedPaint(event) {
   const draft = advancedPaintDraft;
   if (!draft || draft.pointerId !== event.pointerId) return;
   const point = advancedPaintPoint(event);
-  if (Math.hypot(point.x - draft.last.x, point.y - draft.last.y) < .5 ||
+  if (Math.hypot(point.x - draft.last.x, point.y - draft.last.y) < Math.max(.5, draft.brushSize / 16) ||
       draft.points.length >= 4096) return;
   drawAdvancedPaintFeedback(draft, draft.last, point);
   draft.last = point; draft.points.push(point);
@@ -4767,6 +4855,8 @@ async function commitAdvancedPaint(draft) {
     recordHistoryMutation(before, next, title); await acceptSnapshot(next); scheduleCheckpoint(next);
   } catch (error) {
     if (error?.code === 7) setSessionState("document", "Advanced paint cancelled");
+    else if (error?.message === "advanced-paint stroke made no pixel change")
+      showToast("The stroke matches the current pixels or lies outside the selection — change paint settings or clear the selection");
     else showError("Advanced paint failed", error);
   } finally { setBusy(false); }
 }
@@ -4873,7 +4963,7 @@ for (const tool of ["smudge", "dodge", "burn", "sponge", "blur", "sharpen"]) {
 }
 registerCommand("tool.gradient", "gradientToolButton", () => activateRasterTool("gradient"),
   () => !busy && Boolean(snapshot) && (selectedLayer()?.kind === 0 || snapshot.layers.length === 0));
-registerCommand("tool.fill", "fillToolButton", fillSelectedPixels, () => !busy && selectedLayer()?.kind === 0);
+registerCommand("tool.fill", "fillToolButton", () => setCanvasTool("fill"), () => !busy && selectedLayer()?.kind === 0);
 registerCommand("tool.pen", "penToolButton", activatePenTool, () => !busy && Boolean(snapshot));
 registerCommand("tool.text", "textToolButton", () => { setCanvasTool("text"); openTextDialog(); },
   () => !busy && Boolean(snapshot));
@@ -5686,6 +5776,42 @@ $("saveGradientAssetButton").addEventListener("click", () => saveFillAsset("grad
   .catch((error) => showError("Could not save gradient", error)));
 $("savePatternAssetButton").addEventListener("click", () => saveFillAsset("pattern")
   .catch((error) => showError("Could not save pattern", error)));
+$("gradientStopInput").addEventListener("change", syncGradientStops);
+$("paintPresetSelect").addEventListener("change", () => {
+  if (canvasTool === "gradient") resetGradientStopsForPreset();
+});
+$("gradientStopColorInput").addEventListener("input", () => {
+  const stop = gradientStops[Number($("gradientStopInput").value) || 0];
+  stop.color.splice(0, 3, ...colorBytes($("gradientStopColorInput").value));
+  if (gradientDraft) { gradientDraft.stops = gradientStops; scheduleRasterFillPreview(gradientDraft); }
+  renderGradientDraft();
+});
+$("gradientStopOpacityInput").addEventListener("input", () => {
+  const opacity = Math.round(Number($("gradientStopOpacityInput").value));
+  gradientStops[Number($("gradientStopInput").value) || 0].color[3] = Math.round(opacity * 2.55);
+  $("gradientStopOpacityOutput").value = `${opacity}%`;
+  if (gradientDraft) { gradientDraft.stops = gradientStops; scheduleRasterFillPreview(gradientDraft); }
+  renderGradientDraft();
+});
+$("gradientTypeInput").addEventListener("change", () => {
+  if (!gradientDraft) return; gradientDraft.geometry = Number($("gradientTypeInput").value);
+  scheduleRasterFillPreview(gradientDraft);
+});
+$("addGradientStopButton").addEventListener("click", () => {
+  if (gradientStops.length >= 8) return;
+  gradientStops.push({ position: .5, color: [128, 128, 128, 255] });
+  gradientStops.sort((a, b) => a.position - b.position); syncGradientStops();
+});
+$("removeGradientStopButton").addEventListener("click", () => {
+  if (gradientStops.length <= 2) return;
+  gradientStops.splice(Number($("gradientStopInput").value) || 0, 1); syncGradientStops();
+});
+$("cancelGradientButton").addEventListener("click", () => {
+  gradientDraft = null; clearRasterPreview(); renderGradientDraft();
+  $("applyGradientButton").disabled = true; $("cancelGradientButton").disabled = true;
+});
+$("applyGradientButton").addEventListener("click", applyGradientDraft);
+syncGradientStops();
 $("installFontAssetButton").addEventListener("click", () => installFontAsset()
   .catch((error) => showError("Could not install font", error)));
 $("toggleGuidesButton").addEventListener("click", () => {
@@ -5708,6 +5834,7 @@ canvas.addEventListener("pointerdown", (event) => {
     beginAdvancedPaint(event); return;
   }
   if (canvasTool === "gradient") { beginGradient(event); return; }
+  if (canvasTool === "fill") { void fillSelectedPixels(event); return; }
   if (canvasTool === "text") { openTextDialog(); return; }
   if (canvasTool === "pen") {
     const point = canvasPoint(event);
@@ -5852,7 +5979,7 @@ canvas.addEventListener("pointermove", (event) => {
     quickMaskDraft.last = point; renderQuickMask(quickMaskDraft.gray);
   }
   if (gradientDraft?.pointerId === event.pointerId) {
-    gradientDraft.end = canvasPoint(event); scheduleRasterFillPreview(gradientDraft);
+    gradientDraft.end = canvasPoint(event); scheduleRasterFillPreview(gradientDraft); renderGradientDraft();
   }
   if (!moveDraft) return;
   const point = canvasPoint(event);

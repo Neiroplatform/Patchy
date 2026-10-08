@@ -274,6 +274,17 @@ enum patchy_engine_raster_fill_mode {
   PATCHY_ENGINE_RASTER_FILL_CUSTOM_DOTS = 9,
 };
 
+enum patchy_engine_gradient_geometry {
+  PATCHY_ENGINE_GRADIENT_LINEAR = 0, PATCHY_ENGINE_GRADIENT_RADIAL = 1,
+  PATCHY_ENGINE_GRADIENT_ANGLE = 2, PATCHY_ENGINE_GRADIENT_REFLECTED = 3,
+  PATCHY_ENGINE_GRADIENT_DIAMOND = 4,
+};
+typedef struct patchy_engine_gradient_stop {
+  double position;
+  uint8_t red, green, blue, alpha;
+  uint32_t reserved;
+} patchy_engine_gradient_stop;
+
 typedef struct patchy_engine_raster_fill {
   uint32_t struct_size;
   uint32_t mode;
@@ -291,6 +302,9 @@ typedef struct patchy_engine_raster_fill {
   double start_y;
   double end_x;
   double end_y;
+  uint32_t gradient_geometry;
+  uint32_t gradient_stop_count;
+  patchy_engine_gradient_stop gradient_stops[8];
 } patchy_engine_raster_fill;
 
 enum patchy_engine_warp_style {
