@@ -221,4 +221,11 @@ test("production shell stages the lifecycle and exposes open/save/save-as contra
   assert.match(editor, /openDocuments\.map\(\(item\) => item\.documentId\)/);
   assert.match(browserSmoke, /const NATIVE_FILE_LIFECYCLE_TIMEOUT = 180_000;/);
   assert.equal((browserSmoke.match(/NATIVE_FILE_LIFECYCLE_TIMEOUT\);/g) || []).length, 6);
+  assert.match(browserSmoke,
+    /const NATIVE_FILE_LIFECYCLE_SIZE = Object\.freeze\(\{ width: 400, height: 250 \}\);/);
+  const lifecycleShrink = browserSmoke.indexOf("native lifecycle fixture did not shrink the document");
+  const lifecycleSave = browserSmoke.indexOf('byId("saveButton").click();', lifecycleShrink);
+  const lifecycleRestore = browserSmoke.indexOf("native lifecycle fixture did not restore the document");
+  assert.ok(lifecycleShrink >= 0 && lifecycleShrink < lifecycleSave && lifecycleSave < lifecycleRestore,
+    "native lifecycle must save a bounded fixture before restoring the cumulative shell document");
 });

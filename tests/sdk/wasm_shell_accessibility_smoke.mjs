@@ -3,6 +3,7 @@ const frame = document.querySelector("#editorFrame");
 const check = (value, message) => { if (!value) throw new Error(message); };
 const delay = (milliseconds = 25) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const NATIVE_FILE_LIFECYCLE_TIMEOUT = 180_000;
+const NATIVE_FILE_LIFECYCLE_SIZE = Object.freeze({ width: 400, height: 250 });
 
 async function waitFor(predicate, message, timeout = 90_000) {
   const deadline = performance.now() + timeout; let lastError;
@@ -376,6 +377,22 @@ try {
   check(byId("detailRevision").textContent === transformRevision, "dialog Escape committed document state");
 
   smokeStage = "native-file-lifecycle";
+  // Keep lifecycle semantics under the cumulative shell fixture while bounding
+  // the layered payload encoded repeatedly on slower hosted Windows browsers.
+  const lifecycleResizeRevision = Number(byId("detailRevision").textContent);
+  byId("transformButton").click();
+  await waitFor(() => byId("documentDialog").open,
+    "Canvas operations did not open for native lifecycle fixture");
+  byId("resizeConstrainInput").checked = false;
+  byId("documentWidthInput").value = String(NATIVE_FILE_LIFECYCLE_SIZE.width);
+  byId("documentHeightInput").value = String(NATIVE_FILE_LIFECYCLE_SIZE.height);
+  byId("resizeImageButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleResizeRevision + 1 &&
+    byId("detailCanvas").textContent.replaceAll(" ", "") ===
+      `${NATIVE_FILE_LIFECYCLE_SIZE.width}×${NATIVE_FILE_LIFECYCLE_SIZE.height}` &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
+    !byId("documentDialog").open,
+  "native lifecycle fixture did not shrink the document");
   const originalOpenFilePicker = Object.getOwnPropertyDescriptor(
     frame.contentWindow, "showOpenFilePicker");
   const originalSaveFilePicker = Object.getOwnPropertyDescriptor(
@@ -466,6 +483,20 @@ try {
   frame.contentWindow.URL.createObjectURL = originalLifecycleCreateObjectUrl;
   frame.contentWindow.URL.revokeObjectURL = originalLifecycleRevokeObjectUrl;
   frame.contentWindow.HTMLAnchorElement.prototype.click = originalLifecycleAnchorClick;
+
+  const lifecycleRestoreRevision = Number(byId("detailRevision").textContent);
+  byId("transformButton").click();
+  await waitFor(() => byId("documentDialog").open,
+    "Canvas operations did not reopen after native lifecycle fixture");
+  byId("resizeConstrainInput").checked = false;
+  byId("documentWidthInput").value = "1600";
+  byId("documentHeightInput").value = "1000";
+  byId("resizeImageButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleRestoreRevision + 1 &&
+    byId("detailCanvas").textContent.replaceAll(" ", "") === "1600×1000" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
+    !byId("documentDialog").open,
+  "native lifecycle fixture did not restore the document");
 
   smokeStage = "document-lifecycle";
   byId("zoomActualButton").click(); await delay(50);
