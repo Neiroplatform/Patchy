@@ -24,7 +24,10 @@ curves in this surface. Eraser remains on the procedural path without brush
 dynamics, matching the desktop contract. Default round settings omit the
 advanced object; non-default procedural tips are cooperatively cancellable
 during construction and reuse one bounded last-size/softness cache across
-preview and commit. Partial `ImageBitmap` frames replace
+preview and commit. Advanced browser strokes recompose overlapping Count and
+Color Dynamics dabs against the immutable stroke-start pixels and clamp their
+premultiplied contribution to the selected Brush Opacity, so one gesture cannot
+build past that ceiling. Partial `ImageBitmap` frames replace
 their dirty canvas region (clear then draw), so newly transparent Eraser pixels
 cannot be hidden by source-over composition of the previous frame. Every
 size-based browser brush shows a high-contrast footprint while merely hovering

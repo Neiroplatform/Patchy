@@ -5599,6 +5599,32 @@ void core_advanced_raster_brush_is_deterministic_and_bounded() {
   };
   CHECK(paint() == paint());
 
+  Document opacity_document(64, 64, PixelFormat::rgba8());
+  PixelBuffer opacity_pixels(64, 64, PixelFormat::rgba8());
+  opacity_pixels.clear(0);
+  const auto opacity_layer = opacity_document.add_pixel_layer(
+      "Opacity cap", std::move(opacity_pixels)).id();
+  patchy::RasterStrokeRequest opacity_request;
+  opacity_request.mode = patchy::RasterStrokeMode::Brush;
+  opacity_request.points = {{32.0, 32.0}};
+  opacity_request.brush_size = 24;
+  opacity_request.color = {230, 20, 40, 26};
+  opacity_request.secondary_color = {20, 60, 230, 26};
+  opacity_request.advanced_brush = true;
+  opacity_request.brush_dynamics.seed = 17;
+  opacity_request.brush_dynamics.count = 3;
+  opacity_request.brush_dynamics.color_dynamics_enabled = true;
+  opacity_request.brush_dynamics.foreground_background_jitter = 1.0;
+  patchy::RasterStrokeResult opacity_result;
+  std::string opacity_error;
+  CHECK(patchy::apply_raster_stroke(opacity_document, opacity_layer,
+                                    opacity_request, &opacity_result,
+                                    &opacity_error));
+  const auto capped_data = opacity_document.find_layer(opacity_layer)->pixels().data();
+  for (std::size_t index = 3; index < capped_data.size(); index += 4) {
+    CHECK(capped_data[index] <= 26);
+  }
+
   Document invalid_document(8, 8, PixelFormat::rgba8());
   PixelBuffer invalid_pixels(8, 8, PixelFormat::rgba8()); invalid_pixels.clear(0);
   const auto invalid_layer = invalid_document.add_pixel_layer("Invalid", std::move(invalid_pixels)).id();

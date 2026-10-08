@@ -402,11 +402,36 @@ try {
   assert.equal(await page.locator("#layerList [data-layer-id]").count(),
     layerCountBeforeSecondText + 1, "The second text gesture did not create a new layer");
 
+  await page.click("#newButton");
+  await page.waitForFunction(() =>
+    document.querySelectorAll('#documentTabs [role="tab"]').length === 4 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
+  before = await revision();
+  await page.click("#createPixelLayerButton");
+  await waitForMutation(before, "Creating pixel layer");
+  await selectTool("brushToolButton");
+  await page.locator("#brushPresetSelect").selectOption("color-scatter");
+  await page.locator("#brushOpacityInput").evaluate((input) => {
+    input.value = "10"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  before = await revision();
+  await dragCanvas({ x: .5, y: .5 }, { x: .5, y: .5 }, { steps: 1 });
+  await waitForMutation(before, "Painting pixels");
+  const maximumStrokeAlpha = await page.locator("#documentCanvas").evaluate((canvas) => {
+    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    let maximum = 0;
+    for (let index = 3; index < pixels.length; index += 4) maximum = Math.max(maximum, pixels[index]);
+    return maximum;
+  });
+  assert.ok(maximumStrokeAlpha <= 26,
+    `Color Dynamics Count dabs exceeded the 10% stroke-opacity cap: ${maximumStrokeAlpha}`);
+
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);
   console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained tools=30-described-activated ` +
     "hover=idle-brush-radius wand=contiguous-all-layers-active-layer-svg gradient=preset-guard-noop-neutral " +
-    "brush=color-dynamics-opacity-cap " +
+    `brush=color-dynamics-opacity-cap-${maximumStrokeAlpha} ` +
     "paint=advanced-brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill " +
     "authoring=eyedropper-shape-text real-pointer=pass");
 } catch (error) {

@@ -324,6 +324,79 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
           target[3] = blend_byte(target[3], 255, alpha);
           return !std::equal(before.begin(), before.end(), target);
         };
+  } else if (request.advanced_brush) {
+    // Brush Opacity is a ceiling for the contribution of one completed stroke,
+    // not an amount that Count / overlapping dabs may repeatedly source-over.
+    // Clamp the evolving premultiplied result to the envelope produced by one
+    // stroke at the requested opacity relative to the immutable start pixels.
+    const auto opacity_cap = static_cast<float>(request.color.a) / 255.0F;
+    options.stroke_pixel_writer =
+        [source_bounds, source_pixels, opacity_cap,
+         lock_alpha = options.lock_transparent_pixels](
+            std::int32_t x, std::int32_t y, std::uint8_t* target,
+            std::uint16_t channels, float coverage, const EditColor& color) {
+          if (channels != 4) return false;
+          std::array<std::uint8_t, 4> original{};
+          if (source_bounds.contains(x, y)) {
+            const auto* source = source_pixels.pixel(x - source_bounds.x,
+                                                     y - source_bounds.y);
+            std::copy_n(source, original.size(), original.begin());
+          }
+          const auto before = std::array<std::uint8_t, 4>{
+              target[0], target[1], target[2], target[3]};
+          const auto source_alpha = std::clamp(
+              static_cast<float>(color.a) / 255.0F * coverage, 0.0F, 1.0F);
+          if (source_alpha <= 0.0F) return false;
+
+          if (lock_alpha) {
+            if (original[3] == 0) return false;
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+              const auto source_value = channel == 0 ? color.r
+                  : channel == 1 ? color.g : color.b;
+              const auto candidate =
+                  static_cast<float>(source_value) * source_alpha +
+                  static_cast<float>(target[channel]) * (1.0F - source_alpha);
+              const auto lower = static_cast<float>(original[channel]) *
+                                 (1.0F - opacity_cap);
+              const auto upper = lower + 255.0F * opacity_cap;
+              target[channel] = static_cast<std::uint8_t>(std::clamp(
+                  std::lround(std::clamp(candidate, lower, upper)), 0L, 255L));
+            }
+            target[3] = original[3];
+            return !std::equal(before.begin(), before.end(), target);
+          }
+
+          const auto destination_alpha = static_cast<float>(target[3]) / 255.0F;
+          const auto candidate_alpha =
+              source_alpha + destination_alpha * (1.0F - source_alpha);
+          const auto original_alpha = static_cast<float>(original[3]) / 255.0F;
+          const auto maximum_alpha =
+              opacity_cap + original_alpha * (1.0F - opacity_cap);
+          const auto output_alpha = std::min(candidate_alpha, maximum_alpha);
+          for (std::size_t channel = 0; channel < 3; ++channel) {
+            const auto source_value = static_cast<float>(
+                channel == 0 ? color.r : channel == 1 ? color.g : color.b) /
+                255.0F;
+            const auto destination_premultiplied =
+                static_cast<float>(target[channel]) / 255.0F * destination_alpha;
+            const auto candidate_premultiplied =
+                source_value * source_alpha +
+                destination_premultiplied * (1.0F - source_alpha);
+            const auto original_premultiplied =
+                static_cast<float>(original[channel]) / 255.0F * original_alpha;
+            const auto lower = original_premultiplied * (1.0F - opacity_cap);
+            const auto upper = lower + opacity_cap;
+            const auto output_premultiplied =
+                std::clamp(candidate_premultiplied, lower, upper);
+            target[channel] = output_alpha <= 0.0F ? 0 :
+                static_cast<std::uint8_t>(std::clamp(
+                    std::lround(output_premultiplied / output_alpha * 255.0F),
+                    0L, 255L));
+          }
+          target[3] = static_cast<std::uint8_t>(std::clamp(
+              std::lround(output_alpha * 255.0F), 0L, 255L));
+          return !std::equal(before.begin(), before.end(), target);
+        };
   }
 
   Rect affected;
