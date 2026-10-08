@@ -259,7 +259,44 @@ typedef struct patchy_engine_raster_stroke {
   size_t point_count;
   int32_t brush_softness;
   uint32_t reserved;
+  uint32_t advanced_flags;
+  int32_t brush_roundness;
+  double brush_angle_degrees;
+  double brush_spacing;
+  uint32_t dynamics_seed;
+  uint32_t scatter_both_axes;
+  int32_t dab_count;
+  uint32_t texture_style;
+  uint8_t secondary_red;
+  uint8_t secondary_green;
+  uint8_t secondary_blue;
+  uint8_t secondary_alpha;
+  uint32_t reserved2;
+  double size_jitter;
+  double angle_jitter;
+  double roundness_jitter;
+  double scatter;
+  double count_jitter;
+  double opacity_jitter;
+  double flow_jitter;
+  double texture_scale;
+  double texture_depth;
+  double foreground_background_jitter;
+  double hue_jitter;
+  double saturation_jitter;
+  double brightness_jitter;
+  double purity;
 } patchy_engine_raster_stroke;
+
+enum patchy_engine_raster_brush_flags {
+  PATCHY_ENGINE_BRUSH_ADVANCED = 1U << 0,
+  PATCHY_ENGINE_BRUSH_TEXTURE = 1U << 1,
+  PATCHY_ENGINE_BRUSH_TEXTURE_INVERT = 1U << 2,
+  PATCHY_ENGINE_BRUSH_COLOR_DYNAMICS = 1U << 3,
+  PATCHY_ENGINE_BRUSH_COLOR_PER_TIP = 1U << 4,
+  PATCHY_ENGINE_BRUSH_FLIP_X_JITTER = 1U << 5,
+  PATCHY_ENGINE_BRUSH_FLIP_Y_JITTER = 1U << 6,
+};
 
 enum patchy_engine_raster_fill_mode {
   PATCHY_ENGINE_RASTER_FILL_FOREGROUND_TRANSPARENT = 0,

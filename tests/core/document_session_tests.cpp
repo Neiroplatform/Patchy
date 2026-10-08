@@ -5569,6 +5569,47 @@ void core_raster_stroke_respects_selection_and_immutable_clone_source() {
                    document.find_layer(layer_id)->pixels().data().end(), before.begin()));
 }
 
+void core_advanced_raster_brush_is_deterministic_and_bounded() {
+  const auto paint = []() {
+    Document document(64, 48, PixelFormat::rgba8());
+    PixelBuffer pixels(64, 48, PixelFormat::rgba8()); pixels.clear(0);
+    const auto layer_id = document.add_pixel_layer("Advanced", std::move(pixels)).id();
+    patchy::RasterStrokeRequest request;
+    request.mode = patchy::RasterStrokeMode::Brush;
+    request.points = {{8.0, 12.0}, {55.0, 34.0}};
+    request.brush_size = 13; request.brush_softness = 35;
+    request.color = {220, 30, 40, 255}; request.secondary_color = {20, 80, 240, 255};
+    request.advanced_brush = true; request.brush_roundness = 38;
+    request.brush_angle_degrees = 32.0; request.brush_spacing = 0.18;
+    request.brush_dynamics.seed = 8128; request.brush_dynamics.size_jitter = 0.35;
+    request.brush_dynamics.angle_jitter = 0.2; request.brush_dynamics.scatter = 0.75;
+    request.brush_dynamics.scatter_both_axes = true; request.brush_dynamics.count = 3;
+    request.brush_dynamics.count_jitter = 0.4;
+    request.brush_dynamics.texture_enabled = true;
+    request.brush_dynamics.texture_style = patchy::BrushTextureStyle::Canvas;
+    request.brush_dynamics.texture_scale = 0.8; request.brush_dynamics.texture_depth = 0.6;
+    request.brush_dynamics.color_dynamics_enabled = true;
+    request.brush_dynamics.foreground_background_jitter = 0.5;
+    request.brush_dynamics.hue_jitter = 0.2;
+    patchy::RasterStrokeResult result; std::string error;
+    CHECK(patchy::apply_raster_stroke(document, layer_id, request, &result, &error));
+    CHECK(result.affected_region.width > request.brush_size);
+    const auto span = document.find_layer(layer_id)->pixels().data();
+    return std::vector<std::uint8_t>(span.begin(), span.end());
+  };
+  CHECK(paint() == paint());
+
+  Document invalid_document(8, 8, PixelFormat::rgba8());
+  PixelBuffer invalid_pixels(8, 8, PixelFormat::rgba8()); invalid_pixels.clear(0);
+  const auto invalid_layer = invalid_document.add_pixel_layer("Invalid", std::move(invalid_pixels)).id();
+  patchy::RasterStrokeRequest invalid;
+  invalid.points = {{4.0, 4.0}}; invalid.advanced_brush = true;
+  invalid.brush_roundness = 0;
+  std::string error;
+  CHECK(!patchy::apply_raster_stroke(invalid_document, invalid_layer, invalid, nullptr, &error));
+  CHECK(error == "advanced brush settings exceed their bounded contract");
+}
+
 void core_layer_mask_stroke_respects_selection_and_preserves_metadata() {
   Document document(8, 4, PixelFormat::rgba8());
   PixelBuffer pixels(8, 4, PixelFormat::rgba8()); pixels.clear(255);
@@ -5783,6 +5824,27 @@ void engine_host_protocol_previews_and_commits_one_raster_stroke() {
             session, ready.state_id, ready.revision, &invalid_stroke, nullptr,
             nullptr, &region, &preview, &error) == 0);
   CHECK(error.code == PATCHY_ENGINE_ERROR_INVALID_ARGUMENT);
+  auto advanced_stroke = stroke;
+  advanced_stroke.advanced_flags = PATCHY_ENGINE_BRUSH_ADVANCED |
+      PATCHY_ENGINE_BRUSH_TEXTURE | PATCHY_ENGINE_BRUSH_COLOR_DYNAMICS |
+      PATCHY_ENGINE_BRUSH_COLOR_PER_TIP;
+  advanced_stroke.brush_roundness = 45;
+  advanced_stroke.brush_angle_degrees = 28.0;
+  advanced_stroke.brush_spacing = 0.2;
+  advanced_stroke.dynamics_seed = 91;
+  advanced_stroke.dab_count = 2;
+  advanced_stroke.texture_style = 1;
+  advanced_stroke.texture_scale = 1.0;
+  advanced_stroke.texture_depth = 0.5;
+  advanced_stroke.secondary_blue = 255;
+  advanced_stroke.secondary_alpha = 255;
+  advanced_stroke.scatter = 0.5;
+  advanced_stroke.foreground_background_jitter = 0.5;
+  CHECK(patchy_engine_session_preview_raster_stroke(
+            session, ready.state_id, ready.revision, &advanced_stroke, nullptr,
+            nullptr, &region, &preview, &error) == 1);
+  CHECK(region.width > 0 && region.height > 0 && preview.size > 0);
+  patchy_engine_buffer_release(&preview);
   auto legacy_stroke = stroke;
   legacy_stroke.struct_size = static_cast<std::uint32_t>(
       offsetof(patchy_engine_raster_stroke, brush_softness));
@@ -6790,6 +6852,8 @@ std::vector<TestCase> document_session_tests() {
        engine_host_protocol_returns_bounded_layer_thumbnail},
       {"core_raster_stroke_respects_selection_and_immutable_clone_source",
        core_raster_stroke_respects_selection_and_immutable_clone_source},
+      {"core_advanced_raster_brush_is_deterministic_and_bounded",
+       core_advanced_raster_brush_is_deterministic_and_bounded},
       {"core_layer_mask_stroke_respects_selection_and_preserves_metadata",
        core_layer_mask_stroke_respects_selection_and_preserves_metadata},
       {"core_layer_mask_stroke_is_compact_and_precancelled_before_expansion",

@@ -11,16 +11,24 @@ Deep reference for the brush-tip stamping engine, tip library/UI, brush dynamics
 Brush, Pattern Stamp, and Eraser can stamp bitmap **brush tips** in addition to the procedural round/soft brush.
 
 The self-hosted Worker editor exposes Eraser as a permanent primary rail tool
-and shares one procedural Size/Softness/Opacity contract with Brush. Its
-discoverable presets are Hard Round (24/0/100), Soft Round (80/100/100),
-Pencil (4/0/100), and Marker (36/30/45); changing any of those controls selects
-Custom. Softness crosses the versioned raster-stroke C ABI and applies equally
-to preview and commit. Partial `ImageBitmap` frames replace their dirty canvas
-region (clear then draw), so newly transparent Eraser pixels cannot be hidden
-by source-over composition of the previous frame. Every size-based browser
-brush shows a high-contrast circular footprint while merely hovering the
-document; its diameter follows the selected document size and current zoom,
-updates without pointer-down, and never mutates pixels, history or revision.
+and shares one procedural Size/Softness/Opacity contract with Brush. Brush adds
+Calligraphy, Spray, Textured and Color Scatter to the Hard Round, Soft Round,
+Pencil and Marker presets. Its contextual settings expose deterministic base
+angle/roundness/spacing, shape jitter, scattering/count, transfer, one static
+generated texture and direct two-colour dynamics. These values cross the
+versioned raster-stroke C ABI and drive the same engine path for preview and
+commit; the historical request sizes remain accepted and an omitted advanced
+object preserves the previous byte path. The browser deliberately does not
+expose ABR import, Dual Brush, Wet Edges, airbrush timing or tablet-control
+curves in this surface. Eraser remains on the procedural path without brush
+dynamics, matching the desktop contract. Partial `ImageBitmap` frames replace
+their dirty canvas region (clear then draw), so newly transparent Eraser pixels
+cannot be hidden by source-over composition of the previous frame. Every
+size-based browser brush shows a high-contrast footprint while merely hovering
+the document; Brush reflects its selected base angle and roundness, while
+procedural tools remain circular. The footprint follows document size/current
+zoom, updates without pointer-down, and never mutates pixels, history or
+revision.
 
 ## Core stamping engine
 

@@ -118,8 +118,9 @@ export const TOOL_GROUPS = Object.freeze([
     "patchToolButton", "cloneToolButton"] },
   { id: "tone", label: "Local adjustment tools", members: ["smudgeToolButton", "dodgeToolButton",
     "burnToolButton", "spongeToolButton", "blurToolButton", "sharpenToolButton"] },
-  { id: "fill", label: "Fill tools", members: ["gradientToolButton", "fillToolButton"] },
-  { id: "draw", label: "Drawing tools", members: ["penToolButton", "textToolButton"] },
+  { id: "fill", label: "Fill tools", members: ["gradientToolButton", "fillToolButton",
+    "eyedropperToolButton"] },
+  { id: "draw", label: "Drawing tools", members: ["penToolButton", "shapeToolButton", "textToolButton"] },
   { id: "navigation", label: "Navigation tools", members: ["panToolButton"] },
 ].map((group) => Object.freeze({
   ...group,

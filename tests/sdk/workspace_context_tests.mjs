@@ -13,10 +13,10 @@ test("workspace contexts cover every shipped persistent and one-shot tool family
     "move", "crop", "marquee", "lasso", "polygon", "magic", "quickSelect", "magnetic",
     "quickMask", "pan", "brush", "eraser", "mixer", "patternStamp", "clone", "heal",
     "spotHealing", "patch", "smudge", "blur", "sharpen", "dodge", "burn", "sponge",
-    "gradient", "fill", "pen", "text",
+    "gradient", "fill", "eyedropper", "pen", "shape", "text",
   ]);
   assert.deepEqual(new Set(Object.values(WORKSPACE_TOOL_CONTEXTS).map(({ family }) => family)),
-    new Set(["transform", "selection", "navigation", "paint", "retouch", "tone", "fill", "draw"]));
+    new Set(["transform", "selection", "navigation", "paint", "retouch", "tone", "fill", "sample", "draw"]));
   for (const [tool, context] of Object.entries(WORKSPACE_TOOL_CONTEXTS)) {
     assert.ok(context.label, tool);
     assert.ok(context.target, tool);
@@ -34,7 +34,11 @@ test("selection, paint, retouch and tone contexts expose only relevant existing 
       "wandContiguousInput", "wandSampleAllInput"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.brush.controls,
     ["brushPresetSelect", "brushSizeInput", "brushSoftnessInput", "brushOpacityInput",
-      "brushColorInput", "paintTargetSelect"]);
+      "brushColorInput", "paintTargetSelect", "brushSettingsButton"]);
+  assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.shape.controls,
+    ["shapeToolKindInput", "shapeToolFillInput", "shapeToolStrokeInput",
+      "shapeToolStrokeWidthInput", "shapeToolSidesInput"]);
+  assert.ok(WORKSPACE_TOOL_CONTEXTS.text.controls.includes("textSettingsButton"));
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.pen.controls,
     ["cancelPenPathButton", "finishPenPathButton", "closePenPathButton", "makePenSelectionButton"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.patch.controls,

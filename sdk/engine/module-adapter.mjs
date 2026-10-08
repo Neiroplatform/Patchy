@@ -39,7 +39,7 @@ const DOCUMENT_PATH_INPUT_SIZE = 56;
 const DOCUMENT_PATH_PROJECTION_SIZE = 288;
 const PATH_SUBPATH_PROJECTION_SIZE = 16;
 const LAYER_TRANSFORM_SIZE = 80;
-const RASTER_STROKE_SIZE = 56;
+const RASTER_STROKE_SIZE = 216;
 const RASTER_FILL_SIZE = 200;
 const LAYER_WARP_SIZE = 48;
 const LIQUIFY_INPUT_SIZE = 24;
@@ -2575,6 +2575,32 @@ export class EmscriptenPatchyEngine {
         color.some((component) => !Number.isInteger(component) || component < 0 || component > 255)) {
       throw new TypeError("Raster stroke color must contain four bytes");
     }
+    const advanced = input.advanced ?? {};
+    const secondaryColor = advanced.secondaryColor ?? [255, 255, 255, 255];
+    const fractionKeys = ["sizeJitter", "angleJitter", "roundnessJitter", "countJitter",
+      "opacityJitter", "flowJitter", "textureDepth", "foregroundBackgroundJitter",
+      "hueJitter", "saturationJitter", "brightnessJitter"];
+    const fractionValues = Object.fromEntries(fractionKeys.map((key) => [key, advanced[key] ?? 0]));
+    const roundness = advanced.roundness ?? 100;
+    const angle = advanced.angle ?? 0;
+    const spacing = advanced.spacing ?? .25;
+    const scatter = advanced.scatter ?? 0;
+    const count = advanced.count ?? 1;
+    const textureStyle = advanced.textureStyle ?? 0;
+    const textureScale = advanced.textureScale ?? 1;
+    const purity = advanced.purity ?? 0;
+    if (!Array.isArray(secondaryColor) || secondaryColor.length !== 4 ||
+        secondaryColor.some((component) => !Number.isInteger(component) || component < 0 || component > 255) ||
+        !Number.isInteger(roundness) || roundness < 1 || roundness > 100 ||
+        !Number.isFinite(angle) || !Number.isFinite(spacing) || spacing < .01 || spacing > 10 ||
+        !Number.isFinite(scatter) || scatter < 0 || scatter > 10 ||
+        !Number.isInteger(count) || count < 1 || count > 16 ||
+        !Number.isInteger(textureStyle) || textureStyle < 0 || textureStyle > 2 ||
+        !Number.isFinite(textureScale) || textureScale < .01 || textureScale > 10 ||
+        !Number.isFinite(purity) || purity < -1 || purity > 1 ||
+        Object.values(fractionValues).some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+      throw new TypeError("Bounded advanced brush settings are required");
+    }
     const points = this.#alloc(input.points.length * 16);
     try {
       const pointView = this.#view(points, input.points.length * 16);
@@ -2590,6 +2616,36 @@ export class EmscriptenPatchyEngine {
       view.setFloat64(24, source[0], true); view.setFloat64(32, source[1], true);
       view.setUint32(40, points, true); view.setUint32(44, input.points.length, true);
       view.setInt32(48, input.softness ?? 0, true); view.setUint32(52, 0, true);
+      let flags = input.advanced ? 1 : 0;
+      if (input.advanced) {
+        if (advanced.textureEnabled) flags |= 2;
+        if (advanced.textureInvert) flags |= 4;
+        if (advanced.colorDynamicsEnabled) flags |= 8;
+        if (advanced.colorPerTip !== false) flags |= 16;
+        if (advanced.flipXJitter) flags |= 32;
+        if (advanced.flipYJitter) flags |= 64;
+      }
+      view.setUint32(56, flags, true); view.setInt32(60, roundness, true);
+      view.setFloat64(64, angle, true); view.setFloat64(72, spacing, true);
+      view.setUint32(80, Number(advanced.seed ?? 0) >>> 0, true);
+      view.setUint32(84, advanced.scatterBothAxes ? 1 : 0, true);
+      view.setInt32(88, count, true); view.setUint32(92, textureStyle, true);
+      secondaryColor.forEach((component, index) => view.setUint8(96 + index, component));
+      view.setUint32(100, 0, true);
+      view.setFloat64(104, fractionValues.sizeJitter, true);
+      view.setFloat64(112, fractionValues.angleJitter, true);
+      view.setFloat64(120, fractionValues.roundnessJitter, true);
+      view.setFloat64(128, scatter, true);
+      view.setFloat64(136, fractionValues.countJitter, true);
+      view.setFloat64(144, fractionValues.opacityJitter, true);
+      view.setFloat64(152, fractionValues.flowJitter, true);
+      view.setFloat64(160, textureScale, true);
+      view.setFloat64(168, fractionValues.textureDepth, true);
+      view.setFloat64(176, fractionValues.foregroundBackgroundJitter, true);
+      view.setFloat64(184, fractionValues.hueJitter, true);
+      view.setFloat64(192, fractionValues.saturationJitter, true);
+      view.setFloat64(200, fractionValues.brightnessJitter, true);
+      view.setFloat64(208, purity, true);
       return { stroke, points };
     } catch (error) { this.#module._free(points); throw error; }
   }

@@ -32,6 +32,12 @@ struct RasterStrokeRequest {
   std::int32_t brush_size{12};
   std::int32_t brush_softness{0};
   EditColor color{};
+  EditColor secondary_color{255, 255, 255, 255};
+  bool advanced_brush{false};
+  std::int32_t brush_roundness{100};
+  double brush_angle_degrees{0.0};
+  double brush_spacing{0.25};
+  BrushDynamics brush_dynamics{};
   RasterStrokePoint source{};
   std::vector<Rect> selection{};
   Rect selection_mask_bounds{};

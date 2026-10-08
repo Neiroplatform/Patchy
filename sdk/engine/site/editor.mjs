@@ -23,7 +23,7 @@ import { openFileKind } from "./reference-workflow.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
-const contextualEditorIds = ["textDialog", "shapeDialog", "adjustmentDialog"];
+const contextualEditorIds = ["textDialog", "shapeDialog", "brushSettingsDialog", "adjustmentDialog"];
 const propertiesPanel = $("workspacePanelProperties");
 for (const id of contextualEditorIds) {
   const dialog = $(id);
@@ -114,6 +114,9 @@ let transformPreviewGeneration = 0;
 let transformPreviewRestore = null;
 let transformPreviewCancellation = null;
 let paintDraft = null;
+let shapeDraft = null;
+let textBoxDraft = null;
+let pendingTextBounds = null;
 let retouchDraft = null;
 let localBrushDraft = null;
 let advancedPaintDraft = null;
@@ -2090,6 +2093,8 @@ function setCanvasTool(tool) {
   if (tool !== "magnetic") magneticDraft = null;
   if (tool !== "quickSelect") quickSelectDraft = null;
   if (tool !== "quickMask") quickMaskDraft = null;
+  if (tool !== "shape" && shapeDraft) { shapeDraft = null; renderDirectShapeDraft(); }
+  if (tool !== "text" && textBoxDraft) { textBoxDraft = null; renderTextBoxDraft(); }
   if (tool !== "crop" && cropDraft) { cropDraft = null; renderCropOverlay(); }
   canvasTool = tool;
   syncPaintPresetForTool(tool);
@@ -2107,8 +2112,9 @@ function setCanvasTool(tool) {
     ["patchToolButton", "patch"], ["smudgeToolButton", "smudge"],
     ["dodgeToolButton", "dodge"], ["burnToolButton", "burn"],
     ["spongeToolButton", "sponge"], ["blurToolButton", "blur"],
-    ["sharpenToolButton", "sharpen"], ["gradientToolButton", "gradient"], ["fillToolButton", "fill"], ["penToolButton", "pen"],
-    ["textToolButton", "text"]]) {
+    ["sharpenToolButton", "sharpen"], ["gradientToolButton", "gradient"], ["fillToolButton", "fill"],
+    ["eyedropperToolButton", "eyedropper"], ["penToolButton", "pen"],
+    ["shapeToolButton", "shape"], ["textToolButton", "text"]]) {
     $(id).setAttribute("aria-pressed", String(tool === value));
     if (tool === value) activeToolButton = $(id);
   }
@@ -2431,10 +2437,14 @@ function renderBrushHover() {
     return;
   }
   const diameter = Math.max(2, Number($("brushSizeInput").value) * zoom);
+  const advanced = canvasTool === "brush";
+  const roundness = advanced ? Math.max(.01, Number($("brushRoundnessInput").value) / 100) : 1;
+  const angle = advanced ? Number($("brushAngleInput").value) || 0 : 0;
   overlay.style.left = `${brushHoverPoint.x * zoom}px`;
   overlay.style.top = `${brushHoverPoint.y * zoom}px`;
   overlay.style.width = `${diameter}px`;
-  overlay.style.height = `${diameter}px`;
+  overlay.style.height = `${Math.max(2, diameter * roundness)}px`;
+  overlay.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
   overlay.hidden = false;
 }
 
@@ -3231,15 +3241,24 @@ function rectanglePath(bounds) {
   ] };
 }
 
-function geometricShapePath(kind, bounds) {
+function geometricShapePath(kind, bounds, sides = 6, endpoints = null) {
   if (kind === "rectangle") return rectanglePath(bounds);
-  const count = kind === "polygon" ? 6 : 24;
+  if (kind === "line") {
+    const [start, end] = endpoints || [{ x: bounds.x, y: bounds.y },
+      { x: bounds.x + bounds.width, y: bounds.y + bounds.height }];
+    return { subpaths: [{ anchors: [start, end], shapeGroup: 0, combine: 1, closed: false }] };
+  }
+  const count = kind === "ellipse" ? 24 : Math.max(3, Math.min(32, Math.round(sides)));
   const cx = bounds.x + bounds.width / 2; const cy = bounds.y + bounds.height / 2;
-  return { anchors: Array.from({ length: count }, (_, index) => {
+  const anchors = Array.from({ length: kind === "star" ? count * 2 : count }, (_, index) => {
     const angle = -Math.PI / 2 + index * Math.PI * 2 / count;
-    return { x: cx + Math.cos(angle) * bounds.width / 2,
-      y: cy + Math.sin(angle) * bounds.height / 2 };
-  }) };
+    const radius = kind === "star" && index % 2 ? .45 : 1;
+    const normalizedAngle = kind === "star"
+      ? -Math.PI / 2 + index * Math.PI / count : angle;
+    return { x: cx + Math.cos(normalizedAngle) * bounds.width / 2 * radius,
+      y: cy + Math.sin(normalizedAngle) * bounds.height / 2 * radius };
+  });
+  return { anchors };
 }
 
 function pathHasClosedArea(path) {
@@ -3517,6 +3536,117 @@ function renderFilterParameters() {
 function openFilterDialog() {
   if (busy || selectedLayer()?.kind !== 0) return;
   renderFilterParameters(); $("filterDialog").showModal();
+}
+
+function rgbHex(red, green, blue) {
+  return `#${[red, green, blue].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function sampleVisibleColor(event) {
+  if (!snapshot) return false;
+  const point = canvasPoint(event); const x = Math.floor(point.x); const y = Math.floor(point.y);
+  if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return false;
+  const pixel = context.getImageData(x, y, 1, 1).data;
+  const value = rgbHex(pixel[0], pixel[1], pixel[2]);
+  for (const id of ["foregroundSwatchInput", "brushColorInput", "textToolColorInput",
+    "shapeToolFillInput", "textColorInput"]) {
+    if ($(id)) $(id).value = value;
+  }
+  setSessionState("document", `Foreground ${value.toUpperCase()}`);
+  showToast(`Sampled ${value.toUpperCase()}`);
+  return true;
+}
+
+function directShapeGeometry(draft, event = null) {
+  let dx = draft.end.x - draft.start.x; let dy = draft.end.y - draft.start.y;
+  if (event?.shiftKey && draft.kind !== "line") {
+    const size = Math.max(Math.abs(dx), Math.abs(dy));
+    dx = Math.sign(dx || 1) * size; dy = Math.sign(dy || 1) * size;
+  } else if (event?.shiftKey && draft.kind === "line") {
+    const length = Math.hypot(dx, dy); const step = Math.PI / 4;
+    const angle = Math.round(Math.atan2(dy, dx) / step) * step;
+    dx = Math.cos(angle) * length; dy = Math.sin(angle) * length;
+  }
+  const end = { x: draft.start.x + dx, y: draft.start.y + dy };
+  return { end, bounds: { x: Math.floor(Math.min(draft.start.x, end.x)),
+    y: Math.floor(Math.min(draft.start.y, end.y)), width: Math.max(1, Math.ceil(Math.abs(dx))),
+    height: Math.max(1, Math.ceil(Math.abs(dy))) } };
+}
+
+function renderDirectShapeDraft(event = null) {
+  const target = $("gestureCanvas").getContext("2d");
+  target.clearRect(0, 0, canvas.width, canvas.height);
+  if (!shapeDraft) return;
+  const { bounds, end } = directShapeGeometry(shapeDraft, event);
+  target.save(); target.globalAlpha = .4; target.fillStyle = $("shapeToolFillInput").value;
+  target.strokeStyle = $("shapeToolStrokeInput").value;
+  target.lineWidth = Math.max(1 / Math.max(zoom, .01), Number($("shapeToolStrokeWidthInput").value) || 1);
+  target.beginPath();
+  if (shapeDraft.kind === "line") {
+    target.moveTo(shapeDraft.start.x, shapeDraft.start.y); target.lineTo(end.x, end.y);
+  } else if (shapeDraft.kind === "ellipse") {
+    target.ellipse(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2,
+      bounds.width / 2, bounds.height / 2, 0, 0, Math.PI * 2);
+  } else {
+    const path = geometricShapePath(shapeDraft.kind, bounds, shapeDraft.sides);
+    const anchors = path.anchors || path.subpaths?.[0]?.anchors || [];
+    anchors.forEach((point, index) => index ? target.lineTo(point.x, point.y) : target.moveTo(point.x, point.y));
+    target.closePath();
+  }
+  if (shapeDraft.kind !== "line") target.fill();
+  target.stroke(); target.restore(); geometryHud(bounds, "Shape");
+}
+
+function beginDirectShape(event) {
+  if (busy || !snapshot || event.button !== 0) return;
+  const start = canvasPoint(event); canvas.setPointerCapture(event.pointerId);
+  shapeDraft = { pointerId: event.pointerId, start, end: start,
+    kind: $("shapeToolKindInput").value,
+    sides: Math.max(3, Math.min(32, Math.round(Number($("shapeToolSidesInput").value) || 6))) };
+  renderDirectShapeDraft(event);
+}
+
+function finishDirectShape(event, cancelled = false) {
+  if (!shapeDraft || event.pointerId !== shapeDraft.pointerId) return;
+  const draft = shapeDraft; const geometry = directShapeGeometry(draft, event); shapeDraft = null;
+  renderDirectShapeDraft(); geometryHud(null);
+  if (cancelled || Math.hypot(geometry.end.x - draft.start.x, geometry.end.y - draft.start.y) < 1) return;
+  const strokeWidth = Number($("shapeToolStrokeWidthInput").value);
+  const line = draft.kind === "line";
+  const input = { name: `${draft.kind[0].toUpperCase()}${draft.kind.slice(1)}`,
+    path: geometricShapePath(draft.kind, geometry.bounds, draft.sides, [draft.start, geometry.end]),
+    fill: colorBytes($("shapeToolFillInput").value),
+    strokeEnabled: line || strokeWidth > 0,
+    stroke: colorBytes($("shapeToolStrokeInput").value), strokeWidth: line ? Math.max(1, strokeWidth) : strokeWidth };
+  void mutate("Creating vector shape", selectCreatedLayer(4, () => client.addVectorShape(input)))
+    .then((next) => { if (next !== DIAGNOSTIC_COMMAND_FAILED) queueMicrotask(focusSelectedLayerRow); });
+}
+
+function renderTextBoxDraft(event = null) {
+  const target = $("gestureCanvas").getContext("2d"); target.clearRect(0, 0, canvas.width, canvas.height);
+  if (!textBoxDraft) return;
+  const geometry = directShapeGeometry({ ...textBoxDraft, kind: "rectangle" }, event);
+  target.save(); target.strokeStyle = "#d7ff55"; target.lineWidth = Math.max(1, 1 / Math.max(zoom, .01));
+  target.setLineDash([5 / zoom, 4 / zoom]); target.strokeRect(geometry.bounds.x, geometry.bounds.y,
+    geometry.bounds.width, geometry.bounds.height); target.restore(); geometryHud(geometry.bounds, "Text box");
+}
+
+function beginTextBox(event) {
+  if (busy || !snapshot || event.button !== 0) return;
+  const start = canvasPoint(event); canvas.setPointerCapture(event.pointerId);
+  textBoxDraft = { pointerId: event.pointerId, start, end: start }; renderTextBoxDraft(event);
+}
+
+function finishTextBox(event, cancelled = false) {
+  if (!textBoxDraft || event.pointerId !== textBoxDraft.pointerId) return;
+  const draft = textBoxDraft; const { bounds } = directShapeGeometry({ ...draft, kind: "rectangle" }, event);
+  textBoxDraft = null; renderTextBoxDraft(); geometryHud(null);
+  if (cancelled) return;
+  pendingTextBounds = Math.hypot(draft.end.x - draft.start.x, draft.end.y - draft.start.y) < 2
+    ? { x: Math.floor(draft.start.x), y: Math.floor(draft.start.y),
+      width: Math.max(160, Math.round(snapshot.width * .35)), height: Math.max(80, Math.round(snapshot.height * .15)) }
+    : bounds;
+  openTextDialog(pendingTextBounds);
 }
 
 function commitFilter() {
@@ -3918,18 +4048,21 @@ function textLayerPayload(style, bounds, name, runs, paragraphs) {
     rgba: new Uint8Array(scratchContext.getImageData(0, 0, bounds.width, bounds.height).data) };
 }
 
-function openTextDialog() {
+function openTextDialog(boundsOverride = null) {
   if (busy || !snapshot) return;
   const layer = selectedLayer();
   textEditingId = layer?.kind === 3 ? layer.id : null;
   const selectedBounds = snapshot.selection?.[0];
-  const bounds = textEditingId ? layer.bounds : selectedBounds || {
+  const bounds = textEditingId ? layer.bounds : boundsOverride || pendingTextBounds || selectedBounds || {
     x: Math.round(snapshot.width * .1), y: Math.round(snapshot.height * .1),
     width: Math.max(160, Math.round(snapshot.width * .5)),
     height: Math.max(80, Math.round(snapshot.height * .2)),
   };
-  const style = layer?.text || { value: "Text", font: "Arial", sizePixels: 48,
-    color: [17, 17, 17], bold: false, italic: false };
+  pendingTextBounds = null;
+  const style = layer?.text || { value: "Text", font: $("textToolFontInput").value.trim() || "Arial",
+    sizePixels: Math.max(1, Math.min(512, Number($("textToolSizeInput").value) || 48)),
+    color: colorBytes($("textToolColorInput").value), bold: $("textToolBoldInput").checked,
+    italic: $("textToolItalicInput").checked };
   $("textDialogTitle").textContent = textEditingId ? "Edit text layer" : "Create text layer";
   $("commitTextButton").textContent = textEditingId ? "Update text" : "Create text";
   $("textValueInput").value = style.value;
@@ -3956,6 +4089,11 @@ function openTextDialog() {
   $("textColorInput").value = `#${firstRun.color.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
   $("textBoldInput").checked = firstRun.bold;
   $("textItalicInput").checked = firstRun.italic;
+  $("textToolFontInput").value = firstRun.font;
+  $("textToolSizeInput").value = String(firstRun.sizePixels);
+  $("textToolColorInput").value = `#${firstRun.color.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
+  $("textToolBoldInput").checked = firstRun.bold;
+  $("textToolItalicInput").checked = firstRun.italic;
   $("textTrackingInput").value = String(firstRun.tracking || 0);
   $("textLeadingInput").value = String(firstRun.autoLeading ? 0 : firstRun.leading || 0);
   $("textHorizontalScaleInput").value = String((firstRun.horizontalScale || 1) * 100);
@@ -4271,12 +4409,36 @@ function drawPaintSegment(draft, from, to) {
     "source-over");
 }
 
+function advancedBrushSettings(revision = 0n) {
+  const percent = (id) => Number($(id).value) / 100;
+  const seed = (Number($("brushSeedInput").value) >>> 0) ^ Number(BigInt(revision) & 0xffffffffn);
+  return { roundness: Math.round(Number($("brushRoundnessInput").value)),
+    angle: Number($("brushAngleInput").value), spacing: Number($("brushSpacingInput").value) / 100,
+    seed, secondaryColor: [...colorBytes($("backgroundSwatchInput").value), 255],
+    sizeJitter: percent("brushSizeJitterInput"), angleJitter: percent("brushAngleJitterInput"),
+    roundnessJitter: percent("brushRoundnessJitterInput"),
+    flipXJitter: $("brushFlipXInput").checked, flipYJitter: $("brushFlipYInput").checked,
+    scatter: percent("brushScatterInput"), scatterBothAxes: $("brushScatterBothInput").checked,
+    count: Math.round(Number($("brushCountInput").value)), countJitter: percent("brushCountJitterInput"),
+    opacityJitter: percent("brushOpacityJitterInput"), flowJitter: percent("brushFlowJitterInput"),
+    textureEnabled: $("brushTextureEnabledInput").checked,
+    textureStyle: Number($("brushTextureStyleInput").value),
+    textureScale: percent("brushTextureScaleInput"), textureDepth: percent("brushTextureDepthInput"),
+    textureInvert: $("brushTextureInvertInput").checked,
+    colorDynamicsEnabled: $("brushColorDynamicsEnabledInput").checked,
+    foregroundBackgroundJitter: percent("brushForegroundBackgroundJitterInput"),
+    hueJitter: percent("brushHueJitterInput"), saturationJitter: percent("brushSaturationJitterInput"),
+    brightnessJitter: percent("brushBrightnessJitterInput"), purity: percent("brushPurityInput"),
+    colorPerTip: $("brushColorPerTipInput").checked };
+}
+
 function rasterStrokePayload(draft) {
   return { layerId: draft.layer.id,
     mode: { brush: 0, eraser: 1, clone: 2, heal: 3 }[draft.tool],
     brushSize: draft.brushSize, softness: draft.softness, color: draft.color,
     points: draft.points.map(({ x, y }) => [x, y]),
     source: draft.source ? [draft.source.x, draft.source.y] : [0, 0],
+    advanced: draft.advanced,
     expectedStateId: draft.stateId, expectedRevision: draft.revision };
 }
 
@@ -4406,6 +4568,7 @@ function beginPaint(event) {
     stateId: snapshot.stateId, revision: snapshot.revision,
     brushSize: Math.round(Number($("brushSizeInput").value)), softness, opacity,
     color: [...colorBytes($("brushColorInput").value), Math.round(opacity * 2.55)],
+    advanced: canvasTool === "brush" ? advancedBrushSettings(snapshot.revision) : undefined,
     overlay: $("gestureCanvas").getContext("2d") };
   paintDraft = draft;
   drawPaintSegment(draft, point, point); scheduleRasterPreview(draft);
@@ -4964,8 +5127,12 @@ for (const tool of ["smudge", "dodge", "burn", "sponge", "blur", "sharpen"]) {
 registerCommand("tool.gradient", "gradientToolButton", () => activateRasterTool("gradient"),
   () => !busy && Boolean(snapshot) && (selectedLayer()?.kind === 0 || snapshot.layers.length === 0));
 registerCommand("tool.fill", "fillToolButton", () => setCanvasTool("fill"), () => !busy && selectedLayer()?.kind === 0);
+registerCommand("tool.eyedropper", "eyedropperToolButton", () => setCanvasTool("eyedropper"),
+  () => !busy && Boolean(snapshot));
 registerCommand("tool.pen", "penToolButton", activatePenTool, () => !busy && Boolean(snapshot));
-registerCommand("tool.text", "textToolButton", () => { setCanvasTool("text"); openTextDialog(); },
+registerCommand("tool.shape", "shapeToolButton", () => setCanvasTool("shape"),
+  () => !busy && Boolean(snapshot));
+registerCommand("tool.text", "textToolButton", () => setCanvasTool("text"),
   () => !busy && Boolean(snapshot));
 registerCommand("selection.all", "selectAllButton", () => {
   return mutate("Selecting all", () => client.setSelection([{ x: 0, y: 0, width: snapshot.width, height: snapshot.height }]));
@@ -5339,9 +5506,35 @@ for (const [input, output] of [
 const brushPresets = Object.freeze({
   "hard-round": { size: 24, softness: 0, opacity: 100 },
   "soft-round": { size: 80, softness: 100, opacity: 100 },
-  pencil: { size: 4, softness: 0, opacity: 100 },
-  marker: { size: 36, softness: 30, opacity: 45 },
+  pencil: { size: 4, softness: 0, opacity: 100, spacing: 10 },
+  marker: { size: 36, softness: 30, opacity: 45, roundness: 70, spacing: 12 },
+  calligraphy: { size: 42, softness: 8, opacity: 100, roundness: 28, angle: 35, spacing: 10 },
+  spray: { size: 72, softness: 55, opacity: 38, scatter: 200, count: 6,
+    countJitter: 45, sizeJitter: 50, opacityJitter: 35 },
+  textured: { size: 54, softness: 20, opacity: 85, textureEnabled: true,
+    textureStyle: 1, textureScale: 75, textureDepth: 65, sizeJitter: 15 },
+  "color-scatter": { size: 48, softness: 15, opacity: 90, scatter: 100, count: 3,
+    colorDynamicsEnabled: true, foregroundBackgroundJitter: 60, hueJitter: 50,
+    saturationJitter: 30 },
 });
+function applyAdvancedBrushPreset(preset) {
+  const values = { brushRoundnessInput: preset.roundness ?? 100, brushAngleInput: preset.angle ?? 0,
+    brushSpacingInput: preset.spacing ?? 25, brushSizeJitterInput: preset.sizeJitter ?? 0,
+    brushAngleJitterInput: preset.angleJitter ?? 0, brushRoundnessJitterInput: preset.roundnessJitter ?? 0,
+    brushScatterInput: preset.scatter ?? 0, brushCountInput: preset.count ?? 1,
+    brushCountJitterInput: preset.countJitter ?? 0, brushOpacityJitterInput: preset.opacityJitter ?? 0,
+    brushFlowJitterInput: preset.flowJitter ?? 0, brushTextureStyleInput: preset.textureStyle ?? 0,
+    brushTextureScaleInput: preset.textureScale ?? 100, brushTextureDepthInput: preset.textureDepth ?? 50,
+    brushForegroundBackgroundJitterInput: preset.foregroundBackgroundJitter ?? 0,
+    brushHueJitterInput: preset.hueJitter ?? 0, brushSaturationJitterInput: preset.saturationJitter ?? 0,
+    brushBrightnessJitterInput: preset.brightnessJitter ?? 0, brushPurityInput: preset.purity ?? 0 };
+  for (const [id, value] of Object.entries(values)) $(id).value = String(value);
+  for (const [id, value] of Object.entries({ brushFlipXInput: preset.flipX ?? false,
+    brushFlipYInput: preset.flipY ?? false, brushScatterBothInput: preset.scatterBoth ?? false,
+    brushTextureEnabledInput: preset.textureEnabled ?? false, brushTextureInvertInput: preset.textureInvert ?? false,
+    brushColorDynamicsEnabledInput: preset.colorDynamicsEnabled ?? false,
+    brushColorPerTipInput: preset.colorPerTip ?? true })) $(id).checked = value;
+}
 $("brushPresetSelect").addEventListener("change", (event) => {
   const preset = brushPresets[event.currentTarget.value];
   if (!preset) return;
@@ -5350,9 +5543,23 @@ $("brushPresetSelect").addEventListener("change", (event) => {
   $("brushSoftnessOutput").textContent = `${preset.softness}%`;
   $("brushOpacityInput").value = String(preset.opacity);
   $("brushOpacityOutput").textContent = `${preset.opacity}%`;
+  applyAdvancedBrushPreset(preset);
   renderBrushHover();
   persistPreferences();
 });
+$("brushSettingsButton").addEventListener("click", () => openContextEditor("brushSettingsDialog"));
+$("textSettingsButton").addEventListener("click", () => openTextDialog());
+for (const id of ["brushAngleInput", "brushRoundnessInput", "brushSpacingInput",
+  "brushSeedInput", "brushSizeJitterInput", "brushAngleJitterInput", "brushRoundnessJitterInput",
+  "brushFlipXInput", "brushFlipYInput", "brushScatterInput", "brushScatterBothInput",
+  "brushCountInput", "brushCountJitterInput", "brushOpacityJitterInput", "brushFlowJitterInput",
+  "brushTextureEnabledInput", "brushTextureStyleInput", "brushTextureScaleInput",
+  "brushTextureDepthInput", "brushTextureInvertInput", "brushColorDynamicsEnabledInput",
+  "brushForegroundBackgroundJitterInput", "brushHueJitterInput", "brushSaturationJitterInput",
+  "brushBrightnessJitterInput", "brushPurityInput", "brushColorPerTipInput"]) {
+  $(id).addEventListener("input", () => { $("brushPresetSelect").value = "custom"; renderBrushHover(); persistPreferences(); });
+  $(id).addEventListener("change", () => { $("brushPresetSelect").value = "custom"; persistPreferences(); });
+}
 $("retouchSoftnessInput").addEventListener("input", (event) => {
   $("retouchSoftnessOutput").textContent = `${event.currentTarget.value}%`;
 });
@@ -5825,6 +6032,10 @@ $("clearGuidesButton").addEventListener("click", () => setActiveGuides([]));
 canvas.addEventListener("pointerdown", (event) => {
   if (busy || !snapshot || event.button !== 0) return;
   if (spacePanActive) return;
+  if (canvasTool === "eyedropper" || (event.altKey &&
+      ["brush", "eraser", "gradient", "fill", "shape", "text"].includes(canvasTool))) {
+    sampleVisibleColor(event); return;
+  }
   if (["brush", "eraser", "clone", "heal"].includes(canvasTool)) { beginPaint(event); return; }
   if (["spotHealing", "patch"].includes(canvasTool)) { beginRetouch(event); return; }
   if (["smudge", "dodge", "burn", "sponge", "blur", "sharpen"].includes(canvasTool)) {
@@ -5835,7 +6046,8 @@ canvas.addEventListener("pointerdown", (event) => {
   }
   if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "fill") { void fillSelectedPixels(event); return; }
-  if (canvasTool === "text") { openTextDialog(); return; }
+  if (canvasTool === "shape") { beginDirectShape(event); return; }
+  if (canvasTool === "text") { beginTextBox(event); return; }
   if (canvasTool === "pen") {
     const point = canvasPoint(event);
     penDraft ??= { points: [], closed: false };
@@ -5958,6 +6170,12 @@ canvas.addEventListener("pointermove", (event) => {
   moveRetouch(event);
   moveLocalBrush(event);
   moveAdvancedPaint(event);
+  if (shapeDraft?.pointerId === event.pointerId) {
+    shapeDraft.end = canvasPoint(event); renderDirectShapeDraft(event);
+  }
+  if (textBoxDraft?.pointerId === event.pointerId) {
+    textBoxDraft.end = canvasPoint(event); renderTextBoxDraft(event);
+  }
   if (lassoDraft?.pointerId === event.pointerId) {
     const point = canvasPoint(event); const last = lassoDraft.points.at(-1);
     if (Math.hypot(point.x - last.x, point.y - last.y) >= 1) lassoDraft.points.push(point);
@@ -6004,6 +6222,8 @@ canvas.addEventListener("pointerup", (event) => {
   finishLocalBrush(event);
   finishAdvancedPaint(event);
   finishGradient(event);
+  finishDirectShape(event);
+  finishTextBox(event);
   if (lassoDraft?.pointerId === event.pointerId) {
     const draft = lassoDraft; lassoDraft = null; previewPolygon([]);
     if (draft.points.length >= 3) commitSelectionMask("Selecting freehand area",
@@ -6032,6 +6252,8 @@ canvas.addEventListener("pointercancel", (event) => {
   finishRetouch(event, true);
   finishLocalBrush(event, true);
   finishAdvancedPaint(event, true);
+  finishDirectShape(event, true);
+  finishTextBox(event, true);
   quickSelectDraft = null; quickMaskDraft = null; previewPolygon([]); clearTransformPreview(true);
   if (canvasTool === "quickMask") renderQuickMask();
 });
@@ -6214,6 +6436,8 @@ window.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "b") executeCommand("tool.brush");
   if (event.key.toLowerCase() === "e") executeCommand("tool.eraser");
   if (event.key.toLowerCase() === "j") executeCommand(event.shiftKey ? "tool.patch" : "tool.spotHealing");
+  if (event.key.toLowerCase() === "i") executeCommand("tool.eyedropper");
+  if (event.key.toLowerCase() === "u") executeCommand("tool.shape");
   if (event.key.toLowerCase() === "t") executeCommand("tool.text");
   if (event.key.toLowerCase() === "p") executeCommand("tool.pen");
   if (event.key === "Enter" && cropDraft) { event.preventDefault(); commitCropDraft(); return; }
@@ -6241,6 +6465,8 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && polygonDraft) { polygonDraft = null; previewPolygon([]); }
   if (event.key === "Escape" && magneticDraft) { magneticDraft = null; previewPolygon([]); }
+  if (event.key === "Escape" && shapeDraft) { shapeDraft = null; renderDirectShapeDraft(); geometryHud(null); }
+  if (event.key === "Escape" && textBoxDraft) { textBoxDraft = null; renderTextBoxDraft(); geometryHud(null); }
   if (event.key === "Enter" && penDraft) { event.preventDefault(); commitPenPath(false); }
   if (event.key === "Escape" && penDraft) {
     event.preventDefault(); penDraft = null; penHoverPoint = null;

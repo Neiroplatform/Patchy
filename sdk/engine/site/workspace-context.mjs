@@ -24,7 +24,7 @@ const contexts = {
   pan: descriptor("navigation", "Pan canvas", [], "document",
     "Drag the workspace to pan without changing document pixels."),
   brush: descriptor("paint", "Brush", ["brushPresetSelect", "brushSizeInput", "brushSoftnessInput",
-    "brushOpacityInput", "brushColorInput", "paintTargetSelect"], "layer-or-mask",
+    "brushOpacityInput", "brushColorInput", "paintTargetSelect", "brushSettingsButton"], "layer-or-mask",
     "Drag to paint the selected pixel layer or mask; an empty document creates its first paint layer."),
   eraser: descriptor("paint", "Eraser", ["brushPresetSelect", "brushSizeInput", "brushSoftnessInput",
     "brushOpacityInput", "paintTargetSelect"], "layer-or-mask",
@@ -65,11 +65,17 @@ const contexts = {
     "Drag from the first point to the second, edit colour and opacity stops, then Apply; Escape cancels the draft."),
   fill: descriptor("fill", "Fill selection", ["brushColorInput", "paintTargetSelect", "paintPresetSelect"], "layer-or-mask",
     "Select the tool, configure it, then click the canvas. A current selection is filled; otherwise the clicked colour region is selected and filled."),
+  eyedropper: descriptor("sample", "Eyedropper", [], "document",
+    "Click the visible composite to set the foreground colour. Painting tools can temporarily sample with Alt-click."),
   pen: descriptor("draw", "Pen path", ["cancelPenPathButton", "finishPenPathButton", "closePenPathButton",
     "makePenSelectionButton"], "path",
     "Click anchors while the dotted rubber band previews the next segment. Click the first anchor to close the path, then make a selection, fill, stroke or vector mask."),
-  text: descriptor("draw", "Text", [], "text-layer",
-    "Activate to open the text editor; Apply creates or updates one editable text layer."),
+  shape: descriptor("draw", "Shape", ["shapeToolKindInput", "shapeToolFillInput",
+    "shapeToolStrokeInput", "shapeToolStrokeWidthInput", "shapeToolSidesInput"], "shape-layer",
+    "Drag on the canvas to create a vector rectangle, ellipse, line, polygon or star. Hold Shift to constrain proportions."),
+  text: descriptor("draw", "Text", ["textToolFontInput", "textToolSizeInput", "textToolColorInput",
+    "textToolBoldInput", "textToolItalicInput", "textSettingsButton"], "text-layer",
+    "Drag a text box on the canvas, then enter text. Character and Paragraph opens the complete editable settings."),
 };
 
 export const WORKSPACE_TOOL_CONTEXTS = Object.freeze(Object.fromEntries(
@@ -91,7 +97,7 @@ export const WORKSPACE_TOOL_BUTTONS = Object.freeze({
   smudge: "smudgeToolButton", blur: "blurToolButton", sharpen: "sharpenToolButton",
   dodge: "dodgeToolButton", burn: "burnToolButton", sponge: "spongeToolButton",
   gradient: "gradientToolButton", fill: "fillToolButton", pen: "penToolButton",
-  text: "textToolButton",
+  eyedropper: "eyedropperToolButton", shape: "shapeToolButton", text: "textToolButton",
 });
 
 export function workspaceContextForTool(tool) {
@@ -107,7 +113,7 @@ export function installWorkspaceContext(document, { translate = (value) => value
   let currentTool = "marquee";
   for (const id of WORKSPACE_OPTION_CONTROL_IDS) {
     const control = document.getElementById(id);
-    const node = control?.closest("label, .direct-operation-actions");
+    const node = control?.closest("label, .direct-operation-actions, .tool-option-button");
     if (!node) continue;
     node.dataset.toolOption = id;
     optionNodes.set(id, node);

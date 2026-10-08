@@ -953,16 +953,32 @@ std::optional<patchy::RasterStrokeRequest> raster_stroke_request(
   constexpr auto kRasterStrokeWithoutSoftness =
       static_cast<std::uint32_t>(offsetof(patchy_engine_raster_stroke,
                                           brush_softness));
+  constexpr auto kRasterStrokeWithSoftness =
+      static_cast<std::uint32_t>(offsetof(patchy_engine_raster_stroke,
+                                          advanced_flags));
   const auto valid_size = input != nullptr &&
       (input->struct_size == kRasterStrokeWithoutSoftness ||
+       input->struct_size == kRasterStrokeWithSoftness ||
        input->struct_size == sizeof(*input));
   const auto has_softness = input != nullptr &&
+      input->struct_size >= kRasterStrokeWithSoftness;
+  const auto has_advanced = input != nullptr &&
       input->struct_size == sizeof(*input);
+  const auto advanced_enabled = has_advanced &&
+      (input->advanced_flags & PATCHY_ENGINE_BRUSH_ADVANCED) != 0U;
   if (!valid_size ||
       input->layer_id == 0 || input->mode > PATCHY_ENGINE_RASTER_HEAL ||
       input->points == nullptr || input->point_count == 0 ||
       input->point_count > 65536U ||
-      (has_softness && (input->brush_softness > 100 || input->reserved != 0U))) {
+      (has_softness && (input->brush_softness > 100 || input->reserved != 0U)) ||
+      (has_advanced && (input->advanced_flags & ~UINT32_C(0x7f)) != 0U) ||
+      (advanced_enabled &&
+       (input->brush_roundness < 1 || input->brush_roundness > 100 ||
+        !std::isfinite(input->brush_angle_degrees) ||
+        !std::isfinite(input->brush_spacing) || input->brush_spacing < 0.01 ||
+        input->brush_spacing > 10.0 || input->dab_count < 1 ||
+        input->dab_count > 16 || input->texture_style > 2U ||
+        input->scatter_both_axes > 1U || input->reserved2 != 0U))) {
     fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
          "a bounded versioned raster stroke is required");
     return std::nullopt;
@@ -972,6 +988,62 @@ std::optional<patchy::RasterStrokeRequest> raster_stroke_request(
   request.brush_size = input->brush_size;
   request.brush_softness = has_softness ? input->brush_softness : 0;
   request.color = {input->red, input->green, input->blue, input->alpha};
+  if (advanced_enabled) {
+    const auto bounded_fraction = [](double value) {
+      return std::isfinite(value) && value >= 0.0 && value <= 1.0;
+    };
+    if (!bounded_fraction(input->size_jitter) ||
+        !bounded_fraction(input->angle_jitter) ||
+        !bounded_fraction(input->roundness_jitter) ||
+        !std::isfinite(input->scatter) || input->scatter < 0.0 || input->scatter > 10.0 ||
+        !bounded_fraction(input->count_jitter) ||
+        !bounded_fraction(input->opacity_jitter) ||
+        !bounded_fraction(input->flow_jitter) ||
+        !std::isfinite(input->texture_scale) || input->texture_scale < 0.01 ||
+        input->texture_scale > 10.0 || !bounded_fraction(input->texture_depth) ||
+        !bounded_fraction(input->foreground_background_jitter) ||
+        !bounded_fraction(input->hue_jitter) ||
+        !bounded_fraction(input->saturation_jitter) ||
+        !bounded_fraction(input->brightness_jitter) ||
+        !std::isfinite(input->purity) || input->purity < -1.0 || input->purity > 1.0) {
+      fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+           "bounded advanced brush settings are required");
+      return std::nullopt;
+    }
+    const auto flags = input->advanced_flags;
+    request.advanced_brush = true;
+    request.brush_roundness = input->brush_roundness;
+    request.brush_angle_degrees = input->brush_angle_degrees;
+    request.brush_spacing = input->brush_spacing;
+    request.secondary_color = {input->secondary_red, input->secondary_green,
+                               input->secondary_blue, input->secondary_alpha};
+    auto &dynamics = request.brush_dynamics;
+    dynamics.seed = input->dynamics_seed;
+    dynamics.size_jitter = input->size_jitter;
+    dynamics.angle_jitter = input->angle_jitter;
+    dynamics.roundness_jitter = input->roundness_jitter;
+    dynamics.flip_x_jitter = (flags & PATCHY_ENGINE_BRUSH_FLIP_X_JITTER) != 0U;
+    dynamics.flip_y_jitter = (flags & PATCHY_ENGINE_BRUSH_FLIP_Y_JITTER) != 0U;
+    dynamics.scatter = input->scatter;
+    dynamics.scatter_both_axes = input->scatter_both_axes != 0U;
+    dynamics.count = input->dab_count;
+    dynamics.count_jitter = input->count_jitter;
+    dynamics.opacity_jitter = input->opacity_jitter;
+    dynamics.flow_jitter = input->flow_jitter;
+    dynamics.texture_enabled = (flags & PATCHY_ENGINE_BRUSH_TEXTURE) != 0U;
+    dynamics.texture_invert = (flags & PATCHY_ENGINE_BRUSH_TEXTURE_INVERT) != 0U;
+    dynamics.texture_style = static_cast<patchy::BrushTextureStyle>(input->texture_style);
+    dynamics.texture_scale = input->texture_scale;
+    dynamics.texture_depth = input->texture_depth;
+    dynamics.color_dynamics_enabled =
+        (flags & PATCHY_ENGINE_BRUSH_COLOR_DYNAMICS) != 0U;
+    dynamics.color_per_tip = (flags & PATCHY_ENGINE_BRUSH_COLOR_PER_TIP) != 0U;
+    dynamics.foreground_background_jitter = input->foreground_background_jitter;
+    dynamics.hue_jitter = input->hue_jitter;
+    dynamics.saturation_jitter = input->saturation_jitter;
+    dynamics.brightness_jitter = input->brightness_jitter;
+    dynamics.purity = input->purity;
+  }
   request.source = {input->source_x, input->source_y};
   request.points.reserve(input->point_count);
   for (std::size_t index = 0; index < input->point_count; ++index) {

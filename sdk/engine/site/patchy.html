@@ -43,6 +43,8 @@
     <symbol id="icon-gradient" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1"/><path d="M8 5v14m4-14v14m4-14v14" opacity=".7"/></symbol>
     <symbol id="icon-fill" viewBox="0 0 24 24"><path d="m7 4 10 10-6 6-7-7 6-6m-2-1 2 2"/><path d="M4 13h13m2 2s-2 2.3-2 3.5a2 2 0 0 0 4 0c0-1.2-2-3.5-2-3.5Z"/></symbol>
     <symbol id="icon-pen" viewBox="0 0 24 24"><path d="m12 3 7 7-4 10H9L5 10Z"/><circle cx="12" cy="11" r="1.5"/><path d="M12 12.5V20"/></symbol>
+    <symbol id="icon-shape" viewBox="0 0 24 24"><rect x="3" y="4" width="10" height="9" rx="1"/><circle cx="16" cy="15" r="5"/></symbol>
+    <symbol id="icon-eyedropper" viewBox="0 0 24 24"><path d="m14 4 6 6-3 3-1.5-1.5-7 7L4 20l1.5-4.5 7-7L11 7Z"/><path d="m7 14 3 3"/></symbol>
     <symbol id="icon-text" viewBox="0 0 24 24"><path d="M5 5h14M12 5v14m-4 0h8"/></symbol>
     <symbol id="icon-select-all" viewBox="0 0 24 24"><path d="M7 4H4v3m13-3h3v3M4 17v3h3m13-3v3h-3"/><rect x="7" y="7" width="10" height="10" stroke-dasharray="2 2"/></symbol>
     <symbol id="icon-clear-selection" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1" stroke-dasharray="3 2"/><path d="m8 8 8 8m0-8-8 8"/></symbol>
@@ -126,7 +128,9 @@
         <button class="tool-button" id="sharpenToolButton" type="button" aria-label="Sharpen Brush" aria-pressed="false" title="Sharpen Brush"><svg class="ui-icon" aria-hidden="true"><use href="#icon-sharpen"></use></svg></button>
         <button class="tool-button" id="gradientToolButton" type="button" aria-label="Gradient" aria-pressed="false" title="Gradient (G)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-gradient"></use></svg></button>
         <button class="tool-button" id="fillToolButton" type="button" aria-label="Fill selection" title="Fill selection"><svg class="ui-icon" aria-hidden="true"><use href="#icon-fill"></use></svg></button>
+        <button class="tool-button" id="eyedropperToolButton" type="button" aria-label="Eyedropper" aria-pressed="false" title="Eyedropper (I)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-eyedropper"></use></svg></button>
         <button class="tool-button" id="penToolButton" type="button" aria-label="Pen path" aria-pressed="false" title="Pen path (P)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-pen"></use></svg></button>
+        <button class="tool-button" id="shapeToolButton" type="button" aria-label="Shape" aria-pressed="false" title="Shape (U)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shape"></use></svg></button>
         <button class="tool-button" id="textToolButton" type="button" aria-label="Text" aria-pressed="false" title="Text (T)"><svg class="ui-icon" aria-hidden="true"><use href="#icon-text"></use></svg></button>
         <button class="tool-button" id="selectAllButton" type="button" aria-label="Select all" title="Select all (Ctrl+A)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-select-all"></use></svg></button>
         <button class="tool-button" id="clearSelectionButton" type="button" aria-label="Clear selection" title="Clear selection (Ctrl+D)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-clear-selection"></use></svg></button>
@@ -173,10 +177,24 @@
             <label class="standard-brush-option" hidden>Brush <select id="brushPresetSelect" aria-label="Brush preset">
               <option value="hard-round">Hard Round</option><option value="soft-round">Soft Round</option>
               <option value="pencil">Pencil</option><option value="marker">Marker</option>
+              <option value="calligraphy">Calligraphy</option><option value="spray">Spray</option>
+              <option value="textured">Textured</option><option value="color-scatter">Color Scatter</option>
               <option value="custom">Custom</option>
             </select></label>
             <label class="standard-brush-option" hidden>Softness <input id="brushSoftnessInput" type="range" min="0" max="100" value="0"><output id="brushSoftnessOutput">0%</output></label>
             <label class="standard-brush-option" hidden>Opacity <input id="brushOpacityInput" type="range" min="1" max="100" value="100"><output id="brushOpacityOutput">100%</output></label>
+            <button class="tool-option-button" id="brushSettingsButton" type="button" hidden>Brush settings…</button>
+            <label hidden>Shape <select id="shapeToolKindInput"><option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="line">Line</option><option value="polygon">Polygon</option><option value="star">Star</option></select></label>
+            <label hidden>Fill <input id="shapeToolFillInput" type="color" value="#4f7cff"></label>
+            <label hidden>Stroke <input id="shapeToolStrokeInput" type="color" value="#10141d"></label>
+            <label hidden>Width <input id="shapeToolStrokeWidthInput" type="number" min="0" max="200" step="1" value="0"></label>
+            <label hidden>Sides <input id="shapeToolSidesInput" type="number" min="3" max="32" step="1" value="6"></label>
+            <label hidden>Font <input id="textToolFontInput" type="text" value="Arial" list="fontPresetList" maxlength="256"></label>
+            <label hidden>Size <input id="textToolSizeInput" type="number" min="1" max="512" step="1" value="48"></label>
+            <label hidden>Color <input id="textToolColorInput" type="color" value="#111111"></label>
+            <label hidden><input id="textToolBoldInput" type="checkbox"> Bold</label>
+            <label hidden><input id="textToolItalicInput" type="checkbox"> Italic</label>
+            <button class="tool-option-button" id="textSettingsButton" type="button" hidden>Character / Paragraph…</button>
             <label class="non-retouch-option standard-paint-option">Target <select id="paintTargetSelect" aria-label="Paint target">
               <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
             </select></label>
@@ -909,7 +927,7 @@
     </dialog>
     <dialog class="document-dialog" id="shapeDialog" aria-labelledby="shapeDialogTitle">
       <form method="dialog"><header><div><p class="eyebrow">SHAPE</p><h2 id="shapeDialogTitle">Create vector shape</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
-        <section><label class="dialog-field"><span>Kind</span><select id="shapeKindInput"><option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon">Hexagon</option></select></label><div class="field-row field-row-four">
+        <section><label class="dialog-field"><span>Kind</span><select id="shapeKindInput"><option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="line">Line</option><option value="polygon">Polygon</option><option value="star">Star</option></select></label><div class="field-row field-row-four">
           <label><span>X</span><input id="shapeXInput" type="number" step="1" required></label>
           <label><span>Y</span><input id="shapeYInput" type="number" step="1" required></label>
           <label><span>Width</span><input id="shapeWidthInput" type="number" min="1" step="1" required></label>
@@ -919,6 +937,47 @@
           <label><span>Stroke</span><input id="shapeStrokeInput" type="color" value="#10141d"></label>
           <label><span>Stroke width</span><input id="shapeStrokeWidthInput" type="number" min="0" max="200" value="0"></label>
         </div><div class="dialog-actions"><button class="button" type="submit" value="cancel" formnovalidate>Cancel</button><button class="button button-primary" id="commitShapeButton" type="button">Create shape</button></div></section>
+      </form>
+    </dialog>
+    <dialog class="document-dialog brush-settings-dialog" id="brushSettingsDialog" aria-labelledby="brushSettingsDialogTitle">
+      <form method="dialog"><header><div><p class="eyebrow">BRUSH</p><h2 id="brushSettingsDialogTitle">Brush settings</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+        <section><h3>Tip shape</h3><div class="field-row field-row-four">
+          <label><span>Angle°</span><input id="brushAngleInput" type="number" min="-180" max="180" step="1" value="0"></label>
+          <label><span>Roundness %</span><input id="brushRoundnessInput" type="number" min="1" max="100" step="1" value="100"></label>
+          <label><span>Spacing %</span><input id="brushSpacingInput" type="number" min="1" max="1000" step="1" value="25"></label>
+          <label><span>Seed</span><input id="brushSeedInput" type="number" min="0" max="4294967295" step="1" value="1"></label>
+        </div></section>
+        <section><h3>Shape dynamics</h3><div class="field-row field-row-four">
+          <label><span>Size jitter %</span><input id="brushSizeJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label><span>Angle jitter %</span><input id="brushAngleJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label><span>Roundness jitter %</span><input id="brushRoundnessJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label class="check-field"><input id="brushFlipXInput" type="checkbox"><span>Flip X</span></label>
+          <label class="check-field"><input id="brushFlipYInput" type="checkbox"><span>Flip Y</span></label>
+        </div></section>
+        <section><h3>Scattering & transfer</h3><div class="field-row field-row-four">
+          <label><span>Scatter %</span><input id="brushScatterInput" type="number" min="0" max="1000" value="0"></label>
+          <label class="check-field"><input id="brushScatterBothInput" type="checkbox"><span>Both axes</span></label>
+          <label><span>Count</span><input id="brushCountInput" type="number" min="1" max="16" value="1"></label>
+          <label><span>Count jitter %</span><input id="brushCountJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label><span>Opacity jitter %</span><input id="brushOpacityJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label><span>Flow jitter %</span><input id="brushFlowJitterInput" type="number" min="0" max="100" value="0"></label>
+        </div></section>
+        <section><h3>Texture</h3><div class="field-row field-row-four">
+          <label class="check-field"><input id="brushTextureEnabledInput" type="checkbox"><span>Enable texture</span></label>
+          <label><span>Texture</span><select id="brushTextureStyleInput"><option value="0">Fine grain</option><option value="1">Canvas</option><option value="2">Speckle</option></select></label>
+          <label><span>Scale %</span><input id="brushTextureScaleInput" type="number" min="1" max="1000" value="100"></label>
+          <label><span>Depth %</span><input id="brushTextureDepthInput" type="number" min="0" max="100" value="50"></label>
+          <label class="check-field"><input id="brushTextureInvertInput" type="checkbox"><span>Invert</span></label>
+        </div></section>
+        <section><h3>Color dynamics</h3><div class="field-row field-row-four">
+          <label class="check-field"><input id="brushColorDynamicsEnabledInput" type="checkbox"><span>Enable color dynamics</span></label>
+          <label><span>FG / BG jitter %</span><input id="brushForegroundBackgroundJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label><span>Hue jitter %</span><input id="brushHueJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label><span>Saturation jitter %</span><input id="brushSaturationJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label><span>Brightness jitter %</span><input id="brushBrightnessJitterInput" type="number" min="0" max="100" value="0"></label>
+          <label><span>Purity %</span><input id="brushPurityInput" type="number" min="-100" max="100" value="0"></label>
+          <label class="check-field"><input id="brushColorPerTipInput" type="checkbox" checked><span>Per tip</span></label>
+        </div><p class="dialog-note">Settings are deterministic per stroke and use the engine’s bounded static-tip model. No bristle, fluid or destination-adaptive simulation is introduced.</p></section>
       </form>
     </dialog>
     <dialog class="document-dialog" id="adjustmentDialog" aria-labelledby="adjustmentDialogTitle">

@@ -49,7 +49,7 @@ test("icon-only actions use a complete readable first-party SVG vocabulary", asy
   ]);
   const symbols = [...html.matchAll(/<symbol id="(icon-[^"]+)"/g)].map((match) => match[1]);
   const tools = [...html.matchAll(/<button class="tool-button"([^>]*)>([\s\S]*?)<\/button>/g)];
-  assert.equal(tools.length, 31);
+  assert.equal(tools.length, 33);
   const toolIcons = [];
   for (const [, attributes, body] of tools) {
     assert.match(attributes, /aria-label="[^"]+"/);
@@ -58,7 +58,7 @@ test("icon-only actions use a complete readable first-party SVG vocabulary", asy
     toolIcons.push(body.match(/href="#(icon-[^"]+)"/)?.[1]);
     assert.equal(body.replace(/<[^>]+>/g, "").trim(), "");
   }
-  assert.equal(new Set(toolIcons).size, 31, "every rail action needs a distinct silhouette");
+  assert.equal(new Set(toolIcons).size, 33, "every rail action needs a distinct silhouette");
   for (const icon of toolIcons) assert.ok(symbols.includes(icon), icon);
   for (const id of ["undoButton", "redoButton", "copyPixelsButton", "cutPixelsButton", "pastePixelsButton"]) {
     assert.match(html, new RegExp(`id="${id}"[^>]*><svg class="ui-icon" aria-hidden="true">`));

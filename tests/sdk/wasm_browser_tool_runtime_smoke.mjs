@@ -172,8 +172,8 @@ try {
   const toolInventory = await page.locator("[data-tool-contract]").evaluateAll((buttons) =>
     buttons.map((button) => ({ id: button.id, contract: button.dataset.toolContract,
       description: button.getAttribute("aria-description") || "" })));
-  assert.equal(toolInventory.length, 28, "the browser tool catalog changed without runtime coverage");
-  assert.equal(new Set(toolInventory.map(({ contract }) => contract)).size, 28,
+  assert.equal(toolInventory.length, 30, "the browser tool catalog changed without runtime coverage");
+  assert.equal(new Set(toolInventory.map(({ contract }) => contract)).size, 30,
     "the browser tool catalog contains duplicate contracts");
   assert.equal(toolInventory.every(({ id, contract, description }) =>
     id && contract && description.trim().length > 0), true,
@@ -185,11 +185,8 @@ try {
     "patternStampToolButton", "eraserToolButton", "cloneToolButton", "healToolButton",
     "spotHealingToolButton", "smudgeToolButton", "dodgeToolButton", "burnToolButton",
     "spongeToolButton", "blurToolButton", "sharpenToolButton", "gradientToolButton",
-    "penToolButton",
+    "eyedropperToolButton", "penToolButton", "shapeToolButton", "textToolButton",
   ]) await selectTool(buttonId);
-  await selectTool("textToolButton");
-  await page.locator("#textDialog").press("Escape");
-  await page.waitForFunction(() => !document.querySelector("#textDialog")?.open);
 
   await page.locator("#brushSizeInput").evaluate((input) => {
     input.value = "17"; input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -207,6 +204,13 @@ try {
   assert.ok(hoverRing && Math.abs(hoverRing.width - 17 * hoverZoom) < 1.5,
     `brush hover radius is not tied to the selected size: ${JSON.stringify({ hoverRing, hoverZoom })}`);
   assert.equal(await revision(), hoverRevision, "hovering the brush mutated the document");
+  await page.locator("#brushPresetSelect").selectOption("spray");
+  await page.click("#brushSettingsButton");
+  assert.equal(await page.locator("#brushSettingsDialog").getAttribute("open"), "",
+    "Brush settings did not open in the contextual inspector");
+  assert.equal(await page.locator("#brushScatterInput").inputValue(), "200");
+  assert.equal(await page.locator("#brushCountInput").inputValue(), "6");
+  await page.locator('#brushSettingsDialog button[value="cancel"]').click();
   await page.mouse.move(1, 1);
   await page.waitForFunction(() => document.querySelector("#brushCursorOverlay")?.hidden);
   const tools = [
@@ -346,11 +350,46 @@ try {
   assert.equal(await page.locator("#errorBanner").isHidden(), true,
     `Magic Wand surfaced ${await page.textContent("#errorMessage")}`);
 
+  await selectTool("eyedropperToolButton");
+  const sampleRevision = await revision();
+  await page.mouse.click(wandCanvas.x + wandCanvas.width * .5,
+    wandCanvas.y + wandCanvas.height * .5);
+  assert.equal(await page.locator("#foregroundSwatchInput").inputValue(), "#ffffff",
+    "Eyedropper did not sample the visible white composite");
+  assert.equal(await revision(), sampleRevision, "Eyedropper mutated the document");
+
+  await selectTool("shapeToolButton");
+  await page.locator("#shapeToolKindInput").selectOption("star");
+  await page.locator("#shapeToolSidesInput").fill("5");
+  before = await revision();
+  await dragCanvas({ x: .48, y: .15 }, { x: .75, y: .48 }, { modifiers: ["Shift"] });
+  await waitForMutation(before, "Creating vector shape");
+  assert.equal(await page.locator("#errorBanner").isHidden(), true,
+    `Shape surfaced ${await page.textContent("#errorMessage")}`);
+
+  await selectTool("textToolButton");
+  await page.locator("#textToolFontInput").fill("Georgia");
+  await page.locator("#textToolSizeInput").fill("28");
+  await page.locator("#textToolBoldInput").check();
+  await dragCanvas({ x: .1, y: .58 }, { x: .72, y: .82 });
+  await page.waitForFunction(() => document.querySelector("#textDialog")?.open);
+  assert.equal(await page.locator("#textFontInput").inputValue(), "Georgia");
+  assert.equal(await page.locator("#textSizeInput").inputValue(), "28");
+  await page.locator("#textValueInput").fill("Editable browser text");
+  await page.locator("#textTrackingInput").fill("40");
+  await page.locator("#textAlignmentInput").selectOption("2");
+  before = await revision();
+  await page.click("#commitTextButton");
+  await waitForMutation(before, "Creating text");
+  assert.equal(await page.locator("#errorBanner").isHidden(), true,
+    `Text surfaced ${await page.textContent("#errorMessage")}`);
+
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);
-  console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained tools=28-described-activated ` +
+  console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained tools=30-described-activated ` +
     "hover=idle-brush-radius wand=contiguous-all-layers-active-layer-svg gradient=preset-guard-noop-neutral " +
-    "paint=brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill real-pointer=pass");
+    "paint=advanced-brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill " +
+    "authoring=eyedropper-shape-text real-pointer=pass");
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,

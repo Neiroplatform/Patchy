@@ -18,6 +18,35 @@ constexpr std::size_t kMaximumStrokePoints = 65536;
 constexpr std::int32_t kMaximumBrushSize = 4096;
 constexpr std::uint64_t kMaximumLayerMaskStrokePixels = 268435456ULL;
 struct LayerMaskStrokeCancelled {};
+
+ScaledBrushTip procedural_advanced_tip(std::int32_t size, std::int32_t softness) {
+  ScaledBrushTip tip;
+  tip.width = size;
+  tip.height = size;
+  tip.anchor_x = static_cast<double>(size) / 2.0;
+  tip.anchor_y = static_cast<double>(size) / 2.0;
+  tip.mask.resize(static_cast<std::size_t>(size) * static_cast<std::size_t>(size));
+  const auto radius = std::max(0.5, static_cast<double>(size) / 2.0);
+  const auto edge = std::max(0.5, radius * std::clamp(softness, 0, 100) / 100.0);
+  const auto inner = softness <= 0 ? radius : std::max(0.0, radius - edge);
+  for (std::int32_t y = 0; y < size; ++y) {
+    for (std::int32_t x = 0; x < size; ++x) {
+      const auto dx = static_cast<double>(x) + 0.5 - tip.anchor_x;
+      const auto dy = static_cast<double>(y) + 0.5 - tip.anchor_y;
+      const auto distance = std::hypot(dx, dy);
+      double coverage = distance <= radius ? 1.0 : 0.0;
+      if (softness > 0 && distance > inner) {
+        const auto t = std::clamp((distance - inner) / edge, 0.0, 1.0);
+        const auto smooth = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+        coverage = 1.0 - smooth;
+      }
+      tip.mask[static_cast<std::size_t>(y) * static_cast<std::size_t>(size) +
+               static_cast<std::size_t>(x)] =
+          static_cast<std::uint8_t>(std::lround(std::clamp(coverage, 0.0, 1.0) * 255.0));
+    }
+  }
+  return tip;
+}
 bool fail(std::string* error, std::string_view message) {
   if (error != nullptr) *error = std::string(message);
   return false;
@@ -175,6 +204,14 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
       request.brush_softness < 0 || request.brush_softness > 100) {
     return fail(error, "raster stroke geometry exceeds its bounded contract");
   }
+  if (request.advanced_brush &&
+      (request.brush_roundness < 1 || request.brush_roundness > 100 ||
+       !std::isfinite(request.brush_angle_degrees) ||
+       !std::isfinite(request.brush_spacing) || request.brush_spacing < 0.01 ||
+       request.brush_spacing > 10.0 || request.brush_dynamics.count < 1 ||
+       request.brush_dynamics.count > 16)) {
+    return fail(error, "advanced brush settings exceed their bounded contract");
+  }
   for (const auto& point : request.points) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
       return fail(error, "raster stroke points must be finite");
@@ -199,8 +236,19 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
   const auto source_offset_y = request.source.y - request.points.front().y;
   EditOptions options;
   options.primary = request.color;
+  options.secondary = request.secondary_color;
   options.brush_size = request.brush_size;
   options.brush_softness = request.brush_softness;
+  options.brush_roundness = request.brush_roundness;
+  options.brush_angle_degrees = request.brush_angle_degrees;
+  options.brush_tip_spacing = request.brush_spacing;
+  options.brush_dynamics = request.brush_dynamics;
+  std::optional<ScaledBrushTip> advanced_tip;
+  if (request.advanced_brush) {
+    advanced_tip = procedural_advanced_tip(request.brush_size,
+                                           request.brush_softness);
+    options.brush_tip = &*advanced_tip;
+  }
   options.lock_transparent_pixels =
       (layer->lock_flags() & kLayerLockTransparentPixels) != 0U;
   if (options.lock_transparent_pixels) {
@@ -256,16 +304,20 @@ bool apply_raster_stroke(Document& document, LayerId layer_id,
   }
 
   Rect affected;
+  BrushTipStrokeState stroke_state;
   for (std::size_t index = 0; index < request.points.size(); ++index) {
     if (request.continue_operation && !request.continue_operation()) {
       return fail(error, "raster stroke was cancelled");
     }
     const auto& from = request.points[index == 0 ? 0 : index - 1U];
     const auto& to = request.points[index];
-    affected = unite_rect(
-        affected,
-        paint_brush_segment(document, layer_id, from.x, from.y, to.x, to.y,
-                            options, request.mode == RasterStrokeMode::Eraser));
+    affected = unite_rect(affected,
+        request.advanced_brush
+            ? paint_brush_segment(document, layer_id, from.x, from.y, to.x, to.y,
+                                  options, request.mode == RasterStrokeMode::Eraser,
+                                  stroke_state)
+            : paint_brush_segment(document, layer_id, from.x, from.y, to.x, to.y,
+                                  options, request.mode == RasterStrokeMode::Eraser));
   }
   if (affected.empty()) return fail(error, "raster stroke did not affect the target layer");
   if (result != nullptr) result->affected_region = affected;

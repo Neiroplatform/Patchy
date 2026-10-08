@@ -1,4 +1,17 @@
 export interface Rect { x: number; y: number; width: number; height: number }
+export interface RasterBrushSettings {
+  roundness?: number; angle?: number; spacing?: number; seed?: number;
+  secondaryColor?: [number, number, number, number];
+  sizeJitter?: number; angleJitter?: number; roundnessJitter?: number;
+  flipXJitter?: boolean; flipYJitter?: boolean;
+  scatter?: number; scatterBothAxes?: boolean; count?: number; countJitter?: number;
+  opacityJitter?: number; flowJitter?: number;
+  textureEnabled?: boolean; textureStyle?: 0 | 1 | 2; textureScale?: number;
+  textureDepth?: number; textureInvert?: boolean;
+  colorDynamicsEnabled?: boolean; foregroundBackgroundJitter?: number;
+  hueJitter?: number; saturationJitter?: number; brightnessJitter?: number;
+  purity?: number; colorPerTip?: boolean;
+}
 export interface LiquifyStrokeInput {
   tool: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   from: [number, number];
@@ -176,10 +189,11 @@ export class PatchyWorkerClient {
     reference?: 0 | 1; expectedStateId: bigint;
     expectedRevision: bigint }): Promise<DocumentProjection>;
   previewRasterStroke(input: { layerId: bigint; mode: 0 | 1 | 2 | 3; brushSize: number;
-    color: number[]; points: number[][]; source?: number[]; cancellation?: Int32Array;
+    color: number[]; points: number[][]; source?: number[]; advanced?: RasterBrushSettings;
+    cancellation?: Int32Array;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<{ region: Rect; rgba: Uint8Array }>;
   applyRasterStroke(input: { layerId: bigint; mode: 0 | 1 | 2 | 3; brushSize: number;
-    color: number[]; points: number[][]; source?: number[];
+    color: number[]; points: number[][]; source?: number[]; advanced?: RasterBrushSettings;
     expectedStateId: bigint; expectedRevision: bigint }): Promise<DocumentProjection>;
   previewLayerMaskStroke(input: { layerId: bigint; mode: 0 | 1; brushSize: number;
     color: [number, number, number, number]; points: Array<[number, number]>;
