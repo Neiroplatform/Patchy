@@ -473,7 +473,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .authoring-panel .brush-settings-dialog[open] { position: static; inset: auto; display: block; width: 100%; max-width: none; max-height: none; margin: 0; overflow: visible; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .authoring-panel .brush-settings-dialog::backdrop { display: none; }
 .authoring-panel .brush-settings-dialog header { min-height: 38px; padding: 0 2px 8px; }
-.authoring-panel .brush-settings-dialog header .icon-button { display: none; }
 .authoring-panel .brush-settings-dialog h2 { margin: 0; font-size: 12px; }
 .brush-live-preview { display: block; width: 100%; height: 76px; margin-bottom: 9px; border: 1px solid var(--line); border-radius: 5px; }
 .brush-settings-layout { display: grid; grid-template-columns: 116px minmax(0, 1fr); min-height: 240px; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
@@ -490,7 +489,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .authoring-panel .brush-section-body .field-row select { min-height: 30px; }
 .authoring-panel .text-settings-popover { position: static; z-index: auto; width: 100%; border: 0; border-radius: 0; background: transparent; box-shadow: none; backdrop-filter: none; }
 .authoring-panel .text-settings-popover > header { min-height: 34px; }
-.authoring-panel .text-settings-popover .icon-button { display: none; }
 .authoring-panel .text-settings-tabs { width: 100%; }
 .authoring-panel .text-settings-tabs button { min-width: 0; flex: 1; }
 .authoring-panel .text-settings-panel { grid-template-columns: 1fr; padding: 10px 0; }
