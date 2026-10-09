@@ -16,6 +16,8 @@
   --topbar-height: 64px;
   --rail-width: 64px;
   --inspector-width: 316px;
+  --primary-panel-weight: .56fr;
+  --secondary-panel-weight: .44fr;
   --ease: cubic-bezier(.2, .8, .2, 1);
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--text);
@@ -424,7 +426,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .spinner { width: 28px; height: 28px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 6px; }
 .drop-state { margin: 14px; border: 1px dashed var(--accent); border-radius: 10px; background: #161b17f2; }
 .drop-state strong { color: var(--accent); font-size: 20px; }
-.stage-footer { display: flex; align-items: center; gap: 18px; padding: 0 12px; border-top: 1px solid #23282c; color: var(--text-faint); font-size: 10px; overflow-x: auto; scrollbar-width: thin; }
+.stage-footer { display: flex; align-items: center; gap: 18px; padding: 0 12px; border-top: 1px solid #23282c; color: var(--text-faint); font-size: 10px; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+.stage-footer > * { flex: 0 0 auto; }
 .zoom-controls { display: inline-flex; align-items: center; gap: 3px; }
 .zoom-controls button { min-width: 24px; height: 24px; padding: 0 6px; color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: 4px; font-size: 10px; cursor: pointer; }
 .zoom-controls button:hover { color: var(--text); border-color: var(--line); }
@@ -435,14 +438,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .memory-control select { height: 24px; padding: 0 5px; color: var(--text-muted); background: transparent; border: 1px solid var(--line); border-radius: 4px; font-size: 10px; }
 
 .inspector { min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--surface-0);
-  display: grid; grid-template-rows: minmax(190px, 1.15fr) 34px 32px minmax(150px, .85fr);
+  display: grid; grid-template-rows: minmax(150px, var(--primary-panel-weight)) 8px 34px 32px minmax(180px, var(--secondary-panel-weight));
   overflow: hidden; position: relative; }
-.inspector-resizer { position: absolute; z-index: 8; left: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
-.inspector-resizer:hover, .inspector-resizer:focus-visible { background: #9dc7ff55; outline: 0; }
+.inspector-resizer { position: absolute; z-index: 8; left: -5px; top: 0; bottom: 0; width: 10px; cursor: ew-resize; }
+.inspector-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px; background: var(--line-strong); }
+.inspector-resizer:hover, .inspector-resizer:focus-visible { background: #9dc7ff28; outline: 0; }
+.inspector-resizer:hover::after, .inspector-resizer:focus-visible::after { background: var(--focus); }
+.inspector-split-resizer { position: relative; z-index: 7; grid-row: 2; min-height: 8px; cursor: ns-resize; background: #111416; }
+.inspector-split-resizer::after { content: ""; position: absolute; left: calc(50% - 22px); top: 3px; width: 44px; height: 2px; border-radius: 2px; background: var(--line-strong); }
+.inspector-split-resizer:hover, .inspector-split-resizer:focus-visible { background: #9dc7ff20; outline: 0; }
+.inspector-split-resizer:hover::after, .inspector-split-resizer:focus-visible::after { background: var(--focus); }
 .inspector:has(.properties-panel[data-context-editor]) {
-  grid-template-rows: minmax(130px, .45fr) 34px 38px minmax(300px, 1.55fr);
+  grid-template-rows: minmax(130px, var(--primary-panel-weight)) 8px 34px 38px minmax(260px, var(--secondary-panel-weight));
 }
-.workspace-mode-bar { min-width: 0; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) auto 40px;
+.workspace-mode-bar { min-width: 0; grid-row: 3; display: grid; grid-template-columns: minmax(0, 1fr) auto 40px;
   gap: 4px; align-items: center; padding: 3px 5px; border-top: 1px solid var(--line); background: #111416; }
 .workspace-mode-bar label { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center;
   gap: 6px; color: var(--text-faint); font-size: 8px; letter-spacing: .05em; text-transform: uppercase; }
@@ -452,7 +461,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .workspace-mode-bar button { padding: 0 7px; cursor: pointer; }
 .workspace-mode-bar button:hover { border-color: var(--line-strong); color: var(--text); }
 #workspaceCollapseButton { padding: 0 4px; }
-.workspace-panel-tabs { min-width: 0; height: 32px; display: flex; align-items: stretch; overflow-x: auto; grid-row: 3;
+.workspace-panel-tabs { min-width: 0; height: 32px; display: flex; align-items: stretch; overflow-x: auto; grid-row: 4;
   border-bottom: 1px solid var(--line); background: #15181b; scrollbar-width: none; }
 .workspace-panel-tabs::-webkit-scrollbar { display: none; }
 .workspace-panel-tabs button { flex: 1 0 auto; min-width: 56px; padding: 0 9px; border: 0;
@@ -533,7 +542,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .document-structure-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface-1); }
 .document-structure-pane { min-height: 0; flex: 1 1 auto; overflow: auto; }
 .document-structure-layers { display: flex; flex-direction: column; overflow: hidden; }
-[data-secondary-panel] { grid-row: 4; }
+[data-secondary-panel] { grid-row: 5; }
 .panel + .panel { border-top: 1px solid var(--line); }
 .panel-header { min-height: 36px; padding: 6px 9px; display: flex; align-items: center; justify-content: space-between; }
 .panel-header .eyebrow { display: none; }
@@ -843,6 +852,7 @@ kbd { display: inline-grid; min-width: 22px; min-height: 22px; padding: 2px 5px;
   .panel + .panel { border-top: 1px solid var(--line); border-left: 0; }
   .layer-list { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(210px, 1fr); overflow-x: auto; }
   .inspector-resizer { display: none; }
+  .inspector-split-resizer { display: none; }
   .stage-meta { height: 104px; min-height: 104px; grid-template-rows: 24px 72px; }
   .tool-options { height: 68px; overflow-x: auto; overflow-y: hidden; padding-bottom: 3px; }
   .tool-options label { flex: 0 1 auto; }

@@ -26,6 +26,7 @@ import { installNavigatorPanel } from "./navigator-panel.mjs";
 import { installStructureDeck } from "./structure-deck.mjs";
 import { installPropertiesDeck } from "./properties-deck.mjs";
 import { installHistoryDeck } from "./history-deck.mjs";
+import { installDockLayout } from "./dock-layout.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -65,29 +66,8 @@ const workspaceDeck = installWorkspaceDeck(document, {
   activatePanel: (tab) => commandSurface?.workspacePanels?.activate(tab),
   selectAuthoring: (tab) => authoringDeck?.select(tab),
 });
+installDockLayout(document);
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"), ".tool-button:not([hidden])");
-const inspectorResizer = $("inspectorResizer");
-const setInspectorWidth = (width) => document.documentElement.style.setProperty(
-  "--inspector-width", `${Math.max(240, Math.min(480, Math.round(width)))}px`);
-inspectorResizer.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0) return;
-  event.preventDefault(); inspectorResizer.setPointerCapture(event.pointerId);
-  const move = (nextEvent) => setInspectorWidth(innerWidth - nextEvent.clientX);
-  const finish = () => {
-    inspectorResizer.removeEventListener("pointermove", move);
-    inspectorResizer.removeEventListener("pointerup", finish);
-    inspectorResizer.removeEventListener("pointercancel", finish);
-  };
-  inspectorResizer.addEventListener("pointermove", move);
-  inspectorResizer.addEventListener("pointerup", finish);
-  inspectorResizer.addEventListener("pointercancel", finish);
-});
-inspectorResizer.addEventListener("keydown", (event) => {
-  if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
-  event.preventDefault();
-  const current = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--inspector-width")) || 316;
-  setInspectorWidth(current + (event.key === "ArrowLeft" ? (event.shiftKey ? 40 : 10) : -(event.shiftKey ? 40 : 10)));
-});
 const moduleUrl = new URL("./patchy-engine.mjs", location.href).href;
 let client = null;
 let errorReturnFocus = null;

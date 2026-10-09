@@ -27,6 +27,7 @@ const REQUIRED = [
   "structure-deck.mjs",
   "properties-deck.mjs",
   "history-deck.mjs",
+  "dock-layout.mjs",
   "workspace-context.mjs",
   "editor.css",
   "editor.mjs",

@@ -534,6 +534,7 @@ const RU = new Map(Object.entries({
   "Document panels": "Панели документа",
   "Workspace panels": "Панели рабочей области",
   "Resize document panels": "Изменить ширину панелей документа",
+  "Resize layer and panel areas": "Изменить высоту слоёв и панелей",
   "Layers": "Слои",
   "Properties": "Свойства",
   "Info": "Инфо",

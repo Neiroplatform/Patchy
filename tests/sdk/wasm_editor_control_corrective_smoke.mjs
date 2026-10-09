@@ -300,6 +300,30 @@ try {
   await page.waitForFunction(() => document.getElementById("historyHistoryPane")?.hidden === false);
   assert.equal(await page.locator("#historyHistoryPane").isVisible(), true);
 
+  const layoutRevision = await revision();
+  await page.locator("#inspectorResizer").press("Shift+ArrowLeft");
+  await page.locator("#inspectorSplitResizer").press("Shift+ArrowDown");
+  assert.equal(await page.locator("#inspectorResizer").getAttribute("aria-valuenow"), "356");
+  assert.equal(await page.locator("#inspectorSplitResizer").getAttribute("aria-valuenow"), "64");
+  let layoutState = await page.evaluate(() => JSON.parse(localStorage.getItem("patchy.dock-layout.v1")));
+  assert.deepEqual(layoutState, { inspectorWidth: 356, primaryShare: 0.64 });
+  const widthSeparatorBox = await page.locator("#inspectorResizer").boundingBox();
+  await page.mouse.move(widthSeparatorBox.x + widthSeparatorBox.width / 2,
+    widthSeparatorBox.y + widthSeparatorBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(widthSeparatorBox.x - 24, widthSeparatorBox.y + widthSeparatorBox.height / 2);
+  await page.mouse.up();
+  const splitSeparatorBox = await page.locator("#inspectorSplitResizer").boundingBox();
+  await page.mouse.move(splitSeparatorBox.x + splitSeparatorBox.width / 2,
+    splitSeparatorBox.y + splitSeparatorBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(splitSeparatorBox.x + splitSeparatorBox.width / 2, splitSeparatorBox.y + 24);
+  await page.mouse.up();
+  layoutState = await page.evaluate(() => JSON.parse(localStorage.getItem("patchy.dock-layout.v1")));
+  assert.ok(layoutState.inspectorWidth > 356);
+  assert.ok(layoutState.primaryShare > 0.64);
+  assert.equal(await revision(), layoutRevision);
+
   const toolBeforeWorkspace = await page.locator("#canvasViewport").getAttribute("data-tool");
   await page.selectOption("#workspaceModeSelect", "painting");
   assert.equal(await page.locator("#workspacePanelControls").isVisible(), true);
@@ -314,7 +338,23 @@ try {
   assert.equal(await restoredWorkspacePage.inputValue("#workspaceModeSelect"), "painting");
   assert.equal(await restoredWorkspacePage.locator("#authoringBrushPanel").isVisible(), true);
   assert.equal(await restoredWorkspacePage.locator("#canvasViewport").getAttribute("data-tool"), toolBeforeWorkspace);
+  assert.equal(await restoredWorkspacePage.locator("#inspectorResizer").getAttribute("aria-valuenow"),
+    String(layoutState.inspectorWidth));
+  assert.equal(await restoredWorkspacePage.locator("#inspectorSplitResizer").getAttribute("aria-valuenow"),
+    String(Math.round(layoutState.primaryShare * 100)));
   await restoredWorkspacePage.close();
+  await page.click("#workspaceCollapseButton");
+  await page.click("#togglePanelsButton");
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("patchy.dock-layout.v1"))), layoutState);
+  await page.click("#workspaceResetButton");
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("patchy.dock-layout.v1"))),
+    { inspectorWidth: 316, primaryShare: 0.56 });
+  assert.equal(await revision(), layoutRevision);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.equal(await page.locator("#inspectorSplitResizer").getAttribute("aria-hidden"), "false");
+  assert.equal(await revision(), layoutRevision);
+  await page.setViewportSize({ width: 1440, height: 900 });
   const structureRevision = await revision();
   await page.click("#documentStructureChannelsTab");
   assert.equal(await page.locator("#workspacePanelLayers").isVisible(), true);
@@ -339,6 +379,10 @@ try {
   await page.click("#togglePanelsButton");
   assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), false);
   await page.setViewportSize({ width: 760, height: 900 });
+  await page.waitForFunction(() => document.getElementById("inspectorResizer")?.getAttribute("aria-hidden") === "true");
+  assert.equal(await page.locator("#inspectorResizer").getAttribute("aria-hidden"), "true");
+  assert.equal(await page.locator("#inspectorSplitResizer").getAttribute("aria-hidden"), "true");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.selectOption("#workspaceModeSelect", "review");
   assert.equal(await page.locator('[data-workspace-panel]:visible').count(), 1);
   assert.equal(await page.locator("#workspacePanelInfo").isVisible(), true);
@@ -793,7 +837,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties properties=adjustments-eight-configure-create-edit-window-narrow local-state=history-version-create-recovery-docked-no-revision authoring=color-swatches-gradient-pattern-assets-configure-first-no-revision-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties properties=adjustments-eight-configure-create-edit-window-narrow local-state=history-version-create-recovery-docked-no-revision layout=width-split-pointer-keyboard-persist-reset-narrow-no-revision authoring=color-swatches-gradient-pattern-assets-configure-first-no-revision-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,
