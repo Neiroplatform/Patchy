@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { COMMAND_GROUPS, TOOL_GROUPS, filterCommandItems } from "../../sdk/engine/site/command-surface.mjs";
+import { COMMAND_GROUPS, TOOL_FAMILY_STORAGE_KEY, TOOL_GROUPS, filterCommandItems,
+  normalizeToolFamilyPreferences } from "../../sdk/engine/site/command-surface.mjs";
 import { WORKSPACE_TOOL_BUTTONS, WORKSPACE_TOOL_CONTEXTS } from "../../sdk/engine/site/workspace-context.mjs";
 
 const root = new URL("../../", import.meta.url);
@@ -41,6 +42,16 @@ test("tool rail exposes every existing tool through bounded semantic groups", ()
     assert.ok(context.interaction, `${tool} is missing an interaction contract`);
     assert.ok(context.target, `${tool} is missing a target contract`);
   }
+});
+
+test("tool-family preferences restore only declared members and fail closed", () => {
+  assert.equal(TOOL_FAMILY_STORAGE_KEY, "patchy.tool-families.v1");
+  assert.deepEqual(normalizeToolFamilyPreferences({
+    paint: "eraserToolButton", selection: "magicToolButton", draw: "unknownToolButton",
+    unknown: "brushToolButton",
+  }), { paint: "eraserToolButton", selection: "magicToolButton" });
+  assert.deepEqual(normalizeToolFamilyPreferences(null), {});
+  assert.deepEqual(normalizeToolFamilyPreferences([]), {});
 });
 
 test("icon-only actions use a complete readable first-party SVG vocabulary", async () => {
@@ -106,6 +117,9 @@ test("production shell stages and publishes the accessible command surface", asy
   assert.doesNotMatch(menuPanelRule, /backdrop-filter/,
     "a filtered menu panel becomes a containing block and offsets fixed submenus in WebKit");
   assert.match(css, /\.tool-group-menu/);
+  assert.match(await source("sdk/engine/site/command-surface.mjs"), /TOOL_GROUP_LONG_PRESS_MS = 420/);
+  assert.match(await source("sdk/engine/site/command-surface.mjs"), /addEventListener\("contextmenu"/);
+  assert.match(css, /\.tool-group-menu \.tool-button::before[\s\S]+data-tool-shortcut/);
   assert.match(css, /\.tool-cluster[\s\S]+width: 36px/);
   assert.match(css, /\.tool-group-toggle[\s\S]+position: absolute/);
   assert.match(css, /\.workspace-panel-tabs/);
@@ -122,6 +136,18 @@ test("production shell stages and publishes the accessible command surface", asy
   assert.match(editor, /makeSelectedPathSelection\(\{ combine: 0 \}\)/);
   assert.match(editor, /button:not\(\[hidden\]\):not\(:disabled\)/);
   assert.match(css, /\.canvas-context-menu/);
+  for (const contract of [
+    /id="brushQuickPickerButton"[^>]+aria-controls="brushQuickPicker"/,
+    /id="brushQuickPicker" role="dialog"/,
+    /id="brushQuickSizeInput" type="range"/,
+    /id="brushQuickHardnessInput" type="range"/,
+    /id="brushQuickPresetGrid" role="listbox"/,
+  ]) assert.match(html, contract);
+  assert.match(editor, /openBrushQuickPicker\(\{ x: event\.clientX, y: event\.clientY \}\)/);
+  assert.match(editor, /beginInlineLayerRename/);
+  assert.match(editor, /event\.key === "F2"/);
+  assert.match(css, /\.layer-inline-name/);
+  assert.match(css, /\.layer-indicators/);
   assert.match(cmake, /sdk\/engine\/site\/command-surface\.mjs/);
   assert.match(release, /"command-surface\.mjs"/);
 });

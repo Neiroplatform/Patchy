@@ -33,7 +33,7 @@ test("selection, paint, retouch and tone contexts expose only relevant existing 
     ["selectionModeInput", "selectionQuickFeatherInput", "selectionToleranceInput",
       "wandContiguousInput", "wandSampleAllInput"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.brush.controls,
-    ["brushPresetSelect", "brushSizeInput", "brushSoftnessInput", "brushOpacityInput",
+    ["brushPresetSelect", "brushQuickPickerButton", "brushSizeInput", "brushSoftnessInput", "brushOpacityInput",
       "brushColorInput", "paintTargetSelect", "brushSettingsButton"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.shape.controls,
     ["shapeToolKindInput", "shapeToolFillInput", "shapeToolStrokeInput",
@@ -56,7 +56,10 @@ test("renderer removes irrelevant controls from layout and the accessibility tre
   const heading = { textContent: "" };
   const instruction = { textContent: "" };
   const labels = new Map(WORKSPACE_OPTION_CONTROL_IDS.map((id) => [id, { dataset: {}, hidden: false }]));
-  const controls = new Map([...labels].map(([id, label]) => [id, { closest: () => label }]));
+  const penActions = { dataset: {}, hidden: true };
+  const penControls = new Set(WORKSPACE_TOOL_CONTEXTS.pen.controls);
+  const controls = new Map([...labels].map(([id, label]) => [id, { closest: (selector) =>
+    selector === ".direct-operation-actions" && penControls.has(id) ? penActions : label }]));
   const document = { getElementById(id) {
     if (id === "toolOptions") return toolbar;
     if (id === "activeToolContext") return heading;
@@ -71,10 +74,13 @@ test("renderer removes irrelevant controls from layout and the accessibility tre
   assert.equal(toolbar.dataset.empty, "false");
   assert.equal(labels.get("retouchSoftnessInput").hidden, false);
   assert.equal(labels.get("selectionToleranceInput").hidden, true);
+  renderer.render("pen");
+  assert.equal(penActions.hidden, false);
   renderer.render("pan");
   assert.equal(toolbar.dataset.empty, "false");
   assert.match(instruction.textContent, /^t:Drag the workspace/);
-  assert.ok([...labels.values()].every(({ hidden }) => hidden));
+  assert.ok([...labels].filter(([id]) => !penControls.has(id)).every(([, { hidden }]) => hidden));
+  assert.equal(penActions.hidden, true);
 });
 
 test("production and release inventories ship the contextual workspace module", async () => {

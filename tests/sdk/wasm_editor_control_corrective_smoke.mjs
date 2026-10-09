@@ -201,6 +201,12 @@ try {
   assert.equal(await page.locator("#layerList .layer-row").count(), 2);
   assert.equal(await page.locator('.layer-row[data-active="true"] .layer-name').textContent(), "Layer 1");
   before = await revision();
+  await page.locator('.layer-row[data-active="true"] .layer-select-button').press("F2");
+  await page.fill('.layer-row[data-active="true"] .layer-inline-name', "Retouch copy");
+  await page.locator('.layer-row[data-active="true"] .layer-inline-name').press("Enter");
+  await waitForMutation(before, "Renaming layer");
+  assert.equal(await page.locator('.layer-row[data-active="true"] .layer-name').textContent(), "Retouch copy");
+  before = await revision();
   await page.click("#removeLayerButton");
   await waitForMutation(before, "Deleting layer");
   assert.equal(await page.locator("#layerList .layer-row").count(), 1);
@@ -240,6 +246,25 @@ try {
 
   await page.click("#brushToolButton");
   assert.equal(await page.locator("#brushPresetSelect").isVisible(), true);
+  await page.click("#brushQuickPickerButton");
+  assert.equal(await page.locator("#brushQuickPicker").isVisible(), true);
+  await page.locator("#brushQuickSizeInput").evaluate((input) => {
+    input.value = "31"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.locator("#brushQuickHardnessInput").evaluate((input) => {
+    input.value = "72"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  assert.equal(await page.inputValue("#brushSizeInput"), "31");
+  assert.equal(await page.inputValue("#brushSoftnessInput"), "28");
+  await page.click('[data-brush-preset="marker"]');
+  assert.equal(await page.inputValue("#brushPresetSelect"), "marker");
+  assert.equal(await page.locator('[data-brush-preset="marker"]').getAttribute("aria-selected"), "true");
+  await page.locator('[data-brush-preset="marker"]').dblclick();
+  assert.equal(await page.locator("#brushQuickPicker").isHidden(), true);
+  await page.locator("#documentCanvas").dispatchEvent("contextmenu", { button: 2 });
+  assert.equal(await page.locator("#brushQuickPicker").isVisible(), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#brushQuickPicker").isHidden(), true);
   await page.selectOption("#brushPresetSelect", "soft-round");
   assert.equal(await page.inputValue("#brushSizeInput"), "80");
   assert.equal(await page.inputValue("#brushSoftnessInput"), "100");
@@ -262,6 +287,8 @@ try {
   const paintedAfter = await canvasPixel(80, 50);
   assert.notDeepEqual(paintedAfter.slice(0, 3), paintedBefore.slice(0, 3));
 
+  assert.equal(await page.locator("#eraserToolButton").isHidden(), true);
+  await page.click('[data-tool-group="paint"] .tool-group-toggle');
   const eraserHitTarget = await page.evaluate(() => {
     const button = document.getElementById("eraserToolButton");
     const box = button.getBoundingClientRect();
@@ -272,6 +299,10 @@ try {
   assert.equal(eraserHitTarget.visible, true);
   assert.equal(eraserHitTarget.hit, "eraserToolButton");
   assert.ok(eraserHitTarget.width >= 24 && eraserHitTarget.height >= 24, JSON.stringify(eraserHitTarget));
+  await page.click("#eraserToolButton");
+  assert.equal(await page.locator('[data-tool-group="paint"] > #eraserToolButton').count(), 1);
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("patchy.tool-families.v1"))).paint,
+    "eraserToolButton");
   const pixelsBeforeErase = await canvasPixels();
   before = await revision();
   await dragCanvas("eraserToolButton", { x: .48, y: .5 }, { x: .52, y: .5 }, 73);
@@ -296,8 +327,19 @@ try {
   await waitForMutation(before, "Applying Pattern Stamp");
   assert.equal(await page.locator("#errorBanner").isHidden(), true);
 
+  if (await page.locator("#penToolButton").isHidden()) {
+    await page.click('[data-tool-group="draw"] .tool-group-toggle');
+  }
   await page.click("#penToolButton");
-  assert.equal(await page.locator("#finishPenPathButton").isVisible(), true);
+  const penActivation = await page.evaluate(() => ({
+    tool: document.getElementById("canvasViewport").dataset.tool,
+    optionsTool: document.getElementById("toolOptions").dataset.tool,
+    penHidden: document.getElementById("penToolButton").hidden,
+    penDisabled: document.getElementById("penToolButton").disabled,
+    finishHidden: document.getElementById("finishPenPathButton").hidden,
+    finishDisabled: document.getElementById("finishPenPathButton").disabled,
+  }));
+  assert.equal(penActivation.finishHidden, false, JSON.stringify(penActivation));
   await clickCanvasPoints("penToolButton", [[.18, .2]]);
   await page.evaluate(() => {
     const canvas = document.getElementById("documentCanvas"); const box = canvas.getBoundingClientRect();
@@ -326,6 +368,18 @@ try {
   assert.equal(await page.locator("#pathOverlay").isVisible(), true, JSON.stringify(penOverlay));
   assert.equal(await page.locator("#pathOverlayAnchors circle").count(), 3);
   assert.equal(await page.locator("#finishPenPathButton").isEnabled(), true);
+  const penControlLayout = await page.evaluate(() => {
+    const toolbar = document.getElementById("toolOptions").getBoundingClientRect();
+    const control = document.getElementById("finishPenPathButton").getBoundingClientRect();
+    return { toolbar: { left: toolbar.left, right: toolbar.right, top: toolbar.top, bottom: toolbar.bottom },
+      control: { left: control.left, right: control.right, top: control.top, bottom: control.bottom },
+      scrollLeft: document.getElementById("toolOptions").scrollLeft,
+      scrollWidth: document.getElementById("toolOptions").scrollWidth };
+  });
+  assert.ok(penControlLayout.control.left >= penControlLayout.toolbar.left &&
+    penControlLayout.control.right <= penControlLayout.toolbar.right &&
+    penControlLayout.control.top >= penControlLayout.toolbar.top &&
+    penControlLayout.control.bottom <= penControlLayout.toolbar.bottom, JSON.stringify(penControlLayout));
   before = await revision();
   await page.click("#finishPenPathButton");
   await waitForMutation(before, "Creating Pen path");
@@ -425,7 +479,10 @@ try {
   before = await revision();
   await dragCanvas("marqueeToolButton", { x: .08, y: .12 }, { x: .48, y: .68 }, 80);
   await waitForMutation(before, "Selecting area");
-  await page.click("#eraserToolButton");
+  if (await page.locator("#eraserToolButton").isHidden()) {
+    await page.click('[data-tool-group="paint"] .tool-group-toggle');
+    await page.click("#eraserToolButton");
+  }
   await page.locator("#brushSizeInput").evaluate((input) => {
     input.value = "24"; input.dispatchEvent(new Event("input", { bubbles: true }));
   });

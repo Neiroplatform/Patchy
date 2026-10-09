@@ -229,7 +229,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /registerCommand\("document\.export"/);
   assert.match(script, /navigator\.clipboard/);
   assert.match(script, /application\/x-patchy-layer/);
-  assert.match(script, /draggable = true/);
+  assert.match(script, /row\.draggable = !renaming/);
   assert.match(html, /id="layerList" role="list"/);
   assert.match(script, /row\.setAttribute\("role", "listitem"\)/);
   assert.match(script, /selectButton\.setAttribute\("aria-pressed"/);

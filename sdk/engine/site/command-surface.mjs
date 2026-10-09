@@ -113,7 +113,7 @@ export const TOOL_GROUPS = Object.freeze([
   { id: "selection", label: "Selection tools", members: ["marqueeToolButton", "lassoToolButton",
     "polygonToolButton", "magicToolButton", "quickSelectToolButton", "magneticToolButton", "quickMaskToolButton"] },
   { id: "paint", label: "Paint tools", members: ["brushToolButton", "mixerToolButton",
-    "patternStampToolButton", "eraserToolButton"], alwaysVisible: ["eraserToolButton"] },
+    "patternStampToolButton", "eraserToolButton"] },
   { id: "retouch", label: "Retouch tools", members: ["healToolButton", "spotHealingToolButton",
     "patchToolButton", "cloneToolButton"] },
   { id: "tone", label: "Local adjustment tools", members: ["smudgeToolButton", "dodgeToolButton",
@@ -127,6 +127,33 @@ export const TOOL_GROUPS = Object.freeze([
   members: Object.freeze(group.members),
   ...(group.alwaysVisible ? { alwaysVisible: Object.freeze(group.alwaysVisible) } : {}),
 })));
+
+export const TOOL_FAMILY_STORAGE_KEY = "patchy.tool-families.v1";
+const TOOL_GROUP_LONG_PRESS_MS = 420;
+
+export function normalizeToolFamilyPreferences(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const normalized = {};
+  for (const group of TOOL_GROUPS) {
+    const preferred = value[group.id];
+    if (group.members.includes(preferred)) normalized[group.id] = preferred;
+  }
+  return normalized;
+}
+
+function readToolFamilyPreferences(storage) {
+  try {
+    return normalizeToolFamilyPreferences(JSON.parse(storage?.getItem?.(TOOL_FAMILY_STORAGE_KEY) || "{}"));
+  } catch {
+    return {};
+  }
+}
+
+function writeToolFamilyPreferences(storage, preferences) {
+  try { storage?.setItem?.(TOOL_FAMILY_STORAGE_KEY, JSON.stringify(preferences)); } catch {
+    /* Preferences are optional. A blocked or full store must not disable tools. */
+  }
+}
 
 const normalized = (value) => String(value ?? "").normalize("NFKD").toLocaleLowerCase().trim();
 
@@ -148,6 +175,11 @@ function installToolGroups(document, translate) {
   const rail = document.querySelector(".tool-rail");
   if (!rail || rail.dataset.grouped === "true") return null;
   rail.dataset.grouped = "true";
+  let storage = null;
+  try { storage = document.defaultView?.localStorage; } catch {
+    /* Opaque origins and privacy settings may deny access. Tool groups still work. */
+  }
+  const preferences = readToolFamilyPreferences(storage);
   const clusters = [];
   let openCluster = null;
 
@@ -163,22 +195,22 @@ function installToolGroups(document, translate) {
     if (focus) previous?.toggle.focus();
   };
 
-  const open = (cluster) => {
+  const open = (cluster, { focus = true } = {}) => {
     closeCluster();
     openCluster = cluster;
     cluster.wrapper.dataset.open = "true";
     cluster.toggle.setAttribute("aria-expanded", "true");
     cluster.menu.hidden = false;
     for (const button of cluster.secondary) button.hidden = false;
-    cluster.secondary[0]?.focus();
+    if (focus) cluster.secondary[0]?.focus();
   };
 
   for (const group of TOOL_GROUPS) {
-    const alwaysVisible = new Set(group.alwaysVisible || []);
-    const buttons = group.members.filter((id) => !alwaysVisible.has(id))
-      .map((id) => document.getElementById(id)).filter(Boolean);
+    const buttons = group.members.map((id) => document.getElementById(id)).filter(Boolean);
     if (!buttons.length) continue;
-    const [primary, ...secondary] = buttons;
+    const preferred = buttons.find((button) => button.id === preferences[group.id]);
+    const primary = preferred || buttons[0];
+    const secondary = buttons.filter((button) => button !== primary);
     const wrapper = document.createElement("div");
     wrapper.className = "tool-cluster";
     wrapper.dataset.toolGroup = group.id;
@@ -206,8 +238,13 @@ function installToolGroups(document, translate) {
       menu.setAttribute("aria-label", label);
     };
     syncLabels();
-    const promote = (button) => {
-      if (button === cluster.primary || !buttons.includes(button)) return;
+    const promote = (button, { persist = true } = {}) => {
+      if (!buttons.includes(button)) return;
+      if (persist) {
+        preferences[group.id] = button.id;
+        writeToolFamilyPreferences(storage, preferences);
+      }
+      if (button === cluster.primary) return;
       cluster.primary = button;
       cluster.secondary = buttons.filter((item) => item !== button);
       button.hidden = false;
@@ -222,6 +259,9 @@ function installToolGroups(document, translate) {
     };
     cluster.promote = promote;
     for (const button of buttons) {
+      const shortcut = button.title?.match(/\(([^)]+)\)\s*$/)?.[1] || "";
+      button.dataset.toolName = targetLabel(button, button.id);
+      button.dataset.toolShortcut = shortcut;
       button.addEventListener("click", () => {
         promote(button);
         queueMicrotask(() => closeCluster());
@@ -251,6 +291,35 @@ function installToolGroups(document, translate) {
     toggle.addEventListener("keydown", (event) => {
       if (event.key === "ArrowDown") { event.preventDefault(); open(cluster); }
       else if (event.key === "Escape") { event.preventDefault(); closeCluster(); }
+    });
+    let longPressTimer = 0;
+    let longPressOrigin = null;
+    let suppressPrimaryClick = false;
+    const cancelLongPress = () => {
+      clearTimeout(longPressTimer); longPressTimer = 0; longPressOrigin = null;
+    };
+    wrapper.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest?.(".tool-button") !== cluster.primary) return;
+      cancelLongPress();
+      longPressOrigin = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      longPressTimer = setTimeout(() => {
+        longPressTimer = 0; suppressPrimaryClick = true; open(cluster);
+      }, TOOL_GROUP_LONG_PRESS_MS);
+    });
+    wrapper.addEventListener("pointermove", (event) => {
+      if (!longPressOrigin || longPressOrigin.pointerId !== event.pointerId) return;
+      if (Math.hypot(event.clientX - longPressOrigin.x, event.clientY - longPressOrigin.y) > 8) cancelLongPress();
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+      wrapper.addEventListener(type, cancelLongPress);
+    }
+    wrapper.addEventListener("click", (event) => {
+      if (!suppressPrimaryClick) return;
+      suppressPrimaryClick = false; event.preventDefault(); event.stopImmediatePropagation();
+    }, true);
+    wrapper.addEventListener("contextmenu", (event) => {
+      if (event.target.closest?.(".tool-button") !== cluster.primary) return;
+      event.preventDefault(); cancelLongPress(); open(cluster);
     });
     document.addEventListener("patchy:localechange", syncLabels);
   }

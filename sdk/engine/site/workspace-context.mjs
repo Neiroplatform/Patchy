@@ -23,11 +23,11 @@ const contexts = {
     "Drag to paint the selection mask; hold Alt to remove mask coverage."),
   pan: descriptor("navigation", "Pan canvas", [], "document",
     "Drag the workspace to pan without changing document pixels."),
-  brush: descriptor("paint", "Brush", ["brushPresetSelect", "brushSizeInput", "brushSoftnessInput",
-    "brushOpacityInput", "brushColorInput", "paintTargetSelect", "brushSettingsButton"], "layer-or-mask",
+  brush: descriptor("paint", "Brush", ["brushPresetSelect", "brushQuickPickerButton", "brushSizeInput",
+    "brushSoftnessInput", "brushOpacityInput", "brushColorInput", "paintTargetSelect", "brushSettingsButton"], "layer-or-mask",
     "Drag to paint the selected pixel layer or mask; an empty document creates its first paint layer."),
-  eraser: descriptor("paint", "Eraser", ["brushPresetSelect", "brushSizeInput", "brushSoftnessInput",
-    "brushOpacityInput", "paintTargetSelect"], "layer-or-mask",
+  eraser: descriptor("paint", "Eraser", ["brushPresetSelect", "brushQuickPickerButton", "brushSizeInput",
+    "brushSoftnessInput", "brushOpacityInput", "paintTargetSelect"], "layer-or-mask",
     "Drag to erase the selected pixel layer or reveal its mask."),
   mixer: descriptor("paint", "Mixer Brush", ["brushSizeInput", "advancedPaintSoftnessInput", "advancedPaintFlowInput",
     "mixerWetInput", "mixerLoadInput", "mixerMixInput", "mixerSampleAllInput"], "layer",
@@ -113,7 +113,8 @@ export function installWorkspaceContext(document, { translate = (value) => value
   let currentTool = "marquee";
   for (const id of WORKSPACE_OPTION_CONTROL_IDS) {
     const control = document.getElementById(id);
-    const node = control?.closest("label, .direct-operation-actions, .tool-option-button");
+    const node = control?.closest(".direct-operation-actions") ||
+      control?.closest("label, .tool-option-button");
     if (!node) continue;
     node.dataset.toolOption = id;
     optionNodes.set(id, node);

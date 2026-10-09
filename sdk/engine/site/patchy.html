@@ -181,6 +181,11 @@
               <option value="textured">Textured</option><option value="color-scatter">Color Scatter</option>
               <option value="custom">Custom</option>
             </select></label>
+            <button class="tool-option-button brush-picker-trigger" id="brushQuickPickerButton" type="button"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="brushQuickPicker" hidden>
+              <span class="brush-picker-tip" id="brushQuickPickerTip" aria-hidden="true"></span>
+              <span id="brushQuickPickerLabel">Hard Round · 24 px</span><span aria-hidden="true">⌄</span>
+            </button>
             <label class="standard-brush-option" hidden>Softness <input id="brushSoftnessInput" type="range" min="0" max="100" value="0"><output id="brushSoftnessOutput">0%</output></label>
             <label class="standard-brush-option" hidden>Opacity <input id="brushOpacityInput" type="range" min="1" max="100" value="100"><output id="brushOpacityOutput">100%</output></label>
             <button class="tool-option-button" id="brushSettingsButton" type="button" hidden>Brush settings…</button>
@@ -280,6 +285,25 @@
               <label><span>Space after</span><input id="textToolPanelSpaceAfterInput" type="number" step="0.1" value="0"></label>
               <label><span>Auto leading %</span><input id="textToolPanelAutoLeadingInput" type="number" min="1" max="1000" step="1" value="120"></label>
             </div>
+          </section>
+          <section class="brush-quick-picker" id="brushQuickPicker" role="dialog"
+            aria-label="Quick brush picker" aria-modal="false" hidden>
+            <header><strong>Brush presets</strong><span>Single click selects · double click closes</span></header>
+            <div class="brush-quick-controls">
+              <label><span>Size</span><input id="brushQuickSizeInput" type="range" min="1" max="4096" value="24"><output id="brushQuickSizeOutput">24 px</output></label>
+              <label><span>Hardness</span><input id="brushQuickHardnessInput" type="range" min="0" max="100" value="100"><output id="brushQuickHardnessOutput">100%</output></label>
+            </div>
+            <div class="brush-preset-grid" id="brushQuickPresetGrid" role="listbox" aria-label="Brush presets">
+              <button type="button" role="option" data-brush-preset="hard-round"><span class="brush-preset-sample preset-hard"></span><b>Hard Round</b><small>Clean edge</small></button>
+              <button type="button" role="option" data-brush-preset="soft-round"><span class="brush-preset-sample preset-soft"></span><b>Soft Round</b><small>Feathered edge</small></button>
+              <button type="button" role="option" data-brush-preset="pencil"><span class="brush-preset-sample preset-pencil"></span><b>Pencil</b><small>Fine opaque</small></button>
+              <button type="button" role="option" data-brush-preset="marker"><span class="brush-preset-sample preset-marker"></span><b>Marker</b><small>Broad translucent</small></button>
+              <button type="button" role="option" data-brush-preset="calligraphy"><span class="brush-preset-sample preset-calligraphy"></span><b>Calligraphy</b><small>Angled tip</small></button>
+              <button type="button" role="option" data-brush-preset="spray"><span class="brush-preset-sample preset-spray"></span><b>Spray</b><small>Scattered tips</small></button>
+              <button type="button" role="option" data-brush-preset="textured"><span class="brush-preset-sample preset-textured"></span><b>Textured</b><small>Canvas grain</small></button>
+              <button type="button" role="option" data-brush-preset="color-scatter"><span class="brush-preset-sample preset-color"></span><b>Color Scatter</b><small>Dynamic colour</small></button>
+            </div>
+            <footer><button class="tool-option-button" id="brushQuickSettingsButton" type="button">Brush settings…</button></footer>
           </section>
           <span id="documentMetrics"></span>
         </div>
@@ -386,12 +410,12 @@
             <label class="quick-layer-lock"><input id="quickLayerLockInput" type="checkbox" disabled><span>Lock</span></label>
           </div>
           <div class="layer-actions" role="group" aria-label="Layer actions">
-            <button type="button" id="createPixelLayerButton" title="Create pixel layer" disabled><span aria-hidden="true">＋</span> New layer</button>
+            <button type="button" id="createPixelLayerButton" title="Create pixel layer" disabled><span class="layer-action-icon" aria-hidden="true">＋</span><span class="layer-action-label">New</span></button>
             <button type="button" id="importLayerButton" disabled>Import pixels</button>
             <button type="button" id="layerViaCopyButton" disabled>Layer via copy</button>
-            <button type="button" id="groupLayerButton" disabled>Group</button>
+            <button type="button" id="groupLayerButton" title="Group selected layers" disabled><span class="layer-action-icon" aria-hidden="true">▣</span><span class="layer-action-label">Group</span></button>
             <button type="button" id="ungroupLayerButton" disabled>Ungroup</button>
-            <button type="button" id="removeLayerButton" title="Delete selected layer" disabled><span aria-hidden="true">⌫</span> Delete</button>
+            <button type="button" id="removeLayerButton" title="Delete selected layer" disabled><span class="layer-action-icon" aria-hidden="true">⌫</span><span class="layer-action-label">Delete</span></button>
             <button type="button" id="invertLayerButton" disabled>Invert pixels</button>
             <button type="button" id="filterLayerButton" disabled>Filters</button>
             <button type="button" id="liquifyLayerButton" disabled>Liquify…</button>
@@ -414,9 +438,9 @@
               <option value="0">Selection bounds</option><option value="1">Canvas</option>
             </select>
             <button type="button" id="arrangeLayersButton" disabled>Arrange layers</button>
-            <button type="button" id="createMaskButton" disabled>Add mask</button>
-            <button type="button" id="toggleClippingButton" disabled>Create clipping mask</button>
-            <button type="button" id="mergeLayersButton" disabled>Merge layers</button>
+            <button type="button" id="createMaskButton" title="Add layer mask" disabled><span class="layer-action-icon" aria-hidden="true">◐</span><span class="layer-action-label">Mask</span></button>
+            <button type="button" id="toggleClippingButton" title="Create or release clipping mask" disabled><span class="layer-action-icon" aria-hidden="true">↳</span><span class="layer-action-label">Clip</span></button>
+            <button type="button" id="mergeLayersButton" title="Merge selected layers" disabled><span class="layer-action-icon" aria-hidden="true">⇲</span><span class="layer-action-label">Merge</span></button>
             <button type="button" id="toggleMaskButton" disabled>Disable mask</button>
             <button type="button" id="linkMaskButton" disabled>Unlink mask</button>
             <button type="button" id="invertMaskButton" disabled>Invert mask</button>

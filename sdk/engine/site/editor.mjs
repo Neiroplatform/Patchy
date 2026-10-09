@@ -74,6 +74,7 @@ let selectedLayerId = null;
 let selectedLayerIds = new Set();
 let layerSelectionAnchorId = null;
 let lastLayerActivation = { id: null, at: 0 };
+let renamingLayerId = null;
 let selectedChannelId = null;
 let selectedPathId = null;
 let documentName = "Untitled.psd";
@@ -1340,9 +1341,10 @@ function renderLayers() {
   const byId = new Map(layers.map((layer) => [layer.id, layer]));
   for (let index = first; index < last; ++index) {
     const layer = layers[index];
+    const renaming = renamingLayerId === layer.id;
     const row = document.createElement("div");
     row.className = "layer-row";
-    row.draggable = true;
+    row.draggable = !renaming;
     row.setAttribute("role", "listitem");
     row.setAttribute("aria-setsize", String(layers.length));
     row.setAttribute("aria-posinset", String(index + 1));
@@ -1350,31 +1352,64 @@ function renderLayers() {
     row.dataset.layerId = String(layer.id);
     if (selectedLayerId === layer.id) row.setAttribute("aria-current", "true");
     row.style.paddingLeft = `${5 + layerDepth(layer, byId) * 12}px`;
+    const indicators = [
+      layer.lockFlags ? ["🔒", "Locked"] : null,
+      layer.clipped ? ["↓", "Clipped"] : null,
+      layer.mask ? ["◐", layer.mask.disabled ? "Mask disabled" : "Layer mask"] : null,
+      layer.vectorMask ? ["◇", "Vector mask"] : null,
+      layer.layerStyle?.counts && Object.values(layer.layerStyle.counts).some(Boolean) ? ["fx", "Layer effects"] : null,
+    ].filter(Boolean);
     row.innerHTML = `
       <span class="layer-drag-handle" aria-hidden="true" title="Drag to reorder">⠿</span>
       <button class="visibility-button" type="button" aria-label="${layer.visible ? "Hide" : "Show"} ${escapeHtml(layer.name)}">${layer.visible ? "◉" : "○"}</button>
       <canvas class="layer-thumb" width="32" height="32" aria-hidden="true"></canvas>
-      <button class="layer-copy layer-select-button" type="button"><span class="layer-name"></span><span class="layer-kind"></span></button>
+      ${renaming
+        ? `<label class="layer-copy layer-inline-rename"><span class="sr-only">Rename layer</span><input class="layer-inline-name" type="text" maxlength="256"></label>`
+        : `<button class="layer-copy layer-select-button" type="button"><span class="layer-name"></span><span class="layer-kind"></span></button>`}
+      <span class="layer-indicators" aria-label="${indicators.map(([, label]) => localizer.text(label)).join(", ")}">${indicators.map(([mark, label]) => `<i title="${label}">${mark}</i>`).join("")}</span>
       <button class="reorder-button" type="button" aria-label="Move layer up" ${index === 0 ? "disabled" : ""}>↑</button>
       <button class="reorder-button" type="button" aria-label="Move layer down" ${index === layers.length - 1 ? "disabled" : ""}>↓</button>`;
-    if (layer.name) row.querySelector(".layer-name").textContent = layer.name;
-    else localizer.setText(row.querySelector(".layer-name"), "Unnamed layer");
-    row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.clipped ? ` · ${localizer.text("Clipped")}` : ""}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}${layer.adjustment ? ` · ${adjustmentName(layer.adjustment.kind)}` : ""}${layer.smartObject ? ` · ${layer.smartObject.filename}` : ""}`;
     const selectButton = row.querySelector(".layer-select-button");
-    selectButton.tabIndex = rovingLayerId === layer.id ? 0 : -1;
-    selectButton.setAttribute("aria-pressed", String(selectedLayerIds.has(layer.id)));
-    localizer.setAttribute(selectButton, "aria-label", `Select ${layer.name || "unnamed layer"}`);
-    selectButton.addEventListener("click", (event) => {
-      const now = performance.now();
-      const repeated = lastLayerActivation.id === layer.id && now - lastLayerActivation.at < 500;
-      lastLayerActivation = { id: layer.id, at: now };
-      selectLayerFromEvent(layer, event, layers);
-      renderLayers();
-      renderLayerProperties();
-      if (repeated && !event.shiftKey && !(event.ctrlKey || event.metaKey)) {
-        queueMicrotask(editSelectedLayerType);
-      }
-    });
+    if (selectButton) {
+      if (layer.name) row.querySelector(".layer-name").textContent = layer.name;
+      else localizer.setText(row.querySelector(".layer-name"), "Unnamed layer");
+      row.querySelector(".layer-kind").textContent = `${formatKind(layer)}${layer.clipped ? ` · ${localizer.text("Clipped")}` : ""}${layer.mask ? ` · Mask${layer.mask.disabled ? " off" : ""}` : ""}${layer.adjustment ? ` · ${adjustmentName(layer.adjustment.kind)}` : ""}${layer.smartObject ? ` · ${layer.smartObject.filename}` : ""}`;
+      selectButton.tabIndex = rovingLayerId === layer.id ? 0 : -1;
+      selectButton.setAttribute("aria-pressed", String(selectedLayerIds.has(layer.id)));
+      localizer.setAttribute(selectButton, "aria-label", `Select ${layer.name || "unnamed layer"}`);
+      selectButton.addEventListener("click", (event) => {
+        const now = performance.now();
+        const repeated = lastLayerActivation.id === layer.id && now - lastLayerActivation.at < 500;
+        const requestedRename = repeated && event.target.closest?.(".layer-name");
+        lastLayerActivation = { id: layer.id, at: now };
+        selectLayerFromEvent(layer, event, layers);
+        renderLayers();
+        renderLayerProperties();
+        if (requestedRename && !event.shiftKey && !(event.ctrlKey || event.metaKey)) {
+          queueMicrotask(() => beginInlineLayerRename(layer.id));
+        } else if (repeated && !event.shiftKey && !(event.ctrlKey || event.metaKey)) {
+          queueMicrotask(editSelectedLayerType);
+        }
+      });
+    } else {
+      const input = row.querySelector(".layer-inline-name");
+      input.value = layer.name || "";
+      const finish = (commit) => {
+        if (renamingLayerId !== layer.id) return;
+        renamingLayerId = null;
+        const name = input.value.trim();
+        if (commit && name && name !== layer.name) {
+          mutate("Renaming layer", () => client.renameLayer(layer.id, name));
+        } else {
+          renderLayers(); renderLayerProperties();
+        }
+      };
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") { event.preventDefault(); finish(false); }
+        else if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); finish(true); }
+      });
+      input.addEventListener("blur", () => finish(true));
+    }
     row.addEventListener("dragstart", (event) => {
       if (!selectedLayerIds.has(layer.id)) setSingleLayerSelection(layer.id);
       draggedLayer = captureLayerReference();
@@ -1429,6 +1464,20 @@ function renderLayers() {
   list.append(bottomSpacer);
   localizer.localize(list);
   if (restoreFocus) list.querySelector('.layer-select-button[tabindex="0"]')?.focus({ preventScroll: true });
+}
+
+function beginInlineLayerRename(layerId = selectedLayerId) {
+  if (!layerId || busy) return false;
+  const layer = snapshot?.layers.find((item) => String(item.id) === String(layerId));
+  if (!layer) return false;
+  renamingLayerId = layer.id;
+  renderLayers();
+  queueMicrotask(() => {
+    const input = [...$("layerList").querySelectorAll(".layer-row")]
+      .find((row) => row.dataset.layerId === String(layer.id))?.querySelector(".layer-inline-name");
+    input?.focus({ preventScroll: true }); input?.select();
+  });
+  return true;
 }
 
 function renderLayerProperties() {
@@ -2095,6 +2144,7 @@ function renderQuickMask(gray = null) {
 
 function setCanvasTool(tool) {
   if (tool !== "text") closeTextSettings();
+  if (!["brush", "eraser"].includes(tool)) closeBrushQuickPicker();
   if (tool !== "pen") { penDraft = null; penHoverPoint = null; previewPolygon([]); }
   if (tool !== "magnetic") magneticDraft = null;
   if (tool !== "quickSelect") quickSelectDraft = null;
@@ -2126,6 +2176,7 @@ function setCanvasTool(tool) {
   }
   commandSurface?.toolGroups?.promote(activeToolButton);
   workspaceContext?.render(tool);
+  syncBrushQuickPicker();
   renderCropOverlay();
   renderPenPath();
   renderBrushHover();
@@ -5407,7 +5458,11 @@ canvasContextMenu.addEventListener("keydown", (event) => {
 });
 canvas.addEventListener("contextmenu", (event) => {
   if (!snapshot) return;
-  event.preventDefault(); syncCanvasContextMenu();
+  event.preventDefault();
+  if (["brush", "eraser"].includes(canvasTool)) {
+    closeCanvasContextMenu(); openBrushQuickPicker({ x: event.clientX, y: event.clientY }); return;
+  }
+  closeBrushQuickPicker(); syncCanvasContextMenu();
   canvasContextMenu.hidden = false;
   const rect = canvasContextMenu.getBoundingClientRect();
   canvasContextMenu.style.left = `${Math.max(8, Math.min(event.clientX, innerWidth - rect.width - 8))}px`;
@@ -5416,6 +5471,8 @@ canvas.addEventListener("contextmenu", (event) => {
 });
 window.addEventListener("pointerdown", (event) => {
   if (!canvasContextMenu.hidden && !canvasContextMenu.contains(event.target)) closeCanvasContextMenu();
+  if (!$("brushQuickPicker").hidden && !$("brushQuickPicker").contains(event.target) &&
+      !$("brushQuickPickerButton").contains(event.target)) closeBrushQuickPicker();
 });
 $("removeLayerButton").addEventListener("click", () => {
   const ids = selectedLayerIdsTopToBottom({ rootsOnly: true });
@@ -5657,6 +5714,7 @@ $("brushSizeInput").addEventListener("input", () => {
   $("brushSizeOutput").textContent = `${$("brushSizeInput").value} px`;
   if (["brush", "eraser"].includes(canvasTool)) $("brushPresetSelect").value = "custom";
   renderBrushHover();
+  syncBrushQuickPicker();
   persistPreferences();
 });
 for (const [input, output] of [
@@ -5666,6 +5724,7 @@ for (const [input, output] of [
   $(input).addEventListener("input", (event) => {
     $(output).textContent = `${event.currentTarget.value}%`;
     $("brushPresetSelect").value = "custom";
+    syncBrushQuickPicker();
   });
 }
 const brushPresets = Object.freeze({
@@ -5700,6 +5759,50 @@ function applyAdvancedBrushPreset(preset) {
     brushColorDynamicsEnabledInput: preset.colorDynamicsEnabled ?? false,
     brushColorPerTipInput: preset.colorPerTip ?? true })) $(id).checked = value;
 }
+function syncBrushQuickPicker() {
+  const picker = $("brushQuickPicker");
+  if (!picker) return;
+  const preset = $("brushPresetSelect").value;
+  const label = $("brushPresetSelect").selectedOptions[0]?.textContent || "Custom";
+  const size = Number($("brushSizeInput").value) || 1;
+  const hardness = 100 - (Number($("brushSoftnessInput").value) || 0);
+  $("brushQuickPickerLabel").textContent = `${label} · ${Math.round(size)} px`;
+  $("brushQuickSizeInput").value = String(size);
+  $("brushQuickSizeOutput").textContent = `${Math.round(size)} px`;
+  $("brushQuickHardnessInput").value = String(hardness);
+  $("brushQuickHardnessOutput").textContent = `${Math.round(hardness)}%`;
+  $("brushQuickPickerTip").style.setProperty("--brush-tip-size", `${Math.max(5, Math.min(20, Math.sqrt(size) * 2.5))}px`);
+  $("brushQuickPickerTip").style.setProperty("--brush-tip-hardness", `${Math.max(8, hardness)}%`);
+  for (const button of $("brushQuickPresetGrid").querySelectorAll("[data-brush-preset]")) {
+    button.setAttribute("aria-selected", String(button.dataset.brushPreset === preset));
+  }
+}
+
+function closeBrushQuickPicker({ restoreFocus = false } = {}) {
+  const picker = $("brushQuickPicker");
+  if (!picker || picker.hidden) return;
+  picker.hidden = true;
+  $("brushQuickPickerButton").setAttribute("aria-expanded", "false");
+  if (restoreFocus) $("brushQuickPickerButton").focus({ preventScroll: true });
+}
+
+function openBrushQuickPicker({ x = null, y = null } = {}) {
+  if (!$("brushQuickPicker") || !["brush", "eraser"].includes(canvasTool)) return;
+  closeTextSettings(); closeCanvasContextMenu(); syncBrushQuickPicker();
+  const picker = $("brushQuickPicker");
+  picker.hidden = false;
+  picker.style.visibility = "hidden";
+  const anchor = $("brushQuickPickerButton").getBoundingClientRect();
+  const bounds = picker.getBoundingClientRect();
+  const left = x == null ? anchor.left : x;
+  const top = y == null ? anchor.bottom + 5 : y;
+  picker.style.left = `${Math.max(8, Math.min(left, innerWidth - bounds.width - 8))}px`;
+  picker.style.top = `${Math.max(8, Math.min(top, innerHeight - bounds.height - 8))}px`;
+  picker.style.visibility = "";
+  $("brushQuickPickerButton").setAttribute("aria-expanded", "true");
+  queueMicrotask(() => $("brushQuickSizeInput").focus({ preventScroll: true }));
+}
+
 $("brushPresetSelect").addEventListener("change", (event) => {
   const preset = brushPresets[event.currentTarget.value];
   if (!preset) return;
@@ -5710,9 +5813,49 @@ $("brushPresetSelect").addEventListener("change", (event) => {
   $("brushOpacityOutput").textContent = `${preset.opacity}%`;
   applyAdvancedBrushPreset(preset);
   renderBrushHover();
+  syncBrushQuickPicker();
   persistPreferences();
 });
 $("brushSettingsButton").addEventListener("click", () => openContextEditor("brushSettingsDialog"));
+$("brushQuickPickerButton").addEventListener("click", () => {
+  if ($("brushQuickPicker").hidden) openBrushQuickPicker();
+  else closeBrushQuickPicker({ restoreFocus: true });
+});
+$("brushQuickSizeInput").addEventListener("input", (event) => {
+  $("brushSizeInput").value = event.currentTarget.value;
+  $("brushSizeInput").dispatchEvent(new Event("input", { bubbles: true }));
+});
+$("brushQuickHardnessInput").addEventListener("input", (event) => {
+  $("brushSoftnessInput").value = String(100 - Number(event.currentTarget.value));
+  $("brushSoftnessInput").dispatchEvent(new Event("input", { bubbles: true }));
+});
+$("brushQuickPresetGrid").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-brush-preset]");
+  if (!button) return;
+  $("brushPresetSelect").value = button.dataset.brushPreset;
+  $("brushPresetSelect").dispatchEvent(new Event("change", { bubbles: true }));
+});
+$("brushQuickPresetGrid").addEventListener("dblclick", (event) => {
+  if (event.target.closest("[data-brush-preset]")) closeBrushQuickPicker({ restoreFocus: true });
+});
+$("brushQuickPicker").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { event.preventDefault(); closeBrushQuickPicker({ restoreFocus: true }); return; }
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key) ||
+      !event.target.matches("[data-brush-preset]")) return;
+  const buttons = [...$("brushQuickPresetGrid").querySelectorAll("[data-brush-preset]")];
+  const current = buttons.indexOf(event.target);
+  const columns = 2;
+  const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 :
+    event.key === "ArrowDown" ? columns : -columns;
+  const index = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 :
+    Math.max(0, Math.min(buttons.length - 1, current + delta));
+  event.preventDefault(); buttons[index].focus();
+});
+$("brushQuickSettingsButton").addEventListener("click", () => {
+  closeBrushQuickPicker(); $("brushSettingsButton").click();
+});
+document.addEventListener("patchy:localechange", syncBrushQuickPicker);
+syncBrushQuickPicker();
 function selectTextSettingsTab(panel) {
   const character = panel !== "paragraph";
   $("characterSettingsTab").setAttribute("aria-selected", String(character));
@@ -5795,8 +5938,10 @@ for (const id of ["brushAngleInput", "brushRoundnessInput", "brushSpacingInput",
   "brushTextureDepthInput", "brushTextureInvertInput", "brushColorDynamicsEnabledInput",
   "brushForegroundBackgroundJitterInput", "brushHueJitterInput", "brushSaturationJitterInput",
   "brushBrightnessJitterInput", "brushPurityInput", "brushColorPerTipInput"]) {
-  $(id).addEventListener("input", () => { $("brushPresetSelect").value = "custom"; renderBrushHover(); persistPreferences(); });
-  $(id).addEventListener("change", () => { $("brushPresetSelect").value = "custom"; persistPreferences(); });
+  $(id).addEventListener("input", () => { $("brushPresetSelect").value = "custom";
+    syncBrushQuickPicker(); renderBrushHover(); persistPreferences(); });
+  $(id).addEventListener("change", () => { $("brushPresetSelect").value = "custom";
+    syncBrushQuickPicker(); persistPreferences(); });
 }
 $("retouchSoftnessInput").addEventListener("input", (event) => {
   $("retouchSoftnessOutput").textContent = `${event.currentTarget.value}%`;
@@ -6561,6 +6706,9 @@ $("localeSelect").addEventListener("change", () => {
 });
 
 $("layerList").addEventListener("keydown", (event) => {
+  if (event.target.closest?.(".layer-select-button") && event.key === "F2") {
+    event.preventDefault(); beginInlineLayerRename(event.target.closest(".layer-row")?.dataset.layerId); return;
+  }
   if (!event.target.closest?.(".layer-select-button") ||
       !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   const layers = snapshot ? [...snapshot.layers].reverse() : [];
