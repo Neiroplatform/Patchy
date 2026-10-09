@@ -469,26 +469,34 @@ try {
   assert.equal(await page.inputValue("#backgroundSwatchInput"), "#0057ff");
   assert.ok(await page.locator("#authoringRecentSwatches [data-color]").count() >= 2);
   await page.click('[aria-controls="commandMenu-file"]');
-  await page.click('#commandMenu-file [data-command-target="assetsButton"]');
-  await page.fill("#assetGradientNameInput", "Browser gradient");
-  await page.fill("#assetPatternNameInput", "Browser pattern");
-  await page.selectOption("#assetPatternKindInput", "dots");
-  await page.click("#saveGradientAssetButton");
-  await page.waitForFunction(() =>
-    document.querySelectorAll("#authoringGradientPresets [data-preset]").length >= 5);
-  await page.click("#savePatternAssetButton");
-  await page.waitForFunction(() =>
-    document.querySelectorAll("#authoringGradientPresets [data-preset]").length >= 5 &&
-    document.querySelectorAll("#authoringPatternPresets [data-preset]").length >= 3);
-  assert.match(await page.locator('#authoringGradientPresets [aria-label="Gradient: Browser gradient"] .preset-library-preview')
-    .getAttribute("style"), /#111111.*#ffffff/);
-  await page.locator("#assetLibraryList .dialog-actions").filter({ hasText: "gradient · Browser gradient" })
-    .getByRole("button", { name: "Remove" }).click();
-  await page.waitForFunction(() => document.querySelectorAll("#authoringGradientPresets [data-preset]").length === 4);
-  await page.locator("#assetLibraryList .dialog-actions").filter({ hasText: "pattern · Browser pattern" })
-    .getByRole("button", { name: "Remove" }).click();
-  await page.waitForFunction(() => document.querySelectorAll("#authoringPatternPresets [data-preset]").length === 2);
-  await page.click('#assetsDialog button[aria-label="Close"]');
+  const assetCommand = page.locator('#commandMenu-file [data-command-target="assetsButton"]');
+  if (versionStorageAvailable) {
+    await assetCommand.click();
+    await page.fill("#assetGradientNameInput", "Browser gradient");
+    await page.fill("#assetPatternNameInput", "Browser pattern");
+    await page.selectOption("#assetPatternKindInput", "dots");
+    await page.click("#saveGradientAssetButton");
+    await page.waitForFunction(() =>
+      document.querySelectorAll("#authoringGradientPresets [data-preset]").length >= 5);
+    await page.click("#savePatternAssetButton");
+    await page.waitForFunction(() =>
+      document.querySelectorAll("#authoringGradientPresets [data-preset]").length >= 5 &&
+      document.querySelectorAll("#authoringPatternPresets [data-preset]").length >= 3);
+    assert.match(await page.locator('#authoringGradientPresets [aria-label="Gradient: Browser gradient"] .preset-library-preview')
+      .getAttribute("style"), /#111111.*#ffffff/);
+    await page.locator("#assetLibraryList .dialog-actions").filter({ hasText: "gradient · Browser gradient" })
+      .getByRole("button", { name: "Remove" }).click();
+    await page.waitForFunction(() => document.querySelectorAll("#authoringGradientPresets [data-preset]").length === 4);
+    await page.locator("#assetLibraryList .dialog-actions").filter({ hasText: "pattern · Browser pattern" })
+      .getByRole("button", { name: "Remove" }).click();
+    await page.waitForFunction(() => document.querySelectorAll("#authoringPatternPresets [data-preset]").length === 2);
+    await page.click('#assetsDialog button[aria-label="Close"]');
+  } else {
+    assert.equal(await assetCommand.isDisabled(), true);
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#authoringGradientPresets [data-preset]").count(), 4);
+    assert.equal(await page.locator("#authoringPatternPresets [data-preset]").count(), 2);
+  }
   before = await revision();
   await page.click('[aria-controls="commandMenu-window"]');
   await page.click('#commandMenu-window [data-command-target="authoringGradientsLibraryTab"]');
@@ -848,7 +856,8 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties properties=adjustments-eight-configure-create-edit-window-narrow local-state=history-version-create-recovery-docked-no-revision layout=width-split-pointer-keyboard-persist-reset-narrow-no-revision authoring=color-swatches-gradient-pattern-assets-configure-first-no-revision-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
+  const localStateResult = versionStorageAvailable ? "version-assets-create" : "storage-unavailable-guard";
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties properties=adjustments-eight-configure-create-edit-window-narrow local-state=history-recovery-docked-${localStateResult}-no-revision layout=width-split-pointer-keyboard-persist-reset-narrow-no-revision authoring=color-swatches-gradient-pattern-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,
