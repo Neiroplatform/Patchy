@@ -119,9 +119,9 @@ try {
   await page.mouse.move(textCanvas.x + textCanvas.width * .72,
     textCanvas.y + textCanvas.height * .45, { steps: 3 });
   await page.mouse.up();
-  await page.waitForSelector("#textDialog[open]");
-  await page.fill("#textValueInput", "PRIVATE_TEXT_STORY_SENTINEL");
-  await page.click("#commitTextButton");
+  await page.waitForSelector("#inlineTextEditor:not([hidden])");
+  await page.fill("#inlineTextEditor", "PRIVATE_TEXT_STORY_SENTINEL");
+  await page.locator("#inlineTextEditor").press("Control+Enter");
   await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) >= 2 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
   await runPaletteCommand("selectAllButton");

@@ -184,17 +184,20 @@
             <label class="standard-brush-option" hidden>Softness <input id="brushSoftnessInput" type="range" min="0" max="100" value="0"><output id="brushSoftnessOutput">0%</output></label>
             <label class="standard-brush-option" hidden>Opacity <input id="brushOpacityInput" type="range" min="1" max="100" value="100"><output id="brushOpacityOutput">100%</output></label>
             <button class="tool-option-button" id="brushSettingsButton" type="button" hidden>Brush settings…</button>
-            <label hidden>Shape <select id="shapeToolKindInput"><option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="line">Line</option><option value="polygon">Polygon</option><option value="star">Star</option></select></label>
+            <label class="primary-tool-choice" hidden><span>Shape</span><select id="shapeToolKindInput" aria-label="Shape kind"><option value="rectangle">▭ Rectangle</option><option value="ellipse">◯ Ellipse</option><option value="line">╱ Line</option><option value="polygon">⬡ Polygon</option><option value="star">★ Star</option></select></label>
             <label hidden>Fill <input id="shapeToolFillInput" type="color" value="#4f7cff"></label>
             <label hidden>Stroke <input id="shapeToolStrokeInput" type="color" value="#10141d"></label>
             <label hidden>Width <input id="shapeToolStrokeWidthInput" type="number" min="0" max="200" step="1" value="0"></label>
             <label hidden>Sides <input id="shapeToolSidesInput" type="number" min="3" max="32" step="1" value="6"></label>
-            <label hidden>Font <input id="textToolFontInput" type="text" value="Arial" list="fontPresetList" maxlength="256"></label>
+            <label class="primary-tool-choice" hidden>Font <input id="textToolFontInput" type="text" value="Arial" list="fontPresetList" maxlength="256"></label>
+            <label hidden>Style <select id="textToolStyleInput" aria-label="Font style"><option value="regular">Regular</option><option value="bold">Bold</option><option value="italic">Italic</option><option value="bold-italic">Bold Italic</option></select></label>
             <label hidden>Size <input id="textToolSizeInput" type="number" min="1" max="512" step="1" value="48"></label>
             <label hidden>Color <input id="textToolColorInput" type="color" value="#111111"></label>
             <label hidden><input id="textToolBoldInput" type="checkbox"> Bold</label>
             <label hidden><input id="textToolItalicInput" type="checkbox"> Italic</label>
-            <button class="tool-option-button" id="textSettingsButton" type="button" hidden>Character / Paragraph…</button>
+            <label hidden>Align <select id="textToolAlignmentInput" aria-label="Paragraph alignment"><option value="0">Left</option><option value="2">Center</option><option value="1">Right</option><option value="3">Justify</option></select></label>
+            <button class="tool-option-button text-panel-trigger" id="textSettingsButton" type="button" aria-expanded="false" aria-controls="textSettingsPopover" hidden>Character</button>
+            <button class="tool-option-button text-panel-trigger" id="paragraphSettingsButton" type="button" aria-expanded="false" aria-controls="textSettingsPopover" hidden>Paragraph</button>
             <label class="non-retouch-option standard-paint-option">Target <select id="paintTargetSelect" aria-label="Paint target">
               <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
             </select></label>
@@ -245,6 +248,39 @@
             <label class="advanced-paint-option advanced-pattern-option" hidden>Secondary <input id="advancedPatternSecondaryInput" type="color" value="#ffffff"></label>
             <label class="advanced-paint-option advanced-pattern-option" hidden><input id="advancedPatternAlignedInput" type="checkbox" checked> Aligned</label>
           </span>
+          <section class="text-settings-popover" id="textSettingsPopover" aria-label="Text settings" hidden>
+            <header>
+              <div class="text-settings-tabs" role="tablist" aria-label="Text settings panels">
+                <button id="characterSettingsTab" type="button" role="tab" aria-selected="true" aria-controls="characterSettingsPanel">Character</button>
+                <button id="paragraphSettingsTab" type="button" role="tab" aria-selected="false" aria-controls="paragraphSettingsPanel" tabindex="-1">Paragraph</button>
+              </div>
+              <button class="icon-button" id="closeTextSettingsButton" type="button" aria-label="Close">×</button>
+            </header>
+            <div class="text-settings-panel" id="characterSettingsPanel" role="tabpanel" aria-labelledby="characterSettingsTab">
+              <label><span>Font family</span><input id="textToolPanelFontInput" type="text" value="Arial" list="fontPresetList" maxlength="256"></label>
+              <label><span>Font style</span><select id="textToolPanelStyleInput"><option value="regular">Regular</option><option value="bold">Bold</option><option value="italic">Italic</option><option value="bold-italic">Bold Italic</option></select></label>
+              <label><span>Size</span><input id="textToolPanelSizeInput" type="number" min="1" max="512" step="1" value="48"></label>
+              <label><span>Leading</span><input id="textToolPanelLeadingInput" type="number" min="0" max="4096" step="0.1" value="0" aria-description="Zero uses automatic leading"></label>
+              <label><span>Tracking</span><input id="textToolPanelTrackingInput" type="number" min="-1000" max="1000" step="1" value="0"></label>
+              <label><span>Color</span><input id="textToolPanelColorInput" type="color" value="#111111"></label>
+              <label><span>Horizontal scale %</span><input id="textToolPanelHorizontalScaleInput" type="number" min="1" max="1000" step="1" value="100"></label>
+              <label><span>Vertical scale %</span><input id="textToolPanelVerticalScaleInput" type="number" min="1" max="1000" step="1" value="100"></label>
+            </div>
+            <div class="text-settings-panel" id="paragraphSettingsPanel" role="tabpanel" aria-labelledby="paragraphSettingsTab" hidden>
+              <fieldset class="text-alignment-group"><legend>Alignment</legend>
+                <label><input type="radio" name="textToolPanelAlignment" value="0" checked><span>Left</span></label>
+                <label><input type="radio" name="textToolPanelAlignment" value="2"><span>Center</span></label>
+                <label><input type="radio" name="textToolPanelAlignment" value="1"><span>Right</span></label>
+                <label><input type="radio" name="textToolPanelAlignment" value="3"><span>Justify</span></label>
+              </fieldset>
+              <label><span>First-line indent</span><input id="textToolPanelFirstIndentInput" type="number" step="0.1" value="0"></label>
+              <label><span>Start indent</span><input id="textToolPanelStartIndentInput" type="number" step="0.1" value="0"></label>
+              <label><span>End indent</span><input id="textToolPanelEndIndentInput" type="number" step="0.1" value="0"></label>
+              <label><span>Space before</span><input id="textToolPanelSpaceBeforeInput" type="number" step="0.1" value="0"></label>
+              <label><span>Space after</span><input id="textToolPanelSpaceAfterInput" type="number" step="0.1" value="0"></label>
+              <label><span>Auto leading %</span><input id="textToolPanelAutoLeadingInput" type="number" min="1" max="1000" step="1" value="120"></label>
+            </div>
+          </section>
           <span id="documentMetrics"></span>
         </div>
         <div class="canvas-viewport" id="canvasViewport" role="region" aria-label="Document canvas" tabindex="0">
@@ -255,6 +291,7 @@
           <div class="canvas-frame" id="canvasFrame">
             <canvas id="documentCanvas" aria-label="Rendered document"></canvas>
             <canvas id="gestureCanvas" aria-hidden="true"></canvas>
+            <textarea class="inline-text-editor" id="inlineTextEditor" aria-label="Text on canvas" maxlength="1024" spellcheck="true" hidden></textarea>
             <div class="brush-cursor-overlay" id="brushCursorOverlay" aria-hidden="true" hidden></div>
             <svg class="path-overlay" id="pathOverlay" aria-label="Pen path" hidden>
               <path id="pathOverlayLine" vector-effect="non-scaling-stroke"></path>

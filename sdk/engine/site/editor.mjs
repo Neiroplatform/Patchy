@@ -117,6 +117,8 @@ let paintDraft = null;
 let shapeDraft = null;
 let textBoxDraft = null;
 let pendingTextBounds = null;
+let inlineTextDraft = null;
+let inlineTextCommitPending = false;
 let retouchDraft = null;
 let localBrushDraft = null;
 let advancedPaintDraft = null;
@@ -768,7 +770,7 @@ function preferenceSnapshot() {
     brushSize: Number($("brushSizeInput").value),
     color: $("brushColorInput").value,
     paintPreset: $("paintPresetSelect").value,
-    font: $("textFontInput").value.trim() || "Arial",
+    font: $("textToolFontInput").value.trim() || "Arial",
     selectionTolerance: Number($("selectionToleranceInput").value),
     wandContiguous: $("wandContiguousInput").checked,
     wandSampleAllLayers: $("wandSampleAllInput").checked,
@@ -904,6 +906,8 @@ function applyPreferences(preferences) {
   $("foregroundSwatchInput").value = preferences.color;
   $("paintPresetSelect").value = preferences.paintPreset;
   $("textFontInput").value = preferences.font;
+  $("textToolFontInput").value = preferences.font;
+  $("textToolPanelFontInput").value = preferences.font;
   $("selectionToleranceInput").value = String(preferences.selectionTolerance);
   $("selectionToleranceOutput").textContent = String(preferences.selectionTolerance);
   $("wandContiguousInput").checked = preferences.wandContiguous !== false;
@@ -1767,6 +1771,7 @@ function applyViewport() {
   $("canvasFrame").style.width = `${Math.max(1, snapshot.width * zoom)}px`;
   $("canvasFrame").style.height = `${Math.max(1, snapshot.height * zoom)}px`;
   $("zoomLabel").textContent = zoomMode === "fit" ? `Fit · ${Math.round(zoom * 100)}%` : `${Math.round(zoom * 100)}%`;
+  renderInlineTextEditor();
   renderBrushHover();
   renderGuides();
   renderRulers();
@@ -2089,6 +2094,7 @@ function renderQuickMask(gray = null) {
 }
 
 function setCanvasTool(tool) {
+  if (tool !== "text") closeTextSettings();
   if (tool !== "pen") { penDraft = null; penHoverPoint = null; previewPolygon([]); }
   if (tool !== "magnetic") magneticDraft = null;
   if (tool !== "quickSelect") quickSelectDraft = null;
@@ -2607,6 +2613,7 @@ function canvasPointUnclamped(event) {
 async function acceptSnapshot(next, rerender = true, rememberPrevious = true) {
   if (!next) {
     diagnostics.setDocument(null);
+    cancelInlineText({ restoreFocus: false });
     snapshot = null; clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     renderedDocument = null;
     $("emptyState").hidden = false; setSessionState("ready", "Engine ready");
@@ -3633,8 +3640,155 @@ function renderTextBoxDraft(event = null) {
 
 function beginTextBox(event) {
   if (busy || !snapshot || event.button !== 0) return;
+  if (inlineTextDraft) return;
   const start = canvasPoint(event); canvas.setPointerCapture(event.pointerId);
   textBoxDraft = { pointerId: event.pointerId, start, end: start }; renderTextBoxDraft(event);
+}
+
+function textToolStyleSnapshot() {
+  const mode = $("textToolStyleInput").value;
+  const sizePixels = Math.max(1, Math.min(512, Number($("textToolSizeInput").value) || 48));
+  const leading = Math.max(0, Math.min(4096, Number($("textToolPanelLeadingInput").value) || 0));
+  const tracking = Math.max(-1000, Math.min(1000, Number($("textToolPanelTrackingInput").value) || 0));
+  const horizontalScale = Math.max(.01, Math.min(10,
+    (Number($("textToolPanelHorizontalScaleInput").value) || 100) / 100));
+  const verticalScale = Math.max(.01, Math.min(10,
+    (Number($("textToolPanelVerticalScaleInput").value) || 100) / 100));
+  return { font: $("textToolFontInput").value.trim() || "Arial", style: "", sizePixels,
+    color: colorBytes($("textToolColorInput").value),
+    bold: mode === "bold" || mode === "bold-italic",
+    italic: mode === "italic" || mode === "bold-italic",
+    fauxBold: false, fauxItalic: false, leading, autoLeading: leading === 0,
+    tracking, horizontalScale, verticalScale };
+}
+
+function textToolParagraphSnapshot(start, length) {
+  const finite = (id, fallback = 0) => {
+    const value = Number($(id).value); return Number.isFinite(value) ? value : fallback;
+  };
+  return { start, length, justification: Number($("textToolAlignmentInput").value) || 0,
+    firstLineIndent: finite("textToolPanelFirstIndentInput"),
+    startIndent: finite("textToolPanelStartIndentInput"),
+    endIndent: finite("textToolPanelEndIndentInput"),
+    spaceBefore: finite("textToolPanelSpaceBeforeInput"),
+    spaceAfter: finite("textToolPanelSpaceAfterInput"),
+    autoLeadingFraction: Math.max(.01, Math.min(10,
+      finite("textToolPanelAutoLeadingInput", 120) / 100)) };
+}
+
+function syncTextStyleFlags() {
+  const mode = $("textToolStyleInput").value;
+  $("textToolBoldInput").checked = mode === "bold" || mode === "bold-italic";
+  $("textToolItalicInput").checked = mode === "italic" || mode === "bold-italic";
+}
+
+function syncTextSettingsPanelFromToolbar({ run = null, paragraph = null } = {}) {
+  const style = run || textToolStyleSnapshot();
+  const mode = style.bold && style.italic ? "bold-italic" : style.bold ? "bold" :
+    style.italic ? "italic" : $("textToolStyleInput").value;
+  const values = {
+    textToolPanelFontInput: style.font,
+    textToolPanelStyleInput: mode,
+    textToolPanelSizeInput: style.sizePixels,
+    textToolPanelLeadingInput: style.autoLeading ? 0 : style.leading || 0,
+    textToolPanelTrackingInput: style.tracking || 0,
+    textToolPanelHorizontalScaleInput: (style.horizontalScale || 1) * 100,
+    textToolPanelVerticalScaleInput: (style.verticalScale || 1) * 100,
+    textToolPanelColorInput: `#${style.color.map((part) => part.toString(16).padStart(2, "0")).join("")}`,
+  };
+  for (const [id, value] of Object.entries(values)) $(id).value = String(value);
+  const block = paragraph || textToolParagraphSnapshot(0, 1);
+  const paragraphValues = {
+    textToolPanelFirstIndentInput: block.firstLineIndent,
+    textToolPanelStartIndentInput: block.startIndent,
+    textToolPanelEndIndentInput: block.endIndent,
+    textToolPanelSpaceBeforeInput: block.spaceBefore,
+    textToolPanelSpaceAfterInput: block.spaceAfter,
+    textToolPanelAutoLeadingInput: (block.autoLeadingFraction || 1.2) * 100,
+  };
+  for (const [id, value] of Object.entries(paragraphValues)) $(id).value = String(value || 0);
+  $("textToolAlignmentInput").value = String(block.justification || 0);
+  const radio = document.querySelector(`input[name="textToolPanelAlignment"][value="${block.justification || 0}"]`);
+  if (radio) radio.checked = true;
+}
+
+function syncTextToolbarFromPanel() {
+  $("textToolFontInput").value = $("textToolPanelFontInput").value;
+  $("textToolStyleInput").value = $("textToolPanelStyleInput").value;
+  $("textToolSizeInput").value = $("textToolPanelSizeInput").value;
+  $("textToolColorInput").value = $("textToolPanelColorInput").value;
+  const alignment = document.querySelector('input[name="textToolPanelAlignment"]:checked');
+  if (alignment) $("textToolAlignmentInput").value = alignment.value;
+  syncTextStyleFlags();
+  renderInlineTextEditor();
+  persistPreferences();
+}
+
+function normalizedInlineTextBounds(bounds) {
+  const x = Math.max(0, Math.min(snapshot.width - 1, Math.floor(bounds.x)));
+  const y = Math.max(0, Math.min(snapshot.height - 1, Math.floor(bounds.y)));
+  return { x, y, width: Math.max(1, Math.min(snapshot.width - x, Math.ceil(bounds.width))),
+    height: Math.max(1, Math.min(snapshot.height - y, Math.ceil(bounds.height))) };
+}
+
+function renderInlineTextEditor() {
+  const editor = $("inlineTextEditor");
+  if (!snapshot || !inlineTextDraft) { editor.hidden = true; return; }
+  const style = textToolStyleSnapshot(); const { bounds } = inlineTextDraft;
+  editor.style.left = `${bounds.x * zoom}px`; editor.style.top = `${bounds.y * zoom}px`;
+  editor.style.width = `${Math.max(24, bounds.width * zoom / style.horizontalScale)}px`;
+  editor.style.height = `${Math.max(style.sizePixels * 1.4, bounds.height) * zoom / style.verticalScale}px`;
+  editor.style.fontFamily = `"${style.font.replace(/["\\]/g, "")}"`;
+  editor.style.fontSize = `${style.sizePixels * zoom}px`;
+  editor.style.fontWeight = style.bold ? "700" : "400";
+  editor.style.fontStyle = style.italic ? "italic" : "normal";
+  editor.style.color = `rgb(${style.color.join(" ")})`;
+  editor.style.letterSpacing = `${style.sizePixels * style.tracking / 1000 * zoom}px`;
+  editor.style.lineHeight = String((style.leading || style.sizePixels *
+    textToolParagraphSnapshot(0, Math.max(1, editor.value.length)).autoLeadingFraction) / style.sizePixels);
+  editor.style.textAlign = ["left", "right", "center", "justify"][
+    textToolParagraphSnapshot(0, Math.max(1, editor.value.length)).justification] || "left";
+  editor.style.transform = `scale(${style.horizontalScale}, ${style.verticalScale})`;
+  editor.hidden = false;
+}
+
+function beginInlineText(bounds) {
+  if (!snapshot || inlineTextCommitPending) return;
+  inlineTextDraft = { bounds: normalizedInlineTextBounds(bounds) };
+  const editor = $("inlineTextEditor");
+  editor.value = "";
+  renderInlineTextEditor();
+  queueMicrotask(() => editor.focus({ preventScroll: true }));
+}
+
+function cancelInlineText({ restoreFocus = true } = {}) {
+  inlineTextDraft = null;
+  const editor = $("inlineTextEditor"); editor.value = ""; editor.hidden = true;
+  if (restoreFocus) $("canvasViewport").focus({ preventScroll: true });
+}
+
+async function commitInlineText({ restoreFocus = true } = {}) {
+  if (!inlineTextDraft || inlineTextCommitPending || busy || !snapshot) return;
+  const editor = $("inlineTextEditor"); const value = editor.value.replace(/\r\n?/g, "\n");
+  if (!value) { cancelInlineText({ restoreFocus }); return; }
+  const draft = inlineTextDraft; const style = textToolStyleSnapshot();
+  const runs = [{ start: 0, length: value.length, ...style }];
+  const paragraphs = [textToolParagraphSnapshot(0, value.length)];
+  let payload;
+  try {
+    payload = textLayerPayload({ value, font: style.font, sizePixels: style.sizePixels,
+      color: style.color, bold: style.bold, italic: style.italic }, draft.bounds,
+      value.split(/\s+/)[0] || "Text", runs, paragraphs);
+  } catch (error) { showError("Could not prepare text", error); return; }
+  inlineTextCommitPending = true; inlineTextDraft = null; editor.hidden = true;
+  const next = await mutate("Creating text", selectCreatedLayer(3,
+    () => client.addTextLayer(payload, { transferOwnership: true })));
+  inlineTextCommitPending = false;
+  if (next !== DIAGNOSTIC_COMMAND_FAILED) {
+    if (restoreFocus) $("canvasViewport").focus({ preventScroll: true });
+  } else {
+    inlineTextDraft = draft; renderInlineTextEditor(); editor.focus({ preventScroll: true });
+  }
 }
 
 function finishTextBox(event, cancelled = false) {
@@ -3646,7 +3800,7 @@ function finishTextBox(event, cancelled = false) {
     ? { x: Math.floor(draft.start.x), y: Math.floor(draft.start.y),
       width: Math.max(160, Math.round(snapshot.width * .35)), height: Math.max(80, Math.round(snapshot.height * .15)) }
     : bounds;
-  openTextDialog(pendingTextBounds, true);
+  beginInlineText(pendingTextBounds); pendingTextBounds = null;
 }
 
 function commitFilter() {
@@ -4059,10 +4213,8 @@ function openTextDialog(boundsOverride = null, forceCreate = false) {
     height: Math.max(80, Math.round(snapshot.height * .2)),
   };
   pendingTextBounds = null;
-  const style = layer?.text || { value: "Text", font: $("textToolFontInput").value.trim() || "Arial",
-    sizePixels: Math.max(1, Math.min(512, Number($("textToolSizeInput").value) || 48)),
-    color: colorBytes($("textToolColorInput").value), bold: $("textToolBoldInput").checked,
-    italic: $("textToolItalicInput").checked };
+  const toolStyle = textToolStyleSnapshot();
+  const style = layer?.text || { value: "Text", ...toolStyle };
   $("textDialogTitle").textContent = textEditingId ? "Edit text layer" : "Create text layer";
   $("commitTextButton").textContent = textEditingId ? "Update text" : "Create text";
   $("textValueInput").value = style.value;
@@ -4076,11 +4228,14 @@ function openTextDialog(boundsOverride = null, forceCreate = false) {
     ({ ...run, color: [...run.color] })) : [baseTextRun(style.value, {
       font: style.font, style: "", sizePixels: style.sizePixels, color: [...style.color],
       bold: style.bold, italic: style.italic, fauxBold: false, fauxItalic: false,
-      leading: 0, autoLeading: true, tracking: 0, horizontalScale: 1, verticalScale: 1 })];
+      leading: style.leading || 0, autoLeading: style.autoLeading !== false,
+      tracking: style.tracking || 0, horizontalScale: style.horizontalScale || 1,
+      verticalScale: style.verticalScale || 1 })];
   textDialogParagraphRuns = Array.isArray(style.paragraphRuns) && style.paragraphRuns.length
     ? style.paragraphRuns.map((run) => ({ ...run }))
-    : [{ start: 0, length: style.value.length, justification: 0, firstLineIndent: 0,
-      startIndent: 0, endIndent: 0, spaceBefore: 0, spaceAfter: 0, autoLeadingFraction: 1.2 }];
+    : [layer?.text ? { start: 0, length: style.value.length, justification: 0, firstLineIndent: 0,
+      startIndent: 0, endIndent: 0, spaceBefore: 0, spaceAfter: 0, autoLeadingFraction: 1.2 }
+      : textToolParagraphSnapshot(0, style.value.length)];
   textDialogOriginalRuns = textDialogRuns.map((run) => ({ ...run, color: [...run.color] }));
   textDialogOriginalParagraphRuns = textDialogParagraphRuns.map((run) => ({ ...run }));
   const firstRun = textDialogRuns[0];
@@ -4094,6 +4249,8 @@ function openTextDialog(boundsOverride = null, forceCreate = false) {
   $("textToolColorInput").value = `#${firstRun.color.map((part) => part.toString(16).padStart(2, "0")).join("")}`;
   $("textToolBoldInput").checked = firstRun.bold;
   $("textToolItalicInput").checked = firstRun.italic;
+  $("textToolStyleInput").value = firstRun.bold && firstRun.italic ? "bold-italic" :
+    firstRun.bold ? "bold" : firstRun.italic ? "italic" : "regular";
   $("textTrackingInput").value = String(firstRun.tracking || 0);
   $("textLeadingInput").value = String(firstRun.autoLeading ? 0 : firstRun.leading || 0);
   $("textHorizontalScaleInput").value = String((firstRun.horizontalScale || 1) * 100);
@@ -4105,6 +4262,7 @@ function openTextDialog(boundsOverride = null, forceCreate = false) {
     ["textSpaceBeforeInput", paragraph.spaceBefore], ["textSpaceAfterInput", paragraph.spaceAfter]])
     $(id).value = String(value || 0);
   $("textAutoLeadingInput").value = String((paragraph.autoLeadingFraction || 1.2) * 100);
+  syncTextSettingsPanelFromToolbar({ run: firstRun, paragraph });
   textDialogStyleDirty = false; textDialogParagraphDirty = false;
   renderTextRunList(); renderParagraphRunList();
   for (const [id, value] of [["textXInput", bounds.x], ["textYInput", bounds.y],
@@ -5555,7 +5713,80 @@ $("brushPresetSelect").addEventListener("change", (event) => {
   persistPreferences();
 });
 $("brushSettingsButton").addEventListener("click", () => openContextEditor("brushSettingsDialog"));
-$("textSettingsButton").addEventListener("click", () => openTextDialog());
+function selectTextSettingsTab(panel) {
+  const character = panel !== "paragraph";
+  $("characterSettingsTab").setAttribute("aria-selected", String(character));
+  $("characterSettingsTab").tabIndex = character ? 0 : -1;
+  $("paragraphSettingsTab").setAttribute("aria-selected", String(!character));
+  $("paragraphSettingsTab").tabIndex = character ? -1 : 0;
+  $("characterSettingsPanel").hidden = !character;
+  $("paragraphSettingsPanel").hidden = character;
+}
+
+function openTextSettings(panel) {
+  syncTextSettingsPanelFromToolbar();
+  selectTextSettingsTab(panel);
+  $("textSettingsPopover").hidden = false;
+  $("textSettingsButton").setAttribute("aria-expanded", String(panel !== "paragraph"));
+  $("paragraphSettingsButton").setAttribute("aria-expanded", String(panel === "paragraph"));
+  queueMicrotask(() => $(panel === "paragraph" ? "paragraphSettingsTab" : "characterSettingsTab")
+    .focus({ preventScroll: true }));
+}
+
+function closeTextSettings({ restoreFocus = false } = {}) {
+  if ($("textSettingsPopover").hidden) return;
+  $("textSettingsPopover").hidden = true;
+  $("textSettingsButton").setAttribute("aria-expanded", "false");
+  $("paragraphSettingsButton").setAttribute("aria-expanded", "false");
+  if (restoreFocus) $("textSettingsButton").focus({ preventScroll: true });
+}
+
+$("textSettingsButton").addEventListener("click", () => openTextSettings("character"));
+$("paragraphSettingsButton").addEventListener("click", () => openTextSettings("paragraph"));
+$("characterSettingsTab").addEventListener("click", () => selectTextSettingsTab("character"));
+$("paragraphSettingsTab").addEventListener("click", () => selectTextSettingsTab("paragraph"));
+$("closeTextSettingsButton").addEventListener("click", () => closeTextSettings({ restoreFocus: true }));
+$("textSettingsPopover").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { event.preventDefault(); closeTextSettings({ restoreFocus: true }); }
+  if (!["ArrowLeft", "ArrowRight"].includes(event.key) ||
+      !event.target.matches('[role="tab"]')) return;
+  event.preventDefault();
+  const panel = event.key === "ArrowRight" ? "paragraph" : "character";
+  selectTextSettingsTab(panel);
+  $(panel === "paragraph" ? "paragraphSettingsTab" : "characterSettingsTab").focus();
+});
+for (const id of ["textToolFontInput", "textToolStyleInput", "textToolSizeInput",
+  "textToolColorInput", "textToolAlignmentInput"]) {
+  $(id).addEventListener("input", () => {
+    syncTextStyleFlags(); syncTextSettingsPanelFromToolbar(); renderInlineTextEditor(); persistPreferences();
+  });
+  $(id).addEventListener("change", () => {
+    syncTextStyleFlags(); syncTextSettingsPanelFromToolbar(); renderInlineTextEditor(); persistPreferences();
+  });
+}
+for (const id of ["textToolPanelFontInput", "textToolPanelStyleInput", "textToolPanelSizeInput",
+  "textToolPanelLeadingInput", "textToolPanelTrackingInput", "textToolPanelColorInput",
+  "textToolPanelHorizontalScaleInput", "textToolPanelVerticalScaleInput",
+  "textToolPanelFirstIndentInput", "textToolPanelStartIndentInput", "textToolPanelEndIndentInput",
+  "textToolPanelSpaceBeforeInput", "textToolPanelSpaceAfterInput", "textToolPanelAutoLeadingInput"]) {
+  $(id).addEventListener("input", syncTextToolbarFromPanel);
+  $(id).addEventListener("change", syncTextToolbarFromPanel);
+}
+for (const radio of document.querySelectorAll('input[name="textToolPanelAlignment"]')) {
+  radio.addEventListener("change", syncTextToolbarFromPanel);
+}
+$("inlineTextEditor").addEventListener("input", renderInlineTextEditor);
+$("inlineTextEditor").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { event.preventDefault(); cancelInlineText(); return; }
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+    event.preventDefault(); void commitInlineText();
+  }
+});
+$("inlineTextEditor").addEventListener("blur", () => {
+  queueMicrotask(() => { if (inlineTextDraft) void commitInlineText({ restoreFocus: false }); });
+});
+syncTextStyleFlags();
+syncTextSettingsPanelFromToolbar();
 for (const id of ["brushAngleInput", "brushRoundnessInput", "brushSpacingInput",
   "brushSeedInput", "brushSizeJitterInput", "brushAngleJitterInput", "brushRoundnessJitterInput",
   "brushFlipXInput", "brushFlipYInput", "brushScatterInput", "brushScatterBothInput",

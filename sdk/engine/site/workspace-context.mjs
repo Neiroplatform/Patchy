@@ -73,9 +73,9 @@ const contexts = {
   shape: descriptor("draw", "Shape", ["shapeToolKindInput", "shapeToolFillInput",
     "shapeToolStrokeInput", "shapeToolStrokeWidthInput", "shapeToolSidesInput"], "shape-layer",
     "Drag on the canvas to create a vector rectangle, ellipse, line, polygon or star. Hold Shift to constrain proportions."),
-  text: descriptor("draw", "Text", ["textToolFontInput", "textToolSizeInput", "textToolColorInput",
-    "textToolBoldInput", "textToolItalicInput", "textSettingsButton"], "text-layer",
-    "Drag a text box on the canvas, then enter text. Character and Paragraph opens the complete editable settings."),
+  text: descriptor("draw", "Text", ["textToolFontInput", "textToolStyleInput", "textToolSizeInput",
+    "textToolColorInput", "textToolAlignmentInput", "textSettingsButton", "paragraphSettingsButton"], "text-layer",
+    "Click to type directly at that point, or drag a paragraph box. Text uses the current Character and Paragraph settings; Ctrl+Enter commits and Escape cancels."),
 };
 
 export const WORKSPACE_TOOL_CONTEXTS = Object.freeze(Object.fromEntries(

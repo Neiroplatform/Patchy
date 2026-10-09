@@ -364,6 +364,10 @@ try {
   assert.equal(await revision(), sampleRevision, "Eyedropper mutated the document");
 
   await selectTool("shapeToolButton");
+  assert.equal(await page.locator("#shapeToolKindInput").isVisible(), true,
+    "Shape did not expose a visible kind picker");
+  assert.ok((await page.locator("#shapeToolKindInput").boundingBox())?.width >= 120,
+    "Shape kind picker is not readable");
   await page.locator("#shapeToolKindInput").selectOption("star");
   await page.locator("#shapeToolSidesInput").fill("5");
   before = await revision();
@@ -375,32 +379,73 @@ try {
   await selectTool("textToolButton");
   await page.locator("#textToolFontInput").fill("Georgia");
   await page.locator("#textToolSizeInput").fill("28");
-  await page.locator("#textToolBoldInput").check();
-  await dragCanvas({ x: .1, y: .58 }, { x: .72, y: .82 });
+  await page.locator("#textToolStyleInput").selectOption("bold");
+  await page.locator("#textToolAlignmentInput").selectOption("2");
+  await page.click("#textSettingsButton");
+  assert.equal(await page.locator("#textSettingsPopover").isVisible(), true,
+    "Character settings did not open");
+  assert.equal(await page.locator("#characterSettingsTab").getAttribute("aria-selected"), "true");
+  await page.locator("#textToolPanelTrackingInput").fill("40");
+  await page.locator("#textToolPanelLeadingInput").fill("34");
+  await page.click("#paragraphSettingsTab");
+  assert.equal(await page.locator("#paragraphSettingsPanel").isVisible(), true,
+    "Paragraph settings did not open");
+  await page.locator('input[name="textToolPanelAlignment"][value="2"]').check();
+  await page.locator("#textToolPanelFirstIndentInput").fill("7");
+  await page.click("#closeTextSettingsButton");
+  const textCanvas = await page.locator("#documentCanvas").boundingBox();
+  assert.ok(textCanvas, "document canvas is not visible for text");
+  const clickX = textCanvas.x + textCanvas.width * .1;
+  const clickY = textCanvas.y + textCanvas.height * .58;
+  await page.mouse.click(clickX, clickY);
+  await page.waitForFunction(() => !document.querySelector("#inlineTextEditor")?.hidden);
+  const inlineBox = await page.locator("#inlineTextEditor").boundingBox();
+  assert.ok(inlineBox && Math.abs(inlineBox.x - clickX) < 3 && Math.abs(inlineBox.y - clickY) < 3,
+    `Text editor did not appear at the clicked point: ${JSON.stringify({ inlineBox, clickX, clickY })}`);
+  const inlineStyle = await page.locator("#inlineTextEditor").evaluate((node) => ({
+    family: node.style.fontFamily, size: node.style.fontSize, weight: node.style.fontWeight,
+    align: node.style.textAlign, tracking: node.style.letterSpacing,
+  }));
+  assert.match(inlineStyle.family, /Georgia/);
+  assert.equal(inlineStyle.weight, "700");
+  assert.equal(inlineStyle.align, "center");
+  assert.notEqual(inlineStyle.tracking, "0px");
+  await page.locator("#inlineTextEditor").fill("Editable browser text");
+  before = await revision();
+  await page.locator("#inlineTextEditor").press("Control+Enter");
+  await waitForMutation(before, "Creating text");
+  await page.waitForFunction(() => document.querySelector("#inlineTextEditor")?.hidden);
+  assert.equal(await page.locator("#errorBanner").isHidden(), true,
+    `Text surfaced ${await page.textContent("#errorMessage")}`);
+  await page.locator("#textLayerButton").evaluate((button) => button.click());
   await page.waitForFunction(() => document.querySelector("#textDialog")?.open);
   assert.equal(await page.locator("#textFontInput").inputValue(), "Georgia");
   assert.equal(await page.locator("#textSizeInput").inputValue(), "28");
-  await page.locator("#textValueInput").fill("Editable browser text");
-  await page.locator("#textTrackingInput").fill("40");
-  await page.locator("#textAlignmentInput").selectOption("2");
-  before = await revision();
-  await page.click("#commitTextButton");
-  await waitForMutation(before, "Creating text");
-  await page.waitForFunction(() => !document.querySelector("#textDialog")?.open);
-  assert.equal(await page.locator("#errorBanner").isHidden(), true,
-    `Text surfaced ${await page.textContent("#errorMessage")}`);
+  assert.equal(await page.locator("#textTrackingInput").inputValue(), "40");
+  assert.equal(await page.locator("#textLeadingInput").inputValue(), "34");
+  assert.equal(await page.locator("#textAlignmentInput").inputValue(), "2");
+  assert.equal(await page.locator("#textFirstIndentInput").inputValue(), "7");
+  await page.locator('#textDialog button.button[value="cancel"]').click();
 
   const layerCountBeforeSecondText = await page.locator("#layerList [data-layer-id]").count();
   await dragCanvas({ x: .74, y: .58 }, { x: .92, y: .76 });
-  await page.waitForFunction(() => document.querySelector("#textDialog")?.open);
-  assert.equal(await page.locator("#textDialogTitle").textContent(), "Create text layer",
-    "A new text gesture attempted to edit the selected text layer");
-  await page.locator("#textValueInput").fill("Second text layer");
+  await page.waitForFunction(() => !document.querySelector("#inlineTextEditor")?.hidden);
+  await page.locator("#inlineTextEditor").fill("Second text layer");
   before = await revision();
-  await page.click("#commitTextButton");
+  await page.locator("#inlineTextEditor").evaluate((node) => node.blur());
   await waitForMutation(before, "Creating text");
   assert.equal(await page.locator("#layerList [data-layer-id]").count(),
     layerCountBeforeSecondText + 1, "The second text gesture did not create a new layer");
+  const revisionBeforeCancel = await revision();
+  const layerCountBeforeCancel = await page.locator("#layerList [data-layer-id]").count();
+  await page.mouse.click(textCanvas.x + textCanvas.width * .48,
+    textCanvas.y + textCanvas.height * .55);
+  await page.waitForFunction(() => !document.querySelector("#inlineTextEditor")?.hidden);
+  await page.locator("#inlineTextEditor").fill("Cancel me");
+  await page.locator("#inlineTextEditor").press("Escape");
+  assert.equal(await revision(), revisionBeforeCancel, "Escape committed inline text");
+  assert.equal(await page.locator("#layerList [data-layer-id]").count(), layerCountBeforeCancel,
+    "Escape created an inline text layer");
 
   await page.click("#newButton");
   await page.waitForFunction(() =>

@@ -243,9 +243,9 @@ try {
     await clickToolPoints("penToolButton", [[.3, .3], [.7, .35], [.55, .72]]);
     await waitForMutation(before, "Creating Pen path");
     await dragTool("textToolButton", { x: .18, y: .58 }, { x: .72, y: .78 });
-    await page.waitForSelector("#textDialog[open]");
-    await page.fill("#textValueInput", "Icon QA");
-    await page.click("#commitTextButton");
+    await page.waitForSelector("#inlineTextEditor:not([hidden])");
+    await page.fill("#inlineTextEditor", "Icon QA");
+    await page.locator("#inlineTextEditor").press("Control+Enter");
     await page.waitForFunction(() => document.querySelectorAll(".layer-row").length === 2 &&
       document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
     { timeout: 30_000 });
