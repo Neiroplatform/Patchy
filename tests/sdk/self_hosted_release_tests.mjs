@@ -283,8 +283,10 @@ test("capability and legal pages preserve local-first and strict-CSP contracts",
     "source beta-guide smoke must publish its primary error before cleanup");
   assert.match(betaGuideSmoke, /BETA-GUIDE-SOURCE-TEARDOWN-TIMEOUT/,
     "source beta-guide smoke must bound browser-process cleanup");
-  assert.match(betaGuideSmoke, /assert\.equal\(acceptedDialogs, 0/,
-    "source beta-guide smoke must reject spurious clean-document confirmations");
+  assert.match(betaGuideSmoke, /const dialogsAfterBrushClose = acceptedDialogs/,
+    "source beta-guide smoke must record the one intentional dirty-document confirmation");
+  assert.match(betaGuideSmoke, /assert\.equal\(acceptedDialogs, dialogsAfterBrushClose/,
+    "source beta-guide smoke must reject spurious clean-document confirmations after that baseline");
   assert.match(browserVerifier, /externalRequests/);
   assert.match(browserVerifier, /forbiddenRequests/);
   assert.match(browserVerifier, /PATCHY_RELEASE_SOAK_DURATION_MS/);
