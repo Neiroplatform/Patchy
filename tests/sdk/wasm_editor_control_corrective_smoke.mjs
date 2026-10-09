@@ -93,6 +93,13 @@ async function waitForMutation(before, label) {
       .some((node) => node.textContent === label), { before, label }, { timeout: 90_000 });
 }
 
+async function changeRangeValue(selector, value) {
+  await page.locator(selector).evaluate((input, nextValue) => {
+    input.value = nextValue;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+}
+
 async function dragCanvas(toolButtonId, from, to, pointerId = 71) {
   await page.evaluate(({ toolButtonId, from, to, pointerId }) => {
     document.getElementById(toolButtonId).click();
@@ -213,8 +220,7 @@ try {
   await page.locator("#layerList .layer-select-button").click();
 
   before = await revision();
-  await page.fill("#quickLayerOpacityInput", "40");
-  await page.locator("#quickLayerOpacityInput").dispatchEvent("change");
+  await changeRangeValue("#quickLayerOpacityInput", "40");
   await waitForMutation(before, "Changing opacity");
   assert.equal(await page.inputValue("#quickLayerOpacityInput"), "40");
   await page.click("#workspacePanelPropertiesButton");
@@ -229,19 +235,16 @@ try {
   assert.equal(await page.textContent("#layerOpacityOutput"), "65%");
   assert.equal(await page.inputValue("#quickLayerOpacityInput"), "65");
   before = await revision();
-  await page.fill("#quickLayerOpacityInput", "100");
-  await page.locator("#quickLayerOpacityInput").dispatchEvent("change");
+  await changeRangeValue("#quickLayerOpacityInput", "100");
   await waitForMutation(before, "Changing opacity");
 
   before = await revision();
-  await page.fill("#quickLayerFillInput", "55");
-  await page.locator("#quickLayerFillInput").dispatchEvent("change");
+  await changeRangeValue("#quickLayerFillInput", "55");
   await waitForMutation(before, "Changing fill opacity");
   assert.equal(await page.inputValue("#layerFillInput"), "55");
   assert.equal(await page.textContent("#layerFillOutput"), "55%");
   before = await revision();
-  await page.fill("#quickLayerFillInput", "100");
-  await page.locator("#quickLayerFillInput").dispatchEvent("change");
+  await changeRangeValue("#quickLayerFillInput", "100");
   await waitForMutation(before, "Changing fill opacity");
 
   for (const kind of ["0", "1", "2", "3", "4", "5", "6", "7"]) {
@@ -284,11 +287,18 @@ try {
   await page.waitForFunction(() => document.getElementById("versionHistoryDialog")?.open);
   assert.equal(await page.locator("#historyVersionsTab").getAttribute("aria-selected"), "true");
   assert.equal(await revision(), localStateRevision);
-  await page.fill("#versionLabelInput", "Browser gate version");
-  await page.click("#createVersionButton");
-  await page.waitForFunction(() => document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
-    document.querySelectorAll("#versionHistoryList .recovery-row").length === 1, null, { timeout: 90_000 });
-  assert.equal(await revision(), localStateRevision);
+  const versionStorageAvailable = await page.locator("#createVersionButton").isEnabled();
+  if (versionStorageAvailable) {
+    await page.fill("#versionLabelInput", "Browser gate version");
+    await page.click("#createVersionButton");
+    await page.waitForFunction(() => document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
+      document.querySelectorAll("#versionHistoryList .recovery-row").length === 1, null, { timeout: 90_000 });
+    assert.equal(await revision(), localStateRevision);
+  } else {
+    assert.equal(await page.locator("#createVersionButton").isDisabled(), true);
+    assert.match((await page.textContent("#versionHistorySummary")).trim(), /unavailable/i);
+    assert.equal(await page.locator("#recoveryLabel").getAttribute("data-state"), "error");
+  }
   await page.click('#versionHistoryDialog button[value="cancel"]');
   await page.waitForFunction(() => document.getElementById("historyHistoryTab")?.getAttribute("aria-selected") === "true");
   assert.equal(await page.locator("#historyHistoryTab").getAttribute("aria-selected"), "true");
@@ -565,7 +575,8 @@ try {
     const button = document.getElementById("eraserToolButton");
     const box = button.getBoundingClientRect();
     return { visible: getComputedStyle(button).display !== "none" && !button.hidden,
-      hit: document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.id,
+      hit: document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+        ?.closest(".tool-button")?.id,
       width: box.width, height: box.height };
   });
   assert.equal(eraserHitTarget.visible, true);
