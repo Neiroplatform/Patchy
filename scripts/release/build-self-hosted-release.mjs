@@ -27,6 +27,7 @@ const REQUIRED_FILES = Object.freeze([
   "capabilities.html",
   "capabilities.mjs",
   "command-surface.mjs",
+  "authoring-deck.mjs",
   "workspace-context.mjs",
   "reference-workflow.mjs",
   "editor.css",

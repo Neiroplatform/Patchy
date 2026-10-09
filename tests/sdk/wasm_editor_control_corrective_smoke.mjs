@@ -280,6 +280,78 @@ try {
   assert.equal(await page.inputValue("#brushPresetSelect"), "custom");
   assert.equal(await page.textContent("#brushOpacityOutput"), "45%");
   await page.selectOption("#brushPresetSelect", "hard-round");
+
+  await page.click("#brushSettingsButton");
+  assert.equal(await page.locator("#workspacePanelControls").isVisible(), true);
+  assert.equal(await page.locator("#authoringBrushPanel").isVisible(), true);
+  assert.equal(await page.locator("#authoringBrushTab").getAttribute("aria-selected"), "true");
+  await page.click("#authoringColorTab");
+  assert.equal(await page.locator("#authoringColorPanel").isVisible(), true);
+  await page.locator('#authoringSwatches [data-color="#ff0000"]').click();
+  assert.equal(await page.inputValue("#authoringForegroundInput"), "#ff0000");
+  assert.equal(await page.inputValue("#foregroundSwatchInput"), "#ff0000");
+  assert.equal(await page.inputValue("#brushColorInput"), "#ff0000");
+  await page.locator('#authoringSwatches [data-color="#0057ff"]').click({ modifiers: ["Alt"] });
+  assert.equal(await page.inputValue("#authoringBackgroundInput"), "#0057ff");
+  assert.equal(await page.inputValue("#backgroundSwatchInput"), "#0057ff");
+  assert.ok(await page.locator("#authoringRecentSwatches [data-color]").count() >= 2);
+  if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
+    await mkdir(process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({ path: `${process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR}/${browserName}-authoring-color.png` });
+  }
+
+  await page.locator("#authoringColorTab").focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await page.locator("#authoringBrushTab").getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator("#brushSettingsDialog").isVisible(), true);
+  assert.equal(await page.locator(".brush-section-navigation [role=tab]").count(), 5);
+  assert.equal(await page.locator(".brush-section-body > section:visible").count(), 1);
+  await page.locator('.brush-section-navigation [role=tab]').first().focus();
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await page.locator("#brush-section-1").isVisible(), true);
+  const previewBefore = await page.locator("#authoringBrushPreview").getAttribute("data-preview-signature");
+  await page.locator("#brushAngleInput").evaluate((input) => {
+    input.value = "35"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const previewAfter = await page.locator("#authoringBrushPreview").getAttribute("data-preview-signature");
+  assert.notEqual(previewAfter, previewBefore);
+  await page.locator("#brushSoftnessInput").evaluate((input) => {
+    input.value = "40"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  assert.match(await page.locator("#authoringBrushPreview").getAttribute("data-preview-signature"), /^24:60:/);
+  await page.locator('.brush-section-navigation [role=tab]').nth(3).click();
+  assert.equal(await page.locator("#brush-section-3").isVisible(), true);
+  assert.equal(await page.locator('.brush-section-navigation [role=tab]').nth(3).getAttribute("data-enabled"), "false");
+  await page.check("#brushTextureEnabledInput");
+  assert.equal(await page.locator('.brush-section-navigation [role=tab]').nth(3).getAttribute("data-enabled"), "true");
+  if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
+    await page.screenshot({ path: `${process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR}/${browserName}-authoring-brush.png` });
+  }
+
+  if (await page.locator("#textToolButton").isHidden()) {
+    await page.click('[data-tool-group="draw"] .tool-group-toggle');
+  }
+  await page.click("#textToolButton");
+  await page.click("#textSettingsButton");
+  assert.equal(await page.locator("#authoringTypeTab").getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator("#textSettingsPopover").isVisible(), true);
+  assert.equal(await page.locator("#characterSettingsPanel").isVisible(), true);
+  await page.click("#paragraphSettingsTab");
+  assert.equal(await page.locator("#paragraphSettingsPanel").isVisible(), true);
+  const controlDeckLayout = await page.evaluate(() => {
+    const inspector = document.getElementById("inspector").getBoundingClientRect();
+    const panel = document.getElementById("workspacePanelControls").getBoundingClientRect();
+    return { inspector: { left: inspector.left, right: inspector.right, top: inspector.top, bottom: inspector.bottom },
+      panel: { left: panel.left, right: panel.right, top: panel.top, bottom: panel.bottom } };
+  });
+  assert.ok(controlDeckLayout.panel.left >= controlDeckLayout.inspector.left &&
+    controlDeckLayout.panel.right <= controlDeckLayout.inspector.right + .5 &&
+    controlDeckLayout.panel.top >= controlDeckLayout.inspector.top &&
+    controlDeckLayout.panel.bottom <= controlDeckLayout.inspector.bottom + .5, JSON.stringify(controlDeckLayout));
+  if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
+    await page.screenshot({ path: `${process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR}/${browserName}-authoring-type.png` });
+  }
+
   const paintedBefore = await canvasPixel(80, 50);
   before = await revision();
   await dragCanvas("brushToolButton", { x: .48, y: .5 }, { x: .52, y: .5 }, 72);
@@ -505,7 +577,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties authoring=color-brush-type-docked-preview brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,

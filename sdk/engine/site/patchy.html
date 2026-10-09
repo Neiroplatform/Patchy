@@ -390,6 +390,7 @@
         <div class="workspace-panel-tabs" role="tablist" aria-label="Workspace panels">
           <button id="workspacePanelLayersButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelLayers" data-panel-target="workspacePanelLayers" data-primary-tab hidden tabindex="-1">Layers</button>
           <button id="workspacePanelPropertiesButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelProperties" data-panel-target="workspacePanelProperties" tabindex="-1">Properties</button>
+          <button id="workspacePanelControlsButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelControls" data-panel-target="workspacePanelControls" tabindex="-1">Controls</button>
           <button id="workspacePanelHistoryButton" type="button" role="tab" aria-selected="true" aria-controls="workspacePanelHistory" data-panel-target="workspacePanelHistory">History</button>
           <button id="workspacePanelStructureButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelStructure" data-panel-target="workspacePanelStructure" tabindex="-1">Channels</button>
           <button id="workspacePanelInfoButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelInfo" data-panel-target="workspacePanelInfo" tabindex="-1">Info</button>
@@ -477,6 +478,30 @@
             <button id="editLayerStyleButton" type="button" disabled>Edit effects…</button>
             <button id="editLayerTypeButton" type="button" disabled hidden>Edit layer contents…</button>
           </div>
+        </section>
+        <section class="panel authoring-panel" id="workspacePanelControls" role="tabpanel" aria-labelledby="workspacePanelControlsButton" data-workspace-panel data-secondary-panel hidden>
+          <header class="panel-header"><div><p class="eyebrow">AUTHORING</p><h2>Controls</h2></div></header>
+          <div class="authoring-tabs" role="tablist" aria-label="Authoring controls">
+            <button id="authoringColorTab" type="button" role="tab" aria-selected="true" aria-controls="authoringColorPanel" data-authoring-tab="color">Color</button>
+            <button id="authoringBrushTab" type="button" role="tab" aria-selected="false" aria-controls="authoringBrushPanel" data-authoring-tab="brush" tabindex="-1">Brush</button>
+            <button id="authoringTypeTab" type="button" role="tab" aria-selected="false" aria-controls="authoringTypePanel" data-authoring-tab="type" tabindex="-1">Type</button>
+          </div>
+          <section class="authoring-pane color-control-panel" id="authoringColorPanel" role="tabpanel" aria-labelledby="authoringColorTab" data-authoring-pane="color">
+            <div class="color-role-controls">
+              <label><span>Foreground</span><input id="authoringForegroundInput" type="color" value="#111111"></label>
+              <button id="authoringSwapColorsButton" type="button" aria-label="Swap colors" title="Swap colors">⇄</button>
+              <label><span>Background</span><input id="authoringBackgroundInput" type="color" value="#ffffff"></label>
+              <button id="authoringDefaultColorsButton" type="button">Default colors</button>
+            </div>
+            <div class="swatch-section"><header><strong>Recent</strong><small>Click: foreground · Alt/Command: background</small></header><div class="swatch-grid swatch-grid-recent" id="authoringRecentSwatches" aria-label="Recent colors"></div></div>
+            <div class="swatch-section"><header><strong>Swatches</strong></header><div class="swatch-grid" id="authoringSwatches" aria-label="Color swatches"></div></div>
+          </section>
+          <section class="authoring-pane" id="authoringBrushPanel" role="tabpanel" aria-labelledby="authoringBrushTab" data-authoring-pane="brush" hidden>
+            <div id="authoringBrushHost"></div>
+          </section>
+          <section class="authoring-pane" id="authoringTypePanel" role="tabpanel" aria-labelledby="authoringTypeTab" data-authoring-pane="type" hidden>
+            <div id="authoringTypeHost"></div>
+          </section>
         </section>
         <section class="panel history-panel" id="workspacePanelHistory" role="tabpanel" aria-labelledby="workspacePanelHistoryButton" data-workspace-panel data-secondary-panel>
           <header class="panel-header">

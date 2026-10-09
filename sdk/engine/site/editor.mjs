@@ -20,6 +20,7 @@ import { starterDocumentRequest, starterPreset } from "./starter-model.mjs";
 import { installCommandSurface } from "./command-surface.mjs";
 import { installWorkspaceContext } from "./workspace-context.mjs";
 import { openFileKind } from "./reference-workflow.mjs";
+import { installAuthoringDeck } from "./authoring-deck.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -39,6 +40,10 @@ localizer.localize(document);
 installDialogFocusReturn(document);
 const commandSurface = installCommandSurface(document, { translate: (value) => localizer.text(value) });
 const workspaceContext = installWorkspaceContext(document, { translate: (value) => localizer.text(value) });
+const authoringDeck = installAuthoringDeck(document, {
+  activateWorkspacePanel: () => commandSurface?.workspacePanels?.activate($("workspacePanelControlsButton")),
+  translate: (value) => localizer.text(value),
+});
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"), ".tool-button:not([hidden])");
 const inspectorResizer = $("inspectorResizer");
 const setInspectorWidth = (width) => document.documentElement.style.setProperty(
@@ -252,6 +257,12 @@ function revealLayerProperties() {
 }
 
 function openContextEditor(dialogId) {
+  if (dialogId === "brushSettingsDialog") {
+    authoringDeck?.reveal("brush");
+    queueMicrotask(() => $(dialogId).querySelector(
+      "input:not([disabled]), select:not([disabled]), textarea:not([disabled])")?.focus());
+    return;
+  }
   revealLayerProperties();
   for (const id of contextualEditorIds) {
     const dialog = $(id);
@@ -5869,6 +5880,7 @@ function selectTextSettingsTab(panel) {
 function openTextSettings(panel) {
   syncTextSettingsPanelFromToolbar();
   selectTextSettingsTab(panel);
+  authoringDeck?.reveal("type");
   $("textSettingsPopover").hidden = false;
   $("textSettingsButton").setAttribute("aria-expanded", String(panel !== "paragraph"));
   $("paragraphSettingsButton").setAttribute("aria-expanded", String(panel === "paragraph"));

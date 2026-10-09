@@ -57,6 +57,7 @@ const GROUPS = [
     ["togglePanelsButton", "Toggle panels"],
     ["workspacePanelLayersButton", "Layers"],
     ["workspacePanelPropertiesButton", "Properties"],
+    ["workspacePanelControlsButton", "Controls"],
     ["workspacePanelHistoryButton", "History"],
     ["workspacePanelStructureButton", "Channels and paths"],
     ["workspacePanelInfoButton", "Document info"],
