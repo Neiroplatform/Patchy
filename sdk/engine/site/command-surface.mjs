@@ -55,7 +55,9 @@ const GROUPS = [
   ] },
   { id: "window", label: "Window", commands: [
     ["togglePanelsButton", "Toggle panels"],
-    ["workspacePanelLayersButton", "Layers"],
+    ["documentStructureLayersTab", "Layers"],
+    ["documentStructureChannelsTab", "Channels"],
+    ["documentStructurePathsTab", "Paths"],
     ["workspacePanelPropertiesButton", "Properties"],
     ["workspacePanelControlsButton", "Controls"],
     ["authoringColorLibraryTab", "Color"],
@@ -63,7 +65,6 @@ const GROUPS = [
     ["authoringGradientsLibraryTab", "Gradients"],
     ["authoringPatternsLibraryTab", "Patterns"],
     ["workspacePanelHistoryButton", "History"],
-    ["workspacePanelStructureButton", "Channels and paths"],
     ["workspacePanelInfoButton", "Navigator, histogram and info"],
   ] },
   { id: "help", label: "Help", commands: [

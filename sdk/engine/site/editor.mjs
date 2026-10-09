@@ -23,6 +23,7 @@ import { openFileKind } from "./reference-workflow.mjs";
 import { installAuthoringDeck } from "./authoring-deck.mjs";
 import { installWorkspaceDeck } from "./workspace-deck.mjs";
 import { installNavigatorPanel } from "./navigator-panel.mjs";
+import { installStructureDeck } from "./structure-deck.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -41,6 +42,9 @@ const diagnostics = new BrowserDiagnosticRecorder({ runtime: collectRuntimeProfi
 localizer.localize(document);
 installDialogFocusReturn(document);
 const commandSurface = installCommandSurface(document, { translate: (value) => localizer.text(value) });
+const structureDeck = installStructureDeck(document, {
+  activateLayersPanel: () => commandSurface?.workspacePanels?.activate($("workspacePanelLayersButton")),
+});
 const workspaceContext = installWorkspaceContext(document, { translate: (value) => localizer.text(value) });
 const authoringDeck = installAuthoringDeck(document, {
   activateWorkspacePanel: () => commandSurface?.workspacePanels?.activate($("workspacePanelControlsButton")),

@@ -2,6 +2,7 @@ const RU = new Map(Object.entries({
   "Patchy editor home": "Главная редактора Patchy",
   "local editor": "локальный редактор",
   "Document actions": "Действия с документом",
+  "Document structure": "Структура документа",
   "Application menu": "Меню приложения",
   "File": "Файл",
   "Edit": "Правка",

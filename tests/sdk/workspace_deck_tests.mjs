@@ -22,8 +22,8 @@ test("workspace persistence fails soft and retains bounded custom panel state", 
     mode: "painting", panel: "workspacePanelControls", authoring: "brush",
   });
   assert.deepEqual(normalizeWorkspaceSnapshot({
-    mode: "custom", panel: "workspacePanelStructure", authoring: "color",
-  }), { mode: "custom", panel: "workspacePanelStructure", authoring: "color" });
+    mode: "custom", panel: "workspacePanelHistory", authoring: "color",
+  }), { mode: "custom", panel: "workspacePanelHistory", authoring: "color" });
   assert.deepEqual(normalizeWorkspaceSnapshot({ mode: "custom", panel: "../../etc", authoring: "hostile" }), {
     mode: "editing", panel: "workspacePanelProperties", authoring: null,
   });

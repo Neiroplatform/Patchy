@@ -525,6 +525,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .authoring-panel .text-settings-tabs button { min-width: 0; flex: 1; }
 .authoring-panel .text-settings-panel { grid-template-columns: 1fr; padding: 10px 0; }
 .layers-panel { grid-row: 1; overflow: hidden; }
+.document-structure-tabs { flex: 0 0 32px; display: grid; grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--line); background: #111416; }
+.document-structure-tabs button { min-width: 0; border: 0; border-bottom: 2px solid transparent;
+  color: var(--text-faint); background: transparent; font-size: 10px; cursor: pointer; }
+.document-structure-tabs button:hover { color: var(--text); background: #ffffff08; }
+.document-structure-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface-1); }
+.document-structure-pane { min-height: 0; flex: 1 1 auto; overflow: auto; }
+.document-structure-layers { display: flex; flex-direction: column; overflow: hidden; }
 [data-secondary-panel] { grid-row: 4; }
 .panel + .panel { border-top: 1px solid var(--line); }
 .panel-header { min-height: 36px; padding: 6px 9px; display: flex; align-items: center; justify-content: space-between; }
@@ -543,14 +551,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .layer-actions button:disabled { opacity: .35; cursor: not-allowed; }
 .layer-actions select:disabled { opacity: .35; }
 .layer-actions button:last-child:nth-child(odd) { grid-column: 1 / -1; }
-.layers-panel > .layer-actions > * { display: none; }
-.layers-panel > .layer-actions > :is(#createPixelLayerButton, #groupLayerButton, #toggleClippingButton,
+.document-structure-layers > .layer-actions > * { display: none; }
+.document-structure-layers > .layer-actions > :is(#createPixelLayerButton, #groupLayerButton, #toggleClippingButton,
   #createMaskButton, #mergeLayersButton, #removeLayerButton) { display: grid; }
-.layers-panel > .layer-actions { flex: 0 0 auto; grid-template-columns: repeat(6, minmax(0, 1fr));
+.document-structure-layers > .layer-actions { flex: 0 0 auto; grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 2px; padding: 5px; border-top: 1px solid var(--line); background: var(--surface-0); }
-.layers-panel > .layer-actions button { min-height: 40px; grid-template-rows: 18px 10px; place-items: center;
+.document-structure-layers > .layer-actions button { min-height: 40px; grid-template-rows: 18px 10px; place-items: center;
   padding: 3px 2px; overflow: hidden; font-size: 0; line-height: 1; white-space: nowrap; }
-.layers-panel > .layer-actions button:disabled { opacity: .55; }
+.document-structure-layers > .layer-actions button:disabled { opacity: .55; }
 .layer-action-icon { color: var(--text); font-size: 15px; }
 #createPixelLayerButton .layer-action-icon { color: var(--accent); }
 .layer-action-label { max-width: 100%; overflow: hidden; color: var(--text-faint); font-size: 8px;
@@ -561,10 +569,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 #createMaskButton { order: 4; }
 #mergeLayersButton { order: 5; }
 #removeLayerButton { order: 6; }
-.layers-panel > .panel-header { order: 0; }
-.layers-panel > .layer-quick-controls { order: 1; }
-.layers-panel > .layer-list, .layers-panel > .panel-empty { order: 2; }
-.layers-panel > .layer-actions { order: 3; }
+.document-structure-layers > .panel-header { order: 0; }
+.document-structure-layers > .layer-quick-controls { order: 1; }
+.document-structure-layers > .layer-list, .document-structure-layers > .panel-empty { order: 2; }
+.document-structure-layers > .layer-actions { order: 3; }
 .layers-panel .layer-list { flex: 1 1 auto; }
 .layer-list { min-height: 0; overflow: auto; padding: 0 7px 10px; overflow-anchor: none; }
 .layer-spacer { width: 1px; pointer-events: none; }
@@ -597,9 +605,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .history-row[aria-selected="true"] .history-marker::after { display: none; }
 .history-row[aria-selected="true"] .history-marker { color: var(--accent); }
 .history-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.structure-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 12px 12px; color: var(--text-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
-.structure-lists button { display: block; width: 100%; margin-top: 4px; padding: 5px; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-1); color: var(--text-muted); font-size: 10px; text-transform: none; letter-spacing: 0; }
-.structure-lists button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+.structure-list { padding: 0 12px 12px; color: var(--text-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.structure-list button { display: block; width: 100%; margin-top: 4px; padding: 5px; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-1); color: var(--text-muted); font-size: 10px; text-transform: none; letter-spacing: 0; }
+.structure-list button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+.structure-primary-actions { padding-top: 10px; }
 .structure-editor { border-top: 1px solid var(--line); padding-top: 10px; }
 .path-anchor-editor { padding: 0 12px 12px; }
 .path-anchor-editor button { align-self: end; min-height: 30px; }

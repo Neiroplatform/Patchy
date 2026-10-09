@@ -184,7 +184,7 @@ try {
 
   const footer = await page.evaluate(() => {
     const panel = document.getElementById("workspacePanelLayers").getBoundingClientRect();
-    const actions = document.querySelector("#workspacePanelLayers > .layer-actions").getBoundingClientRect();
+    const actions = document.querySelector("#documentStructureLayersPane > .layer-actions").getBoundingClientRect();
     const create = document.getElementById("createPixelLayerButton").getBoundingClientRect();
     const remove = document.getElementById("removeLayerButton").getBoundingClientRect();
     return { panel: { top: panel.top, bottom: panel.bottom }, actions: { top: actions.top, bottom: actions.bottom },
@@ -259,11 +259,20 @@ try {
   assert.equal(await restoredWorkspacePage.locator("#authoringBrushPanel").isVisible(), true);
   assert.equal(await restoredWorkspacePage.locator("#canvasViewport").getAttribute("data-tool"), toolBeforeWorkspace);
   await restoredWorkspacePage.close();
-  await page.click("#workspacePanelStructureButton");
-  assert.equal(await page.inputValue("#workspaceModeSelect"), "custom");
-  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("patchy.workspace-deck.v1"))).panel,
-    "workspacePanelStructure");
+  const structureRevision = await revision();
+  await page.click("#documentStructureChannelsTab");
+  assert.equal(await page.locator("#workspacePanelLayers").isVisible(), true);
+  assert.equal(await page.locator("#documentStructureChannelsPane").isVisible(), true);
+  await page.locator("#documentStructureChannelsTab").press("ArrowRight");
+  assert.equal(await page.locator("#documentStructurePathsTab").getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator("#documentStructurePathsPane").isVisible(), true);
+  await page.locator("#documentStructurePathsTab").press("Home");
+  assert.equal(await page.locator("#documentStructureLayersTab").getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator("#canvasViewport").getAttribute("data-tool"), toolBeforeWorkspace);
+  assert.equal(await revision(), structureRevision);
   await page.click("#workspaceResetButton");
+  assert.equal(await page.inputValue("#workspaceModeSelect"), "painting");
+  await page.selectOption("#workspaceModeSelect", "editing");
   assert.equal(await page.inputValue("#workspaceModeSelect"), "editing");
   assert.equal(await page.locator("#workspacePanelProperties").isVisible(), true);
   await page.selectOption("#workspaceModeSelect", "typography");
@@ -277,8 +286,14 @@ try {
   await page.selectOption("#workspaceModeSelect", "review");
   assert.equal(await page.locator('[data-workspace-panel]:visible').count(), 1);
   assert.equal(await page.locator("#workspacePanelInfo").isVisible(), true);
+  await page.click('[aria-controls="commandMenu-window"]');
+  await page.click('#commandMenu-window [data-command-target="documentStructurePathsTab"]');
+  assert.equal(await page.locator('[data-workspace-panel]:visible').count(), 1);
+  assert.equal(await page.locator("#workspacePanelLayers").isVisible(), true);
+  assert.equal(await page.locator("#documentStructurePathsPane").isVisible(), true);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.selectOption("#workspaceModeSelect", "painting");
+  await page.click("#documentStructureLayersTab");
   if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
     await mkdir(process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR, { recursive: true });
     await page.screenshot({ path: `${process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR}/${browserName}-workspace-painting.png` });
@@ -596,7 +611,24 @@ try {
   assert.ok(selectedPixel[3] > 0, `selected area lost: ${selectedPixel}`);
   assert.equal(outsidePixel[3], 0, `copy/paste leaked the full source layer: ${outsidePixel}`);
 
-  await page.click("#workspacePanelStructureButton");
+  await page.click("#documentStructureChannelsTab");
+  assert.equal(await page.locator("#saveChannelButton").isEnabled(), true);
+  before = await revision();
+  await page.click("#saveChannelButton");
+  await waitForMutation(before, "Saving alpha channel");
+  assert.equal(await page.locator("#channelList button").count(), 1);
+  before = await revision();
+  await page.locator("#channelList button").click();
+  await waitForMutation(before, "Loading channel selection");
+  assert.equal(await page.locator("#channelInvertButton").isEnabled(), true);
+  before = await revision();
+  await page.click("#channelInvertButton");
+  await waitForMutation(before, "Inverting channel");
+  before = await revision();
+  await page.click("#channelDeleteButton");
+  await waitForMutation(before, "Deleting channel");
+  assert.equal(await page.locator("#channelList button").count(), 0);
+  await page.click("#documentStructurePathsTab");
   assert.equal(await page.locator("#pathSelectionButton").isEnabled(), true);
   assert.equal(await page.locator("#pathStrokeButton").isEnabled(), true);
   assert.equal(await page.locator("#pathFillButton").isEnabled(), true);

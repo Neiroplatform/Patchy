@@ -403,10 +403,15 @@
           <button id="workspacePanelPropertiesButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelProperties" data-panel-target="workspacePanelProperties" tabindex="-1">Properties</button>
           <button id="workspacePanelControlsButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelControls" data-panel-target="workspacePanelControls" tabindex="-1">Controls</button>
           <button id="workspacePanelHistoryButton" type="button" role="tab" aria-selected="true" aria-controls="workspacePanelHistory" data-panel-target="workspacePanelHistory">History</button>
-          <button id="workspacePanelStructureButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelStructure" data-panel-target="workspacePanelStructure" tabindex="-1">Channels</button>
           <button id="workspacePanelInfoButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelInfo" data-panel-target="workspacePanelInfo" tabindex="-1">Navigator</button>
         </div>
         <section class="panel layers-panel" id="workspacePanelLayers" role="tabpanel" aria-labelledby="workspacePanelLayersButton" data-workspace-panel data-primary-panel>
+          <div class="document-structure-tabs" role="tablist" aria-label="Document structure">
+            <button id="documentStructureLayersTab" type="button" role="tab" aria-selected="true" aria-controls="documentStructureLayersPane" data-structure-tab="layers">Layers</button>
+            <button id="documentStructureChannelsTab" type="button" role="tab" aria-selected="false" aria-controls="documentStructureChannelsPane" data-structure-tab="channels" tabindex="-1">Channels</button>
+            <button id="documentStructurePathsTab" type="button" role="tab" aria-selected="false" aria-controls="documentStructurePathsPane" data-structure-tab="paths" tabindex="-1">Paths</button>
+          </div>
+          <section class="document-structure-pane document-structure-layers" id="documentStructureLayersPane" role="tabpanel" aria-labelledby="documentStructureLayersTab" data-structure-pane="layers">
           <header class="panel-header">
             <div><p class="eyebrow">STRUCTURE</p><h2>Layers</h2></div>
             <span class="layer-count" id="layerCount">0</span>
@@ -458,9 +463,58 @@
             <button type="button" id="invertMaskButton" disabled>Invert mask</button>
             <button type="button" id="removeMaskButton" disabled>Remove mask</button>
             <button type="button" id="createVectorMaskButton" disabled>Vector mask</button>
+            <button type="button" id="rasterizeLayerButton" disabled>Rasterize layer</button>
+            <button type="button" id="mergeVisibleButton" disabled>Merge visible copy</button>
           </div>
           <div class="layer-list" id="layerList" role="list" aria-label="Layers"></div>
           <div class="panel-empty" id="layersEmpty">Open a document to inspect its layers.</div>
+          </section>
+          <section class="document-structure-pane" id="documentStructureChannelsPane" role="tabpanel" aria-labelledby="documentStructureChannelsTab" data-structure-pane="channels" hidden>
+            <div class="layer-actions structure-primary-actions">
+              <button id="invertSelectionButton" type="button" disabled>Invert selection</button>
+              <button id="expandSelectionButton" type="button" disabled>Expand 4 px</button>
+              <button id="contractSelectionButton" type="button" disabled>Contract 4 px</button>
+              <button id="borderSelectionButton" type="button" disabled>Border 4 px</button>
+              <button id="growSelectionButton" type="button" disabled>Grow by color</button>
+              <button id="similarSelectionButton" type="button" disabled>Select similar</button>
+              <button id="smoothSelectionButton" type="button" disabled>Select and Mask…</button>
+              <button id="saveChannelButton" type="button" disabled>Save channel</button>
+            </div>
+            <div class="structure-list"><span>Channels</span><div id="channelList"></div></div>
+            <div class="structure-editor">
+              <div class="layer-actions">
+                <button id="channelRenameButton" type="button" disabled>Rename channel</button>
+                <button id="channelInvertButton" type="button" disabled>Invert channel</button>
+                <button id="channelUpButton" type="button" disabled>Channel up</button>
+                <button id="channelDownButton" type="button" disabled>Channel down</button>
+                <button id="channelDeleteButton" type="button" disabled>Delete channel</button>
+              </div>
+            </div>
+          </section>
+          <section class="document-structure-pane" id="documentStructurePathsPane" role="tabpanel" aria-labelledby="documentStructurePathsTab" data-structure-pane="paths" hidden>
+            <div class="layer-actions structure-primary-actions">
+              <button id="savePathButton" type="button" disabled>Save path</button>
+            </div>
+            <div class="structure-list"><span>Paths</span><div id="pathList"></div></div>
+            <div class="structure-editor">
+              <div class="layer-actions">
+                <button id="pathRenameButton" type="button" disabled>Rename path</button>
+                <button id="pathClipButton" type="button" disabled>Toggle clipping</button>
+                <button id="pathUpButton" type="button" disabled>Path up</button>
+                <button id="pathDownButton" type="button" disabled>Path down</button>
+                <button id="pathDeleteButton" type="button" disabled>Delete path</button>
+                <button id="pathSelectionButton" type="button" disabled>Make selection</button>
+                <button id="pathFillButton" type="button" disabled>Fill path</button>
+                <button id="pathStrokeButton" type="button" disabled>Stroke path</button>
+                <button id="pathVectorMaskButton" type="button" disabled>Vector mask</button>
+              </div>
+              <div class="field-row path-anchor-editor">
+                <label><span>First anchor X</span><input id="pathAnchorXInput" type="number" step="0.25" disabled></label>
+                <label><span>First anchor Y</span><input id="pathAnchorYInput" type="number" step="0.25" disabled></label>
+                <button id="pathAnchorApplyButton" type="button" disabled>Apply anchor</button>
+              </div>
+            </div>
+          </section>
         </section>
         <section class="panel properties-panel" id="workspacePanelProperties" role="tabpanel" aria-labelledby="workspacePanelPropertiesButton" data-workspace-panel data-secondary-panel hidden>
           <header class="panel-header"><div><p class="eyebrow">APPEARANCE</p><h2 id="propertiesTitle">Selected layer</h2></div></header>
@@ -539,46 +593,6 @@
           </header>
           <div class="history-list" id="historyList" role="listbox" aria-label="Document history"></div>
           <div class="panel-empty" id="historyEmpty">Edit the document to build history.</div>
-        </section>
-        <section class="panel structure-panel" id="workspacePanelStructure" role="tabpanel" aria-labelledby="workspacePanelStructureButton" data-workspace-panel data-secondary-panel hidden>
-          <header class="panel-header"><div><p class="eyebrow">CHANNELS &amp; PATHS</p><h2>Structure</h2></div></header>
-          <div class="layer-actions">
-            <button id="invertSelectionButton" type="button" disabled>Invert selection</button>
-            <button id="expandSelectionButton" type="button" disabled>Expand 4 px</button>
-            <button id="contractSelectionButton" type="button" disabled>Contract 4 px</button>
-            <button id="borderSelectionButton" type="button" disabled>Border 4 px</button>
-            <button id="growSelectionButton" type="button" disabled>Grow by color</button>
-            <button id="similarSelectionButton" type="button" disabled>Select similar</button>
-            <button id="smoothSelectionButton" type="button" disabled>Select and Mask…</button>
-            <button id="saveChannelButton" type="button" disabled>Save channel</button>
-            <button id="savePathButton" type="button" disabled>Save path</button>
-            <button id="rasterizeLayerButton" type="button" disabled>Rasterize layer</button>
-            <button id="mergeVisibleButton" type="button" disabled>Merge visible copy</button>
-          </div>
-          <div class="structure-lists"><div><span>Channels</span><div id="channelList"></div></div><div><span>Paths</span><div id="pathList"></div></div></div>
-          <div class="structure-editor">
-            <div class="layer-actions">
-              <button id="channelRenameButton" type="button" disabled>Rename channel</button>
-              <button id="channelInvertButton" type="button" disabled>Invert channel</button>
-              <button id="channelUpButton" type="button" disabled>Channel up</button>
-              <button id="channelDownButton" type="button" disabled>Channel down</button>
-              <button id="channelDeleteButton" type="button" disabled>Delete channel</button>
-              <button id="pathRenameButton" type="button" disabled>Rename path</button>
-              <button id="pathClipButton" type="button" disabled>Toggle clipping</button>
-              <button id="pathUpButton" type="button" disabled>Path up</button>
-              <button id="pathDownButton" type="button" disabled>Path down</button>
-              <button id="pathDeleteButton" type="button" disabled>Delete path</button>
-              <button id="pathSelectionButton" type="button" disabled>Make selection</button>
-              <button id="pathFillButton" type="button" disabled>Fill path</button>
-              <button id="pathStrokeButton" type="button" disabled>Stroke path</button>
-              <button id="pathVectorMaskButton" type="button" disabled>Vector mask</button>
-            </div>
-            <div class="field-row path-anchor-editor">
-              <label><span>First anchor X</span><input id="pathAnchorXInput" type="number" step="0.25" disabled></label>
-              <label><span>First anchor Y</span><input id="pathAnchorYInput" type="number" step="0.25" disabled></label>
-              <button id="pathAnchorApplyButton" type="button" disabled>Apply anchor</button>
-            </div>
-          </div>
         </section>
         <section class="panel details-panel" id="workspacePanelInfo" role="tabpanel" aria-labelledby="workspacePanelInfoButton" data-workspace-panel data-secondary-panel hidden>
           <div class="inspection-tabs" role="tablist" aria-label="Document inspection">
