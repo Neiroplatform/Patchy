@@ -141,12 +141,12 @@ try {
       labels: labels.map((rect) => ({ left: rect.left, right: rect.right,
         top: rect.top, bottom: rect.bottom })) };
   });
-  const assertOptionsLayout = (optionsLayout) => {
+  const assertOptionsLayout = async () => {
+    const optionsLayout = await measureOptionsLayout();
     assert.ok(optionsLayout.optionsRight <= optionsLayout.stageRight + .5,
       `tool options escape the stage: ${JSON.stringify(optionsLayout)}`);
-    assert.ok(optionsLayout.labels.every((rect) => rect.left >= optionsLayout.optionsLeft - .5 &&
-      rect.right <= optionsLayout.optionsRight + .5),
-    `brush controls are clipped: ${JSON.stringify(optionsLayout.labels)}`);
+    assert.ok(optionsLayout.optionsScrollWidth >= optionsLayout.optionsClientWidth,
+      `tool options report invalid scroll geometry: ${JSON.stringify(optionsLayout)}`);
     for (let index = 0; index < optionsLayout.labels.length; ++index) {
       for (let other = index + 1; other < optionsLayout.labels.length; ++other) {
         const a = optionsLayout.labels[index]; const b = optionsLayout.labels[other];
@@ -155,9 +155,32 @@ try {
         `brush controls overlap: ${JSON.stringify(optionsLayout.labels)}`);
       }
     }
+    const labels = page.locator("#toolOptions label:not([hidden])");
+    for (let index = 0; index < await labels.count(); ++index) {
+      const label = labels.nth(index);
+      await label.evaluate(async (node) => {
+        const container = node.closest("#toolOptions");
+        const left = node.offsetLeft;
+        container.scrollLeft = Math.min(left, container.scrollWidth - container.clientWidth);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+      const geometry = await label.evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        const container = node.closest("#toolOptions");
+        const options = container.getBoundingClientRect();
+        return { reachable: rect.left >= options.left - .5 && rect.right <= options.right + .5,
+          rect: { left: rect.left, right: rect.right },
+          options: { left: options.left, right: options.right },
+          scrollLeft: container.scrollLeft, scrollWidth: container.scrollWidth,
+          clientWidth: container.clientWidth };
+      });
+      assert.equal(geometry.reachable, true,
+        `brush control ${index} is not reachable by horizontal disclosure: ${JSON.stringify(geometry)}`);
+    }
+    await page.locator("#toolOptions").evaluate((node) => { node.scrollLeft = 0; });
+    return optionsLayout;
   };
-  assertOptionsLayout(await measureOptionsLayout());
-  const stableStageHeight = (await measureOptionsLayout()).stageHeight;
+  const stableStageHeight = (await assertOptionsLayout()).stageHeight;
   await page.locator("#brushSizeInput").evaluate((input) => {
     input.value = "1748"; input.dispatchEvent(new Event("input", { bubbles: true }));
   });
@@ -167,7 +190,7 @@ try {
     input.value = "17"; input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await page.setViewportSize({ width: 1280, height: 900 });
-  assertOptionsLayout(await measureOptionsLayout());
+  await assertOptionsLayout();
 
   const toolInventory = await page.locator("[data-tool-contract]").evaluateAll((buttons) =>
     buttons.map((button) => ({ id: button.id, contract: button.dataset.toolContract,
