@@ -60,7 +60,7 @@ const GROUPS = [
     ["workspacePanelControlsButton", "Controls"],
     ["workspacePanelHistoryButton", "History"],
     ["workspacePanelStructureButton", "Channels and paths"],
-    ["workspacePanelInfoButton", "Document info"],
+    ["workspacePanelInfoButton", "Navigator, histogram and info"],
   ] },
   { id: "help", label: "Help", commands: [
     ["helpButton", "Getting started", "?"], ["systemCheckLink", "System check"],

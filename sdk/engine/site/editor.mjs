@@ -22,6 +22,7 @@ import { installWorkspaceContext } from "./workspace-context.mjs";
 import { openFileKind } from "./reference-workflow.mjs";
 import { installAuthoringDeck } from "./authoring-deck.mjs";
 import { installWorkspaceDeck } from "./workspace-deck.mjs";
+import { installNavigatorPanel } from "./navigator-panel.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -96,6 +97,10 @@ let cancelActiveOperation = null;
 let canvasTool = "marquee";
 let zoomMode = "fit";
 let zoom = 1;
+const navigatorPanel = installNavigatorPanel(document, {
+  getZoom: () => zoom,
+  setZoom: (value) => setZoom(value),
+});
 const documentViewports = new Map();
 let pendingViewportFrame = 0;
 let pendingViewportAnchor = null;
@@ -1732,6 +1737,7 @@ function renderMetadata() {
   $("memoryLabel").textContent = memory
     ? `${formatBytes(memory.totalRetainedBytes)} retained · ${formatBytes(memory.historyRetainedBytes)} history · ${formatBytes(memory.renderCacheBytes)} cache · ${formatBytes(workingSetLimit)} limit · ${frameTransport === "bitmap" ? "bitmap frames" : frameTransport === "rgba" ? "RGBA fallback" : "frame transport waiting"}`
     : "Memory ready";
+  navigatorPanel?.refresh();
   updateControls();
 }
 
@@ -1840,6 +1846,7 @@ function applyViewport() {
   renderBrushHover();
   renderGuides();
   renderRulers();
+  navigatorPanel?.refresh();
 }
 
 function drawRuler(target, horizontal, viewportRect, frameRect) {

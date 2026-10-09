@@ -11,7 +11,7 @@ test("workspace presets route only existing canonical panel surfaces", () => {
   assert.deepEqual(WORKSPACE_MODES.editing, { panel: "workspacePanelProperties", authoring: null });
   assert.deepEqual(WORKSPACE_MODES.painting, { panel: "workspacePanelControls", authoring: "brush" });
   assert.deepEqual(WORKSPACE_MODES.typography, { panel: "workspacePanelControls", authoring: "type" });
-  assert.deepEqual(WORKSPACE_MODES.review, { panel: "workspacePanelHistory", authoring: null });
+  assert.deepEqual(WORKSPACE_MODES.review, { panel: "workspacePanelInfo", authoring: null });
 });
 
 test("workspace persistence fails soft and retains bounded custom panel state", () => {
@@ -33,9 +33,9 @@ test("manual panel and authoring navigation maps to named modes only on exact ma
   assert.equal(workspaceModeForState("workspacePanelProperties"), "editing");
   assert.equal(workspaceModeForState("workspacePanelControls", "brush"), "painting");
   assert.equal(workspaceModeForState("workspacePanelControls", "type"), "typography");
-  assert.equal(workspaceModeForState("workspacePanelHistory"), "review");
+  assert.equal(workspaceModeForState("workspacePanelInfo"), "review");
+  assert.equal(workspaceModeForState("workspacePanelHistory"), "custom");
   assert.equal(workspaceModeForState("workspacePanelControls", "color"), "custom");
-  assert.equal(workspaceModeForState("workspacePanelInfo"), "custom");
 });
 
 test("production shell exposes one task-oriented workspace bar and delegates collapse", () => {

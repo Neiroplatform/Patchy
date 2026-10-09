@@ -640,6 +640,7 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/command-surface.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/authoring-deck.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/workspace-deck.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/navigator-panel.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/workspace-context.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/reference-workflow.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/capabilities.css"

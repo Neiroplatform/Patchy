@@ -23,6 +23,7 @@ const REQUIRED = [
   "command-surface.mjs",
   "authoring-deck.mjs",
   "workspace-deck.mjs",
+  "navigator-panel.mjs",
   "workspace-context.mjs",
   "editor.css",
   "editor.mjs",

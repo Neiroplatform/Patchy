@@ -404,7 +404,7 @@
           <button id="workspacePanelControlsButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelControls" data-panel-target="workspacePanelControls" tabindex="-1">Controls</button>
           <button id="workspacePanelHistoryButton" type="button" role="tab" aria-selected="true" aria-controls="workspacePanelHistory" data-panel-target="workspacePanelHistory">History</button>
           <button id="workspacePanelStructureButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelStructure" data-panel-target="workspacePanelStructure" tabindex="-1">Channels</button>
-          <button id="workspacePanelInfoButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelInfo" data-panel-target="workspacePanelInfo" tabindex="-1">Info</button>
+          <button id="workspacePanelInfoButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelInfo" data-panel-target="workspacePanelInfo" tabindex="-1">Navigator</button>
         </div>
         <section class="panel layers-panel" id="workspacePanelLayers" role="tabpanel" aria-labelledby="workspacePanelLayersButton" data-workspace-panel data-primary-panel>
           <header class="panel-header">
@@ -563,13 +563,28 @@
           </div>
         </section>
         <section class="panel details-panel" id="workspacePanelInfo" role="tabpanel" aria-labelledby="workspacePanelInfoButton" data-workspace-panel data-secondary-panel hidden>
-          <header class="panel-header"><div><p class="eyebrow">SESSION</p><h2>Document</h2></div></header>
-          <dl class="details-grid">
-            <div><dt>State</dt><dd id="detailState">No document</dd></div>
-            <div><dt>Format</dt><dd id="detailFormat">-</dd></div>
-            <div><dt>Canvas</dt><dd id="detailCanvas">-</dd></div>
-            <div><dt>Revision</dt><dd id="detailRevision">-</dd></div>
-          </dl>
+          <div class="inspection-tabs" role="tablist" aria-label="Document inspection">
+            <button id="navigatorTab" type="button" role="tab" aria-selected="true" aria-controls="navigatorPanel">Navigator</button>
+            <button id="histogramTab" type="button" role="tab" aria-selected="false" aria-controls="histogramPanel" tabindex="-1">Histogram</button>
+            <button id="documentInfoTab" type="button" role="tab" aria-selected="false" aria-controls="documentInfoPanel" tabindex="-1">Info</button>
+          </div>
+          <section class="inspection-pane navigator-pane" id="navigatorPanel" role="tabpanel" aria-labelledby="navigatorTab">
+            <canvas id="navigatorCanvas" aria-label="Document navigator"></canvas>
+            <div class="navigator-zoom-row"><span>Zoom</span><button id="navigatorFitButton" type="button">Fit</button><button id="navigatorActualButton" type="button">100%</button><button id="navigatorDoubleButton" type="button">200%</button></div>
+            <label class="navigator-zoom-slider"><span class="sr-only">Zoom</span><input id="navigatorZoomInput" type="range" min="6" max="3200" value="100" step="1"><output id="navigatorZoomOutput">100%</output></label>
+          </section>
+          <section class="inspection-pane histogram-pane" id="histogramPanel" role="tabpanel" aria-labelledby="histogramTab" hidden>
+            <canvas id="histogramCanvas" aria-label="RGB and luminance histogram"></canvas>
+            <p>Bounded RGB and luminance sample of the visible composite.</p>
+          </section>
+          <section class="inspection-pane" id="documentInfoPanel" role="tabpanel" aria-labelledby="documentInfoTab" hidden>
+            <dl class="details-grid">
+              <div><dt>State</dt><dd id="detailState">No document</dd></div>
+              <div><dt>Format</dt><dd id="detailFormat">-</dd></div>
+              <div><dt>Canvas</dt><dd id="detailCanvas">-</dd></div>
+              <div><dt>Revision</dt><dd id="detailRevision">-</dd></div>
+            </dl>
+          </section>
         </section>
       </aside>
     </main>

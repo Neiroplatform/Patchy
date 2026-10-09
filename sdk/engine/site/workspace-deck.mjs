@@ -4,7 +4,7 @@ export const WORKSPACE_MODES = Object.freeze({
   editing: Object.freeze({ panel: "workspacePanelProperties", authoring: null }),
   painting: Object.freeze({ panel: "workspacePanelControls", authoring: "brush" }),
   typography: Object.freeze({ panel: "workspacePanelControls", authoring: "type" }),
-  review: Object.freeze({ panel: "workspacePanelHistory", authoring: null }),
+  review: Object.freeze({ panel: "workspacePanelInfo", authoring: null }),
 });
 
 export function normalizeWorkspaceSnapshot(value) {

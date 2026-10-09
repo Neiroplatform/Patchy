@@ -276,7 +276,7 @@ try {
   await page.setViewportSize({ width: 760, height: 900 });
   await page.selectOption("#workspaceModeSelect", "review");
   assert.equal(await page.locator('[data-workspace-panel]:visible').count(), 1);
-  assert.equal(await page.locator("#workspacePanelHistory").isVisible(), true);
+  assert.equal(await page.locator("#workspacePanelInfo").isVisible(), true);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.selectOption("#workspaceModeSelect", "painting");
   if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
@@ -581,6 +581,49 @@ try {
   await ready();
   await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "756 × 718" &&
     document.querySelectorAll("#layerList .layer-row").length === 1, null, { timeout: 90_000 });
+  const navigatorRevision = await revision();
+  await page.click("#workspacePanelInfoButton");
+  await page.waitForFunction(() => document.querySelector("#navigatorCanvas")?.dataset.preview === "ready");
+  const previewEvidence = await page.evaluate(() => {
+    const canvas = document.getElementById("navigatorCanvas");
+    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    let colored = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (pixels[index] !== pixels[index + 1] || pixels[index + 1] !== pixels[index + 2]) { colored++; break; }
+    }
+    return { colored, width: canvas.width, height: canvas.height };
+  });
+  assert.ok(previewEvidence.colored > 0, JSON.stringify(previewEvidence));
+  await page.click("#histogramTab");
+  await page.waitForFunction(() => Number(document.querySelector("#histogramCanvas")?.dataset.samplePixels) > 0);
+  assert.ok(Number(await page.locator("#histogramCanvas").getAttribute("data-sample-pixels")) <= 65_536);
+  await page.locator("#histogramTab").press("ArrowRight");
+  assert.equal(await page.locator("#documentInfoTab").getAttribute("aria-selected"), "true");
+  assert.equal((await page.textContent("#detailCanvas")).trim(), "756 × 718");
+  await page.locator("#documentInfoTab").press("Home");
+  assert.equal(await page.locator("#navigatorTab").getAttribute("aria-selected"), "true");
+  await page.click("#navigatorDoubleButton");
+  await page.waitForFunction(() => document.querySelector("#zoomLabel")?.textContent === "200%" &&
+    document.querySelector("#navigatorZoomOutput")?.textContent === "200%");
+  const scrollBeforeNavigatorPan = await page.evaluate(() => ({
+    left: document.getElementById("canvasViewport").scrollLeft,
+    top: document.getElementById("canvasViewport").scrollTop,
+  }));
+  await page.locator("#navigatorCanvas").evaluate((canvas) => {
+    const box = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 501,
+      pointerType: "mouse", button: 0, buttons: 1, clientX: box.right - 12, clientY: box.bottom - 12 }));
+    canvas.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 501,
+      pointerType: "mouse", button: 0, buttons: 0, clientX: box.right - 12, clientY: box.bottom - 12 }));
+  });
+  await page.waitForFunction((before) => {
+    const viewport = document.getElementById("canvasViewport");
+    return viewport.scrollLeft !== before.left || viewport.scrollTop !== before.top;
+  }, scrollBeforeNavigatorPan);
+  assert.equal(await revision(), navigatorRevision);
+  await page.click("#navigatorFitButton");
+  await page.waitForFunction(() => document.querySelector("#zoomLabel")?.textContent.startsWith("Fit ·"));
+  assert.equal(await revision(), navigatorRevision);
   const scaledCanvas = await page.evaluate(() => {
     const canvas = document.getElementById("documentCanvas");
     const box = canvas.getBoundingClientRect();
@@ -617,7 +660,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties authoring=color-brush-type-docked-preview brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties authoring=color-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,
