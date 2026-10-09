@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { brushPreviewModel, normalizeAuthoringTab,
+import { brushPreviewModel, gradientPreviewCss, normalizeAuthoringLibraryTab, normalizeAuthoringTab,
+  patternPreviewCss,
   swatchTargetFromModifiers } from "../../sdk/engine/site/authoring-deck.mjs";
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
@@ -12,6 +13,22 @@ test("authoring deck routes only declared stable control modes", () => {
   assert.equal(normalizeAuthoringTab("brush"), "brush");
   assert.equal(normalizeAuthoringTab("type"), "type");
   assert.equal(normalizeAuthoringTab("unknown"), "color");
+});
+
+test("color library routes only declared PhotoCraft-derived tabs", () => {
+  for (const tab of ["color", "swatches", "gradients", "patterns"])
+    assert.equal(normalizeAuthoringLibraryTab(tab), tab);
+  assert.equal(normalizeAuthoringLibraryTab("hostile"), "color");
+});
+
+test("gradient and pattern previews are deterministic and sanitize projected colors", () => {
+  assert.equal(gradientPreviewCss("black-white"), "linear-gradient(90deg, #000000, #ffffff)");
+  assert.match(gradientPreviewCss("foreground-transparent", "#336699"), /#336699, transparent/);
+  assert.equal(gradientPreviewCss("asset:test", "#010203", {
+    previewStart: "#123456", previewEnd: "javascript:alert(1)",
+  }), "linear-gradient(90deg, #123456, #010203)");
+  assert.match(patternPreviewCss("dots", "#123456", "bad"), /#123456.*#ffffff/);
+  assert.match(patternPreviewCss("checker", "bad", "#abcdef"), /#111111.*#abcdef/);
 });
 
 test("swatches default to foreground and modifiers explicitly select background", () => {
@@ -36,11 +53,17 @@ test("production shell exposes one docked PhotoCraft-derived authoring deck", ()
   const commands = read("sdk/engine/site/command-surface.mjs");
   for (const id of ["workspacePanelControls", "authoringColorPanel", "authoringBrushPanel",
     "authoringTypePanel", "authoringForegroundInput", "authoringBackgroundInput",
-    "authoringSwatches", "authoringRecentSwatches"]) assert.match(html, new RegExp(`id="${id}"`));
+    "authoringSwatches", "authoringRecentSwatches", "authoringColorLibraryTab",
+    "authoringSwatchesLibraryTab", "authoringGradientsLibraryTab", "authoringPatternsLibraryTab",
+    "authoringGradientPresets", "authoringPatternPresets"]) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(editor, /installAuthoringDeck/);
   assert.match(editor, /authoringDeck\?\.reveal\("brush"\)/);
   assert.match(editor, /authoringDeck\?\.reveal\("type"\)/);
   assert.match(commands, /\["workspacePanelControlsButton", "Controls"\]/);
+  assert.match(commands, /\["authoringGradientsLibraryTab", "Gradients"\]/);
+  assert.match(commands, /\["authoringPatternsLibraryTab", "Patterns"\]/);
+  assert.match(editor, /option\.dataset\.previewStart = asset\.start/);
+  assert.match(editor, /option\.dataset\.previewKind = asset\.kind/);
 });
 
 test("development and self-hosted release inventories ship the authoring deck", () => {

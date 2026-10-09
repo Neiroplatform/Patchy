@@ -6,9 +6,39 @@ const BUILTIN_SWATCHES = Object.freeze([
 ]);
 
 const RECENT_STORAGE_KEY = "patchy.authoring-recent-colors.v1";
+const LIBRARY_TABS = Object.freeze(["color", "swatches", "gradients", "patterns"]);
 
 export function normalizeAuthoringTab(value) {
   return ["color", "brush", "type"].includes(value) ? value : "color";
+}
+
+export function normalizeAuthoringLibraryTab(value) {
+  return LIBRARY_TABS.includes(value) ? value : "color";
+}
+
+const validColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(value || "") ? value : fallback;
+
+export function gradientPreviewCss(preset, foreground = "#111111", metadata = {}) {
+  const fg = validColor(foreground, "#111111");
+  if (metadata.previewKind === "foreground-transparent" || preset === "foreground-transparent")
+    return `linear-gradient(90deg, ${fg}, transparent), repeating-conic-gradient(#c9c9c9 0 25%, #fff 0 50%) 0 0 / 10px 10px`;
+  const builtins = {
+    "black-white": ["#000000", "#ffffff"],
+    sunset: ["#ff3d77", "#ff9a3d", "#ffe66d"],
+    ocean: ["#082f49", "#0284c7", "#67e8f9"],
+  };
+  const colors = [metadata.previewStart, metadata.previewMiddle, metadata.previewEnd].filter(Boolean)
+    .map((color) => validColor(color, fg));
+  const stops = colors.length >= 2 ? colors : (builtins[preset] || [fg, "#ffffff"]);
+  return `linear-gradient(90deg, ${stops.join(", ")})`;
+}
+
+export function patternPreviewCss(kind, foreground = "#111111", background = "#ffffff") {
+  const fg = validColor(foreground, "#111111");
+  const bg = validColor(background, "#ffffff");
+  return kind === "dots"
+    ? `radial-gradient(circle, ${fg} 0 24%, transparent 26%), linear-gradient(${bg}, ${bg})`
+    : `conic-gradient(${fg} 0 25%, ${bg} 0 50%, ${fg} 0 75%, ${bg} 0)`;
 }
 
 export function swatchTargetFromModifiers(event = {}) {
@@ -59,7 +89,7 @@ function installRovingTabs(container, selector, activate) {
     const index = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 :
       (current + (backwards ? -1 : 1) + tabs.length) % tabs.length;
     event.preventDefault();
-    activate(tabs[index].dataset.authoringTab || tabs[index].dataset.brushSection);
+    activate(tabs[index].dataset.authoringTab || tabs[index].dataset.brushSection || tabs[index].dataset.libraryTab);
     tabs[index].focus();
   });
 }
@@ -115,6 +145,10 @@ export function installAuthoringDeck(document, { activateWorkspacePanel = () => 
   const deckBackground = byId("authoringBackgroundInput");
   const recentGrid = byId("authoringRecentSwatches");
   const swatchGrid = byId("authoringSwatches");
+  const gradientGrid = byId("authoringGradientPresets");
+  const patternGrid = byId("authoringPatternPresets");
+  const paintPreset = byId("paintPresetSelect");
+  const advancedPattern = byId("advancedPatternInput");
 
   const syncColors = () => {
     deckForeground.value = foreground.value;
@@ -158,6 +192,54 @@ export function installAuthoringDeck(document, { activateWorkspacePanel = () => 
   byId("authoringDefaultColorsButton").addEventListener("click", () => {
     byId("defaultSwatchesButton").click(); syncColors(); remember(foreground.value); remember(background.value);
   });
+
+  const presetButton = (option, kind) => {
+    const button = document.createElement("button");
+    button.type = "button"; button.className = "preset-library-item";
+    button.dataset.preset = option.value;
+    button.setAttribute("aria-selected", String(option.selected));
+    const preview = document.createElement("span");
+    preview.className = `preset-library-preview ${kind}-library-preview`;
+    if (kind === "gradient") {
+      preview.style.setProperty("--preset-gradient", gradientPreviewCss(option.value, foreground.value, option.dataset));
+    } else {
+      preview.style.setProperty("--preset-pattern", patternPreviewCss(option.dataset.previewKind || option.value,
+        option.dataset.previewForeground, option.dataset.previewBackground));
+      preview.style.setProperty("--preset-size", `${Math.max(4, Math.min(32, Number(option.dataset.previewSize) || 8))}px`);
+    }
+    const name = document.createElement("span"); name.className = "preset-library-name";
+    name.textContent = option.textContent.replace(/^(Gradient|Pattern):\s*/, "");
+    button.setAttribute("aria-label", option.textContent); button.title = option.textContent;
+    button.append(preview, name); return button;
+  };
+  const renderPresetLibraries = () => {
+    const gradients = [...paintPreset.options].filter((option) => option.dataset.presetKind === "gradient");
+    gradientGrid.replaceChildren(...gradients.map((option) => presetButton(option, "gradient")));
+    patternGrid.replaceChildren(...[...advancedPattern.options].map((option) => presetButton(option, "pattern")));
+  };
+  const syncPresetSelection = () => {
+    for (const button of gradientGrid.querySelectorAll("[data-preset]"))
+      button.setAttribute("aria-selected", String(button.dataset.preset === paintPreset.value));
+    for (const button of patternGrid.querySelectorAll("[data-preset]"))
+      button.setAttribute("aria-selected", String(button.dataset.preset === advancedPattern.value));
+  };
+  gradientGrid.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-preset]");
+    if (!button) return;
+    byId("gradientToolButton").click(); emitInput(paintPreset, button.dataset.preset); syncPresetSelection();
+  });
+  patternGrid.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-preset]");
+    if (!button) return;
+    byId("patternStampToolButton").click(); emitInput(advancedPattern, button.dataset.preset); syncPresetSelection();
+  });
+  paintPreset.addEventListener("change", syncPresetSelection);
+  advancedPattern.addEventListener("change", syncPresetSelection);
+  const presetObserver = new document.defaultView.MutationObserver(renderPresetLibraries);
+  presetObserver.observe(paintPreset, { childList: true, subtree: true, attributes: true });
+  presetObserver.observe(advancedPattern, { childList: true, subtree: true, attributes: true });
+  foreground.addEventListener("input", renderPresetLibraries);
+  renderPresetLibraries(); syncPresetSelection();
 
   const brushDialog = byId("brushSettingsDialog");
   const brushForm = brushDialog.querySelector("form");
@@ -229,6 +311,23 @@ export function installAuthoringDeck(document, { activateWorkspacePanel = () => 
   for (const tab of deck.querySelectorAll("[data-authoring-tab]")) tab.addEventListener("click", () => select(tab.dataset.authoringTab));
   installRovingTabs(deck.querySelector(".authoring-tabs"), "[data-authoring-tab]", select);
 
+  const selectLibrary = (value, { focus = false } = {}) => {
+    const selected = normalizeAuthoringLibraryTab(value);
+    for (const tab of deck.querySelectorAll("[data-library-tab]")) {
+      const active = tab.dataset.libraryTab === selected;
+      tab.setAttribute("aria-selected", String(active)); tab.tabIndex = active ? 0 : -1;
+      if (active && focus) tab.focus();
+    }
+    for (const pane of deck.querySelectorAll("[data-library-pane]")) pane.hidden = pane.dataset.libraryPane !== selected;
+    deck.dataset.libraryMode = selected;
+    return selected;
+  };
+  for (const tab of deck.querySelectorAll("[data-library-tab]")) tab.addEventListener("click", () => {
+    activateWorkspacePanel(); select("color"); selectLibrary(tab.dataset.libraryTab);
+  });
+  installRovingTabs(deck.querySelector(".color-library-tabs"), "[data-library-tab]", selectLibrary);
+  selectLibrary("color");
+
   const reveal = (tab) => { activateWorkspacePanel(); return select(tab); };
-  return Object.freeze({ select, reveal, syncColors, refreshPreview });
+  return Object.freeze({ select, selectLibrary, reveal, syncColors, refreshPreview, renderPresetLibraries });
 }

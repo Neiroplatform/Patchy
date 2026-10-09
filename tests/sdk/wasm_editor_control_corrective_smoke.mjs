@@ -327,6 +327,7 @@ try {
   assert.equal(await page.locator("#authoringBrushTab").getAttribute("aria-selected"), "true");
   await page.click("#authoringColorTab");
   assert.equal(await page.locator("#authoringColorPanel").isVisible(), true);
+  await page.click("#authoringSwatchesLibraryTab");
   await page.locator('#authoringSwatches [data-color="#ff0000"]').click();
   assert.equal(await page.inputValue("#authoringForegroundInput"), "#ff0000");
   assert.equal(await page.inputValue("#foregroundSwatchInput"), "#ff0000");
@@ -335,6 +336,43 @@ try {
   assert.equal(await page.inputValue("#authoringBackgroundInput"), "#0057ff");
   assert.equal(await page.inputValue("#backgroundSwatchInput"), "#0057ff");
   assert.ok(await page.locator("#authoringRecentSwatches [data-color]").count() >= 2);
+  await page.click('[aria-controls="commandMenu-file"]');
+  await page.click('#commandMenu-file [data-command-target="assetsButton"]');
+  await page.fill("#assetGradientNameInput", "Browser gradient");
+  await page.fill("#assetPatternNameInput", "Browser pattern");
+  await page.selectOption("#assetPatternKindInput", "dots");
+  await page.click("#saveGradientAssetButton");
+  await page.waitForFunction(() =>
+    document.querySelectorAll("#authoringGradientPresets [data-preset]").length >= 5);
+  await page.click("#savePatternAssetButton");
+  await page.waitForFunction(() =>
+    document.querySelectorAll("#authoringGradientPresets [data-preset]").length >= 5 &&
+    document.querySelectorAll("#authoringPatternPresets [data-preset]").length >= 3);
+  assert.match(await page.locator('#authoringGradientPresets [aria-label="Gradient: Browser gradient"] .preset-library-preview')
+    .getAttribute("style"), /#111111.*#ffffff/);
+  await page.locator("#assetLibraryList .dialog-actions").filter({ hasText: "gradient · Browser gradient" })
+    .getByRole("button", { name: "Remove" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#authoringGradientPresets [data-preset]").length === 4);
+  await page.locator("#assetLibraryList .dialog-actions").filter({ hasText: "pattern · Browser pattern" })
+    .getByRole("button", { name: "Remove" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#authoringPatternPresets [data-preset]").length === 2);
+  await page.click('#assetsDialog button[aria-label="Close"]');
+  before = await revision();
+  await page.click('[aria-controls="commandMenu-window"]');
+  await page.click('#commandMenu-window [data-command-target="authoringGradientsLibraryTab"]');
+  assert.equal(await page.locator("#authoringGradientsLibraryPanel").isVisible(), true);
+  assert.equal(await page.locator("#authoringGradientPresets [data-preset]").count(), 4);
+  await page.click('#authoringGradientPresets [data-preset="sunset"]');
+  assert.equal(await page.locator("#canvasViewport").getAttribute("data-tool"), "gradient");
+  assert.equal(await page.inputValue("#paintPresetSelect"), "sunset");
+  assert.equal(await page.locator("#gradientStopInput option").count(), 3);
+  assert.equal(await revision(), before);
+  await page.locator("#authoringGradientsLibraryTab").press("ArrowRight");
+  assert.equal(await page.locator("#authoringPatternsLibraryPanel").isVisible(), true);
+  await page.click('#authoringPatternPresets [data-preset="dots"]');
+  assert.equal(await page.locator("#canvasViewport").getAttribute("data-tool"), "patternStamp");
+  assert.equal(await page.inputValue("#advancedPatternInput"), "dots");
+  assert.equal(await revision(), before);
   if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
     await mkdir(process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR, { recursive: true });
     await page.screenshot({ path: `${process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR}/${browserName}-authoring-color.png` });
@@ -660,7 +698,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties authoring=color-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties authoring=color-swatches-gradient-pattern-assets-configure-first-no-revision-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,

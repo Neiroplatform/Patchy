@@ -816,6 +816,15 @@ function renderAssetLibrary() {
     const option = document.createElement("option"); option.value = `asset:${asset.id}`;
     option.dataset.localAsset = "true";
     option.dataset.presetKind = assetLibrary.gradients.includes(asset) ? "gradient" : "fill";
+    if (assetLibrary.gradients.includes(asset)) {
+      option.dataset.previewStart = asset.start;
+      option.dataset.previewEnd = asset.end;
+    } else {
+      option.dataset.previewKind = asset.kind;
+      option.dataset.previewForeground = asset.foreground;
+      option.dataset.previewBackground = asset.background;
+      option.dataset.previewSize = String(asset.size);
+    }
     const kindLabel = assetLibrary.gradients.includes(asset) ? "Gradient" : "Pattern";
     option.textContent = `${kindLabel}: ${asset.name}`;
     select.append(option);
@@ -826,7 +835,11 @@ function renderAssetLibrary() {
   for (const option of [...advancedPattern.querySelectorAll('option[data-local-asset="true"]')]) option.remove();
   for (const asset of assetLibrary.patterns) {
     const option = document.createElement("option"); option.value = `asset:${asset.id}`;
-    option.dataset.localAsset = "true"; option.textContent = `Pattern: ${asset.name}`;
+    option.dataset.localAsset = "true"; option.dataset.previewKind = asset.kind;
+    option.dataset.previewForeground = asset.foreground;
+    option.dataset.previewBackground = asset.background;
+    option.dataset.previewSize = String(asset.size);
+    option.textContent = `Pattern: ${asset.name}`;
     advancedPattern.append(option);
   }
   if ([...advancedPattern.options].some((option) => option.value === selectedAdvancedPattern)) {

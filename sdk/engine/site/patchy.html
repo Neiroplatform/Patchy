@@ -207,9 +207,9 @@
               <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
             </select></label>
             <label class="non-retouch-option standard-paint-option">Paint <select id="paintPresetSelect">
-              <option value="foreground-transparent" data-preset-kind="gradient">Foreground → transparent</option>
-              <option value="black-white" data-preset-kind="gradient">Black → white</option>
-              <option value="sunset" data-preset-kind="gradient">Sunset</option><option value="ocean" data-preset-kind="gradient">Ocean</option>
+              <option value="foreground-transparent" data-preset-kind="gradient" data-preview-kind="foreground-transparent">Foreground → transparent</option>
+              <option value="black-white" data-preset-kind="gradient" data-preview-start="#000000" data-preview-end="#ffffff">Black → white</option>
+              <option value="sunset" data-preset-kind="gradient" data-preview-start="#ff3d77" data-preview-middle="#ff9a3d" data-preview-end="#ffe66d">Sunset</option><option value="ocean" data-preset-kind="gradient" data-preview-start="#082f49" data-preview-middle="#0284c7" data-preview-end="#67e8f9">Ocean</option>
               <option value="solid" data-preset-kind="fill">Solid foreground</option>
               <option value="checker" data-preset-kind="fill">Checker pattern</option><option value="dots" data-preset-kind="fill">Dot pattern</option>
             </select></label>
@@ -248,7 +248,7 @@
             <label class="advanced-paint-option advanced-mixer-option" hidden>Load <input id="mixerLoadInput" type="range" min="1" max="100" value="50"><output id="mixerLoadOutput">50%</output></label>
             <label class="advanced-paint-option advanced-mixer-option" hidden>Mix <input id="mixerMixInput" type="range" min="0" max="100" value="50"><output id="mixerMixOutput">50%</output></label>
             <label class="advanced-paint-option advanced-mixer-option" hidden><input id="mixerSampleAllInput" type="checkbox"> Sample all layers</label>
-            <label class="advanced-paint-option advanced-pattern-option" hidden>Pattern <select id="advancedPatternInput"><option value="checker">Checker pattern</option><option value="dots">Dot pattern</option></select></label>
+            <label class="advanced-paint-option advanced-pattern-option" hidden>Pattern <select id="advancedPatternInput"><option value="checker" data-preview-kind="checker" data-preview-foreground="#111111" data-preview-background="#ffffff" data-preview-size="8">Checker pattern</option><option value="dots" data-preview-kind="dots" data-preview-foreground="#111111" data-preview-background="#ffffff" data-preview-size="8">Dot pattern</option></select></label>
             <label class="advanced-paint-option advanced-pattern-option" hidden>Pattern size <input id="advancedPatternSizeInput" type="range" min="1" max="128" value="8"><output id="advancedPatternSizeOutput">8 px</output></label>
             <label class="advanced-paint-option advanced-pattern-option" hidden>Secondary <input id="advancedPatternSecondaryInput" type="color" value="#ffffff"></label>
             <label class="advanced-paint-option advanced-pattern-option" hidden><input id="advancedPatternAlignedInput" type="checkbox" checked> Aligned</label>
@@ -498,14 +498,32 @@
             <button id="authoringTypeTab" type="button" role="tab" aria-selected="false" aria-controls="authoringTypePanel" data-authoring-tab="type" tabindex="-1">Type</button>
           </div>
           <section class="authoring-pane color-control-panel" id="authoringColorPanel" role="tabpanel" aria-labelledby="authoringColorTab" data-authoring-pane="color">
-            <div class="color-role-controls">
-              <label><span>Foreground</span><input id="authoringForegroundInput" type="color" value="#111111"></label>
-              <button id="authoringSwapColorsButton" type="button" aria-label="Swap colors" title="Swap colors">⇄</button>
-              <label><span>Background</span><input id="authoringBackgroundInput" type="color" value="#ffffff"></label>
-              <button id="authoringDefaultColorsButton" type="button">Default colors</button>
+            <div class="color-library-tabs" role="tablist" aria-label="Color and preset libraries">
+              <button id="authoringColorLibraryTab" type="button" role="tab" aria-selected="true" aria-controls="authoringColorLibraryPanel" data-library-tab="color">Color</button>
+              <button id="authoringSwatchesLibraryTab" type="button" role="tab" aria-selected="false" aria-controls="authoringSwatchesLibraryPanel" data-library-tab="swatches" tabindex="-1">Swatches</button>
+              <button id="authoringGradientsLibraryTab" type="button" role="tab" aria-selected="false" aria-controls="authoringGradientsLibraryPanel" data-library-tab="gradients" tabindex="-1">Gradients</button>
+              <button id="authoringPatternsLibraryTab" type="button" role="tab" aria-selected="false" aria-controls="authoringPatternsLibraryPanel" data-library-tab="patterns" tabindex="-1">Patterns</button>
             </div>
-            <div class="swatch-section"><header><strong>Recent</strong><small>Click: foreground · Alt/Command: background</small></header><div class="swatch-grid swatch-grid-recent" id="authoringRecentSwatches" aria-label="Recent colors"></div></div>
-            <div class="swatch-section"><header><strong>Swatches</strong></header><div class="swatch-grid" id="authoringSwatches" aria-label="Color swatches"></div></div>
+            <section class="color-library-pane" id="authoringColorLibraryPanel" role="tabpanel" aria-labelledby="authoringColorLibraryTab" data-library-pane="color">
+              <div class="color-role-controls">
+                <label><span>Foreground</span><input id="authoringForegroundInput" type="color" value="#111111"></label>
+                <button id="authoringSwapColorsButton" type="button" aria-label="Swap colors" title="Swap colors">⇄</button>
+                <label><span>Background</span><input id="authoringBackgroundInput" type="color" value="#ffffff"></label>
+                <button id="authoringDefaultColorsButton" type="button">Default colors</button>
+              </div>
+              <div class="swatch-section"><header><strong>Recent</strong><small>Click: foreground · Alt/Command: background</small></header><div class="swatch-grid swatch-grid-recent" id="authoringRecentSwatches" aria-label="Recent colors"></div></div>
+            </section>
+            <section class="color-library-pane" id="authoringSwatchesLibraryPanel" role="tabpanel" aria-labelledby="authoringSwatchesLibraryTab" data-library-pane="swatches" hidden>
+              <div class="swatch-section"><header><strong>Swatches</strong><small>Click: foreground · Alt/Command: background</small></header><div class="swatch-grid" id="authoringSwatches" aria-label="Color swatches"></div></div>
+            </section>
+            <section class="color-library-pane" id="authoringGradientsLibraryPanel" role="tabpanel" aria-labelledby="authoringGradientsLibraryTab" data-library-pane="gradients" hidden>
+              <p class="preset-library-hint">Choose a gradient, adjust it in the options bar, then drag on the canvas.</p>
+              <div class="preset-library-grid" id="authoringGradientPresets" aria-label="Gradient presets"></div>
+            </section>
+            <section class="color-library-pane" id="authoringPatternsLibraryPanel" role="tabpanel" aria-labelledby="authoringPatternsLibraryTab" data-library-pane="patterns" hidden>
+              <p class="preset-library-hint">Choose a pattern, adjust its brush settings, then paint on the canvas.</p>
+              <div class="preset-library-grid preset-pattern-grid" id="authoringPatternPresets" aria-label="Pattern presets"></div>
+            </section>
           </section>
           <section class="authoring-pane" id="authoringBrushPanel" role="tabpanel" aria-labelledby="authoringBrushTab" data-authoring-pane="brush" hidden>
             <div id="authoringBrushHost"></div>
