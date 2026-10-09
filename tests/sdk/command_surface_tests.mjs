@@ -77,7 +77,7 @@ test("icon-only actions use a complete readable first-party SVG vocabulary", asy
     assert.match(html, new RegExp(`id="${id}"[^>]*><svg class="ui-icon" aria-hidden="true">`));
   }
   assert.match(css, /\.ui-icon \{[\s\S]+stroke: currentColor/);
-  assert.match(css, /\.tool-cluster > \.tool-button::after[\s\S]+content: attr\(aria-label\)/);
+  assert.match(css, /\.tool-cluster > \.tool-button > \.tool-visible-label/);
   assert.match(css, /\.visibility-button\[aria-label\^="Hide"\]::after/);
   assert.match(css, /\.layer-row \.reorder-button:nth-last-child\(2\)::before/);
   assert.match(css, /\.history-row\[aria-selected="true"\] \.history-marker::before/);
@@ -121,7 +121,9 @@ test("production shell stages and publishes the accessible command surface", asy
   assert.match(css, /\.tool-group-menu/);
   assert.match(await source("sdk/engine/site/command-surface.mjs"), /TOOL_GROUP_LONG_PRESS_MS = 420/);
   assert.match(await source("sdk/engine/site/command-surface.mjs"), /addEventListener\("contextmenu"/);
-  assert.match(css, /\.tool-group-menu \.tool-button::before[\s\S]+data-tool-shortcut/);
+  assert.match(css, /\.tool-group-menu \.tool-visible-label/);
+  assert.match(css, /\.tool-group-menu \.tool-shortcut-label/);
+  assert.match(await source("sdk/engine/site/command-surface.mjs"), /visibleLabel\.className = "tool-visible-label"/);
   assert.match(css, /\.tool-cluster[\s\S]+width: 36px/);
   assert.match(css, /\.tool-group-toggle[\s\S]+position: absolute/);
   assert.match(css, /\.workspace-panel-tabs/);

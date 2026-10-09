@@ -197,18 +197,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; padding: 0 8px; border-color: transparent;
   text-align: center; }
 .tool-group-menu .tool-button .ui-icon { grid-column: 1; }
-.tool-group-menu .tool-button::after { content: attr(aria-label); overflow: hidden; color: var(--text);
+.tool-group-menu .tool-visible-label { position: static; overflow: hidden; color: var(--text);
   grid-column: 2; font-size: 11px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.tool-group-menu .tool-button::before { content: attr(data-tool-shortcut); grid-column: 3; color: var(--text-faint);
+.tool-group-menu .tool-shortcut-label { grid-column: 3; color: var(--text-faint);
   font: 500 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.tool-cluster > .tool-button::after { content: attr(aria-label); position: absolute; z-index: 90; left: 66px;
+.tool-cluster > .tool-button > .tool-visible-label { position: absolute; z-index: 90; left: 66px;
   top: 50%; min-width: max-content; max-width: 240px; padding: 6px 8px; border: 1px solid var(--line-strong);
   border-radius: 5px; color: var(--text); background: #24272bf7; box-shadow: 0 8px 24px #0009;
   font-size: 11px; line-height: 1; text-align: left; white-space: nowrap; pointer-events: none;
   opacity: 0; visibility: hidden; transform: translate(4px, -50%); transition: opacity 100ms var(--ease), transform 100ms var(--ease); }
-.tool-cluster > .tool-button:hover::after, .tool-cluster > .tool-button:focus-visible::after {
+.tool-cluster > .tool-button > .tool-shortcut-label { display: none; }
+.tool-cluster > .tool-button:hover > .tool-visible-label, .tool-cluster > .tool-button:focus-visible > .tool-visible-label {
   opacity: 1; visibility: visible; transform: translate(0, -50%); }
-.tool-cluster[data-open="true"] > .tool-button::after { opacity: 0; visibility: hidden; }
+.tool-cluster[data-open="true"] > .tool-button > .tool-visible-label { opacity: 0; visibility: hidden; }
+.tool-group-menu .tool-button > .tool-shortcut-label { display: block; }
 #selectAllButton, #clearSelectionButton { display: none; }
 .tool-spacer { flex: 1; }
 .color-swatches { position: relative; width: 36px; height: 38px; flex: 0 0 auto; }

@@ -23,6 +23,7 @@ const playwright = await loadPlaywright();
 const browserType = playwright[browserName];
 const launchOptions = browserName === "chromium" && process.env.PATCHY_BROWSER_CHANNEL
   ? { channel: process.env.PATCHY_BROWSER_CHANNEL } : {};
+if (browserName === "firefox") launchOptions.firefoxUserPrefs = { "network.proxy.type": 0 };
 const browser = await browserType.launch({ headless: true, ...launchOptions });
 const expectedOrigin = new URL(baseUrl).origin;
 const unexpectedNetwork = [];
@@ -136,18 +137,18 @@ try {
     assert.ok(await toggle.getAttribute("aria-label"));
     await primary.hover();
     await page.waitForTimeout(150);
-    const tooltip = await primary.evaluate((button) => ({
-      content: getComputedStyle(button, "::after").content,
-      opacity: getComputedStyle(button, "::after").opacity,
+    const tooltip = await primary.locator(":scope > .tool-visible-label").evaluate((label) => ({
+      content: label.textContent,
+      opacity: getComputedStyle(label).opacity,
     }));
-    assert.equal(tooltip.content.replaceAll('"', ""), await primary.getAttribute("aria-label"));
+    assert.equal(tooltip.content, await primary.getAttribute("aria-label"));
     assert.equal(tooltip.opacity, "1");
     await toggle.click();
     assert.equal(await toggle.getAttribute("aria-expanded"), "true");
     assert.equal(await cluster.locator(".tool-group-menu").isVisible(), true);
     assert.equal(await cluster.locator(".tool-group-menu .tool-button").evaluateAll((buttons) =>
       buttons.every((button) => {
-        const label = getComputedStyle(button, "::after").content.replaceAll('"', "");
+        const label = button.querySelector(":scope > .tool-visible-label")?.textContent;
         const box = button.getBoundingClientRect();
         return label === button.getAttribute("aria-label") && box.height >= 24 && box.width >= 24;
       })), true, `${group} menu lost a visible name or target floor`);

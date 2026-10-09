@@ -271,6 +271,13 @@ function installToolGroups(document, translate) {
       const shortcut = button.title?.match(/\(([^)]+)\)\s*$/)?.[1] || "";
       button.dataset.toolName = targetLabel(button, button.id);
       button.dataset.toolShortcut = shortcut;
+      const visibleLabel = document.createElement("span");
+      visibleLabel.className = "tool-visible-label";
+      visibleLabel.textContent = button.getAttribute("aria-label") || button.dataset.toolName;
+      const shortcutLabel = document.createElement("span");
+      shortcutLabel.className = "tool-shortcut-label";
+      shortcutLabel.textContent = shortcut;
+      button.append(visibleLabel, shortcutLabel);
       button.addEventListener("click", () => {
         promote(button);
         queueMicrotask(() => closeCluster());
@@ -290,6 +297,12 @@ function installToolGroups(document, translate) {
         }
       });
     }
+    document.addEventListener("patchy:localechange", () => {
+      for (const button of buttons) {
+        const label = button.querySelector(":scope > .tool-visible-label");
+        if (label) label.textContent = button.getAttribute("aria-label") || button.dataset.toolName;
+      }
+    });
     for (const button of secondary) {
       button.hidden = true;
       button.setAttribute("role", "menuitem");

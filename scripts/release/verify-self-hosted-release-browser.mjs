@@ -198,7 +198,6 @@ async function verifyScaledSelectedEraser(page) {
   let before = await revision();
   await drag("marqueeToolButton", { x: .08, y: .12 }, { x: .48, y: .68 }, 501);
   await waitForRevision(before, "Selecting area");
-  await page.click("#eraserToolButton");
   await page.locator("#brushSizeInput").evaluate((input) => {
     input.value = "24";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -628,17 +627,17 @@ async function verifyReadableIconography(page) {
     assert.ok(await toggle.getAttribute("aria-label"), `${group} disclosure lost its accessible name`);
     await primary.hover();
     await page.waitForTimeout(150);
-    const tooltip = await primary.evaluate((button) => ({
-      content: getComputedStyle(button, "::after").content,
-      opacity: getComputedStyle(button, "::after").opacity,
+    const tooltip = await primary.locator(":scope > .tool-visible-label").evaluate((label) => ({
+      content: label.textContent,
+      opacity: getComputedStyle(label).opacity,
     }));
-    assert.equal(tooltip.content.replaceAll('"', ""), await primary.getAttribute("aria-label"));
+    assert.equal(tooltip.content, await primary.getAttribute("aria-label"));
     assert.equal(tooltip.opacity, "1", `${group} primary tool lost its visible hover label`);
     await toggle.click();
     assert.equal(await toggle.getAttribute("aria-expanded"), "true");
     assert.equal(await cluster.locator(".tool-group-menu .tool-button").evaluateAll((buttons) =>
       buttons.every((button) => {
-        const label = getComputedStyle(button, "::after").content.replaceAll('"', "");
+        const label = button.querySelector(":scope > .tool-visible-label")?.textContent;
         const box = button.getBoundingClientRect();
         return label === button.getAttribute("aria-label") && box.height >= 24 && box.width >= 24;
       })), true, `${group} flyout lost a readable label or target floor`);
