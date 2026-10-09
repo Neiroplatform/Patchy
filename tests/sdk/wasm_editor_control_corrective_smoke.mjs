@@ -244,6 +244,40 @@ try {
   await page.locator("#quickLayerFillInput").dispatchEvent("change");
   await waitForMutation(before, "Changing fill opacity");
 
+  for (const kind of ["0", "1", "2", "3", "4", "5", "6", "7"]) {
+    await page.click("#propertiesAdjustmentsTab");
+    const configureRevision = await revision();
+    await page.click(`[data-adjustment-preset="${kind}"]`);
+    assert.equal(await page.locator("#adjustmentDialog").isVisible(), true);
+    assert.equal(await page.inputValue("#adjustmentKindInput"), kind);
+    assert.equal((await page.textContent("#adjustmentDialogTitle")).trim(), "Create adjustment layer");
+    assert.equal(await revision(), configureRevision);
+    await page.click('#adjustmentDialog button[value="cancel"]');
+  }
+  await page.click("#propertiesAdjustmentsTab");
+  before = await revision();
+  await page.click('[data-adjustment-preset="4"]');
+  await page.click("#commitAdjustmentButton");
+  await waitForMutation(before, "Creating adjustment");
+  assert.equal(await page.locator("#layerList .layer-row").count(), 2);
+  assert.match((await page.locator('.layer-row[data-active="true"] .layer-kind').textContent()), /Adjustment.+Invert/);
+  assert.equal(await page.locator("#propertiesPropertiesTab").getAttribute("aria-selected"), "true");
+  await page.click("#propertiesAdjustmentsTab");
+  const forceCreateRevision = await revision();
+  await page.click('[data-adjustment-preset="7"]');
+  assert.equal((await page.textContent("#adjustmentDialogTitle")).trim(), "Create adjustment layer");
+  assert.equal(await revision(), forceCreateRevision);
+  await page.click('#adjustmentDialog button[value="cancel"]');
+  await page.click("#editLayerTypeButton");
+  assert.equal((await page.textContent("#adjustmentDialogTitle")).trim(), "Edit adjustment layer");
+  assert.equal(await page.inputValue("#adjustmentKindInput"), "4");
+  await page.click('#adjustmentDialog button[value="cancel"]');
+  before = await revision();
+  await page.click("#removeLayerButton");
+  await waitForMutation(before, "Deleting layer");
+  assert.equal(await page.locator("#layerList .layer-row").count(), 1);
+  await page.locator("#layerList .layer-select-button").click();
+
   const toolBeforeWorkspace = await page.locator("#canvasViewport").getAttribute("data-tool");
   await page.selectOption("#workspaceModeSelect", "painting");
   assert.equal(await page.locator("#workspacePanelControls").isVisible(), true);
@@ -291,6 +325,13 @@ try {
   assert.equal(await page.locator('[data-workspace-panel]:visible').count(), 1);
   assert.equal(await page.locator("#workspacePanelLayers").isVisible(), true);
   assert.equal(await page.locator("#documentStructurePathsPane").isVisible(), true);
+  const narrowAdjustmentRevision = await revision();
+  await page.click('[aria-controls="commandMenu-window"]');
+  await page.click('#commandMenu-window [data-command-target="propertiesAdjustmentsTab"]');
+  assert.equal(await page.locator('[data-workspace-panel]:visible').count(), 1);
+  assert.equal(await page.locator("#workspacePanelProperties").isVisible(), true);
+  assert.equal(await page.locator("#propertiesAdjustmentsPane").isVisible(), true);
+  assert.equal(await revision(), narrowAdjustmentRevision);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.selectOption("#workspaceModeSelect", "painting");
   await page.click("#documentStructureLayersTab");
@@ -730,7 +771,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties authoring=color-swatches-gradient-pattern-assets-configure-first-no-revision-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties properties=adjustments-eight-configure-create-edit-window-narrow authoring=color-swatches-gradient-pattern-assets-configure-first-no-revision-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,

@@ -517,8 +517,13 @@
           </section>
         </section>
         <section class="panel properties-panel" id="workspacePanelProperties" role="tabpanel" aria-labelledby="workspacePanelPropertiesButton" data-workspace-panel data-secondary-panel hidden>
-          <header class="panel-header"><div><p class="eyebrow">APPEARANCE</p><h2 id="propertiesTitle">Selected layer</h2></div></header>
-          <div class="property-fields">
+          <div class="properties-deck-tabs" role="tablist" aria-label="Layer properties and adjustments">
+            <button id="propertiesPropertiesTab" type="button" role="tab" aria-selected="true" aria-controls="propertiesPropertiesPane" data-properties-tab="properties">Properties</button>
+            <button id="propertiesAdjustmentsTab" type="button" role="tab" aria-selected="false" aria-controls="propertiesAdjustmentsPane" data-properties-tab="adjustments" tabindex="-1">Adjustments</button>
+          </div>
+          <section class="properties-deck-pane" id="propertiesPropertiesPane" role="tabpanel" aria-labelledby="propertiesPropertiesTab" data-properties-pane="properties">
+            <header class="panel-header"><div><p class="eyebrow">APPEARANCE</p><h2 id="propertiesTitle">Selected layer</h2></div></header>
+            <div class="property-fields">
             <label><span>Name</span><input id="layerNameInput" type="text" maxlength="256" disabled></label>
             <label><span>Opacity <output id="layerOpacityOutput">100%</output></span><input id="layerOpacityInput" aria-label="Layer opacity" type="range" min="0" max="100" value="100" disabled></label>
             <label><span>Fill <output id="layerFillOutput">100%</output></span><input id="layerFillInput" aria-label="Layer fill opacity" type="range" min="0" max="100" value="100" disabled></label>
@@ -542,7 +547,21 @@
             <button id="applyLayerStyleButton" type="button" disabled>Apply style</button>
             <button id="editLayerStyleButton" type="button" disabled>Edit effects…</button>
             <button id="editLayerTypeButton" type="button" disabled hidden>Edit layer contents…</button>
-          </div>
+            </div>
+          </section>
+          <section class="properties-deck-pane adjustments-library-pane" id="propertiesAdjustmentsPane" role="tabpanel" aria-labelledby="propertiesAdjustmentsTab" data-properties-pane="adjustments" hidden>
+            <p class="adjustments-library-hint">Add an editable adjustment layer. Choose a kind, configure it, then apply.</p>
+            <div class="adjustment-preset-grid" role="listbox" aria-label="Supported adjustment layers">
+              <button type="button" role="option" aria-selected="false" data-adjustment-preset="7"><span class="adjustment-preset-icon" aria-hidden="true">☀</span><span>Brightness / Contrast</span></button>
+              <button type="button" role="option" aria-selected="false" data-adjustment-preset="0"><span class="adjustment-preset-icon" aria-hidden="true">◲</span><span>Levels</span></button>
+              <button type="button" role="option" aria-selected="false" data-adjustment-preset="1"><span class="adjustment-preset-icon" aria-hidden="true">∿</span><span>Curves</span></button>
+              <button type="button" role="option" aria-selected="false" data-adjustment-preset="2"><span class="adjustment-preset-icon" aria-hidden="true">◔</span><span>Hue / Saturation</span></button>
+              <button type="button" role="option" aria-selected="false" data-adjustment-preset="3"><span class="adjustment-preset-icon" aria-hidden="true">◑</span><span>Color Balance</span></button>
+              <button type="button" role="option" aria-selected="false" data-adjustment-preset="4"><span class="adjustment-preset-icon" aria-hidden="true">◐</span><span>Invert</span></button>
+              <button type="button" role="option" aria-selected="false" data-adjustment-preset="5"><span class="adjustment-preset-icon" aria-hidden="true">▥</span><span>Posterize</span></button>
+              <button type="button" role="option" aria-selected="false" data-adjustment-preset="6"><span class="adjustment-preset-icon" aria-hidden="true">▨</span><span>Threshold</span></button>
+            </div>
+          </section>
         </section>
         <section class="panel authoring-panel" id="workspacePanelControls" role="tabpanel" aria-labelledby="workspacePanelControlsButton" data-workspace-panel data-secondary-panel hidden>
           <header class="panel-header"><div><p class="eyebrow">AUTHORING</p><h2>Controls</h2></div></header>

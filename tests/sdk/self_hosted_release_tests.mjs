@@ -25,6 +25,7 @@ const REQUIRED = [
   "workspace-deck.mjs",
   "navigator-panel.mjs",
   "structure-deck.mjs",
+  "properties-deck.mjs",
   "workspace-context.mjs",
   "editor.css",
   "editor.mjs",

@@ -24,6 +24,7 @@ import { installAuthoringDeck } from "./authoring-deck.mjs";
 import { installWorkspaceDeck } from "./workspace-deck.mjs";
 import { installNavigatorPanel } from "./navigator-panel.mjs";
 import { installStructureDeck } from "./structure-deck.mjs";
+import { installPropertiesDeck } from "./properties-deck.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -44,6 +45,10 @@ installDialogFocusReturn(document);
 const commandSurface = installCommandSurface(document, { translate: (value) => localizer.text(value) });
 const structureDeck = installStructureDeck(document, {
   activateLayersPanel: () => commandSurface?.workspacePanels?.activate($("workspacePanelLayersButton")),
+});
+const propertiesDeck = installPropertiesDeck(document, {
+  activatePropertiesPanel: () => commandSurface?.workspacePanels?.activate($("workspacePanelPropertiesButton")),
+  openAdjustmentPreset: (kind) => openAdjustmentDialog({ kind, forceCreate: true }),
 });
 const workspaceContext = installWorkspaceContext(document, { translate: (value) => localizer.text(value) });
 const authoringDeck = installAuthoringDeck(document, {
@@ -267,6 +272,7 @@ function setSingleLayerSelection(layerId) {
 function clearLayerSelection() { setSingleLayerSelection(null); }
 
 function revealLayerProperties() {
+  propertiesDeck?.select("properties", { reveal: false });
   commandSurface?.workspacePanels?.activate($("workspacePanelPropertiesButton"));
 }
 
@@ -3945,15 +3951,16 @@ async function commitShape() {
   }
 }
 
-function openAdjustmentDialog() {
+function openAdjustmentDialog({ kind = null, forceCreate = false } = {}) {
   if (busy || !snapshot) return;
   const layer = selectedLayer();
-  const editing = layer?.kind === 2;
+  const editing = !forceCreate && layer?.kind === 2;
   $("adjustmentDialogTitle").textContent = editing ? "Edit adjustment layer" : "Create adjustment layer";
   $("commitAdjustmentButton").textContent = editing ? "Update adjustment" : "Create adjustment";
-  $("adjustmentKindInput").value = String(layer?.adjustment?.kind ?? 7);
+  $("adjustmentKindInput").value = String(kind ?? (editing ? layer.adjustment?.kind : 7));
   renderAdjustmentParameters(editing ? layer.adjustment : null);
   openContextEditor("adjustmentDialog");
+  return true;
 }
 
 function renderAdjustmentParameters(existing = null) {
@@ -5539,7 +5546,7 @@ $("commitAdjustmentButton").addEventListener("click", async () => {
 });
 $("textLayerButton").addEventListener("click", openTextDialog);
 $("shapeLayerButton").addEventListener("click", openShapeDialog);
-$("adjustmentLayerButton").addEventListener("click", openAdjustmentDialog);
+$("adjustmentLayerButton").addEventListener("click", () => openAdjustmentDialog());
 $("editLayerTypeButton").addEventListener("click", editSelectedLayerType);
 $("smartObjectButton").addEventListener("click", () => $("smartObjectInput").click());
 $("smartObjectInput").addEventListener("change", () => { placeSmartObject($("smartObjectInput").files[0]); $("smartObjectInput").value = ""; });

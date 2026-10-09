@@ -645,9 +645,28 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .layer-inline-name { width: 100%; height: 27px; padding: 0 5px; border: 1px solid var(--focus); border-radius: 3px;
   color: var(--text); background: #101315; font-size: 11px; }
 .panel-empty { padding: 12px 14px 20px; color: var(--text-faint); font-size: 11px; line-height: 1.5; }
+.properties-panel { overflow: hidden; }
+.properties-deck-tabs { flex: 0 0 32px; display: grid; grid-template-columns: repeat(2, 1fr);
+  border-bottom: 1px solid var(--line); background: #111416; }
+.properties-deck-tabs button { min-width: 0; border: 0; border-bottom: 2px solid transparent;
+  color: var(--text-faint); background: transparent; font-size: 10px; cursor: pointer; }
+.properties-deck-tabs button:hover { color: var(--text); background: #ffffff08; }
+.properties-deck-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface-1); }
+.properties-deck-pane { min-height: 0; flex: 1 1 auto; overflow: auto; }
 .properties-panel .panel-header { min-height: 54px; }
-.properties-panel[data-context-editor] > .panel-header,
-.properties-panel[data-context-editor] > .property-fields { display: none; }
+.properties-panel[data-context-editor] > .properties-deck-tabs,
+.properties-panel[data-context-editor] > .properties-deck-pane { display: none; }
+.adjustments-library-pane { padding: 10px; }
+.adjustments-library-hint { margin: 0 0 10px; color: var(--text-faint); font-size: 9px; line-height: 1.45; }
+.adjustment-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.adjustment-preset-grid button { min-width: 0; min-height: 62px; display: grid; grid-template-columns: 24px minmax(0, 1fr);
+  gap: 7px; align-items: center; padding: 7px; border: 1px solid var(--line); border-radius: 5px;
+  color: var(--text-muted); background: var(--surface-1); text-align: left; font-size: 9px; cursor: pointer; }
+.adjustment-preset-grid button:hover, .adjustment-preset-grid button:focus-visible {
+  border-color: var(--line-strong); color: var(--text); }
+.adjustment-preset-grid button[aria-selected="true"] { border-color: var(--accent); color: var(--text); background: #d7ff550b; }
+.adjustment-preset-icon { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid #ffffff1f;
+  border-radius: 50%; color: var(--accent); background: #0f1214; font-size: 14px; }
 .context-editor-dialog[open] { position: static; inset: auto; width: 100%; max-width: none; max-height: none;
   margin: 0; padding: 0; overflow: visible; color: var(--text); background: transparent;
   border: 0; border-radius: 0; box-shadow: none; }

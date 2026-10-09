@@ -23,7 +23,8 @@ test("command surface exposes one deterministic route to high-value editor actio
     "layerViaCopyButton",
     "selectAllButton", "smoothSelectionButton", "zoomFitButton", "helpButton",
     "transformButton", "documentStructureLayersTab", "documentStructureChannelsTab",
-    "documentStructurePathsTab", "workspacePanelHistoryButton",
+    "documentStructurePathsTab", "propertiesPropertiesTab", "propertiesAdjustmentsTab",
+    "workspacePanelHistoryButton",
   ]) assert.ok(commands.some((command) => command.targetId === targetId), targetId);
 });
 
