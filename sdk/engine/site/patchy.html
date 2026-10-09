@@ -387,6 +387,17 @@
 
       <aside class="inspector" id="inspector" aria-label="Document panels">
         <div class="inspector-resizer" id="inspectorResizer" role="separator" aria-label="Resize document panels" aria-orientation="vertical" tabindex="0"></div>
+        <div class="workspace-mode-bar">
+          <label for="workspaceModeSelect"><span>Workspace</span><select id="workspaceModeSelect">
+            <option value="editing">Editing</option>
+            <option value="painting">Painting</option>
+            <option value="typography">Typography</option>
+            <option value="review">Review</option>
+            <option value="custom" hidden>Custom</option>
+          </select></label>
+          <button id="workspaceResetButton" type="button">Reset</button>
+          <button id="workspaceCollapseButton" type="button" aria-label="Collapse panels" title="Collapse panels">Hide</button>
+        </div>
         <div class="workspace-panel-tabs" role="tablist" aria-label="Workspace panels">
           <button id="workspacePanelLayersButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelLayers" data-panel-target="workspacePanelLayers" data-primary-tab hidden tabindex="-1">Layers</button>
           <button id="workspacePanelPropertiesButton" type="button" role="tab" aria-selected="false" aria-controls="workspacePanelProperties" data-panel-target="workspacePanelProperties" tabindex="-1">Properties</button>

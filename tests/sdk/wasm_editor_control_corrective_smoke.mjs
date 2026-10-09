@@ -244,6 +244,46 @@ try {
   await page.locator("#quickLayerFillInput").dispatchEvent("change");
   await waitForMutation(before, "Changing fill opacity");
 
+  const toolBeforeWorkspace = await page.locator("#canvasViewport").getAttribute("data-tool");
+  await page.selectOption("#workspaceModeSelect", "painting");
+  assert.equal(await page.locator("#workspacePanelControls").isVisible(), true);
+  assert.equal(await page.locator("#authoringBrushPanel").isVisible(), true);
+  assert.equal(await page.locator("#canvasViewport").getAttribute("data-tool"), toolBeforeWorkspace);
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("patchy.workspace-deck.v1"))).mode,
+    "painting");
+  const restoredWorkspacePage = await context.newPage();
+  await restoredWorkspacePage.goto(editorUrl, { waitUntil: "domcontentloaded" });
+  await restoredWorkspacePage.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "ready" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null, { timeout: 90_000 });
+  assert.equal(await restoredWorkspacePage.inputValue("#workspaceModeSelect"), "painting");
+  assert.equal(await restoredWorkspacePage.locator("#authoringBrushPanel").isVisible(), true);
+  assert.equal(await restoredWorkspacePage.locator("#canvasViewport").getAttribute("data-tool"), toolBeforeWorkspace);
+  await restoredWorkspacePage.close();
+  await page.click("#workspacePanelStructureButton");
+  assert.equal(await page.inputValue("#workspaceModeSelect"), "custom");
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("patchy.workspace-deck.v1"))).panel,
+    "workspacePanelStructure");
+  await page.click("#workspaceResetButton");
+  assert.equal(await page.inputValue("#workspaceModeSelect"), "editing");
+  assert.equal(await page.locator("#workspacePanelProperties").isVisible(), true);
+  await page.selectOption("#workspaceModeSelect", "typography");
+  assert.equal(await page.locator("#authoringTypePanel").isVisible(), true);
+  await page.click("#workspaceCollapseButton");
+  assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), true);
+  assert.equal(await page.locator("#togglePanelsButton").getAttribute("aria-pressed"), "true");
+  await page.click("#togglePanelsButton");
+  assert.equal(await page.locator(".editor-shell").evaluate((node) => node.classList.contains("panels-hidden")), false);
+  await page.setViewportSize({ width: 760, height: 900 });
+  await page.selectOption("#workspaceModeSelect", "review");
+  assert.equal(await page.locator('[data-workspace-panel]:visible').count(), 1);
+  assert.equal(await page.locator("#workspacePanelHistory").isVisible(), true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.selectOption("#workspaceModeSelect", "painting");
+  if (process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR) {
+    await mkdir(process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({ path: `${process.env.PATCHY_CORRECTIVE_SCREENSHOT_DIR}/${browserName}-workspace-painting.png` });
+  }
+
   await page.click("#brushToolButton");
   assert.equal(await page.locator("#brushPresetSelect").isVisible(), true);
   await page.click("#brushQuickPickerButton");

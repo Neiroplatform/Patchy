@@ -21,6 +21,7 @@ import { installCommandSurface } from "./command-surface.mjs";
 import { installWorkspaceContext } from "./workspace-context.mjs";
 import { openFileKind } from "./reference-workflow.mjs";
 import { installAuthoringDeck } from "./authoring-deck.mjs";
+import { installWorkspaceDeck } from "./workspace-deck.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -43,6 +44,10 @@ const workspaceContext = installWorkspaceContext(document, { translate: (value) 
 const authoringDeck = installAuthoringDeck(document, {
   activateWorkspacePanel: () => commandSurface?.workspacePanels?.activate($("workspacePanelControlsButton")),
   translate: (value) => localizer.text(value),
+});
+const workspaceDeck = installWorkspaceDeck(document, {
+  activatePanel: (tab) => commandSurface?.workspacePanels?.activate(tab),
+  selectAuthoring: (tab) => authoringDeck?.select(tab),
 });
 const syncToolRoving = installRovingToolbar(document.querySelector(".tool-rail"), ".tool-button:not([hidden])");
 const inspectorResizer = $("inspectorResizer");

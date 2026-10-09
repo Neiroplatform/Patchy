@@ -378,6 +378,10 @@ function installWorkspacePanels(document) {
         !(panel.hasAttribute("data-primary-panel") || panel.id === secondaryTarget);
     }
     shell.dataset.inspectorMode = narrow ? "single" : "dual";
+    shell.dataset.activeWorkspacePanel = target;
+    document.dispatchEvent(new document.defaultView.CustomEvent("patchy:workspacepanelchange", {
+      detail: { target, narrow },
+    }));
     if (focus) tab.focus();
     return true;
   };

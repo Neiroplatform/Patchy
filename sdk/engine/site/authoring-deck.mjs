@@ -215,11 +215,15 @@ export function installAuthoringDeck(document, { activateWorkspacePanel = () => 
       if (active && focus) tab.focus();
     }
     for (const pane of deck.querySelectorAll("[data-authoring-pane]")) pane.hidden = pane.dataset.authoringPane !== selected;
+    deck.dataset.authoringMode = selected;
     if (selected === "brush") {
       if (!brushDialog.open) brushDialog.show();
       document.defaultView?.requestAnimationFrame(refreshPreview);
     }
     if (selected === "type") textSettings.hidden = false;
+    document.dispatchEvent(new document.defaultView.CustomEvent("patchy:authoringtabchange", {
+      detail: { tab: selected },
+    }));
     return selected;
   };
   for (const tab of deck.querySelectorAll("[data-authoring-tab]")) tab.addEventListener("click", () => select(tab.dataset.authoringTab));
