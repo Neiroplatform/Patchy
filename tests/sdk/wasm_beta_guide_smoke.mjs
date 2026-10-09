@@ -159,6 +159,12 @@ try {
     return stage.right <= inspector.left + .5;
   }), true, "active stage content overlaps the inspector column");
 
+  await page.click("#emptyNewButton");
+  await page.click('[data-starter-preset="blank"]');
+  await page.waitForFunction(() =>
+    document.querySelector(".editor-shell")?.dataset.state === "document" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
   await page.click('[data-tool-group="selection"] .tool-group-toggle');
   assert.equal(await page.locator('[data-tool-group="selection"] .tool-group-menu [role="menuitem"]')
     .count(), 6);
@@ -175,20 +181,21 @@ try {
   await page.keyboard.press("Escape");
   assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("tool-group-toggle")), true,
     "closing a tool flyout did not return focus to its disclosure");
+  await closeActiveDocument();
 
   await page.click("#workspacePanelHistoryButton");
   assert.deepEqual(await page.evaluate(() =>
     [...document.querySelectorAll("[data-workspace-panel]")].filter((panel) => !panel.hidden)
       .map((panel) => panel.id)), ["workspacePanelLayers", "workspacePanelHistory"]);
   await page.getByRole("button", { name: "Window", exact: true }).click();
-  await page.click('#commandMenu-window [data-command-target="workspacePanelPropertiesButton"]');
+  await page.click('#commandMenu-window [data-command-target="propertiesPropertiesTab"]');
   assert.deepEqual(await page.evaluate(() =>
     [...document.querySelectorAll("[data-workspace-panel]")].filter((panel) => !panel.hidden)
       .map((panel) => panel.id)), ["workspacePanelLayers", "workspacePanelProperties"]);
   await page.locator("#workspacePanelPropertiesButton").press("ArrowRight");
-  assert.equal(await page.getAttribute("#workspacePanelHistoryButton", "aria-selected"), "true",
+  assert.equal(await page.getAttribute("#workspacePanelControlsButton", "aria-selected"), "true",
     "ArrowRight did not move between workspace panel tabs");
-  await page.locator("#workspacePanelHistoryButton").press("Home");
+  await page.locator("#workspacePanelControlsButton").press("Home");
   assert.equal(await page.getAttribute("#workspacePanelPropertiesButton", "aria-selected"), "true",
     "Home did not return to the first secondary workspace panel tab");
   console.log(`BETA-GUIDE-SOURCE-PHASE browser=${browserName} phase=workspace-ia`);
@@ -251,19 +258,35 @@ try {
     .evaluateAll((labels) => labels.map((label) => label.dataset.toolOption)),
   ["brushSizeInput", "selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"]);
   await page.keyboard.press("b");
+  await page.waitForFunction(() => document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
+    Boolean(document.querySelector('.layer-row[data-active="true"]')) &&
+    document.querySelector('#toolOptions [data-tool-option="brushColorInput"]')?.hidden === false,
+  null, { timeout: 90_000 });
   assert.deepEqual(await page.locator("#toolOptions [data-tool-option]:not([hidden])")
     .evaluateAll((labels) => labels.map((label) => label.dataset.toolOption)),
-  ["brushSizeInput", "brushColorInput", "paintTargetSelect"]);
+  ["brushSizeInput", "brushColorInput", "brushPresetSelect", "brushQuickPickerButton",
+    "brushSoftnessInput", "brushOpacityInput", "brushSettingsButton", "paintTargetSelect"]);
   assert.equal(await page.locator("#toolOptions [data-tool-option][hidden] input, #toolOptions [data-tool-option][hidden] select")
     .evaluateAll((controls) => controls.every((control) => control.getClientRects().length === 0)), true,
   "irrelevant tool controls remain in layout or the accessibility surface");
+  const dialogsBeforeBrushClose = acceptedDialogs;
+  await closeActiveDocument();
+  assert.equal(acceptedDialogs, dialogsBeforeBrushClose + 1,
+    "closing the keyboard-created pixel layer did not request confirmation");
+  const dialogsAfterBrushClose = acceptedDialogs;
+  await page.click("#emptyNewButton");
+  await page.click('[data-starter-preset="blank"]');
+  await page.waitForFunction(() => document.querySelector("#detailCanvas")?.textContent === "1600 × 1000" &&
+    document.querySelector("#detailRevision")?.textContent === "0" &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
+  { timeout: 90_000 });
 
   const revisionBeforeCancel = (await page.textContent("#detailRevision")).trim();
-  await page.click("#shapeLayerButton");
+  await runPaletteCommand("shapeLayerButton");
   await page.click('#shapeDialog button[value="cancel"]');
   assert.equal((await page.textContent("#detailRevision")).trim(), revisionBeforeCancel,
     "cancelling shape creation changed the document revision");
-  await page.click("#shapeLayerButton");
+  await runPaletteCommand("shapeLayerButton");
   await page.click("#commitShapeButton");
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "1" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null, { timeout: 90_000 });
@@ -273,13 +296,13 @@ try {
   assert.equal(await page.isVisible("#shapeDialog[open]"), true);
   await page.click('#shapeDialog button[value="cancel"]');
   assert.equal((await page.textContent("#detailRevision")).trim(), "1");
-  const selectedShape = page.locator('.layer-row[data-active="true"] .layer-select-button');
-  await selectedShape.click();
-  await page.locator('.layer-row[data-active="true"] .layer-select-button').click();
+
+  await page.locator('.layer-row[data-active="true"] .layer-kind').click();
+  await page.locator('.layer-row[data-active="true"] .layer-kind').click();
   await page.waitForSelector("#shapeDialog[open]");
   await page.click('#shapeDialog button[value="cancel"]');
 
-  await page.click("#adjustmentLayerButton");
+  await runPaletteCommand("adjustmentLayerButton");
   await page.click("#commitAdjustmentButton");
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "2" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null, { timeout: 90_000 });
@@ -289,7 +312,7 @@ try {
   assert.equal(await page.isVisible("#adjustmentDialog[open]"), true);
   await page.click('#adjustmentDialog button[value="cancel"]');
 
-  await page.click("#textLayerButton");
+  await runPaletteCommand("textLayerButton");
   await page.fill("#textValueInput", "Contextual workspace");
   await page.click("#commitTextButton");
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "3" &&
@@ -322,7 +345,7 @@ try {
       `stage exceeds viewport at ${viewport.width}px`);
   }
   await page.setViewportSize({ width: 1280, height: 800 });
-  assert.equal(acceptedDialogs, 0,
+  assert.equal(acceptedDialogs, dialogsAfterBrushClose,
     "contextual create, edit and responsive checks must not invent confirmation dialogs");
   const [contextualDownload] = await Promise.all([
     page.waitForEvent("download", { timeout: 90_000 }),
