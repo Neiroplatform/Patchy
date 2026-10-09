@@ -278,6 +278,28 @@ try {
   assert.equal(await page.locator("#layerList .layer-row").count(), 1);
   await page.locator("#layerList .layer-select-button").click();
 
+  await page.click("#workspacePanelHistoryButton");
+  const localStateRevision = await revision();
+  await page.locator("#historyHistoryTab").press("ArrowRight");
+  await page.waitForFunction(() => document.getElementById("versionHistoryDialog")?.open);
+  assert.equal(await page.locator("#historyVersionsTab").getAttribute("aria-selected"), "true");
+  assert.equal(await revision(), localStateRevision);
+  await page.fill("#versionLabelInput", "Browser gate version");
+  await page.click("#createVersionButton");
+  await page.waitForFunction(() => document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true" &&
+    document.querySelectorAll("#versionHistoryList .recovery-row").length === 1, null, { timeout: 90_000 });
+  assert.equal(await revision(), localStateRevision);
+  await page.click('#versionHistoryDialog button[value="cancel"]');
+  await page.waitForFunction(() => document.getElementById("historyHistoryTab")?.getAttribute("aria-selected") === "true");
+  assert.equal(await page.locator("#historyHistoryTab").getAttribute("aria-selected"), "true");
+  await page.evaluate(() => document.getElementById("recoveryButton").click());
+  await page.waitForFunction(() => document.getElementById("recoveryDialog")?.open);
+  assert.equal(await page.locator("#historyRecoveryTab").getAttribute("aria-selected"), "true");
+  assert.equal(await revision(), localStateRevision);
+  await page.click('#recoveryDialog button[value="cancel"]');
+  await page.waitForFunction(() => document.getElementById("historyHistoryPane")?.hidden === false);
+  assert.equal(await page.locator("#historyHistoryPane").isVisible(), true);
+
   const toolBeforeWorkspace = await page.locator("#canvasViewport").getAttribute("data-tool");
   await page.selectOption("#workspaceModeSelect", "painting");
   assert.equal(await page.locator("#workspacePanelControls").isVisible(), true);
@@ -771,7 +793,7 @@ try {
   assert.deepEqual(unexpectedNetwork, []);
   assert.deepEqual(failedRequests, []);
   assert.deepEqual(pageErrors, []);
-  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties properties=adjustments-eight-configure-create-edit-window-narrow authoring=color-swatches-gradient-pattern-assets-configure-first-no-revision-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
+  console.log(`EDITOR-CONTROL-CORRECTIVE browser=${browserName} menus=submenu-over-ruler guides=thin pen=rubber-band-anchor-close-open-selection-fill-stroke-mask clipboard=path-selection-only layers=add-delete opacity-fill=quick-properties properties=adjustments-eight-configure-create-edit-window-narrow local-state=history-version-create-recovery-docked-no-revision authoring=color-swatches-gradient-pattern-assets-configure-first-no-revision-brush-type-docked-preview navigator=preview-bounded-histogram-pan-zoom-no-revision brush=preset-softness-opacity mixer-pattern=pass eraser=plain-scaled-selected-pass`);
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,

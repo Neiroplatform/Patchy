@@ -4,6 +4,7 @@ const RU = new Map(Object.entries({
   "Document actions": "Действия с документом",
   "Document structure": "Структура документа",
   "Layer properties and adjustments": "Свойства и коррекции слоя",
+  "History and local state": "История и локальное состояние",
   "Adjustments": "Коррекции",
   "Supported adjustment layers": "Поддерживаемые корректирующие слои",
   "Add an editable adjustment layer. Choose a kind, configure it, then apply.": "Добавьте редактируемый корректирующий слой. Выберите тип, настройте его и примените.",

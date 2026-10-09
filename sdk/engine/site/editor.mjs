@@ -25,6 +25,7 @@ import { installWorkspaceDeck } from "./workspace-deck.mjs";
 import { installNavigatorPanel } from "./navigator-panel.mjs";
 import { installStructureDeck } from "./structure-deck.mjs";
 import { installPropertiesDeck } from "./properties-deck.mjs";
+import { installHistoryDeck } from "./history-deck.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -49,6 +50,11 @@ const structureDeck = installStructureDeck(document, {
 const propertiesDeck = installPropertiesDeck(document, {
   activatePropertiesPanel: () => commandSurface?.workspacePanels?.activate($("workspacePanelPropertiesButton")),
   openAdjustmentPreset: (kind) => openAdjustmentDialog({ kind, forceCreate: true }),
+});
+const historyDeck = installHistoryDeck(document, {
+  activateHistoryPanel: () => commandSurface?.workspacePanels?.activate($("workspacePanelHistoryButton")),
+  showVersions: () => showVersionHistoryPanel(),
+  showRecovery: () => showRecoveryPanel(),
 });
 const workspaceContext = installWorkspaceContext(document, { translate: (value) => localizer.text(value) });
 const authoringDeck = installAuthoringDeck(document, {
@@ -1174,11 +1180,14 @@ async function refreshRecoveryList() {
   }
 }
 
-async function openRecoveryDialog() {
+async function showRecoveryPanel() {
   if (busy) return;
-  $("recoveryDialog").showModal();
+  if (!$("recoveryDialog").open) $("recoveryDialog").show();
   await refreshRecoveryList();
+  return true;
 }
+
+function openRecoveryDialog() { return historyDeck?.select("recovery"); }
 
 async function refreshVersionHistoryList() {
   const list = $("versionHistoryList");
@@ -1221,12 +1230,15 @@ async function refreshVersionHistoryList() {
   }
 }
 
-async function openVersionHistoryDialog() {
-  if (busy || !snapshot || !workspaceAvailable) return;
-  $("versionHistoryDialog").showModal();
+async function showVersionHistoryPanel() {
+  if (busy) return;
+  if (!$("versionHistoryDialog").open) $("versionHistoryDialog").show();
   await refreshVersionHistoryList();
-  $("versionLabelInput").focus();
+  if (!$("versionLabelInput").disabled) $("versionLabelInput").focus();
+  return true;
 }
+
+function openVersionHistoryDialog() { return historyDeck?.select("versions"); }
 
 async function createLocalVersion() {
   if (busy || !snapshot || !workspaceAvailable) return;

@@ -65,7 +65,9 @@ const GROUPS = [
     ["authoringSwatchesLibraryTab", "Swatches"],
     ["authoringGradientsLibraryTab", "Gradients"],
     ["authoringPatternsLibraryTab", "Patterns"],
-    ["workspacePanelHistoryButton", "History"],
+    ["historyHistoryTab", "History"],
+    ["historyVersionsTab", "Versions"],
+    ["historyRecoveryTab", "Recovery"],
     ["workspacePanelInfoButton", "Navigator, histogram and info"],
   ] },
   { id: "help", label: "Help", commands: [

@@ -32,6 +32,7 @@ const REQUIRED_FILES = Object.freeze([
   "navigator-panel.mjs",
   "structure-deck.mjs",
   "properties-deck.mjs",
+  "history-deck.mjs",
   "workspace-context.mjs",
   "reference-workflow.mjs",
   "editor.css",

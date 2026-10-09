@@ -606,12 +606,19 @@
           </section>
         </section>
         <section class="panel history-panel" id="workspacePanelHistory" role="tabpanel" aria-labelledby="workspacePanelHistoryButton" data-workspace-panel data-secondary-panel>
-          <header class="panel-header">
-            <div><p class="eyebrow">DOCUMENT</p><h2 id="historyTitle">History</h2></div>
-            <span class="layer-count" id="historyCount">0</span>
-          </header>
-          <div class="history-list" id="historyList" role="listbox" aria-label="Document history"></div>
-          <div class="panel-empty" id="historyEmpty">Edit the document to build history.</div>
+          <div class="history-deck-tabs" role="tablist" aria-label="History and local state">
+            <button id="historyHistoryTab" type="button" role="tab" aria-selected="true" aria-controls="historyHistoryPane" data-history-tab="history">History</button>
+            <button id="historyVersionsTab" type="button" role="tab" aria-selected="false" aria-controls="versionHistoryDialog" data-history-tab="versions" tabindex="-1">Versions</button>
+            <button id="historyRecoveryTab" type="button" role="tab" aria-selected="false" aria-controls="recoveryDialog" data-history-tab="recovery" tabindex="-1">Recovery</button>
+          </div>
+          <section class="history-deck-pane" id="historyHistoryPane" role="tabpanel" aria-labelledby="historyHistoryTab" data-history-pane="history">
+            <header class="panel-header">
+              <div><p class="eyebrow">DOCUMENT</p><h2 id="historyTitle">History</h2></div>
+              <span class="layer-count" id="historyCount">0</span>
+            </header>
+            <div class="history-list" id="historyList" role="listbox" aria-label="Document history"></div>
+            <div class="panel-empty" id="historyEmpty">Edit the document to build history.</div>
+          </section>
         </section>
         <section class="panel details-panel" id="workspacePanelInfo" role="tabpanel" aria-labelledby="workspacePanelInfoButton" data-workspace-panel data-secondary-panel hidden>
           <div class="inspection-tabs" role="tablist" aria-label="Document inspection">

@@ -576,7 +576,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .layers-panel .layer-list { flex: 1 1 auto; }
 .layer-list { min-height: 0; overflow: auto; padding: 0 7px 10px; overflow-anchor: none; }
 .layer-spacer { width: 1px; pointer-events: none; }
+.history-panel { overflow: hidden; }
+.history-deck-tabs { flex: 0 0 32px; display: grid; grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--line); background: #111416; }
+.history-deck-tabs button { min-width: 0; border: 0; border-bottom: 2px solid transparent;
+  color: var(--text-faint); background: transparent; font-size: 10px; cursor: pointer; }
+.history-deck-tabs button:hover { color: var(--text); background: #ffffff08; }
+.history-deck-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface-1); }
+.history-deck-pane { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; }
 .history-list { max-height: 240px; overflow: auto; padding: 0 7px 10px; }
+.history-deck-pane .history-list { min-height: 0; max-height: none; flex: 1 1 auto; }
+.history-dock-dialog[open] { position: static; inset: auto; display: block; width: 100%; max-width: none;
+  min-height: 0; max-height: none; flex: 1 1 auto; margin: 0; padding: 0; overflow: auto;
+  color: var(--text); background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+.history-dock-dialog[open]::backdrop { display: none; }
+.history-dock-dialog header { min-height: 42px; padding: 7px 10px; }
+.history-dock-dialog section { padding: 8px 10px 12px; }
+.history-dock-dialog .recovery-row { grid-template-columns: 1fr; }
+.history-dock-dialog .recovery-actions { justify-content: flex-start; }
 .details-panel { overflow: hidden; }
 .inspection-tabs { flex: 0 0 34px; display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
 .inspection-tabs button { border: 0; border-bottom: 2px solid transparent; color: var(--text-faint); background: transparent; font-size: 10px; cursor: pointer; }
