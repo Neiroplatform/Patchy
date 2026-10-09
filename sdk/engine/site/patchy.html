@@ -408,15 +408,11 @@
         </div>
         <section class="panel layers-panel" id="workspacePanelLayers" role="tabpanel" aria-labelledby="workspacePanelLayersButton" data-workspace-panel data-primary-panel>
           <div class="document-structure-tabs" role="tablist" aria-label="Document structure">
-            <button id="documentStructureLayersTab" type="button" role="tab" aria-selected="true" aria-controls="documentStructureLayersPane" data-structure-tab="layers">Layers</button>
+            <button id="documentStructureLayersTab" type="button" role="tab" aria-selected="true" aria-controls="documentStructureLayersPane" data-structure-tab="layers">Layers <span class="tab-count" id="layerCount">0</span></button>
             <button id="documentStructureChannelsTab" type="button" role="tab" aria-selected="false" aria-controls="documentStructureChannelsPane" data-structure-tab="channels" tabindex="-1">Channels</button>
             <button id="documentStructurePathsTab" type="button" role="tab" aria-selected="false" aria-controls="documentStructurePathsPane" data-structure-tab="paths" tabindex="-1">Paths</button>
           </div>
           <section class="document-structure-pane document-structure-layers" id="documentStructureLayersPane" role="tabpanel" aria-labelledby="documentStructureLayersTab" data-structure-pane="layers">
-          <header class="panel-header">
-            <div><p class="eyebrow">STRUCTURE</p><h2>Layers</h2></div>
-            <span class="layer-count" id="layerCount">0</span>
-          </header>
           <div class="layer-quick-controls" aria-label="Common layer appearance">
             <label><span>Blend</span><select id="quickLayerBlendSelect" aria-label="Layer blend mode" disabled>
               <option value="0">Pass through</option><option value="1">Normal</option><option value="2">Multiply</option>
@@ -608,15 +604,11 @@
         </section>
         <section class="panel history-panel" id="workspacePanelHistory" role="tabpanel" aria-labelledby="workspacePanelHistoryButton" data-workspace-panel data-secondary-panel>
           <div class="history-deck-tabs" role="tablist" aria-label="History and local state">
-            <button id="historyHistoryTab" type="button" role="tab" aria-selected="true" aria-controls="historyHistoryPane" data-history-tab="history">History</button>
+            <button id="historyHistoryTab" type="button" role="tab" aria-selected="true" aria-controls="historyHistoryPane" data-history-tab="history">History <span class="tab-count" id="historyCount">0</span></button>
             <button id="historyVersionsTab" type="button" role="tab" aria-selected="false" aria-controls="versionHistoryDialog" data-history-tab="versions" tabindex="-1">Versions</button>
             <button id="historyRecoveryTab" type="button" role="tab" aria-selected="false" aria-controls="recoveryDialog" data-history-tab="recovery" tabindex="-1">Recovery</button>
           </div>
           <section class="history-deck-pane" id="historyHistoryPane" role="tabpanel" aria-labelledby="historyHistoryTab" data-history-pane="history">
-            <header class="panel-header">
-              <div><p class="eyebrow">DOCUMENT</p><h2 id="historyTitle">History</h2></div>
-              <span class="layer-count" id="historyCount">0</span>
-            </header>
             <div class="history-list" id="historyList" role="listbox" aria-label="Document history"></div>
             <div class="panel-empty" id="historyEmpty">Edit the document to build history.</div>
           </section>
