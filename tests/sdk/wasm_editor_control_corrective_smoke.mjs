@@ -143,7 +143,9 @@ async function canvasPixels() {
   });
 }
 
-const editorUrl = `${baseUrl.replace(/\/$/, "")}/build/wasm-sdk/site/patchy.html?editor-control-corrective=1`;
+const editorPath = (process.env.PATCHY_EDITOR_PATH || "build/wasm-sdk/site/patchy.html")
+  .replace(/^\/+/, "");
+const editorUrl = `${baseUrl.replace(/\/$/, "")}/${editorPath}?editor-control-corrective=1`;
 try {
   await page.goto(editorUrl, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "ready" &&

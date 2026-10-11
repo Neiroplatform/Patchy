@@ -38,7 +38,9 @@ page.on("requestfailed", (request) => failedRequests.push(
   `${request.url()} ${request.failure()?.errorText || "failed"}`));
 page.on("pageerror", (error) => pageErrors.push(String(error)));
 
-const editorUrl = `${baseUrl.replace(/\/$/, "")}/build/wasm-sdk/site/patchy.html?adaptive-shell-smoke=1`;
+const editorPath = (process.env.PATCHY_EDITOR_PATH || "build/wasm-sdk/site/patchy.html")
+  .replace(/^\/+/, "");
+const editorUrl = `${baseUrl.replace(/\/$/, "")}/${editorPath}?adaptive-shell-smoke=1`;
 const screenshotDir = process.env.PATCHY_ADAPTIVE_SHELL_SCREENSHOT_DIR;
 const viewports = [
   { width: 1440, height: 900, placement: "side" },
