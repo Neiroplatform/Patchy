@@ -127,7 +127,7 @@ test("production shell stages and publishes the accessible command surface", asy
   assert.match(css, /\.tool-cluster[\s\S]+width: 36px/);
   assert.match(css, /\.tool-group-toggle[\s\S]+position: absolute/);
   assert.match(css, /\.reorder-button \{ min-width: 24px; width: 24px; \}/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]+\.tool-cluster \{ width: 60px; height: 40px; grid-template-columns: 36px 24px; \}[\s\S]+\.tool-group-toggle \{ width: 24px; height: 40px; \}/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]+:root \{ --topbar-height: 92px; --rail-width: 68px; \}[\s\S]+\.tool-cluster \{ width: 64px; height: 40px; grid-template-columns: 40px 24px; \}[\s\S]+\.tool-cluster > \.tool-button \{ width: 40px; min-width: 40px; \}[\s\S]+\.tool-group-toggle \{ width: 24px; height: 40px; \}/);
   assert.match(css, /\.workspace-panel-tabs/);
   assert.match(css, /\.command-palette::backdrop/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]+\.command-menubar/);

@@ -877,7 +877,7 @@ kbd { display: inline-grid; min-width: 22px; min-height: 22px; padding: 2px 5px;
 
 @media (max-width: 560px) {
   .version-create-row { grid-template-columns: 1fr; }
-  :root { --topbar-height: 92px; --rail-width: 64px; }
+  :root { --topbar-height: 92px; --rail-width: 68px; }
   .topbar { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: 42px 50px; }
   .command-menubar { grid-column: 2; grid-row: 1; overflow-x: auto; scrollbar-width: none; }
   .command-menubar::-webkit-scrollbar { display: none; }
@@ -897,11 +897,11 @@ kbd { display: inline-grid; min-width: 22px; min-height: 22px; padding: 2px 5px;
   .save-label { display: inline; }
   .tool-rail { padding-inline: 2px; gap: 1px; }
   .tool-button { width: 40px; height: 40px; min-height: 40px; }
-  .tool-cluster { width: 60px; height: 40px; grid-template-columns: 36px 24px; }
-  .tool-cluster > .tool-button { width: 36px; min-width: 36px; }
+  .tool-cluster { width: 64px; height: 40px; grid-template-columns: 40px 24px; }
+  .tool-cluster > .tool-button { width: 40px; min-width: 40px; }
   .tool-group-toggle { width: 24px; height: 40px; }
   .tool-group-toggle::after { right: 6px; bottom: 7px; }
-  .tool-group-menu { left: 64px; max-width: calc(100vw - 76px); }
+  .tool-group-menu { left: 68px; max-width: calc(100vw - 80px); }
   .empty-state { width: 100%; }
   .empty-state h1 { max-width: 100%; overflow-wrap: anywhere; font-size: 24px; }
   .empty-actions { flex-direction: column; }
