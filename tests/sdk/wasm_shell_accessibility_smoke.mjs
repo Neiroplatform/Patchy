@@ -377,8 +377,17 @@ try {
   check(byId("detailRevision").textContent === transformRevision, "dialog Escape committed document state");
 
   smokeStage = "native-file-lifecycle";
-  // Keep lifecycle semantics under the cumulative shell fixture while bounding
-  // the layered payload encoded repeatedly on slower hosted Windows browsers.
+  // Exercise lifecycle semantics in a clean document so hosted Edge does not
+  // encode the cumulative shell fixture's long edit history on every save.
+  const lifecycleDocumentCount = doc.querySelectorAll('#documentTabs [role="tab"]').length;
+  byId("newButton").click();
+  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length ===
+      lifecycleDocumentCount + 1 &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native lifecycle fixture did not create an isolated document");
+  await importSvg("lifecycle.svg", "#5b79d1");
+  check(!byId("layerOpacityInput").disabled,
+    "native lifecycle fixture did not create an editable pixel layer");
   const lifecycleResizeRevision = Number(byId("detailRevision").textContent);
   byId("transformButton").click();
   await waitFor(() => byId("documentDialog").open,
@@ -484,19 +493,20 @@ try {
   frame.contentWindow.URL.revokeObjectURL = originalLifecycleRevokeObjectUrl;
   frame.contentWindow.HTMLAnchorElement.prototype.click = originalLifecycleAnchorClick;
 
-  const lifecycleRestoreRevision = Number(byId("detailRevision").textContent);
-  byId("transformButton").click();
-  await waitFor(() => byId("documentDialog").open,
-    "Canvas operations did not reopen after native lifecycle fixture");
-  byId("resizeConstrainInput").checked = false;
-  byId("documentWidthInput").value = "1600";
-  byId("documentHeightInput").value = "1000";
-  byId("resizeImageButton").click();
-  await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleRestoreRevision + 1 &&
+  const lifecycleDirtyRevision = Number(byId("detailRevision").textContent);
+  byId("undoButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleDirtyRevision + 1 &&
+    byId("detailState").textContent === "Сохранён" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native lifecycle fixture did not return to its durable savepoint", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  byId("documentTabs")
+    .querySelector('.document-tab[data-active="true"] button[aria-hidden="true"]').click();
+  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length ===
+      lifecycleDocumentCount &&
     byId("detailCanvas").textContent.replaceAll(" ", "") === "1600×1000" &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
-    !byId("documentDialog").open,
-  "native lifecycle fixture did not restore the document");
+    byId("documentTabs").querySelector('[role="tab"][aria-selected="true"]'),
+  "native lifecycle fixture did not close back to the cumulative shell document");
 
   smokeStage = "document-lifecycle";
   byId("zoomActualButton").click(); await delay(50);

@@ -220,12 +220,17 @@ test("production shell stages the lifecycle and exposes open/save/save-as contra
   assert.match(editor, /fileLifecycle\.remapAll\(/);
   assert.match(editor, /openDocuments\.map\(\(item\) => item\.documentId\)/);
   assert.match(browserSmoke, /const NATIVE_FILE_LIFECYCLE_TIMEOUT = 180_000;/);
-  assert.equal((browserSmoke.match(/NATIVE_FILE_LIFECYCLE_TIMEOUT\);/g) || []).length, 6);
+  assert.equal((browserSmoke.match(/NATIVE_FILE_LIFECYCLE_TIMEOUT\);/g) || []).length, 7);
   assert.match(browserSmoke,
     /const NATIVE_FILE_LIFECYCLE_SIZE = Object\.freeze\(\{ width: 400, height: 250 \}\);/);
+  const lifecycleCreate = browserSmoke.indexOf("native lifecycle fixture did not create an isolated document");
+  const lifecycleLayer = browserSmoke.indexOf("native lifecycle fixture did not create an editable pixel layer");
   const lifecycleShrink = browserSmoke.indexOf("native lifecycle fixture did not shrink the document");
   const lifecycleSave = browserSmoke.indexOf('byId("saveButton").click();', lifecycleShrink);
-  const lifecycleRestore = browserSmoke.indexOf("native lifecycle fixture did not restore the document");
-  assert.ok(lifecycleShrink >= 0 && lifecycleShrink < lifecycleSave && lifecycleSave < lifecycleRestore,
-    "native lifecycle must save a bounded fixture before restoring the cumulative shell document");
+  const lifecycleClean = browserSmoke.indexOf("native lifecycle fixture did not return to its durable savepoint");
+  const lifecycleClose = browserSmoke.indexOf(
+    "native lifecycle fixture did not close back to the cumulative shell document");
+  assert.ok(lifecycleCreate >= 0 && lifecycleCreate < lifecycleLayer && lifecycleLayer < lifecycleShrink &&
+    lifecycleShrink < lifecycleSave && lifecycleSave < lifecycleClean && lifecycleClean < lifecycleClose,
+    "native lifecycle must save a bounded isolated document before returning to the cumulative fixture");
 });
