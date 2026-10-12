@@ -109,6 +109,36 @@ test("checkpoint queue reports write failure without rejecting its idle barrier"
   assert.deepEqual(states, [["pending", undefined], ["error", "quota"]]);
 });
 
+test("explicit save shares the encoder lane without waiting for checkpoint storage", async () => {
+  let releaseWrite;
+  const writeBlocked = new Promise((resolve) => { releaseWrite = resolve; });
+  const events = [];
+  const queue = new PatchyCheckpointQueue({
+    save: async (checkpoint) => {
+      events.push(`checkpoint-save-${checkpoint.revision}`);
+      return new Uint8Array([checkpoint.revision]);
+    },
+    write: async (checkpoint) => {
+      events.push(`checkpoint-write-${checkpoint.revision}`);
+      if (checkpoint.revision === 1) await writeBlocked;
+      return { generation: checkpoint.revision };
+    },
+  });
+  queue.schedule({ revision: 1 });
+  await new Promise((resolve) => setImmediate(resolve));
+  queue.schedule({ revision: 2 });
+  const explicit = queue.runExclusiveSave(async () => {
+    events.push("explicit-save");
+    return "saved";
+  });
+  assert.equal(await explicit, "saved");
+  assert.deepEqual(events, ["checkpoint-save-1", "checkpoint-write-1", "explicit-save"]);
+  releaseWrite();
+  await queue.whenIdle();
+  assert.deepEqual(events, ["checkpoint-save-1", "checkpoint-write-1", "explicit-save",
+    "checkpoint-save-2", "checkpoint-write-2"]);
+});
+
 test("alternating generations restore the newest digest-valid PSD", async () => {
   const { store } = fixture();
   const first = await store.checkpoint({ id: "document-1", name: "One.psd", revision: 1n,

@@ -224,12 +224,14 @@ test("production shell stages the lifecycle and exposes open/save/save-as contra
   assert.match(editor, /const savingSnapshot = snapshot;/);
   assert.match(editor, /automaticRecoveryEnabled = false;/);
   const explicitSaveStart = editor.indexOf("async function saveDocument(saveAs = false)");
-  const checkpointBarrier = editor.indexOf(
-    "await checkpointQueues.get(savingSnapshot.documentId)?.whenIdle();", explicitSaveStart);
+  const checkpointQueue = editor.indexOf(
+    "const checkpointQueue = checkpointQueues.get(savingSnapshot.documentId);", explicitSaveStart);
+  const exclusiveEncoder = editor.indexOf(
+    "checkpointQueue.runExclusiveSave(() => savingClient.saveBlob(format))", explicitSaveStart);
   const explicitLifecycleSave = editor.indexOf("await fileLifecycle.save(", explicitSaveStart);
-  assert.ok(explicitSaveStart >= 0 && checkpointBarrier > explicitSaveStart &&
-    explicitLifecycleSave > checkpointBarrier,
-  "explicit Save must serialize behind any in-flight recovery checkpoint");
+  assert.ok(explicitSaveStart >= 0 && checkpointQueue > explicitSaveStart &&
+    explicitLifecycleSave > checkpointQueue && exclusiveEncoder > explicitLifecycleSave,
+  "explicit Save must share the recovery encoder lane without waiting for storage publication");
   assert.match(editor, /savingClient\.markSaved\([\s\S]*savingSnapshot\.documentId,[\s\S]*savingSnapshot\.stateId\)/);
   assert.match(editor, /savingClient\.state === "crashed" && client === savingClient/);
   assert.match(editor, /documentTab\.dirty/);

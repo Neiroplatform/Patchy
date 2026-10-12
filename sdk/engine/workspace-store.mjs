@@ -29,6 +29,7 @@ export class PatchyCheckpointQueue {
   #pending = null;
   #running = false;
   #idle = Promise.resolve();
+  #saveTail = Promise.resolve();
 
   constructor({ save, write, onState = () => {} }) {
     if (typeof save !== "function" || typeof write !== "function") {
@@ -51,12 +52,21 @@ export class PatchyCheckpointQueue {
 
   whenIdle() { return this.#idle; }
 
+  runExclusiveSave(operation) {
+    if (typeof operation !== "function") {
+      throw new TypeError("Exclusive save requires an operation");
+    }
+    const result = this.#saveTail.then(operation, operation);
+    this.#saveTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
   async #drain() {
     try {
       while (this.#pending) {
         const checkpoint = this.#pending;
         this.#pending = null;
-        const bytes = await this.#save(checkpoint);
+        const bytes = await this.runExclusiveSave(() => this.#save(checkpoint));
         const manifest = await this.#write(checkpoint, bytes);
         this.#onState("confirmed", checkpoint, manifest);
       }

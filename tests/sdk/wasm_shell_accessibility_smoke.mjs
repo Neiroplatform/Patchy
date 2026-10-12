@@ -280,12 +280,19 @@ try {
     clientY: canvasRect.top + y * canvasRect.height / 1000,
   });
   const moveRevision = Number(byId("detailRevision").textContent);
-  const start = { x: 200, y: 200 };
-  moveCanvas.dispatchEvent(pointer("pointerdown", start.x, start.y, 1));
   const originalPoints = byId("transformPolygon").getAttribute("points").trim().split(/[ ,]+/).map(Number);
+  const originalXs = [originalPoints[0], originalPoints[2], originalPoints[4], originalPoints[6]];
+  const originalYs = [originalPoints[1], originalPoints[3], originalPoints[5], originalPoints[7]];
+  const start = { x: (Math.min(...originalXs) + Math.max(...originalXs)) / 2,
+    y: (Math.min(...originalYs) + Math.max(...originalYs)) / 2 };
   const originalRight = Math.max(originalPoints[0], originalPoints[2], originalPoints[4], originalPoints[6]);
   const nearCenterDelta = 800 - originalRight - 1;
-  moveCanvas.dispatchEvent(pointer("pointermove", start.x + nearCenterDelta, start.y, 1));
+  moveCanvas.dispatchEvent(pointer("pointerdown", start.x, start.y, 1));
+  await waitFor(() => {
+    moveCanvas.dispatchEvent(pointer("pointermove", start.x + nearCenterDelta, start.y, 1));
+    const points = byId("transformPolygon").getAttribute("points").trim().split(/[ ,]+/).map(Number);
+    return Math.max(points[0], points[2], points[4], points[6]) === 800;
+  }, "Move preview did not become ready after content hit-testing");
   const snappedPoints = byId("transformPolygon").getAttribute("points").trim().split(/[ ,]+/).map(Number);
   check(Math.max(snappedPoints[0], snappedPoints[2], snappedPoints[4], snappedPoints[6]) === 800,
     "Move preview did not snap the selected layer edge to the center guide");

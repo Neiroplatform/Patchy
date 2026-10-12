@@ -3107,11 +3107,6 @@ async function saveDocument(saveAs = false) {
     applyingContents ? "Committing one guarded parent revision" :
       (fileLifecycle.supported ? "Writing after permission to a local file" : "Preparing a local browser download"));
   try {
-    // Recovery and explicit Save both encode through the same canonical Worker.
-    // Let the already-scheduled checkpoint finish before starting a second
-    // encoder request; the busy state prevents another UI mutation from
-    // scheduling work between this barrier and the explicit save.
-    await checkpointQueues.get(savingSnapshot.documentId)?.whenIdle();
     if (applyingContents) {
       const before = savingSnapshot;
       const next = await savingClient.saveSmartObjectContents(savingSnapshot.documentId);
@@ -3121,9 +3116,15 @@ async function saveDocument(saveAs = false) {
       scheduleCheckpoint(next);
       return;
     }
+    const checkpointQueue = checkpointQueues.get(savingSnapshot.documentId);
     const result = await fileLifecycle.save({ documentId: savingSnapshot.documentId,
       projection: savingSnapshot, format, name: `${exportBaseName()}.${format}`, saveAs,
-      createBlob: () => savingClient.saveBlob(format) });
+      // Recovery publication may still be writing to origin-private storage.
+      // Serialize only the canonical Worker encoder, not the unrelated storage
+      // write, so a stalled OPFS write cannot stall an explicit local Save.
+      createBlob: () => checkpointQueue
+        ? checkpointQueue.runExclusiveSave(() => savingClient.saveBlob(format))
+        : savingClient.saveBlob(format) });
     if (result.kind === "permission-denied") {
       throw new Error("Write permission was not granted; the document remains modified.");
     }
