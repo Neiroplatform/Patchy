@@ -3034,6 +3034,11 @@ async function saveDocument(saveAs = false) {
     applyingContents ? "Committing one guarded parent revision" :
       (fileLifecycle.supported ? "Writing after permission to a local file" : "Preparing a local browser download"));
   try {
+    // Recovery and explicit Save both encode through the same canonical Worker.
+    // Let the already-scheduled checkpoint finish before starting a second
+    // encoder request; the busy state prevents another UI mutation from
+    // scheduling work between this barrier and the explicit save.
+    await checkpointQueues.get(savingSnapshot.documentId)?.whenIdle();
     if (applyingContents) {
       const before = savingSnapshot;
       const next = await savingClient.saveSmartObjectContents(savingSnapshot.documentId);
