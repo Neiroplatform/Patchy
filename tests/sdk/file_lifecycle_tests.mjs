@@ -46,8 +46,14 @@ test("native open picker offers layered and raster documents", async () => {
   const picked = await lifecycle.pickOpen();
   assert.equal(picked.kind, "handles");
   assert.equal(options.multiple, true);
-  assert.equal(options.types.length, 2);
-  assert.deepEqual(options.types[1].accept["image/jpeg"], [".jpg", ".jpeg"]);
+  assert.equal(options.types.length, 1,
+    "Open must expose one combined filter so raster files are selectable without changing picker type");
+  assert.deepEqual(options.types[0].accept["application/octet-stream"], [".psd", ".psb"]);
+  assert.deepEqual(options.types[0].accept["image/png"], [".png"]);
+  assert.deepEqual(options.types[0].accept["image/jpeg"], [".jpg", ".jpeg"]);
+  assert.deepEqual(options.types[0].accept["image/webp"], [".webp"]);
+  assert.deepEqual(options.types[0].accept["image/avif"], [".avif"]);
+  assert.deepEqual(options.types[0].accept["image/svg+xml"], [".svg"]);
 });
 
 test("native open returns every selected layered or raster handle in picker order", async () => {
@@ -64,15 +70,18 @@ test("native open returns every selected layered or raster handle in picker orde
 });
 
 test("durable persistence is reported only after writable close", async () => {
-  const target = handle();
+  const target = handle(); let saveOptions;
   const lifecycle = new BrowserFileLifecycle({ scope: { showOpenFilePicker() {},
-    showSaveFilePicker: async () => target } });
+    showSaveFilePicker: async (value) => { saveOptions = value; return target; } } });
   lifecycle.register(7, projection(1, false), "psd");
   let encoded = 0;
   const result = await lifecycle.save({ documentId: 7, projection: projection(2), format: "psd",
     name: "Artwork.psd", createBlob: async () => { encoded++; return new Blob(["bytes"]); } });
   assert.deepEqual({ kind: result.kind, durable: result.durable, bytes: result.bytes },
     { kind: "file", durable: true, bytes: 5 });
+  assert.equal(saveOptions.types.length, 1);
+  assert.deepEqual(saveOptions.types[0].accept,
+    { "application/octet-stream": [".psd", ".psb"] });
   assert.equal(encoded, 1); assert.equal(target.writes.length, 1); assert.equal(target.closed, 1);
 });
 

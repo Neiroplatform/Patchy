@@ -1,11 +1,13 @@
 const OPEN_TYPES = [
-  { description: "Layered Photoshop document", accept: { "application/octet-stream": [".psd", ".psb"] } },
-  { description: "Image", accept: {
+  { description: "Layered documents and images", accept: {
+    "application/octet-stream": [".psd", ".psb"],
     "image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"], "image/webp": [".webp"],
     "image/avif": [".avif"], "image/svg+xml": [".svg"],
   } },
 ];
-const LAYERED_TYPES = OPEN_TYPES.slice(0, 1);
+const LAYERED_TYPES = [
+  { description: "Layered Photoshop document", accept: { "application/octet-stream": [".psd", ".psb"] } },
+];
 
 function abortError(error) {
   return error?.name === "AbortError";

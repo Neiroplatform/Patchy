@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -38,6 +39,9 @@ const firstRaster = fileURLToPath(new URL(
   "../../test-fixtures/readme/stylized_sunset_cc0.png", import.meta.url));
 const secondRaster = fileURLToPath(new URL(
   "../../test-fixtures/readme/san_francisco_cityscape_cc0.jpg", import.meta.url));
+const [firstRasterBase64, secondRasterBase64] = (await Promise.all([
+  readFile(firstRaster), readFile(secondRaster),
+])).map((value) => value.toString("base64"));
 const editorPath = process.env.PATCHY_EDITOR_PATH || "build/wasm-sdk/site/patchy.html";
 const editorUrl = `${baseUrl.replace(/\/$/, "")}/${editorPath.replace(/^\//, "")}?browser-tool-runtime=1`;
 
@@ -108,15 +112,21 @@ try {
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
   { timeout: 90_000 });
 
-  await page.evaluate(() => Object.defineProperty(window, "showOpenFilePicker", {
-    configurable: true, value: undefined,
-  }));
-  const [chooser] = await Promise.all([
-    page.waitForEvent("filechooser"),
-    page.click("#openButton"),
-  ]);
-  assert.equal(chooser.isMultiple(), true, "Open fallback did not allow multiple files");
-  await chooser.setFiles([firstRaster, secondRaster]);
+  await page.evaluate(({ png, jpeg }) => {
+    const decode = (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+    const files = [
+      new File([decode(png)], "stylized_sunset_cc0.png", { type: "image/png" }),
+      new File([decode(jpeg)], "san_francisco_cityscape_cc0.jpg", { type: "image/jpeg" }),
+    ];
+    Object.defineProperty(window, "showOpenFilePicker", { configurable: true,
+      value: async (options) => {
+        window.__patchyOpenPickerOptions = options;
+        return files.map((file) => ({ name: file.name, getFile: async () => file }));
+      } });
+    Object.defineProperty(window, "showSaveFilePicker", { configurable: true,
+      value: async () => { throw new DOMException("cancel", "AbortError"); } });
+  }, { png: firstRasterBase64, jpeg: secondRasterBase64 });
+  await page.click("#openButton");
   await page.waitForFunction(() =>
     document.querySelectorAll('#documentTabs [role="tab"]').length === 2 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
@@ -124,6 +134,22 @@ try {
   assert.deepEqual((await page.locator('#documentTabs [role="tab"]').allTextContents())
     .map((value) => value.replace(/^\s*•\s*/, "")),
   ["stylized_sunset_cc0.psd", "san_francisco_cityscape_cc0.psd"]);
+  const pickerOptions = await page.evaluate(() => window.__patchyOpenPickerOptions);
+  assert.equal(pickerOptions.multiple, true, "native Open did not allow multiple files");
+  assert.equal(pickerOptions.types.length, 1,
+    "native Open split layered and raster formats into separate user-visible filters");
+  assert.deepEqual(pickerOptions.types[0].accept, {
+    "application/octet-stream": [".psd", ".psb"],
+    "image/png": [".png"],
+    "image/jpeg": [".jpg", ".jpeg"],
+    "image/webp": [".webp"],
+    "image/avif": [".avif"],
+    "image/svg+xml": [".svg"],
+  });
+  assert.equal(await page.locator("#fileInput").getAttribute("multiple"), "",
+    "fallback Open lost multi-file selection");
+  assert.match(await page.locator("#fileInput").getAttribute("accept"), /\.psd.*\.png.*\.jpe?g.*\.webp.*\.avif.*\.svg/,
+    "fallback Open format set diverged from native Open");
   await idle();
 
   await selectTool("brushToolButton");
