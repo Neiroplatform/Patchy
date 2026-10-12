@@ -51,6 +51,20 @@ const idle = () => page.waitForFunction(() =>
   document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null,
 { timeout: 90_000 });
 
+async function waitFor(predicate, message, timeout = 90_000) {
+  const deadline = Date.now() + timeout;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      if (await predicate()) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(message, lastError ? { cause: lastError } : undefined);
+}
+
 async function waitForMutation(before, label) {
   await page.waitForFunction(({ before, label }) =>
     Number(document.querySelector("#detailRevision")?.textContent) === before + 1 &&
@@ -492,7 +506,7 @@ try {
 
   before = await revision();
   await page.locator("#layerLockInput").check();
-  await waitForMutation(before, "Updating layer");
+  await waitForMutation(before, "Changing layer lock");
   const lockedRevision = await revision();
   await page.locator("#canvasViewport").focus();
   await page.keyboard.press("ArrowRight");
@@ -500,8 +514,11 @@ try {
   assert.equal(await revision(), lockedRevision, "position-locked shape moved from the keyboard");
   before = await revision();
   await page.locator("#layerLockInput").uncheck();
-  await waitForMutation(before, "Updating layer");
+  await waitForMutation(before, "Changing layer lock");
 
+  // Raster authoring shortcuts are only enabled with a pixel target. Keep the
+  // physical-key assertion independent from the vector-shape fixture above.
+  await rasterRow.locator(".layer-select-button").click();
   for (const shortcut of [
     { key: "п", code: "KeyG", tool: "gradient" },
     { key: "м", code: "KeyV", tool: "move" },
@@ -509,9 +526,10 @@ try {
     { key: "у", code: "KeyE", tool: "eraser" },
     { key: "с", code: "KeyC", tool: "crop" },
   ]) {
-    await page.evaluate(({ key, code }) => window.dispatchEvent(new KeyboardEvent("keydown", {
-      key, code, bubbles: true,
-    })), shortcut);
+    await page.evaluate(({ key, code }) =>
+      document.querySelector("#canvasViewport").dispatchEvent(new KeyboardEvent("keydown", {
+        key, code, bubbles: true,
+      })), shortcut);
     await waitFor(async () => await page.locator("#toolOptions").getAttribute("data-tool") === shortcut.tool,
       `physical ${shortcut.code} shortcut did not select ${shortcut.tool} under a Russian key value`);
   }
