@@ -475,6 +475,31 @@ void free_transform_preserves_editable_vector_shape() {
   CHECK(document.layers()[0].vector_shape()->path == unchanged);
 }
 
+void position_locked_vector_shape_transform_fails_without_mutation() {
+  auto document = geometry_test_document();
+  const auto layer_id = document.layers()[0].id();
+  const auto before_bounds = document.layers()[0].bounds();
+  const auto before_path = document.layers()[0].vector_shape()->path;
+  const auto before_data = document.layers()[0].pixels().data();
+  const std::vector<std::uint8_t> before_pixels(before_data.begin(), before_data.end());
+  document.layers()[0].set_lock_flags(patchy::kLayerLockPosition);
+
+  patchy::LayerTransformRequest request;
+  request.quad = {20.0, 20.0, 64.0, 20.0, 64.0, 54.0, 20.0, 54.0};
+  std::string error;
+  CHECK(!patchy::transform_layer(document, layer_id, request, nullptr, &error));
+  CHECK(error == "transform target position is locked");
+  const auto& unchanged = document.layers()[0];
+  CHECK(unchanged.bounds().x == before_bounds.x &&
+        unchanged.bounds().y == before_bounds.y &&
+        unchanged.bounds().width == before_bounds.width &&
+        unchanged.bounds().height == before_bounds.height);
+  CHECK(unchanged.vector_shape()->path == before_path);
+  const auto unchanged_pixels = unchanged.pixels().data();
+  CHECK(std::vector<std::uint8_t>(unchanged_pixels.begin(), unchanged_pixels.end()) ==
+        before_pixels);
+}
+
 void path_fit_square_keeps_four_corner_anchors() {
   // A traced rectangle (collinear runs already collapsed) must fit to exactly
   // its four corners with collapsed handles, at any reasonable tolerance.
@@ -753,6 +778,8 @@ std::vector<patchy::test::TestCase> vector_shape_tests() {
       {"geometry_ops_transform_vector_data", geometry_ops_transform_vector_data},
       {"free_transform_preserves_editable_vector_shape",
        free_transform_preserves_editable_vector_shape},
+      {"position_locked_vector_shape_transform_fails_without_mutation",
+       position_locked_vector_shape_transform_fails_without_mutation},
       {"path_fit_square_keeps_four_corner_anchors", path_fit_square_keeps_four_corner_anchors},
       {"path_fit_circle_is_smooth_and_within_tolerance",
        path_fit_circle_is_smooth_and_within_tolerance},

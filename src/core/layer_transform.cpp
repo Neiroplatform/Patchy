@@ -461,6 +461,10 @@ bool transform_layer(Document& document, LayerId layer_id,
   if (current == nullptr) {
     return fail(error, "transform target layer does not exist");
   }
+  if ((layer_effective_lock_flags(document.layers(), layer_id) &
+       kLayerLockPosition) != kLayerLockNone) {
+    return fail(error, "transform target position is locked");
+  }
   const bool editable_text = layer_is_text(*current);
   const bool editable_smart_object = layer_is_smart_object(*current);
   const bool editable_vector_shape = layer_is_vector_shape(*current);
@@ -683,6 +687,10 @@ bool transform_layers(Document& document,
   for (const auto& [id, bounds] : leaves) {
     const auto* layer = std::as_const(document).find_layer(id);
     if (layer == nullptr) return fail(error, "transform leaf layer does not exist");
+    if ((layer_effective_lock_flags(document.layers(), id) &
+         kLayerLockPosition) != kLayerLockNone) {
+      return fail(error, "transform target position is locked");
+    }
     const auto quad = transformed_rect(bounds, *matrix);
     const auto target_bounds = bounds_for_points(quad);
     if (!target_bounds.has_value()) {
@@ -842,7 +850,12 @@ bool arrange_layers(Document& document, const LayerArrangeRequest& request,
     for (const auto& [leaf_id, bounds] : leaves) {
       (void)bounds;
       const auto* leaf = std::as_const(document).find_layer(leaf_id);
-      if (leaf == nullptr || !validate_arrange_leaf(*leaf, error)) return false;
+      if (leaf == nullptr) return fail(error, "arrange leaf layer does not exist");
+      if ((layer_effective_lock_flags(document.layers(), leaf_id) &
+           kLayerLockPosition) != kLayerLockNone) {
+        return fail(error, "arrange target position is locked");
+      }
+      if (!validate_arrange_leaf(*leaf, error)) return false;
     }
     const auto bounds = bounded_union(leaves);
     if (!bounds.has_value()) {

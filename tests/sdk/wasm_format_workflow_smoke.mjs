@@ -40,6 +40,8 @@ try {
   const exportInput = { rgba: flattened, width: 4, height: 3, title: "Formats <whole>" };
   const png = await encodeFlatDocument({ ...exportInput, format: "png" });
   const jpeg = await encodeFlatDocument({ ...exportInput, format: "jpeg" });
+  const jpegLow = await encodeFlatDocument({ ...exportInput, format: "jpeg", jpegQuality: 30 });
+  const jpegHigh = await encodeFlatDocument({ ...exportInput, format: "jpeg", jpegQuality: 90 });
   const webp = await encodeFlatDocument({ ...exportInput, format: "webp" });
   const svgBlob = await encodeFlatDocument({ ...exportInput, format: "svg" });
   check(png.size > 8 && jpeg.size > 2 && webp.size > 12, "flat browser codec returned empty output");
@@ -48,6 +50,14 @@ try {
   const webpHead = new TextDecoder().decode(await webp.slice(0, 12).arrayBuffer());
   check(pngHead[0] === 0x89 && pngHead[1] === 0x50, "PNG signature mismatch");
   check(jpegHead[0] === 0xff && jpegHead[1] === 0xd8, "JPEG signature mismatch");
+  const lowBytes = new Uint8Array(await jpegLow.arrayBuffer());
+  const highBytes = new Uint8Array(await jpegHigh.arrayBuffer());
+  check(lowBytes.length !== highBytes.length || lowBytes.some((value, index) => value !== highBytes[index]),
+    "distinct JPEG quality settings produced identical bytes");
+  let invalidQualityRejected = false;
+  try { await encodeFlatDocument({ ...exportInput, format: "jpeg", jpegQuality: 0 }); }
+  catch (error) { invalidQualityRejected = /quality/.test(error.message); }
+  check(invalidQualityRejected, "out-of-range JPEG quality was accepted");
   check(webpHead.startsWith("RIFF") && webpHead.endsWith("WEBP"), "WebP signature mismatch");
   const svg = await svgBlob.text();
   const parsedSvg = new DOMParser().parseFromString(svg, "image/svg+xml");

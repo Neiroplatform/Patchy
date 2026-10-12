@@ -97,6 +97,12 @@ try {
   "visual Crop gesture did not retain document-space coordinates");
   check(byId("cropHandles").querySelectorAll("circle").length === 8,
     "visual Crop gesture did not expose all direct resize handles");
+  await dragCanvas("cropToolButton", { x: 6.2, y: 8.1 }, { x: 8.2, y: 10.1 });
+  check(byId("cropBoundary").getAttribute("x") === "5" &&
+    byId("cropBoundary").getAttribute("y") === "6" &&
+    byId("cropBoundary").getAttribute("width") === "10" &&
+    byId("cropBoundary").getAttribute("height") === "12",
+  "dragging the Crop body did not translate it while preserving dimensions");
   before = revision(); byId("cancelCropButton").click();
   await waitFor(() => revision() === before && byId("cropOverlay").hasAttribute("hidden"),
     "direct Crop cancel changed the document or retained its overlay");

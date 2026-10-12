@@ -180,11 +180,14 @@ let renderedDocument = null;
 let frameTransport = "waiting";
 let layerWindowFrame = 0;
 const layerThumbnailCache = new Map();
+const layerHitTestCache = new Map();
+const pendingMoveHitTests = new Map();
 const documentHistoryLabels = new Map();
 const documentSaveFormats = new Map();
 const LAYER_ROW_HEIGHT = 40;
 const LAYER_OVERSCAN = 5;
 const MAX_LAYER_THUMBNAILS = 256;
+const MAX_LAYER_HIT_TESTS = 64;
 const workingSetLimit = browserWorkingSetLimit({
   heapLimitBytes: performance.memory?.jsHeapSizeLimit,
   deviceMemoryGiB: navigator.deviceMemory,
@@ -234,6 +237,15 @@ function selectedLayer() {
 function selectedLayers() {
   if (!snapshot) return [];
   return snapshot.layers.filter((layer) => selectedLayerIds.has(layer.id));
+}
+
+function effectiveLayerLockFlags(layer, byId) {
+  let current = layer; let flags = 0; const visited = new Set();
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id); flags |= Number(current.lockFlags || 0);
+    current = current.parentId && current.parentId !== 0n ? byId.get(current.parentId) : null;
+  }
+  return flags;
 }
 
 function canToggleLayerClipping(layer) {
@@ -343,6 +355,8 @@ function transformSelection() {
     return false;
   };
   const forest = snapshot.layers.filter(belongsToForest);
+  if (forest.some((layer) =>
+    (effectiveLayerLockFlags(layer, byId) & 4) !== 0)) return null;
   if (forest.some((layer) => layer.kind === 1 &&
       (layer.vectorMask || (layer.mask && !layer.mask.linked)))) return null;
   const leaves = forest.filter((layer) => layer.kind !== 1);
@@ -515,6 +529,8 @@ function updateControls() {
   }
   $("exportFormatSelect").disabled = busy || !snapshot;
   $("exportButton").disabled = busy || !snapshot;
+  $("jpegQualityRange").disabled = busy || !snapshot;
+  $("jpegQualityInput").disabled = busy || !snapshot;
   $("copyPixelsButton").disabled = busy || !snapshot;
   $("cutPixelsButton").disabled = busy || !single || layer?.kind !== 0 || !layer.visible || Boolean(layer.lockFlags);
   $("pastePixelsButton").disabled = busy || !snapshot ||
@@ -1321,6 +1337,52 @@ function rememberLayerThumbnail(key, value) {
   while (layerThumbnailCache.size > MAX_LAYER_THUMBNAILS) {
     layerThumbnailCache.delete(layerThumbnailCache.keys().next().value);
   }
+}
+
+function rememberLayerHitTest(key, value) {
+  layerHitTestCache.delete(key); layerHitTestCache.set(key, value);
+  while (layerHitTestCache.size > MAX_LAYER_HIT_TESTS) {
+    layerHitTestCache.delete(layerHitTestCache.keys().next().value);
+  }
+}
+
+async function layerContainsPoint(layer, point, stateId, revision) {
+  const { x, y, width, height } = layer.bounds;
+  if (point.x < x || point.y < y || point.x >= x + width || point.y >= y + height) return false;
+  const key = `${snapshot.documentId}:${revision}:${layer.id}:hit`;
+  let thumbnail = layerHitTestCache.get(key);
+  if (!thumbnail) {
+    thumbnail = await client.layerThumbnail(layer.id, 128, stateId, revision);
+    if (!(thumbnail?.rgba instanceof Uint8Array) || thumbnail.width < 1 || thumbnail.height < 1 ||
+        thumbnail.rgba.byteLength !== thumbnail.width * thumbnail.height * 4 ||
+        thumbnail.rgba.byteLength > 128 * 128 * 4) return false;
+    rememberLayerHitTest(key, thumbnail);
+  } else rememberLayerHitTest(key, thumbnail);
+  const sampleX = Math.min(thumbnail.width - 1,
+    Math.max(0, Math.floor((point.x - x) / width * thumbnail.width)));
+  const sampleY = Math.min(thumbnail.height - 1,
+    Math.max(0, Math.floor((point.y - y) / height * thumbnail.height)));
+  return thumbnail.rgba[(sampleY * thumbnail.width + sampleX) * 4 + 3] > 8;
+}
+
+async function topmostLayerAtPoint(point) {
+  if (!snapshot) return null;
+  const stateId = snapshot.stateId; const revision = snapshot.revision;
+  const byId = new Map(snapshot.layers.map((layer) => [layer.id, layer]));
+  const candidates = [...snapshot.layers].reverse().filter((layer) => layer.visible &&
+    effectiveLayerLockFlags(layer, byId) === 0 && [0, 3, 4, 5].includes(layer.kind) &&
+    layer.bounds.width > 0 && layer.bounds.height > 0);
+  for (const layer of candidates) {
+    try {
+      if (await layerContainsPoint(layer, point, stateId, revision)) {
+        return snapshot?.stateId === stateId && snapshot?.revision === revision ? layer : null;
+      }
+    } catch (error) {
+      if (error?.code !== 7) console.warn("Layer hit-test failed", error);
+      return null;
+    }
+  }
+  return null;
 }
 
 function paintLayerThumbnail(canvas, thumbnail) {
@@ -2144,6 +2206,17 @@ function constrainedCrop(start, point) {
   const x = Math.max(0, Math.floor(target.x)); const y = Math.max(0, Math.floor(target.y));
   return { x, y, width: Math.max(1, Math.min(snapshot.width - x, Math.ceil(target.width))),
     height: Math.max(1, Math.min(snapshot.height - y, Math.ceil(target.height))) };
+}
+
+function pointInCrop(point, crop) {
+  return Boolean(crop) && point.x >= crop.x && point.y >= crop.y &&
+    point.x <= crop.x + crop.width && point.y <= crop.y + crop.height;
+}
+
+function translatedCrop(crop, dx, dy) {
+  const x = Math.max(0, Math.min(snapshot.width - crop.width, Math.round(crop.x + dx)));
+  const y = Math.max(0, Math.min(snapshot.height - crop.height, Math.round(crop.y + dy)));
+  return { x, y, width: crop.width, height: crop.height };
 }
 
 function renderCropOverlay() {
@@ -3127,6 +3200,20 @@ function exportBaseName() {
   return (documentName.replace(/\.[^.]+$/, "") || "Patchy export").replace(/[\\/:*?"<>|]/g, "-");
 }
 
+function jpegQuality() {
+  const value = Math.round(Number($("jpegQualityInput").value));
+  return Math.max(1, Math.min(100, Number.isFinite(value) ? value : 92));
+}
+
+function syncJpegQualityControls(source = null) {
+  const jpeg = $("exportFormatSelect").value === "jpeg";
+  $("jpegQualityControl").hidden = !jpeg;
+  const value = source ? Math.max(1, Math.min(100, Math.round(Number(source.value) || 92)))
+    : jpegQuality();
+  $("jpegQualityRange").value = String(value);
+  $("jpegQualityInput").value = String(value);
+}
+
 async function exportDocument() {
   if (busy || !snapshot) return;
   clearError(); setBusy(true, "Exporting document", "Encoding the rendered composite locally");
@@ -3138,7 +3225,7 @@ async function exportDocument() {
       throw new Error("Engine returned an incomplete flattened export");
     }
     const blob = await encodeFlatDocument({ rgba, width: snapshot.width, height: snapshot.height,
-      format, title: exportBaseName() });
+      format, title: exportBaseName(), jpegQuality: jpegQuality() });
     downloadBlob(blob, `${exportBaseName()}.${format === "jpeg" ? "jpg" : format}`);
   } catch (error) { showError("Could not export document", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally { setBusy(false); }
@@ -5502,6 +5589,12 @@ for (const [id, command] of commandRegistry) {
   command.button?.addEventListener("click", () => executeCommand(id));
 }
 
+$("exportFormatSelect").addEventListener("change", () => syncJpegQualityControls());
+$("jpegQualityRange").addEventListener("input", (event) => syncJpegQualityControls(event.currentTarget));
+$("jpegQualityInput").addEventListener("input", (event) => syncJpegQualityControls(event.currentTarget));
+$("jpegQualityInput").addEventListener("change", (event) => syncJpegQualityControls(event.currentTarget));
+syncJpegQualityControls();
+
 $("emptyOpenButton").addEventListener("click", openPicker);
 $("starterDialog").addEventListener("close", () => {
   const target = starterReturnFocus?.isConnected === false || starterReturnFocus?.disabled
@@ -6596,9 +6689,10 @@ $("toggleSnapButton").addEventListener("click", () => {
 });
 $("clearGuidesButton").addEventListener("click", () => setActiveGuides([]));
 
-canvas.addEventListener("pointerdown", (event) => {
+canvas.addEventListener("pointerdown", async (event) => {
   if (busy || !snapshot || event.button !== 0) return;
   if (spacePanActive) return;
+  $("canvasViewport").focus({ preventScroll: true });
   if (canvasTool === "eyedropper" || (event.altKey &&
       ["brush", "eraser", "gradient", "fill", "shape", "text"].includes(canvasTool))) {
     sampleVisibleColor(event); return;
@@ -6668,16 +6762,20 @@ canvas.addEventListener("pointerdown", (event) => {
   }
   if (canvasTool === "move") {
     const start = canvasPoint(event);
-    const hit = [...snapshot.layers].reverse().find((layer) => layer.visible && !layer.lockFlags &&
-      [0, 3, 4, 5].includes(layer.kind) && layer.bounds.width > 0 && layer.bounds.height > 0 &&
-      start.x >= layer.bounds.x && start.y >= layer.bounds.y &&
-      start.x <= layer.bounds.x + layer.bounds.width &&
-      start.y <= layer.bounds.y + layer.bounds.height);
-    if (hit && !selectedLayerIds.has(hit.id)) {
+    const pending = { released: false, cancelled: false };
+    pendingMoveHitTests.set(event.pointerId, pending);
+    const hit = await topmostLayerAtPoint(start);
+    if (pendingMoveHitTests.get(event.pointerId) !== pending || pending.cancelled) return;
+    if (!hit) {
+      clearLayerSelection(); renderLayers(); renderLayerProperties(); renderTransformOverlay();
+      pendingMoveHitTests.delete(event.pointerId); return;
+    }
+    if (!selectedLayerIds.has(hit.id)) {
       setSingleLayerSelection(hit.id); renderLayers(); renderLayerProperties(); renderTransformOverlay();
     }
     const target = transformSelection();
-    if (!target) return;
+    if (!target || pending.released) { pendingMoveHitTests.delete(event.pointerId); return; }
+    pendingMoveHitTests.delete(event.pointerId);
     canvas.setPointerCapture(event.pointerId);
     moveDraft = { target, start, quad: quadFromBounds(target.bounds),
       originalQuad: quadFromBounds(target.bounds), pointerId: event.pointerId, moved: false };
@@ -6686,12 +6784,16 @@ canvas.addEventListener("pointerdown", (event) => {
   }
   if (canvasTool === "crop") {
     const start = canvasPoint(event);
+    const original = cropDraft ? { ...cropDraft } : null;
+    const translating = pointInCrop(start, original);
     canvas.setPointerCapture(event.pointerId);
-    cropDraft = { x: Math.floor(start.x), y: Math.floor(start.y), width: 1, height: 1 };
+    if (!translating) cropDraft = { x: Math.floor(start.x), y: Math.floor(start.y), width: 1, height: 1 };
     renderCropOverlay();
     const move = (nextEvent) => {
       const point = canvasPoint(nextEvent);
-      cropDraft = constrainedCrop(start, point);
+      cropDraft = translating
+        ? translatedCrop(original, point.x - start.x, point.y - start.y)
+        : constrainedCrop(start, point);
       renderCropOverlay();
     };
     const finish = () => {
@@ -6700,7 +6802,7 @@ canvas.addEventListener("pointerdown", (event) => {
       canvas.removeEventListener("pointercancel", cancel);
       renderCropOverlay();
     };
-    const cancel = () => { cropDraft = null; renderCropOverlay(); finish(); };
+    const cancel = () => { cropDraft = original; renderCropOverlay(); finish(); };
     canvas.addEventListener("pointermove", move);
     canvas.addEventListener("pointerup", finish);
     canvas.addEventListener("pointercancel", cancel);
@@ -6794,6 +6896,8 @@ canvas.addEventListener("pointerleave", () => {
   }
 });
 canvas.addEventListener("pointerup", (event) => {
+  const pendingMove = pendingMoveHitTests.get(event.pointerId);
+  if (pendingMove) pendingMove.released = true;
   finishPaint(event);
   finishRetouch(event);
   finishLocalBrush(event);
@@ -6826,6 +6930,9 @@ canvas.addEventListener("pointerup", (event) => {
   else { clearTransformPreview(); renderTransformOverlay(); }
 });
 canvas.addEventListener("pointercancel", (event) => {
+  const pendingMove = pendingMoveHitTests.get(event.pointerId);
+  if (pendingMove) pendingMove.cancelled = true;
+  pendingMoveHitTests.delete(event.pointerId);
   finishPaint(event, true); gradientDraft = null; clearRasterPreview(); moveDraft = null; lassoDraft = null;
   finishRetouch(event, true);
   finishLocalBrush(event, true);
@@ -6948,10 +7055,17 @@ $("documentTabs").addEventListener("keydown", (event) => {
   tabs[index].focus(); tabs[index].click();
 });
 
+function shortcutLetter(event) {
+  const code = String(event.code || "");
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+  const key = String(event.key || "");
+  return /^[A-Za-z]$/.test(key) ? key.toLowerCase() : "";
+}
+
 window.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
   if (!(event.ctrlKey || event.metaKey)) return;
-  const key = event.key.toLowerCase();
+  const key = shortcutLetter(event);
   const editingField = isEditableTarget(event);
   if (editingField) return;
   if (key === "o") { event.preventDefault(); executeCommand("document.open"); }
@@ -6980,6 +7094,7 @@ window.addEventListener("keydown", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey || event.metaKey || event.altKey || isEditableTarget(event)) return;
+  const toolKey = shortcutLetter(event);
   if ((event.key === "Delete" || event.key === "Backspace") &&
       event.target instanceof Element && event.target.closest("#layerList")) {
     event.preventDefault(); $("removeLayerButton").click(); return;
@@ -7002,26 +7117,41 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault(); setZoom(1);
   }
   if (snapshot && viewportFocused && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-    event.preventDefault();
-    const amount = event.shiftKey ? 80 : 24;
-    pendingPan = { left: viewport.scrollLeft + (event.key === "ArrowRight" ? amount : event.key === "ArrowLeft" ? -amount : 0),
-      top: viewport.scrollTop + (event.key === "ArrowDown" ? amount : event.key === "ArrowUp" ? -amount : 0) };
-    scheduleViewportUpdate("keyboard-pan");
+    const target = canvasTool === "move" ? transformSelection() : null;
+    if (target) {
+      event.preventDefault();
+      const amount = event.shiftKey ? 10 : 1;
+      const dx = event.key === "ArrowRight" ? amount : event.key === "ArrowLeft" ? -amount : 0;
+      const dy = event.key === "ArrowDown" ? amount : event.key === "ArrowUp" ? -amount : 0;
+      const quad = quadFromBounds(target.bounds)
+        .map((coordinate, index) => coordinate + (index % 2 ? dy : dx));
+      void commitLayerQuad(target, quad, target.leaves.length > 1 ? "Moving layers" : "Moving layer");
+      return;
+    }
+    if (canvasTool === "pan" || spacePanActive) {
+      event.preventDefault();
+      const amount = event.shiftKey ? 80 : 24;
+      pendingPan = { left: viewport.scrollLeft + (event.key === "ArrowRight" ? amount : event.key === "ArrowLeft" ? -amount : 0),
+        top: viewport.scrollTop + (event.key === "ArrowDown" ? amount : event.key === "ArrowUp" ? -amount : 0) };
+      scheduleViewportUpdate("keyboard-pan");
+      return;
+    }
   }
-  if (event.key.toLowerCase() === "m") executeCommand("tool.marquee");
-  if (event.key.toLowerCase() === "l") executeCommand(event.shiftKey ? "tool.magnetic" : "tool.lasso");
-  if (event.key.toLowerCase() === "w") executeCommand(event.shiftKey ? "tool.quickSelect" : "tool.magic");
-  if (event.key.toLowerCase() === "q") executeCommand("tool.quickMask");
-  if (event.key.toLowerCase() === "h") executeCommand("tool.pan");
-  if (event.key.toLowerCase() === "v") executeCommand("tool.move");
-  if (event.key.toLowerCase() === "c") executeCommand("tool.crop");
-  if (event.key.toLowerCase() === "b") executeCommand("tool.brush");
-  if (event.key.toLowerCase() === "e") executeCommand("tool.eraser");
-  if (event.key.toLowerCase() === "j") executeCommand(event.shiftKey ? "tool.patch" : "tool.spotHealing");
-  if (event.key.toLowerCase() === "i") executeCommand("tool.eyedropper");
-  if (event.key.toLowerCase() === "u") executeCommand("tool.shape");
-  if (event.key.toLowerCase() === "t") executeCommand("tool.text");
-  if (event.key.toLowerCase() === "p") executeCommand("tool.pen");
+  if (toolKey === "m") executeCommand("tool.marquee");
+  if (toolKey === "l") executeCommand(event.shiftKey ? "tool.magnetic" : "tool.lasso");
+  if (toolKey === "w") executeCommand(event.shiftKey ? "tool.quickSelect" : "tool.magic");
+  if (toolKey === "q") executeCommand("tool.quickMask");
+  if (toolKey === "h") executeCommand("tool.pan");
+  if (toolKey === "v") executeCommand("tool.move");
+  if (toolKey === "c") executeCommand("tool.crop");
+  if (toolKey === "b") executeCommand("tool.brush");
+  if (toolKey === "e") executeCommand("tool.eraser");
+  if (toolKey === "g") executeCommand("tool.gradient");
+  if (toolKey === "j") executeCommand(event.shiftKey ? "tool.patch" : "tool.spotHealing");
+  if (toolKey === "i") executeCommand("tool.eyedropper");
+  if (toolKey === "u") executeCommand("tool.shape");
+  if (toolKey === "t") executeCommand("tool.text");
+  if (toolKey === "p") executeCommand("tool.pen");
   if (event.key === "Enter" && cropDraft) { event.preventDefault(); commitCropDraft(); return; }
   if (event.key === "Escape" && cropDraft) { event.preventDefault(); cancelCropDraft(); return; }
   if (event.key === "Enter" && transformDialogDraft) {

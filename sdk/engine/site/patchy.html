@@ -81,6 +81,14 @@
           <option value="png">PNG</option><option value="jpeg">JPEG</option>
           <option value="webp">WebP</option><option value="svg">SVG (flattened)</option>
         </select>
+        <label class="export-quality" id="jpegQualityControl" hidden>
+          <span>Quality</span>
+          <input id="jpegQualityRange" type="range" min="1" max="100" step="1" value="92"
+            aria-label="JPEG quality">
+          <input id="jpegQualityInput" type="number" min="1" max="100" step="1" value="92"
+            aria-label="JPEG quality value">
+          <span aria-hidden="true">%</span>
+        </label>
         <button class="button" id="exportButton" type="button" disabled>Export</button>
         <button class="icon-button" id="copyPixelsButton" type="button" aria-label="Copy selected pixels or editable layer" title="Copy selected pixels or layer (Ctrl+C)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-copy"></use></svg></button>
         <button class="icon-button" id="cutPixelsButton" type="button" aria-label="Cut selected pixels" title="Cut selected pixels (Ctrl+X)" disabled><svg class="ui-icon" aria-hidden="true"><use href="#icon-cut"></use></svg></button>

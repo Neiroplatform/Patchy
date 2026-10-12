@@ -152,6 +152,25 @@ try {
     "fallback Open format set diverged from native Open");
   await idle();
 
+  assert.equal(await page.locator("#jpegQualityControl").isHidden(), true,
+    "JPEG quality controls were exposed for the default non-JPEG export");
+  await page.locator("#exportFormatSelect").selectOption("jpeg");
+  assert.equal(await page.locator("#jpegQualityControl").isVisible(), true,
+    "JPEG quality controls did not appear for JPEG export");
+  await page.locator("#jpegQualityRange").evaluate((input) => {
+    input.value = "30"; input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  assert.equal(await page.locator("#jpegQualityInput").inputValue(), "30",
+    "JPEG range did not synchronize its exact quality value");
+  await page.locator("#jpegQualityInput").evaluate((input) => {
+    input.value = "90"; input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  assert.equal(await page.locator("#jpegQualityRange").inputValue(), "90",
+    "JPEG numeric input did not synchronize the range control");
+  await page.locator("#exportFormatSelect").selectOption("png");
+  assert.equal(await page.locator("#jpegQualityControl").isHidden(), true,
+    "JPEG quality controls remained exposed for PNG export");
+
   await selectTool("brushToolButton");
   const measureOptionsLayout = () => page.evaluate(() => {
     const stage = document.querySelector(".stage-meta").getBoundingClientRect();
@@ -432,9 +451,18 @@ try {
   await selectTool("moveToolButton");
   const shapeCanvas = await page.locator("#documentCanvas").boundingBox();
   assert.ok(shapeCanvas, "document canvas is not visible for shape selection");
+  await page.mouse.click(shapeCanvas.x + shapeCanvas.width * .485,
+    shapeCanvas.y + shapeCanvas.height * .155);
+  await page.waitForTimeout(250);
+  assert.notEqual((await page.locator('#layerList [aria-pressed="true"]')
+    .evaluateAll((nodes) => nodes[0]?.closest("[data-layer-id]")?.dataset.layerId || null)), vectorLayerId,
+  "Move selected an ellipse through its transparent bounds corner");
   const selectionRevision = await revision();
   await page.mouse.click(shapeCanvas.x + shapeCanvas.width * .61,
     shapeCanvas.y + shapeCanvas.height * .31);
+  await waitFor(async () => await page.locator('#layerList [aria-pressed="true"]')
+    .evaluate((node) => node.closest("[data-layer-id]")?.dataset.layerId) === vectorLayerId,
+  "Move did not finish content-aware shape selection");
   assert.equal(await revision(), selectionRevision, "click-selecting a shape created an edit");
   assert.equal(await page.locator('#layerList [aria-pressed="true"]')
     .evaluate((node) => node.closest("[data-layer-id]")?.dataset.layerId), vectorLayerId,
@@ -443,6 +471,51 @@ try {
     "Move did not expose persistent transform handles for the selected shape");
   assert.match(await page.locator('#layerList [aria-pressed="true"] .layer-kind').textContent(), /Shape/i,
     "the ellipse was not retained as an editable vector layer");
+  let polygonPoints = (await page.locator("#transformPolygon").getAttribute("points"))
+    .trim().split(/[ ,]+/).map(Number);
+  before = await revision();
+  await page.locator("#canvasViewport").focus();
+  await page.keyboard.press("ArrowRight");
+  await waitForMutation(before, "Moving layer");
+  let nudgedPoints = (await page.locator("#transformPolygon").getAttribute("points"))
+    .trim().split(/[ ,]+/).map(Number);
+  assert.deepEqual(nudgedPoints, polygonPoints.map((value, index) => value + (index % 2 ? 0 : 1)),
+    "Move ArrowRight did not nudge the selected shape by exactly one pixel");
+  polygonPoints = nudgedPoints;
+  before = await revision();
+  await page.keyboard.press("Shift+ArrowDown");
+  await waitForMutation(before, "Moving layer");
+  nudgedPoints = (await page.locator("#transformPolygon").getAttribute("points"))
+    .trim().split(/[ ,]+/).map(Number);
+  assert.deepEqual(nudgedPoints, polygonPoints.map((value, index) => value + (index % 2 ? 10 : 0)),
+    "Move Shift+ArrowDown did not nudge the selected shape by exactly ten pixels");
+
+  before = await revision();
+  await page.locator("#layerLockInput").check();
+  await waitForMutation(before, "Updating layer");
+  const lockedRevision = await revision();
+  await page.locator("#canvasViewport").focus();
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(200);
+  assert.equal(await revision(), lockedRevision, "position-locked shape moved from the keyboard");
+  before = await revision();
+  await page.locator("#layerLockInput").uncheck();
+  await waitForMutation(before, "Updating layer");
+
+  for (const shortcut of [
+    { key: "п", code: "KeyG", tool: "gradient" },
+    { key: "м", code: "KeyV", tool: "move" },
+    { key: "и", code: "KeyB", tool: "brush" },
+    { key: "у", code: "KeyE", tool: "eraser" },
+    { key: "с", code: "KeyC", tool: "crop" },
+  ]) {
+    await page.evaluate(({ key, code }) => window.dispatchEvent(new KeyboardEvent("keydown", {
+      key, code, bubbles: true,
+    })), shortcut);
+    await waitFor(async () => await page.locator("#toolOptions").getAttribute("data-tool") === shortcut.tool,
+      `physical ${shortcut.code} shortcut did not select ${shortcut.tool} under a Russian key value`);
+  }
+  await selectTool("moveToolButton");
   const resizeHandle = page.locator('[data-transform-handle="corner-2"]');
   let handleBox = await resizeHandle.boundingBox();
   assert.ok(handleBox, "shape resize handle is not pointer-accessible");

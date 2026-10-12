@@ -141,6 +141,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-1);
   font-size: 11px;
 }
+.export-quality { min-height: 34px; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); color: var(--text-faint);
+  background: var(--surface-1); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.export-quality[hidden] { display: none; }
+.export-quality input[type="range"] { width: 72px; accent-color: var(--accent); }
+.export-quality input[type="number"] { width: 46px; min-height: 26px; padding: 0 4px; border: 1px solid var(--line);
+  border-radius: 4px; color: var(--text); background: var(--surface-0); font-size: 11px; }
 .save-label { display: none; }
 .button, .icon-button, .tool-button {
   border: 1px solid var(--line-strong); background: var(--surface-1); min-height: 34px; border-radius: var(--radius);

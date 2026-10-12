@@ -25,7 +25,8 @@ function sourceCanvas(rgba, width, height) {
   return canvas;
 }
 
-export async function encodeFlatDocument({ rgba, width, height, format, title = "Patchy export" }) {
+export async function encodeFlatDocument({ rgba, width, height, format, title = "Patchy export",
+  jpegQuality = 92 }) {
   if (!["png", "jpeg", "webp", "svg"].includes(format)) {
     throw new TypeError("Flat export format is unsupported");
   }
@@ -37,6 +38,9 @@ export async function encodeFlatDocument({ rgba, width, height, format, title = 
   }
   let output = source;
   if (format === "jpeg") {
+    if (!Number.isInteger(jpegQuality) || jpegQuality < 1 || jpegQuality > 100) {
+      throw new RangeError("JPEG quality must be an integer from 1 through 100");
+    }
     output = document.createElement("canvas");
     output.width = width; output.height = height;
     const context = output.getContext("2d", { alpha: false });
@@ -44,5 +48,5 @@ export async function encodeFlatDocument({ rgba, width, height, format, title = 
     context.fillStyle = "#ffffff"; context.fillRect(0, 0, width, height);
     context.drawImage(source, 0, 0);
   }
-  return canvasBlob(output, `image/${format}`, format === "jpeg" ? .92 : undefined);
+  return canvasBlob(output, `image/${format}`, format === "jpeg" ? jpegQuality / 100 : undefined);
 }

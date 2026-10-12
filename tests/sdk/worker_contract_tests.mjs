@@ -67,7 +67,8 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /secondaryColor: \[\.\.\.colorBytes\(\$\("backgroundSwatchInput"\)\.value\), alpha\]/);
   assert.match(script, /advancedBrushSettings\(snapshot\.revision, opacity\)/);
   for (const id of ["openButton", "fileInput", "imageInput", "documentCanvas", "documentTabs", "layerList",
-    "saveFormatSelect", "exportFormatSelect", "exportButton", "copyPixelsButton", "cutPixelsButton", "pastePixelsButton", "paintPresetSelect",
+    "saveFormatSelect", "exportFormatSelect", "jpegQualityControl", "jpegQualityRange", "jpegQualityInput",
+    "exportButton", "copyPixelsButton", "cutPixelsButton", "pastePixelsButton", "paintPresetSelect",
     "brushPresetSelect", "brushSoftnessInput", "brushOpacityInput",
     "paintTargetSelect", "linkMaskButton", "spotHealingToolButton", "patchToolButton",
     "mixerToolButton", "patternStampToolButton", "advancedPaintSoftnessInput",
@@ -222,6 +223,11 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /documentSaveFormats\.set\(next\.documentId, header\.version === 2 \? "psb" : "psd"\)/);
   assert.match(script, /updateControls\(\); scheduleCheckpoint\(snapshot\);/);
   assert.match(script, /encodeFlatDocument\(\{ rgba/);
+  assert.match(script, /jpegQuality: jpegQuality\(\)/);
+  assert.match(script, /function shortcutLetter\(event\)/);
+  assert.match(script, /toolKey === "g"/);
+  assert.match(script, /topmostLayerAtPoint\(start\)/);
+  assert.match(script, /translatedCrop\(original/);
   assert.match(script, /const commandRegistry = new Map\(\)/);
   assert.match(script, /registerCommand\("selection\.all"/);
   assert.match(script, /registerCommand\("tool\.clone"/);
