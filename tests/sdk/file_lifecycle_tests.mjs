@@ -238,8 +238,14 @@ test("production shell stages the lifecycle and exposes open/save/save-as contra
   const lifecycleSave = browserSmoke.indexOf('byId("saveButton").click();', lifecycleShrink);
   const lifecycleClean = browserSmoke.indexOf("native lifecycle fixture did not return to its durable savepoint");
   const lifecycleClose = browserSmoke.indexOf(
-    "native lifecycle fixture did not close back to the cumulative shell document");
+    "native lifecycle fixture did not close back to its initial document count");
+  const lifecycleCall = browserSmoke.indexOf("await exerciseNativeFileLifecycle(doc, byId);");
+  const cumulativeFixture = browserSmoke.indexOf('smokeStage = "guides-and-move";');
   assert.ok(lifecycleCreate >= 0 && lifecycleCreate < lifecycleLayer && lifecycleLayer < lifecycleShrink &&
     lifecycleShrink < lifecycleSave && lifecycleSave < lifecycleClean && lifecycleClean < lifecycleClose,
-    "native lifecycle must save a bounded isolated document before returning to the cumulative fixture");
+    "native lifecycle must save a bounded isolated document before closing its fixture");
+  assert.ok(lifecycleCall >= 0 && lifecycleCall < cumulativeFixture,
+    "native lifecycle must run before the cumulative shell fixture mutates the Worker session");
+  assert.match(browserSmoke,
+    /if \(!byId\("errorBanner"\)\.hidden\) throw new Error\("native Save surfaced an editor error"\);/);
 });

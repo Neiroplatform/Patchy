@@ -29,6 +29,152 @@ async function loadEditor(tag) {
 }
 
 let smokeStage = "startup";
+
+async function importSvgFixture(doc, byId, name, color) {
+  const file = new frame.contentWindow.File([
+    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><rect width="64" height="48" fill="${color}"/></svg>`,
+  ], name, { type: "image/svg+xml" });
+  const transfer = new frame.contentWindow.DataTransfer(); transfer.items.add(file);
+  Object.defineProperty(byId("imageInput"), "files", { configurable: true, value: transfer.files });
+  byId("imageInput").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
+  await waitFor(() => doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
+    Number(byId("layerCount").textContent) >= (name.includes("two") ? 2 : 1), `${name} did not import`);
+}
+
+async function exerciseNativeFileLifecycle(doc, byId) {
+  smokeStage = "native-file-lifecycle";
+  const lifecycleDocumentCount = doc.querySelectorAll('#documentTabs [role="tab"]').length;
+  byId("newButton").click();
+  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length ===
+      lifecycleDocumentCount + 1 &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native lifecycle fixture did not create an isolated document");
+  await importSvgFixture(doc, byId, "lifecycle.svg", "#5b79d1");
+  check(!byId("layerOpacityInput").disabled,
+    "native lifecycle fixture did not create an editable pixel layer");
+  const lifecycleResizeRevision = Number(byId("detailRevision").textContent);
+  byId("transformButton").click();
+  await waitFor(() => byId("documentDialog").open,
+    "Canvas operations did not open for native lifecycle fixture");
+  byId("resizeConstrainInput").checked = false;
+  byId("documentWidthInput").value = String(NATIVE_FILE_LIFECYCLE_SIZE.width);
+  byId("documentHeightInput").value = String(NATIVE_FILE_LIFECYCLE_SIZE.height);
+  byId("resizeImageButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleResizeRevision + 1 &&
+    byId("detailCanvas").textContent.replaceAll(" ", "") ===
+      `${NATIVE_FILE_LIFECYCLE_SIZE.width}×${NATIVE_FILE_LIFECYCLE_SIZE.height}` &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
+    !byId("documentDialog").open,
+  "native lifecycle fixture did not shrink the document");
+  const originalOpenFilePicker = Object.getOwnPropertyDescriptor(
+    frame.contentWindow, "showOpenFilePicker");
+  const originalSaveFilePicker = Object.getOwnPropertyDescriptor(
+    frame.contentWindow, "showSaveFilePicker");
+  const setFilePicker = (name, value) => Object.defineProperty(frame.contentWindow, name, {
+    configurable: true, writable: true, value,
+  });
+  const restoreFilePicker = (name, descriptor) => descriptor
+    ? Object.defineProperty(frame.contentWindow, name, descriptor)
+    : delete frame.contentWindow[name];
+  const fileWrites = [];
+  let writableClosed = 0;
+  let saveTarget = {
+    name: "Native lifecycle.psd",
+    async queryPermission() { return "granted"; },
+    async createWritable() { return {
+      async write(blob) {
+        check(blob instanceof frame.contentWindow.Blob && blob.size > 0,
+          "native Save did not receive a non-empty Worker Blob");
+        fileWrites.push(blob);
+      },
+      async close() { writableClosed++; },
+      async abort() { throw new Error("successful native Save called abort"); },
+    }; },
+  };
+  setFilePicker("showOpenFilePicker", async () => []);
+  setFilePicker("showSaveFilePicker", async () => saveTarget);
+  byId("saveButton").click();
+  await waitFor(() => {
+    if (!byId("errorBanner").hidden) throw new Error("native Save surfaced an editor error");
+    return writableClosed === 1 &&
+      doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true";
+  }, "native Save did not close its writable stream", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  check(fileWrites.length === 1 && byId("detailState").textContent === "Сохранён",
+    "completed native Save did not publish the exact clean savepoint");
+
+  const savedRevision = Number(byId("detailRevision").textContent);
+  const opacity = byId("layerOpacityInput");
+  opacity.value = String(Number(opacity.value) === 73 ? 72 : 73);
+  opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
+  await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 1 &&
+    byId("detailState").textContent === "Изменён" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "post-save mutation did not restore modified state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  byId("undoButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 2 &&
+    byId("detailState").textContent === "Сохранён" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "undo to the exact native savepoint did not restore clean state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+
+  const restoredRevision = Number(byId("detailRevision").textContent);
+  opacity.value = String(Number(opacity.value) === 61 ? 62 : 61);
+  opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
+  await waitFor(() => Number(byId("detailRevision").textContent) === restoredRevision + 1 &&
+    byId("detailState").textContent === "Изменён",
+  "write-failure fixture did not create a modified state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  let abortedWrite = false;
+  saveTarget = {
+    name: "Failed lifecycle.psd",
+    async queryPermission() { return "granted"; },
+    async createWritable() { return {
+      async write() { throw new Error("simulated local write failure"); },
+      async close() { throw new Error("failed write attempted close"); },
+      async abort() { abortedWrite = true; },
+    }; },
+  };
+  byId("saveAsButton").click();
+  await waitFor(() => abortedWrite && !byId("errorBanner").hidden &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native write failure did not abort and surface an error", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  check(byId("detailState").textContent === "Изменён",
+    "native write failure falsely advanced the durable savepoint");
+  byId("dismissErrorButton").click();
+  setFilePicker("showOpenFilePicker", undefined);
+  setFilePicker("showSaveFilePicker", undefined);
+  let fallbackBlob = null; let fallbackName = null;
+  const originalLifecycleCreateObjectUrl = frame.contentWindow.URL.createObjectURL;
+  const originalLifecycleRevokeObjectUrl = frame.contentWindow.URL.revokeObjectURL;
+  const originalLifecycleAnchorClick = frame.contentWindow.HTMLAnchorElement.prototype.click;
+  frame.contentWindow.URL.createObjectURL = (blob) => { fallbackBlob = blob; return "blob:file-lifecycle-smoke"; };
+  frame.contentWindow.URL.revokeObjectURL = () => {};
+  frame.contentWindow.HTMLAnchorElement.prototype.click = function () { fallbackName = this.download; };
+  byId("saveAsButton").click();
+  await waitFor(() => fallbackBlob &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "download fallback did not create a layered Blob", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  check(fallbackBlob.size === fileWrites[0].size && /\.psd$/i.test(fallbackName) &&
+    byId("detailState").textContent === "Изменён",
+  "download fallback changed bytes, filename or durable dirty state");
+  frame.contentWindow.URL.createObjectURL = originalLifecycleCreateObjectUrl;
+  frame.contentWindow.URL.revokeObjectURL = originalLifecycleRevokeObjectUrl;
+  frame.contentWindow.HTMLAnchorElement.prototype.click = originalLifecycleAnchorClick;
+
+  const lifecycleDirtyRevision = Number(byId("detailRevision").textContent);
+  byId("undoButton").click();
+  await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleDirtyRevision + 1 &&
+    byId("detailState").textContent === "Сохранён" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native lifecycle fixture did not return to its durable savepoint", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  byId("documentTabs")
+    .querySelector('.document-tab[data-active="true"] button[aria-hidden="true"]').click();
+  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length ===
+      lifecycleDocumentCount &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
+  "native lifecycle fixture did not close back to its initial document count");
+  return { fileWrites, saveTarget, setFilePicker, restoreFilePicker,
+    originalOpenFilePicker, originalSaveFilePicker };
+}
+
 try {
   let doc = await loadEditor("initial");
   let byId = (id) => doc.getElementById(id);
@@ -52,6 +198,8 @@ try {
   check(byId("toggleSnapButton").getAttribute("aria-pressed") === "true",
     "snap preference did not re-enable");
   await delay(300);
+
+  const lifecycle = await exerciseNativeFileLifecycle(doc, byId);
 
   const toolbar = doc.querySelector(".tool-rail");
   check([...toolbar.querySelectorAll("button[data-tool-contract]")].every((button) => button.disabled),
@@ -119,18 +267,8 @@ try {
   check(byId("guidesOverlay").querySelectorAll(".guide-line").length === 1,
     "guide keyboard deletion did not remove exactly one guide");
   byId("addHorizontalGuideButton").click();
-  const importSvg = async (name, color) => {
-    const file = new frame.contentWindow.File([
-      `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><rect width="64" height="48" fill="${color}"/></svg>`,
-    ], name, { type: "image/svg+xml" });
-    const transfer = new frame.contentWindow.DataTransfer(); transfer.items.add(file);
-    Object.defineProperty(byId("imageInput"), "files", { configurable: true, value: transfer.files });
-    byId("imageInput").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
-    await waitFor(() => doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
-      Number(byId("layerCount").textContent) >= (name.includes("two") ? 2 : 1), `${name} did not import`);
-  };
-  await importSvg("one.svg", "#4b91e2");
-  await importSvg("two.svg", "#df6e46");
+  await importSvgFixture(doc, byId, "one.svg", "#4b91e2");
+  await importSvgFixture(doc, byId, "two.svg", "#df6e46");
 
   byId("moveToolButton").click();
   const moveCanvas = byId("documentCanvas");
@@ -376,138 +514,6 @@ try {
     "Escape did not close dialog and return focus");
   check(byId("detailRevision").textContent === transformRevision, "dialog Escape committed document state");
 
-  smokeStage = "native-file-lifecycle";
-  // Exercise lifecycle semantics in a clean document so hosted Edge does not
-  // encode the cumulative shell fixture's long edit history on every save.
-  const lifecycleDocumentCount = doc.querySelectorAll('#documentTabs [role="tab"]').length;
-  byId("newButton").click();
-  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length ===
-      lifecycleDocumentCount + 1 &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "native lifecycle fixture did not create an isolated document");
-  await importSvg("lifecycle.svg", "#5b79d1");
-  check(!byId("layerOpacityInput").disabled,
-    "native lifecycle fixture did not create an editable pixel layer");
-  const lifecycleResizeRevision = Number(byId("detailRevision").textContent);
-  byId("transformButton").click();
-  await waitFor(() => byId("documentDialog").open,
-    "Canvas operations did not open for native lifecycle fixture");
-  byId("resizeConstrainInput").checked = false;
-  byId("documentWidthInput").value = String(NATIVE_FILE_LIFECYCLE_SIZE.width);
-  byId("documentHeightInput").value = String(NATIVE_FILE_LIFECYCLE_SIZE.height);
-  byId("resizeImageButton").click();
-  await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleResizeRevision + 1 &&
-    byId("detailCanvas").textContent.replaceAll(" ", "") ===
-      `${NATIVE_FILE_LIFECYCLE_SIZE.width}×${NATIVE_FILE_LIFECYCLE_SIZE.height}` &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
-    !byId("documentDialog").open,
-  "native lifecycle fixture did not shrink the document");
-  const originalOpenFilePicker = Object.getOwnPropertyDescriptor(
-    frame.contentWindow, "showOpenFilePicker");
-  const originalSaveFilePicker = Object.getOwnPropertyDescriptor(
-    frame.contentWindow, "showSaveFilePicker");
-  const setFilePicker = (name, value) => Object.defineProperty(frame.contentWindow, name, {
-    configurable: true, writable: true, value,
-  });
-  const restoreFilePicker = (name, descriptor) => descriptor
-    ? Object.defineProperty(frame.contentWindow, name, descriptor)
-    : delete frame.contentWindow[name];
-  const fileWrites = [];
-  let writableClosed = 0;
-  let saveTarget = {
-    name: "Native lifecycle.psd",
-    async queryPermission() { return "granted"; },
-    async createWritable() { return {
-      async write(blob) {
-        check(blob instanceof frame.contentWindow.Blob && blob.size > 0,
-          "native Save did not receive a non-empty Worker Blob");
-        fileWrites.push(blob);
-      },
-      async close() { writableClosed++; },
-      async abort() { throw new Error("successful native Save called abort"); },
-    }; },
-  };
-  setFilePicker("showOpenFilePicker", async () => []);
-  setFilePicker("showSaveFilePicker", async () => saveTarget);
-  byId("saveButton").click();
-  await waitFor(() => writableClosed === 1 &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "native Save did not close its writable stream", NATIVE_FILE_LIFECYCLE_TIMEOUT);
-  check(fileWrites.length === 1 && byId("detailState").textContent === "Сохранён",
-    "completed native Save did not publish the exact clean savepoint");
-
-  const savedRevision = Number(byId("detailRevision").textContent);
-  const opacity = byId("layerOpacityInput");
-  opacity.value = String(Number(opacity.value) === 73 ? 72 : 73);
-  opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
-  await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 1 &&
-    byId("detailState").textContent === "Изменён" &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "post-save mutation did not restore modified state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
-  byId("undoButton").click();
-  await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 2 &&
-    byId("detailState").textContent === "Сохранён" &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "undo to the exact native savepoint did not restore clean state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
-
-  const restoredRevision = Number(byId("detailRevision").textContent);
-  opacity.value = String(Number(opacity.value) === 61 ? 62 : 61);
-  opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
-  await waitFor(() => Number(byId("detailRevision").textContent) === restoredRevision + 1 &&
-    byId("detailState").textContent === "Изменён",
-  "write-failure fixture did not create a modified state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
-  let abortedWrite = false;
-  saveTarget = {
-    name: "Failed lifecycle.psd",
-    async queryPermission() { return "granted"; },
-    async createWritable() { return {
-      async write() { throw new Error("simulated local write failure"); },
-      async close() { throw new Error("failed write attempted close"); },
-      async abort() { abortedWrite = true; },
-    }; },
-  };
-  byId("saveAsButton").click();
-  await waitFor(() => abortedWrite && !byId("errorBanner").hidden &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "native write failure did not abort and surface an error", NATIVE_FILE_LIFECYCLE_TIMEOUT);
-  check(byId("detailState").textContent === "Изменён",
-    "native write failure falsely advanced the durable savepoint");
-  byId("dismissErrorButton").click();
-  setFilePicker("showOpenFilePicker", undefined);
-  setFilePicker("showSaveFilePicker", undefined);
-  let fallbackBlob = null; let fallbackName = null;
-  const originalLifecycleCreateObjectUrl = frame.contentWindow.URL.createObjectURL;
-  const originalLifecycleRevokeObjectUrl = frame.contentWindow.URL.revokeObjectURL;
-  const originalLifecycleAnchorClick = frame.contentWindow.HTMLAnchorElement.prototype.click;
-  frame.contentWindow.URL.createObjectURL = (blob) => { fallbackBlob = blob; return "blob:file-lifecycle-smoke"; };
-  frame.contentWindow.URL.revokeObjectURL = () => {};
-  frame.contentWindow.HTMLAnchorElement.prototype.click = function () { fallbackName = this.download; };
-  byId("saveAsButton").click();
-  await waitFor(() => fallbackBlob &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "download fallback did not create a layered Blob", NATIVE_FILE_LIFECYCLE_TIMEOUT);
-  check(fallbackBlob.size === fileWrites[0].size && /\.psd$/i.test(fallbackName) &&
-    byId("detailState").textContent === "Изменён",
-  "download fallback changed bytes, filename or durable dirty state");
-  frame.contentWindow.URL.createObjectURL = originalLifecycleCreateObjectUrl;
-  frame.contentWindow.URL.revokeObjectURL = originalLifecycleRevokeObjectUrl;
-  frame.contentWindow.HTMLAnchorElement.prototype.click = originalLifecycleAnchorClick;
-
-  const lifecycleDirtyRevision = Number(byId("detailRevision").textContent);
-  byId("undoButton").click();
-  await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleDirtyRevision + 1 &&
-    byId("detailState").textContent === "Сохранён" &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
-  "native lifecycle fixture did not return to its durable savepoint", NATIVE_FILE_LIFECYCLE_TIMEOUT);
-  byId("documentTabs")
-    .querySelector('.document-tab[data-active="true"] button[aria-hidden="true"]').click();
-  await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length ===
-      lifecycleDocumentCount &&
-    byId("detailCanvas").textContent.replaceAll(" ", "") === "1600×1000" &&
-    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true" &&
-    byId("documentTabs").querySelector('[role="tab"][aria-selected="true"]'),
-  "native lifecycle fixture did not close back to the cumulative shell document");
-
   smokeStage = "document-lifecycle";
   byId("zoomActualButton").click(); await delay(50);
   viewport.scrollLeft = 137; viewport.scrollTop = 91; await delay(50);
@@ -682,11 +688,11 @@ try {
   check(p95 < 100, `non-render UI command p95 ${p95.toFixed(2)}ms exceeds 100ms`);
 
   smokeStage = "native-file-open";
-  const reopenedFile = new frame.contentWindow.File([fileWrites[0]], "Native reopen.psd",
+  const reopenedFile = new frame.contentWindow.File([lifecycle.fileWrites[0]], "Native reopen.psd",
     { type: "application/octet-stream" });
   const reopenedHandle = { name: reopenedFile.name, async getFile() { return reopenedFile; } };
-  setFilePicker("showOpenFilePicker", async () => [reopenedHandle]);
-  setFilePicker("showSaveFilePicker", async () => saveTarget);
+  lifecycle.setFilePicker("showOpenFilePicker", async () => [reopenedHandle]);
+  lifecycle.setFilePicker("showSaveFilePicker", async () => lifecycle.saveTarget);
   byId("openButton").click();
   await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length === 2 &&
     byId("documentTabs").querySelector('[role="tab"][aria-selected="true"]')?.title ===
@@ -697,8 +703,8 @@ try {
   await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length === 1 &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
   "native-opened document did not release its tab and handle binding");
-  restoreFilePicker("showOpenFilePicker", originalOpenFilePicker);
-  restoreFilePicker("showSaveFilePicker", originalSaveFilePicker);
+  lifecycle.restoreFilePicker("showOpenFilePicker", lifecycle.originalOpenFilePicker);
+  lifecycle.restoreFilePicker("showSaveFilePicker", lifecycle.originalSaveFilePicker);
 
   byId("localeSelect").value = "en";
   byId("localeSelect").dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
