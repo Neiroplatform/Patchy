@@ -42,17 +42,19 @@ async function importSvgFixture(doc, byId, name, color) {
 }
 
 async function exerciseNativeFileLifecycle(doc, byId) {
-  smokeStage = "native-file-lifecycle";
+  smokeStage = "native-file-lifecycle-create";
   const lifecycleDocumentCount = doc.querySelectorAll('#documentTabs [role="tab"]').length;
   byId("newButton").click();
   await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length ===
       lifecycleDocumentCount + 1 &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
   "native lifecycle fixture did not create an isolated document");
+  smokeStage = "native-file-lifecycle-import";
   await importSvgFixture(doc, byId, "lifecycle.svg", "#5b79d1");
   check(!byId("layerOpacityInput").disabled,
     "native lifecycle fixture did not create an editable pixel layer");
   const lifecycleResizeRevision = Number(byId("detailRevision").textContent);
+  smokeStage = "native-file-lifecycle-resize";
   byId("transformButton").click();
   await waitFor(() => byId("documentDialog").open,
     "Canvas operations did not open for native lifecycle fixture");
@@ -93,6 +95,7 @@ async function exerciseNativeFileLifecycle(doc, byId) {
   };
   setFilePicker("showOpenFilePicker", async () => []);
   setFilePicker("showSaveFilePicker", async () => saveTarget);
+  smokeStage = "native-file-lifecycle-save-success";
   byId("saveButton").click();
   await waitFor(() => {
     if (!byId("errorBanner").hidden) throw new Error("native Save surfaced an editor error");
@@ -103,6 +106,7 @@ async function exerciseNativeFileLifecycle(doc, byId) {
     "completed native Save did not publish the exact clean savepoint");
 
   const savedRevision = Number(byId("detailRevision").textContent);
+  smokeStage = "native-file-lifecycle-post-save-mutation";
   const opacity = byId("layerOpacityInput");
   opacity.value = String(Number(opacity.value) === 73 ? 72 : 73);
   opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
@@ -110,6 +114,7 @@ async function exerciseNativeFileLifecycle(doc, byId) {
     byId("detailState").textContent === "Изменён" &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
   "post-save mutation did not restore modified state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  smokeStage = "native-file-lifecycle-undo-clean";
   byId("undoButton").click();
   await waitFor(() => Number(byId("detailRevision").textContent) === savedRevision + 2 &&
     byId("detailState").textContent === "Сохранён" &&
@@ -117,6 +122,7 @@ async function exerciseNativeFileLifecycle(doc, byId) {
   "undo to the exact native savepoint did not restore clean state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
 
   const restoredRevision = Number(byId("detailRevision").textContent);
+  smokeStage = "native-file-lifecycle-write-failure-mutation";
   opacity.value = String(Number(opacity.value) === 61 ? 62 : 61);
   opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
   await waitFor(() => Number(byId("detailRevision").textContent) === restoredRevision + 1 &&
@@ -132,6 +138,7 @@ async function exerciseNativeFileLifecycle(doc, byId) {
       async abort() { abortedWrite = true; },
     }; },
   };
+  smokeStage = "native-file-lifecycle-write-failure";
   byId("saveAsButton").click();
   await waitFor(() => abortedWrite && !byId("errorBanner").hidden &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
@@ -148,6 +155,7 @@ async function exerciseNativeFileLifecycle(doc, byId) {
   frame.contentWindow.URL.createObjectURL = (blob) => { fallbackBlob = blob; return "blob:file-lifecycle-smoke"; };
   frame.contentWindow.URL.revokeObjectURL = () => {};
   frame.contentWindow.HTMLAnchorElement.prototype.click = function () { fallbackName = this.download; };
+  smokeStage = "native-file-lifecycle-download-fallback";
   byId("saveAsButton").click();
   await waitFor(() => fallbackBlob &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
@@ -160,11 +168,13 @@ async function exerciseNativeFileLifecycle(doc, byId) {
   frame.contentWindow.HTMLAnchorElement.prototype.click = originalLifecycleAnchorClick;
 
   const lifecycleDirtyRevision = Number(byId("detailRevision").textContent);
+  smokeStage = "native-file-lifecycle-undo-restore";
   byId("undoButton").click();
   await waitFor(() => Number(byId("detailRevision").textContent) === lifecycleDirtyRevision + 1 &&
     byId("detailState").textContent === "Сохранён" &&
     doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
   "native lifecycle fixture did not return to its durable savepoint", NATIVE_FILE_LIFECYCLE_TIMEOUT);
+  smokeStage = "native-file-lifecycle-close";
   byId("documentTabs")
     .querySelector('.document-tab[data-active="true"] button[aria-hidden="true"]').click();
   await waitFor(() => doc.querySelectorAll('#documentTabs [role="tab"]').length ===
