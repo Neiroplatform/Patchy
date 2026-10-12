@@ -417,13 +417,78 @@ try {
     "Shape did not expose a visible kind picker");
   assert.ok((await page.locator("#shapeToolKindInput").boundingBox())?.width >= 120,
     "Shape kind picker is not readable");
-  await page.locator("#shapeToolKindInput").selectOption("star");
-  await page.locator("#shapeToolSidesInput").fill("5");
+  await page.locator("#shapeToolKindInput").selectOption("ellipse");
   before = await revision();
   await dragCanvas({ x: .48, y: .15 }, { x: .75, y: .48 }, { modifiers: ["Shift"] });
   await waitForMutation(before, "Creating vector shape");
   assert.equal(await page.locator("#errorBanner").isHidden(), true,
     `Shape surfaced ${await page.textContent("#errorMessage")}`);
+
+  const vectorRow = page.locator('#layerList [data-layer-id]').filter({ hasText: "Shape" }).first();
+  const vectorLayerId = await vectorRow.getAttribute("data-layer-id");
+  const rasterRow = page.locator('#layerList [data-layer-id]').filter({ hasText: "Pixels" }).first();
+  assert.ok(vectorLayerId && await rasterRow.count(), "shape hit-test fixture lacks vector or raster layers");
+  await rasterRow.locator(".layer-select-button").click();
+  await selectTool("moveToolButton");
+  const shapeCanvas = await page.locator("#documentCanvas").boundingBox();
+  assert.ok(shapeCanvas, "document canvas is not visible for shape selection");
+  const selectionRevision = await revision();
+  await page.mouse.click(shapeCanvas.x + shapeCanvas.width * .61,
+    shapeCanvas.y + shapeCanvas.height * .31);
+  assert.equal(await revision(), selectionRevision, "click-selecting a shape created an edit");
+  assert.equal(await page.locator('#layerList [aria-pressed="true"]')
+    .evaluate((node) => node.closest("[data-layer-id]")?.dataset.layerId), vectorLayerId,
+  "Move did not select the topmost shape under the pointer");
+  assert.equal(await page.locator("#transformOverlay").isHidden(), false,
+    "Move did not expose persistent transform handles for the selected shape");
+  assert.match(await page.locator('#layerList [aria-pressed="true"] .layer-kind').textContent(), /Shape/i,
+    "the ellipse was not retained as an editable vector layer");
+  const resizeHandle = page.locator('[data-transform-handle="corner-2"]');
+  let handleBox = await resizeHandle.boundingBox();
+  assert.ok(handleBox, "shape resize handle is not pointer-accessible");
+  before = await revision();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2 + 32,
+    handleBox.y + handleBox.height / 2 + 24, { steps: 8 });
+  await page.mouse.up();
+  await waitForMutation(before, "Transforming shape");
+  assert.equal(await page.locator("#transformOverlay").isHidden(), false,
+    "shape resize hid the persistent transform box");
+
+  const rotateHandle = page.locator('[data-transform-handle="rotate"]');
+  handleBox = await rotateHandle.boundingBox();
+  const polygonBox = await page.locator("#transformPolygon").boundingBox();
+  assert.ok(handleBox && polygonBox, "shape rotate handle is not pointer-accessible");
+  const rotateStart = { x: handleBox.x + handleBox.width / 2,
+    y: handleBox.y + handleBox.height / 2 };
+  const rotateCenter = { x: polygonBox.x + polygonBox.width / 2,
+    y: polygonBox.y + polygonBox.height / 2 };
+  const rotateTarget = { x: rotateCenter.x - (rotateStart.y - rotateCenter.y),
+    y: rotateCenter.y + (rotateStart.x - rotateCenter.x) };
+  before = await revision();
+  await page.mouse.move(rotateStart.x, rotateStart.y);
+  await page.mouse.down();
+  await page.mouse.move(rotateTarget.x, rotateTarget.y, { steps: 12 });
+  await page.mouse.up();
+  await waitForMutation(before, "Transforming shape");
+  assert.equal(await page.locator("#transformOverlay").isHidden(), false,
+    "shape rotation hid the persistent transform box");
+
+  const movedPolygon = await page.locator("#transformPolygon").boundingBox();
+  assert.ok(movedPolygon, "shape transform box disappeared before Move drag");
+  before = await revision();
+  await page.mouse.move(movedPolygon.x + movedPolygon.width / 2,
+    movedPolygon.y + movedPolygon.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(movedPolygon.x + movedPolygon.width / 2 + 24,
+    movedPolygon.y + movedPolygon.height / 2 + 18, { steps: 8 });
+  await page.mouse.up();
+  await waitForMutation(before, "Moving layer");
+  assert.equal(await page.locator("#transformOverlay").isHidden(), false,
+    "moving the shape hid its persistent transform box");
+  assert.equal(await page.locator("#errorBanner").isHidden(), true,
+    `shape Move/Transform surfaced ${await page.textContent("#errorMessage")}`);
 
   await selectTool("textToolButton");
   await page.locator("#textToolFontInput").fill("Georgia");
@@ -527,7 +592,7 @@ try {
     "hover=idle-brush-radius wand=contiguous-all-layers-active-layer-svg gradient=preset-guard-noop-neutral " +
     `brush=color-dynamics-opacity-cap-${maximumStrokeAlpha} ` +
     "paint=advanced-brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill " +
-    "authoring=eyedropper-shape-text real-pointer=pass");
+    "authoring=eyedropper-shape-smooth-ellipse-move-resize-rotate-text real-pointer=pass");
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,

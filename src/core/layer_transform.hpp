@@ -18,7 +18,8 @@ enum class LayerTransformInterpolation : std::uint8_t {
 struct LayerTransformRequest {
   // Document-space corners in top-left, top-right, bottom-right, bottom-left
   // order. Pixel layers accept a general convex perspective quad. Editable text
-  // accepts only an affine parallelogram so its TySh transform stays editable.
+  // and vector shape layers accept only an affine parallelogram so their
+  // canonical editable geometry stays intact.
   std::array<double, 8> quad{};
   LayerTransformInterpolation interpolation{LayerTransformInterpolation::Bilinear};
   // Checked between output rows. False cancels without changing the document.
@@ -65,10 +66,11 @@ struct LayerArrangeRequest {
   LayerArrangeReference reference{LayerArrangeReference::Selection};
 };
 
-// Applies one engine-owned transform to a pixel, editable text or editable
-// Smart Object layer. Smart Object placement/non-affine quads are mapped with
-// the same homography while embedded source, filters and warp state survive. The
-// raster and a linked raster mask use the exact same document-space homography.
+// Applies one engine-owned transform to a pixel, editable text, editable vector
+// shape or editable Smart Object layer. Smart Object placement/non-affine quads
+// are mapped with the same homography while embedded source, filters and warp
+// state survive. The raster and a linked raster mask use the exact same
+// document-space homography.
 // Unsupported layer kinds, unlinked masks, vector masks, degenerate/non-convex
 // quads and excessive output allocations fail closed without changing document.
 [[nodiscard]] bool transform_layer(Document& document, LayerId layer_id,

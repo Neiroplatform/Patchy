@@ -291,9 +291,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .crop-overlay circle { fill: #f4f6f7; stroke: #171a1d; stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: auto; }
 .transform-overlay { position: absolute; inset: 0; z-index: 4; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .transform-overlay polygon { fill: #76b9000b; stroke: var(--accent); stroke-width: 1; }
+.transform-overlay line { stroke: var(--accent); stroke-width: 1; pointer-events: none; }
 .transform-overlay circle { r: 5px; fill: var(--surface-0); stroke: var(--accent); stroke-width: 2px; vector-effect: non-scaling-stroke; pointer-events: auto; cursor: nwse-resize; }
 .transform-overlay circle[data-transform-handle="edge-top"], .transform-overlay circle[data-transform-handle="edge-bottom"] { cursor: ns-resize; }
 .transform-overlay circle[data-transform-handle="edge-right"], .transform-overlay circle[data-transform-handle="edge-left"] { cursor: ew-resize; }
+.transform-overlay circle[data-transform-handle="rotate"] { cursor: grab; fill: var(--accent); }
+.transform-overlay circle[data-transform-handle="rotate"]:active { cursor: grabbing; }
 .transform-overlay .transform-pivot { fill: transparent; stroke: #fff; stroke-width: 1px; pointer-events: none; }
 .geometry-hud { position: absolute; z-index: 6; min-width: max-content; padding: 4px 6px; border: 1px solid #0008;
   border-radius: 3px; color: #fff; background: #111d; box-shadow: 0 3px 12px #0007; font: 600 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }

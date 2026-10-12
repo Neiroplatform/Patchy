@@ -1,7 +1,9 @@
 #include "core/layer_transform.hpp"
 
 #include "core/layer_metadata.hpp"
+#include "core/pixel_tools.hpp"
 #include "core/smart_object.hpp"
+#include "core/vector_shape.hpp"
 #include "core/warp_mesh.hpp"
 
 #include <algorithm>
@@ -255,6 +257,11 @@ bool collect_transform_leaves(const Layer& layer,
 bool validate_transform_leaf(const Layer& layer,
                              const std::array<double, 8>& quad,
                              std::string* error) {
+  if (layer_is_vector_shape(layer)) {
+    return fail(
+        error,
+        "multi-layer transforms do not yet support editable vector shapes");
+  }
   const bool editable_text = layer_is_text(layer);
   const bool editable_smart_object = layer_is_smart_object(layer);
   if (layer.kind() != LayerKind::Pixel && !editable_text &&
@@ -456,9 +463,12 @@ bool transform_layer(Document& document, LayerId layer_id,
   }
   const bool editable_text = layer_is_text(*current);
   const bool editable_smart_object = layer_is_smart_object(*current);
+  const bool editable_vector_shape = layer_is_vector_shape(*current);
   if (current->kind() != LayerKind::Pixel && !editable_text &&
-      !editable_smart_object) {
-    return fail(error, "only pixel, editable text and Smart Object layers can be transformed");
+      !editable_smart_object && !editable_vector_shape) {
+    return fail(error,
+                "only pixel, editable text, vector shape and Smart Object "
+                "layers can be transformed");
   }
   if (current->bounds().empty() || current->pixels().empty()) {
     return fail(error, "transform target has no raster bounds");
@@ -474,6 +484,15 @@ bool transform_layer(Document& document, LayerId layer_id,
   }
   if (editable_text && !affine_quad(request.quad)) {
     return fail(error, "editable text supports affine transforms only");
+  }
+  if (editable_vector_shape && !affine_quad(request.quad)) {
+    return fail(error, "editable vector shapes support affine transforms only");
+  }
+  if (editable_vector_shape &&
+      (current->mask().has_value() || current->vector_mask() != nullptr)) {
+    return fail(
+        error,
+        "editable vector shape transforms do not support attached masks");
   }
   if (editable_smart_object &&
       (!smart_object_placement_from_layer(*current).has_value() ||
@@ -493,6 +512,36 @@ bool transform_layer(Document& document, LayerId layer_id,
   const auto target_bounds = bounds_for_points(request.quad);
   if (!inverse.has_value() || !target_bounds.has_value()) {
     return fail(error, "transform output is singular or exceeds the allocation budget");
+  }
+
+  if (editable_vector_shape) {
+    if (request.continue_operation && !request.continue_operation()) {
+      return fail(error, "layer transform was cancelled");
+    }
+    const std::array<double, 6> affine{
+        (*matrix)[0], (*matrix)[3], (*matrix)[1],
+        (*matrix)[4], (*matrix)[2], (*matrix)[5]};
+    const auto determinant = affine[0] * affine[3] - affine[1] * affine[2];
+    const auto stroke_scale = std::sqrt(std::abs(determinant));
+    if (!std::isfinite(stroke_scale) || stroke_scale <= kGeometryEpsilon) {
+      return fail(error, "editable vector shape transform has an invalid scale");
+    }
+    auto transformed = *current;
+    transform_layer_vector_data(
+        document, transformed, affine,
+        Rect::from_size(document.width(), document.height()), stroke_scale);
+    if (transformed.vector_shape() == nullptr || transformed.pixels().empty() ||
+        transformed.bounds().empty()) {
+      return fail(error, "editable vector shape transform produced no raster result");
+    }
+    const auto transformed_bounds = transformed.bounds();
+    const auto affected = unite(bounds, transformed_bounds);
+    *current = std::move(transformed);
+    if (result != nullptr) {
+      *result = LayerTransformResult{bounds, transformed_bounds, affected};
+    }
+    if (error != nullptr) error->clear();
+    return true;
   }
 
   const auto pixel_count = static_cast<std::uint64_t>(target_bounds->width) *

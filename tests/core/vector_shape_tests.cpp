@@ -1,6 +1,7 @@
 #include "core/document.hpp"
 #include "core/document_path.hpp"
 #include "core/layer.hpp"
+#include "core/layer_transform.hpp"
 #include "core/path_fit.hpp"
 #include "core/path_simplify.hpp"
 #include "core/pixel_tools.hpp"
@@ -10,6 +11,7 @@
 
 #include "test_harness.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -420,6 +422,59 @@ void geometry_ops_transform_vector_data() {
   }
 }
 
+void free_transform_preserves_editable_vector_shape() {
+  auto document = geometry_test_document();
+  const auto layer_id = document.layers()[0].id();
+  const auto before = document.layers()[0].bounds();
+  const auto center_x = before.x + before.width / 2.0;
+  const auto center_y = before.y + before.height / 2.0;
+  const auto rotate = [center_x, center_y](double x, double y) {
+    return std::array<double, 2>{center_x - (y - center_y),
+                                 center_y + (x - center_x)};
+  };
+  const auto top_left = rotate(before.x, before.y);
+  const auto top_right = rotate(before.x + before.width, before.y);
+  const auto bottom_right =
+      rotate(before.x + before.width, before.y + before.height);
+  const auto bottom_left = rotate(before.x, before.y + before.height);
+  patchy::LayerTransformRequest request;
+  request.quad = {top_left[0], top_left[1], top_right[0], top_right[1],
+                  bottom_right[0], bottom_right[1], bottom_left[0],
+                  bottom_left[1]};
+  patchy::LayerTransformResult result;
+  std::string error;
+  CHECK(patchy::transform_layer(document, layer_id, request, &result, &error));
+  CHECK(error.empty());
+  const auto& transformed = document.layers()[0];
+  CHECK(patchy::layer_is_vector_shape(transformed));
+  CHECK(transformed.vector_shape() != nullptr);
+  CHECK(!transformed.pixels().empty());
+  CHECK(!transformed.bounds().empty());
+  CHECK(transformed.vector_shape()->origination.empty());
+  CHECK(patchy::layer_vector_block_dirty(transformed));
+  CHECK(nearly(transformed.vector_shape()->stroke.width, 4.0, 1e-9));
+  CHECK(nearly(transformed.vector_shape()->path.subpaths[0].anchors[0].anchor_x,
+               center_x - (10.0 - center_y), 1e-8));
+  CHECK(nearly(transformed.vector_shape()->path.subpaths[0].anchors[0].anchor_y,
+               center_y + (10.0 - center_x), 1e-8));
+  CHECK(result.previous_bounds.x == before.x &&
+        result.previous_bounds.y == before.y &&
+        result.previous_bounds.width == before.width &&
+        result.previous_bounds.height == before.height);
+  CHECK(result.transformed_bounds.x == transformed.bounds().x &&
+        result.transformed_bounds.y == transformed.bounds().y &&
+        result.transformed_bounds.width == transformed.bounds().width &&
+        result.transformed_bounds.height == transformed.bounds().height);
+  CHECK(!result.affected_region.empty());
+
+  const auto unchanged = transformed.vector_shape()->path;
+  patchy::LayerTransformRequest perspective;
+  perspective.quad = {0.0, 0.0, 50.0, 3.0, 47.0, 45.0, 2.0, 40.0};
+  CHECK(!patchy::transform_layer(document, layer_id, perspective, nullptr, &error));
+  CHECK(error == "editable vector shapes support affine transforms only");
+  CHECK(document.layers()[0].vector_shape()->path == unchanged);
+}
+
 void path_fit_square_keeps_four_corner_anchors() {
   // A traced rectangle (collinear runs already collapsed) must fit to exactly
   // its four corners with collapsed handles, at any reasonable tolerance.
@@ -696,6 +751,8 @@ std::vector<patchy::test::TestCase> vector_shape_tests() {
       {"vector_metadata_flags_round_trip", vector_metadata_flags_round_trip},
       {"document_path_revision_and_dirty_semantics", document_path_revision_and_dirty_semantics},
       {"geometry_ops_transform_vector_data", geometry_ops_transform_vector_data},
+      {"free_transform_preserves_editable_vector_shape",
+       free_transform_preserves_editable_vector_shape},
       {"path_fit_square_keeps_four_corner_anchors", path_fit_square_keeps_four_corner_anchors},
       {"path_fit_circle_is_smooth_and_within_tolerance",
        path_fit_circle_is_smooth_and_within_tolerance},
