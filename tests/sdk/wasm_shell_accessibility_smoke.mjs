@@ -126,7 +126,8 @@ async function exerciseNativeFileLifecycle(doc, byId) {
   opacity.value = String(Number(opacity.value) === 61 ? 62 : 61);
   opacity.dispatchEvent(new frame.contentWindow.Event("change", { bubbles: true }));
   await waitFor(() => Number(byId("detailRevision").textContent) === restoredRevision + 1 &&
-    byId("detailState").textContent === "Изменён",
+    byId("detailState").textContent === "Изменён" &&
+    doc.querySelector(".editor-shell").getAttribute("aria-busy") !== "true",
   "write-failure fixture did not create a modified state", NATIVE_FILE_LIFECYCLE_TIMEOUT);
   let abortedWrite = false;
   saveTarget = {
