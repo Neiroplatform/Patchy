@@ -2301,6 +2301,7 @@ function renderQuickMask(gray = null) {
 }
 
 function setCanvasTool(tool) {
+  if (tool !== "text" && inlineTextDraft) void commitInlineText({ restoreFocus: false });
   if (tool !== "text") closeTextSettings();
   if (!["brush", "eraser"].includes(tool)) closeBrushQuickPicker();
   if (tool !== "pen") { penDraft = null; penHoverPoint = null; previewPolygon([]); }
@@ -6359,28 +6360,12 @@ for (const radio of document.querySelectorAll('input[name="textToolPanelAlignmen
   radio.addEventListener("change", () => { syncTextToolbarFromPanel();
     noteInlineTextFormattingChange({ paragraph: true }); });
 }
-function focusKeepsInlineTextSession(element) {
-  if (!(element instanceof Element)) return false;
-  if (element === $("inlineTextEditor") || $("textSettingsPopover").contains(element)) return true;
-  return ["textToolFontInput", "textToolStyleInput", "textToolSizeInput", "textToolColorInput",
-    "textToolAlignmentInput", "textSettingsButton", "paragraphSettingsButton",
-    "applyInlineTextButton", "cancelInlineTextButton"].some((id) => $(id) === element || $(id).contains(element));
-}
-
 $("inlineTextEditor").addEventListener("input", renderInlineTextEditor);
 $("inlineTextEditor").addEventListener("keydown", (event) => {
   if (event.key === "Escape") { event.preventDefault(); cancelInlineText(); return; }
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) {
     event.preventDefault(); void commitInlineText();
   }
-});
-$("inlineTextEditor").addEventListener("blur", (event) => {
-  const relatedTarget = event.relatedTarget;
-  setTimeout(() => {
-    if (inlineTextDraft && !focusKeepsInlineTextSession(relatedTarget) &&
-        !focusKeepsInlineTextSession(document.activeElement))
-      void commitInlineText({ restoreFocus: false });
-  }, 0);
 });
 $("applyInlineTextButton").addEventListener("click", () => void commitInlineText());
 $("cancelInlineTextButton").addEventListener("click", () => cancelInlineText());

@@ -71,3 +71,14 @@ test("development and self-hosted release inventories ship the authoring deck", 
   assert.match(read("scripts/release/build-self-hosted-release.mjs"), /"authoring-deck\.mjs"/);
   assert.match(read("sdk/engine/site/editor.mjs"), /from "\.\/authoring-deck\.mjs"/);
 });
+
+test("inline text remains explicit while settings and unrelated UI receive focus", () => {
+  const editor = read("sdk/engine/site/editor.mjs");
+  assert.doesNotMatch(editor, /inlineTextEditor"\)\.addEventListener\("blur"/);
+  assert.match(editor,
+    /if \(tool !== "text" && inlineTextDraft\) void commitInlineText\(\{ restoreFocus: false \}\)/);
+  assert.match(editor,
+    /if \(inlineTextDraft\) \{ void commitInlineText\(\{ restoreFocus: false \}\); return; \}/);
+  assert.match(editor, /applyInlineTextButton"\)\.addEventListener\("click"/);
+  assert.match(editor, /cancelInlineTextButton"\)\.addEventListener\("click"/);
+});
