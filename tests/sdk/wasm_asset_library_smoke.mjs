@@ -108,7 +108,8 @@ try {
   byId("assetFontFamilyInput").value = names.font;
   assignFile(byId("assetFontFileInput"), fontFile, view());
   byId("installFontAssetButton").click();
-  await waitFor(() => [...byId("fontPresetList").options].some((option) => option.value === names.font) &&
+  await waitFor(() => ["textToolFontInput", "textToolPanelFontInput", "textFontInput"]
+    .every((id) => [...byId(id).options].some((option) => option.value === names.font)) &&
     doc.fonts.check(`12px "${names.font}"`), "local font was not installed and activated");
 
   let library = await store.loadAssetLibrary();
@@ -157,7 +158,8 @@ try {
   check([...byId("paintPresetSelect").options].some((option) => option.value === `asset:${gradient.id}`) &&
     [...byId("paintPresetSelect").options].some((option) => option.value === `asset:${pattern.id}`),
   "reloaded fill controls did not expose persisted assets");
-  check([...byId("fontPresetList").options].some((option) => option.value === names.font) &&
+  check(["textToolFontInput", "textToolPanelFontInput", "textFontInput"]
+    .every((id) => [...byId(id).options].some((option) => option.value === names.font)) &&
     doc.fonts.check(`12px "${names.font}"`), "reloaded editor did not reactivate the persisted font");
 
   await cleanup();
