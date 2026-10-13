@@ -27,6 +27,8 @@ import { installStructureDeck } from "./structure-deck.mjs";
 import { installPropertiesDeck } from "./properties-deck.mjs";
 import { installHistoryDeck } from "./history-deck.mjs";
 import { installDockLayout } from "./dock-layout.mjs";
+import { BUNDLED_FONT_CATALOG, BUNDLED_FONT_FAMILIES,
+  loadBundledFontFamily } from "./font-catalog.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -130,6 +132,8 @@ let textBoxDraft = null;
 let pendingTextBounds = null;
 let inlineTextDraft = null;
 let inlineTextCommitPending = false;
+let inlineTextStyleDirty = false;
+let inlineTextParagraphDirty = false;
 let retouchDraft = null;
 let localBrushDraft = null;
 let advancedPaintDraft = null;
@@ -176,6 +180,7 @@ let recoveryPromise = null;
 let preferenceTimer = null;
 let assetLibrary = { version: 1, generation: 0, gradients: [], patterns: [], fonts: [] };
 const loadedFontFaces = new Map();
+const bundledFontLoads = new Map();
 let renderedDocument = null;
 let frameTransport = "waiting";
 let layerWindowFrame = 0;
@@ -819,6 +824,43 @@ function preferenceSnapshot() {
   };
 }
 
+const SYSTEM_FONT_FAMILIES = Object.freeze([
+  "Arial", "Georgia", "Courier New", "Times New Roman", "Verdana", "Trebuchet MS",
+]);
+
+function syncFontOptions(...requestedFamilies) {
+  const controls = [$("textToolFontInput"), $("textToolPanelFontInput"), $("textFontInput")];
+  const current = controls.map((control) => control.value);
+  const local = assetLibrary.fonts.map(({ family }) => family);
+  const extras = [...new Set([...current, ...requestedFamilies, ...local].filter(Boolean))]
+    .filter((name) => !SYSTEM_FONT_FAMILIES.includes(name) && !BUNDLED_FONT_FAMILIES.includes(name));
+  for (const [index, control] of controls.entries()) {
+    control.replaceChildren();
+    for (const [label, families] of [["Bundled fonts", BUNDLED_FONT_FAMILIES],
+      ["Browser fonts", SYSTEM_FONT_FAMILIES], ["Document and installed fonts", extras]]) {
+      if (!families.length) continue;
+      const group = document.createElement("optgroup"); group.label = label;
+      for (const name of families) {
+        const option = document.createElement("option"); option.value = name; option.textContent = name;
+        group.append(option);
+      }
+      control.append(group);
+    }
+    const preferred = current[index] || requestedFamilies.find(Boolean) || "Arial";
+    control.value = [...control.options].some((option) => option.value === preferred) ? preferred : "Arial";
+  }
+}
+
+async function ensureFontFamilyLoaded(name) {
+  if (!BUNDLED_FONT_CATALOG.some(({ family }) => family === name)) return [];
+  if (!bundledFontLoads.has(name)) {
+    bundledFontLoads.set(name, loadBundledFontFamily(name).catch((error) => {
+      bundledFontLoads.delete(name); throw error;
+    }));
+  }
+  return bundledFontLoads.get(name);
+}
+
 function assetId(prefix) {
   const suffix = crypto.randomUUID ? crypto.randomUUID() :
     [...crypto.getRandomValues(new Uint32Array(4))].map((value) => value.toString(16)).join("-");
@@ -861,12 +903,7 @@ function renderAssetLibrary() {
   if ([...advancedPattern.options].some((option) => option.value === selectedAdvancedPattern)) {
     advancedPattern.value = selectedAdvancedPattern;
   }
-  const fonts = $("fontPresetList");
-  for (const option of [...fonts.querySelectorAll('option[data-local-asset="true"]')]) option.remove();
-  for (const font of assetLibrary.fonts) {
-    const option = document.createElement("option"); option.value = font.family;
-    option.dataset.localAsset = "true"; fonts.append(option);
-  }
+  syncFontOptions();
   const list = $("assetLibraryList"); list.replaceChildren();
   for (const [kind, assets] of [["gradients", assetLibrary.gradients],
     ["patterns", assetLibrary.patterns], ["fonts", assetLibrary.fonts]]) {
@@ -935,7 +972,9 @@ async function installFontAsset() {
   const metadata = await workspaceStore.installFont({ id, family, filename: file.name, bytes });
   document.fonts.add(face); loadedFontFaces.set(id, face);
   assetLibrary = await workspaceStore.loadAssetLibrary();
-  renderAssetLibrary(); $("textFontInput").value = metadata.family; persistPreferences();
+  renderAssetLibrary(); syncFontOptions(metadata.family);
+  for (const id of ["textFontInput", "textToolFontInput", "textToolPanelFontInput"]) $(id).value = metadata.family;
+  persistPreferences();
 }
 
 function persistPreferences() {
@@ -956,6 +995,7 @@ function applyPreferences(preferences) {
   $("brushColorInput").value = preferences.color;
   $("foregroundSwatchInput").value = preferences.color;
   $("paintPresetSelect").value = preferences.paintPreset;
+  syncFontOptions(preferences.font);
   $("textFontInput").value = preferences.font;
   $("textToolFontInput").value = preferences.font;
   $("textToolPanelFontInput").value = preferences.font;
@@ -2163,8 +2203,10 @@ function renderSelection(rect = marqueeDraft) {
   if (canvasTool === "quickMask") { overlay.setAttribute("hidden", ""); renderQuickMask(); return; }
   if (!snapshot || (!rect && !snapshot.selection?.length)) { overlay.setAttribute("hidden", ""); return; }
   const path = rect ? rectanglePath(rect) : selectionPath();
-  if (!path?.subpaths?.length) { overlay.setAttribute("hidden", ""); return; }
-  const data = path.subpaths.map(({ anchors, closed }) => anchors.length
+  const subpaths = path?.subpaths?.length ? path.subpaths : path?.anchors?.length
+    ? [{ anchors: path.anchors, closed: true }] : [];
+  if (!subpaths.length) { overlay.setAttribute("hidden", ""); return; }
+  const data = subpaths.map(({ anchors, closed }) => anchors.length
     ? `M ${anchors.map((point) => `${point.x} ${point.y}`).join(" L ")}${closed ? " Z" : ""}`
     : "").filter(Boolean).join(" ");
   overlay.setAttribute("viewBox", `0 0 ${snapshot.width} ${snapshot.height}`);
@@ -3991,6 +4033,16 @@ function syncTextToolbarFromPanel() {
   persistPreferences();
 }
 
+function noteInlineTextFormattingChange({ paragraph = false } = {}) {
+  if (inlineTextDraft) {
+    if (paragraph) inlineTextParagraphDirty = true;
+    else inlineTextStyleDirty = true;
+  }
+  const font = $("textToolFontInput").value;
+  void ensureFontFamilyLoaded(font).then(() => renderInlineTextEditor())
+    .catch((error) => showError("Could not load font", error));
+}
+
 function normalizedInlineTextBounds(bounds) {
   const x = Math.max(0, Math.min(snapshot.width - 1, Math.floor(bounds.x)));
   const y = Math.max(0, Math.min(snapshot.height - 1, Math.floor(bounds.y)));
@@ -3998,9 +4050,60 @@ function normalizedInlineTextBounds(bounds) {
     height: Math.max(1, Math.min(snapshot.height - y, Math.ceil(bounds.height))) };
 }
 
+function cloneTextRun(run) { return { ...run, color: [...run.color] }; }
+function cloneParagraphRun(run) { return { ...run }; }
+
+function rebaseRuns(previousValue, nextValue, runs, fallback, clone, equal) {
+  const previous = Array.from({ length: previousValue.length }, () => clone(fallback));
+  for (const run of runs || []) {
+    const end = Math.min(previous.length, run.start + run.length);
+    for (let index = Math.max(0, run.start); index < end; ++index) previous[index] = clone(run);
+  }
+  let prefix = 0;
+  while (prefix < previousValue.length && prefix < nextValue.length &&
+      previousValue[prefix] === nextValue[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < previousValue.length - prefix && suffix < nextValue.length - prefix &&
+      previousValue[previousValue.length - 1 - suffix] === nextValue[nextValue.length - 1 - suffix]) suffix++;
+  const insertionStyle = previous[Math.max(0, prefix - 1)] || previous[prefix] || clone(fallback);
+  const mapped = Array.from({ length: nextValue.length }, (_, index) => {
+    if (index < prefix) return clone(previous[index] || fallback);
+    if (index >= nextValue.length - suffix) {
+      const previousIndex = previousValue.length - (nextValue.length - index);
+      return clone(previous[previousIndex] || insertionStyle);
+    }
+    return clone(insertionStyle);
+  });
+  const result = [];
+  for (let index = 0; index < mapped.length; ++index) {
+    const value = mapped[index]; const last = result.at(-1);
+    if (last && equal(last, value)) last.length++;
+    else result.push({ ...value, start: index, length: 1 });
+  }
+  return result;
+}
+
+function sameParagraphStyle(left, right) {
+  return ["justification", "firstLineIndent", "startIndent", "endIndent", "spaceBefore",
+    "spaceAfter", "autoLeadingFraction"].every((key) => left[key] === right[key]);
+}
+
+function textLayerAtPoint(point) {
+  if (!snapshot) return null;
+  const byId = new Map(snapshot.layers.map((layer) => [layer.id, layer]));
+  return [...snapshot.layers].reverse().find((layer) => {
+    if (layer.kind !== 3 || !layer.visible || effectiveLayerLockFlags(layer, byId) !== 0) return false;
+    const { x, y, width, height } = layer.bounds;
+    return point.x >= x && point.y >= y && point.x < x + width && point.y < y + height;
+  }) || null;
+}
+
 function renderInlineTextEditor() {
   const editor = $("inlineTextEditor");
-  if (!snapshot || !inlineTextDraft) { editor.hidden = true; return; }
+  const active = Boolean(snapshot && inlineTextDraft);
+  $("applyInlineTextButton").disabled = !active || !editor.value;
+  $("cancelInlineTextButton").disabled = !active;
+  if (!active) { editor.hidden = true; return; }
   const style = textToolStyleSnapshot(); const { bounds } = inlineTextDraft;
   editor.style.left = `${bounds.x * zoom}px`; editor.style.top = `${bounds.y * zoom}px`;
   editor.style.width = `${Math.max(24, bounds.width * zoom / style.horizontalScale)}px`;
@@ -4019,37 +4122,84 @@ function renderInlineTextEditor() {
   editor.hidden = false;
 }
 
-function beginInlineText(bounds) {
+function beginInlineText(bounds, { layer = null } = {}) {
   if (!snapshot || inlineTextCommitPending) return;
-  inlineTextDraft = { bounds: normalizedInlineTextBounds(bounds) };
+  const value = layer?.text?.value || "";
+  const fallbackStyle = layer?.text ? {
+    font: layer.text.font, style: "", sizePixels: layer.text.sizePixels, color: [...layer.text.color],
+    bold: layer.text.bold, italic: layer.text.italic, fauxBold: false, fauxItalic: false,
+    leading: layer.text.leading || 0, autoLeading: layer.text.autoLeading !== false,
+    tracking: layer.text.tracking || 0, horizontalScale: layer.text.horizontalScale || 1,
+    verticalScale: layer.text.verticalScale || 1,
+  } : textToolStyleSnapshot();
+  const fallbackParagraph = textToolParagraphSnapshot(0, Math.max(1, value.length));
+  const styleRuns = layer?.text?.styleRuns?.length
+    ? layer.text.styleRuns.map(cloneTextRun) : [{ start: 0, length: value.length, ...fallbackStyle }];
+  const paragraphRuns = layer?.text?.paragraphRuns?.length
+    ? layer.text.paragraphRuns.map(cloneParagraphRun) : [{ ...fallbackParagraph, start: 0, length: value.length }];
+  inlineTextDraft = { bounds: normalizedInlineTextBounds(bounds), layerId: layer?.id || null,
+    name: layer?.name || null, originalValue: value, originalStyleRuns: styleRuns,
+    originalParagraphRuns: paragraphRuns, fallbackStyle, fallbackParagraph };
+  inlineTextStyleDirty = false; inlineTextParagraphDirty = false;
+  if (layer) {
+    setSingleLayerSelection(layer.id); renderLayers(); renderLayerProperties();
+    syncFontOptions(fallbackStyle.font);
+    $("textToolFontInput").value = fallbackStyle.font;
+    $("textToolStyleInput").value = fallbackStyle.bold && fallbackStyle.italic ? "bold-italic" :
+      fallbackStyle.bold ? "bold" : fallbackStyle.italic ? "italic" : "regular";
+    $("textToolSizeInput").value = String(fallbackStyle.sizePixels);
+    $("textToolColorInput").value = `#${fallbackStyle.color.map((part) =>
+      part.toString(16).padStart(2, "0")).join("")}`;
+    syncTextSettingsPanelFromToolbar({ run: fallbackStyle, paragraph: paragraphRuns[0] });
+    syncTextStyleFlags();
+  }
   const editor = $("inlineTextEditor");
-  editor.value = "";
+  editor.value = value;
   renderInlineTextEditor();
-  queueMicrotask(() => editor.focus({ preventScroll: true }));
+  void ensureFontFamilyLoaded(fallbackStyle.font).then(() => renderInlineTextEditor())
+    .catch((error) => showError("Could not load font", error));
+  requestAnimationFrame(() => {
+    editor.focus({ preventScroll: true });
+    if (layer) editor.setSelectionRange(editor.value.length, editor.value.length);
+  });
 }
 
 function cancelInlineText({ restoreFocus = true } = {}) {
   inlineTextDraft = null;
+  inlineTextStyleDirty = false; inlineTextParagraphDirty = false;
   const editor = $("inlineTextEditor"); editor.value = ""; editor.hidden = true;
+  renderInlineTextEditor();
   if (restoreFocus) $("canvasViewport").focus({ preventScroll: true });
 }
 
 async function commitInlineText({ restoreFocus = true } = {}) {
   if (!inlineTextDraft || inlineTextCommitPending || busy || !snapshot) return;
   const editor = $("inlineTextEditor"); const value = editor.value.replace(/\r\n?/g, "\n");
-  if (!value) { cancelInlineText({ restoreFocus }); return; }
+  if (!value) {
+    if (inlineTextDraft.layerId) { showError("Text cannot be empty", new Error("Cancel the edit to preserve the layer.")); return; }
+    cancelInlineText({ restoreFocus }); return;
+  }
   const draft = inlineTextDraft; const style = textToolStyleSnapshot();
-  const runs = [{ start: 0, length: value.length, ...style }];
-  const paragraphs = [textToolParagraphSnapshot(0, value.length)];
+  try { await ensureFontFamilyLoaded(style.font); }
+  catch (error) { showError("Could not load font", error); return; }
+  const paragraph = textToolParagraphSnapshot(0, value.length);
+  const runs = inlineTextStyleDirty ? [{ start: 0, length: value.length, ...style }]
+    : rebaseRuns(draft.originalValue, value, draft.originalStyleRuns, draft.fallbackStyle,
+      cloneTextRun, sameTextStyle);
+  const paragraphs = inlineTextParagraphDirty ? [{ ...paragraph, start: 0, length: value.length }]
+    : rebaseRuns(draft.originalValue, value, draft.originalParagraphRuns, draft.fallbackParagraph,
+      cloneParagraphRun, sameParagraphStyle);
   let payload;
   try {
     payload = textLayerPayload({ value, font: style.font, sizePixels: style.sizePixels,
       color: style.color, bold: style.bold, italic: style.italic }, draft.bounds,
-      value.split(/\s+/)[0] || "Text", runs, paragraphs);
+      draft.name || value.split(/\s+/)[0] || "Text", runs, paragraphs);
   } catch (error) { showError("Could not prepare text", error); return; }
   inlineTextCommitPending = true; inlineTextDraft = null; editor.hidden = true;
-  const next = await mutate("Creating text", selectCreatedLayer(3,
-    () => client.addTextLayer(payload, { transferOwnership: true })));
+  const operation = draft.layerId
+    ? () => client.updateTextLayer(draft.layerId, payload, { transferOwnership: true })
+    : selectCreatedLayer(3, () => client.addTextLayer(payload, { transferOwnership: true }));
+  const next = await mutate(draft.layerId ? "Updating text" : "Creating text", operation);
   inlineTextCommitPending = false;
   if (next !== DIAGNOSTIC_COMMAND_FAILED) {
     if (restoreFocus) $("canvasViewport").focus({ preventScroll: true });
@@ -4483,6 +4633,8 @@ function openTextDialog(boundsOverride = null, forceCreate = false) {
   pendingTextBounds = null;
   const toolStyle = textToolStyleSnapshot();
   const style = layer?.text || { value: "Text", ...toolStyle };
+  syncFontOptions(style.font);
+  void ensureFontFamilyLoaded(style.font).catch((error) => showError("Could not load font", error));
   $("textDialogTitle").textContent = textEditingId ? "Edit text layer" : "Create text layer";
   $("commitTextButton").textContent = textEditingId ? "Update text" : "Create text";
   $("textValueInput").value = style.value;
@@ -6179,23 +6331,42 @@ $("textSettingsPopover").addEventListener("keydown", (event) => {
 for (const id of ["textToolFontInput", "textToolStyleInput", "textToolSizeInput",
   "textToolColorInput", "textToolAlignmentInput"]) {
   $(id).addEventListener("input", () => {
-    syncTextStyleFlags(); syncTextSettingsPanelFromToolbar(); renderInlineTextEditor(); persistPreferences();
+    syncTextStyleFlags(); syncTextSettingsPanelFromToolbar();
+    noteInlineTextFormattingChange({ paragraph: id === "textToolAlignmentInput" });
+    renderInlineTextEditor(); persistPreferences();
   });
   $(id).addEventListener("change", () => {
-    syncTextStyleFlags(); syncTextSettingsPanelFromToolbar(); renderInlineTextEditor(); persistPreferences();
+    syncTextStyleFlags(); syncTextSettingsPanelFromToolbar();
+    noteInlineTextFormattingChange({ paragraph: id === "textToolAlignmentInput" });
+    renderInlineTextEditor(); persistPreferences();
   });
 }
+const paragraphTextSettingIds = new Set(["textToolPanelFirstIndentInput", "textToolPanelStartIndentInput",
+  "textToolPanelEndIndentInput", "textToolPanelSpaceBeforeInput", "textToolPanelSpaceAfterInput",
+  "textToolPanelAutoLeadingInput"]);
 for (const id of ["textToolPanelFontInput", "textToolPanelStyleInput", "textToolPanelSizeInput",
   "textToolPanelLeadingInput", "textToolPanelTrackingInput", "textToolPanelColorInput",
   "textToolPanelHorizontalScaleInput", "textToolPanelVerticalScaleInput",
   "textToolPanelFirstIndentInput", "textToolPanelStartIndentInput", "textToolPanelEndIndentInput",
   "textToolPanelSpaceBeforeInput", "textToolPanelSpaceAfterInput", "textToolPanelAutoLeadingInput"]) {
-  $(id).addEventListener("input", syncTextToolbarFromPanel);
-  $(id).addEventListener("change", syncTextToolbarFromPanel);
+  const paragraph = paragraphTextSettingIds.has(id);
+  $(id).addEventListener("input", () => { syncTextToolbarFromPanel();
+    noteInlineTextFormattingChange({ paragraph }); });
+  $(id).addEventListener("change", () => { syncTextToolbarFromPanel();
+    noteInlineTextFormattingChange({ paragraph }); });
 }
 for (const radio of document.querySelectorAll('input[name="textToolPanelAlignment"]')) {
-  radio.addEventListener("change", syncTextToolbarFromPanel);
+  radio.addEventListener("change", () => { syncTextToolbarFromPanel();
+    noteInlineTextFormattingChange({ paragraph: true }); });
 }
+function focusKeepsInlineTextSession(element) {
+  if (!(element instanceof Element)) return false;
+  if (element === $("inlineTextEditor") || $("textSettingsPopover").contains(element)) return true;
+  return ["textToolFontInput", "textToolStyleInput", "textToolSizeInput", "textToolColorInput",
+    "textToolAlignmentInput", "textSettingsButton", "paragraphSettingsButton",
+    "applyInlineTextButton", "cancelInlineTextButton"].some((id) => $(id) === element || $(id).contains(element));
+}
+
 $("inlineTextEditor").addEventListener("input", renderInlineTextEditor);
 $("inlineTextEditor").addEventListener("keydown", (event) => {
   if (event.key === "Escape") { event.preventDefault(); cancelInlineText(); return; }
@@ -6203,9 +6374,17 @@ $("inlineTextEditor").addEventListener("keydown", (event) => {
     event.preventDefault(); void commitInlineText();
   }
 });
-$("inlineTextEditor").addEventListener("blur", () => {
-  queueMicrotask(() => { if (inlineTextDraft) void commitInlineText({ restoreFocus: false }); });
+$("inlineTextEditor").addEventListener("blur", (event) => {
+  const relatedTarget = event.relatedTarget;
+  setTimeout(() => {
+    if (inlineTextDraft && !focusKeepsInlineTextSession(relatedTarget) &&
+        !focusKeepsInlineTextSession(document.activeElement))
+      void commitInlineText({ restoreFocus: false });
+  }, 0);
 });
+$("applyInlineTextButton").addEventListener("click", () => void commitInlineText());
+$("cancelInlineTextButton").addEventListener("click", () => cancelInlineText());
+syncFontOptions();
 syncTextStyleFlags();
 syncTextSettingsPanelFromToolbar();
 for (const id of ["brushAngleInput", "brushRoundnessInput", "brushSpacingInput",
@@ -6709,7 +6888,14 @@ canvas.addEventListener("pointerdown", async (event) => {
   if (canvasTool === "gradient") { beginGradient(event); return; }
   if (canvasTool === "fill") { void fillSelectedPixels(event); return; }
   if (canvasTool === "shape") { beginDirectShape(event); return; }
-  if (canvasTool === "text") { beginTextBox(event); return; }
+  if (canvasTool === "text") {
+    const point = canvasPoint(event);
+    const layer = textLayerAtPoint(point);
+    if (inlineTextDraft) { void commitInlineText({ restoreFocus: false }); return; }
+    if (layer) beginInlineText(layer.bounds, { layer });
+    else beginTextBox(event);
+    return;
+  }
   if (canvasTool === "pen") {
     const point = canvasPoint(event);
     penDraft ??= { points: [], closed: false };
@@ -6813,6 +6999,7 @@ canvas.addEventListener("pointerdown", async (event) => {
   const start = canvasPoint(event);
   canvas.setPointerCapture(event.pointerId);
   marqueeDraft = { x: Math.floor(start.x), y: Math.floor(start.y), width: 1, height: 1 };
+  renderSelection();
   const move = (nextEvent) => {
     const point = canvasPoint(nextEvent);
     const x = Math.floor(Math.min(start.x, point.x));

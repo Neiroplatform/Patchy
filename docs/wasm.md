@@ -80,8 +80,13 @@ Freeze/Thaw stroke batches to the same engine for cancellable preview and one
 exact-state commit; the browser never authors canonical deformed pixels. The
 inspector authors masks, shapes, adjustments, Smart Objects/Filters,
 channels/paths, rasterize and merge, while built-in style, gradient, pattern
-and font presets cover common appearance work without remote assets. Raster
-images and SVG decode locally,
+and font presets cover common appearance work without remote assets. The
+Qt-free package stages 13 OFL font families / 35 faces under its immutable
+same-origin font tree and loads only the selected family. The Text tool
+reopens an existing visible, unlocked text layer by clicking its authored
+bounds; Character and Paragraph controls retain the inline edit session until
+Apply/Ctrl+Enter, Cancel/Escape or an explicit canvas exit. Raster images and
+SVG decode locally,
 can be dropped into an active document or create a new document. One Worker
 owns up to 16 isolated engine sessions; tabs activate/close them while each
 keeps independent revision/history/document state. Rendered selection pixels

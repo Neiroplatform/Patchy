@@ -29,6 +29,7 @@ const REQUIRED = [
   "history-deck.mjs",
   "dock-layout.mjs",
   "workspace-context.mjs",
+  "font-catalog.mjs",
   "editor.css",
   "editor.mjs",
   "reference-workflow.mjs",

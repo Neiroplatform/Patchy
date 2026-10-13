@@ -202,7 +202,7 @@
             <label hidden>Stroke <input id="shapeToolStrokeInput" type="color" value="#10141d"></label>
             <label hidden>Width <input id="shapeToolStrokeWidthInput" type="number" min="0" max="200" step="1" value="0"></label>
             <label hidden>Sides <input id="shapeToolSidesInput" type="number" min="3" max="32" step="1" value="6"></label>
-            <label class="primary-tool-choice" hidden>Font <input id="textToolFontInput" type="text" value="Arial" list="fontPresetList" maxlength="256"></label>
+            <label class="primary-tool-choice" hidden>Font <select id="textToolFontInput" aria-label="Font family"><option value="Arial">Arial</option></select></label>
             <label hidden>Style <select id="textToolStyleInput" aria-label="Font style"><option value="regular">Regular</option><option value="bold">Bold</option><option value="italic">Italic</option><option value="bold-italic">Bold Italic</option></select></label>
             <label hidden>Size <input id="textToolSizeInput" type="number" min="1" max="512" step="1" value="48"></label>
             <label hidden>Color <input id="textToolColorInput" type="color" value="#111111"></label>
@@ -211,6 +211,10 @@
             <label hidden>Align <select id="textToolAlignmentInput" aria-label="Paragraph alignment"><option value="0">Left</option><option value="2">Center</option><option value="1">Right</option><option value="3">Justify</option></select></label>
             <button class="tool-option-button text-panel-trigger" id="textSettingsButton" type="button" aria-expanded="false" aria-controls="textSettingsPopover" hidden>Character</button>
             <button class="tool-option-button text-panel-trigger" id="paragraphSettingsButton" type="button" aria-expanded="false" aria-controls="textSettingsPopover" hidden>Paragraph</button>
+            <span class="direct-operation-actions">
+              <button class="tool-option-button" id="cancelInlineTextButton" type="button" disabled>Cancel</button>
+              <button class="tool-option-button tool-option-apply" id="applyInlineTextButton" type="button" disabled>Apply</button>
+            </span>
             <label class="non-retouch-option standard-paint-option">Target <select id="paintTargetSelect" aria-label="Paint target">
               <option value="pixels">Layer pixels</option><option value="mask">Layer mask</option>
             </select></label>
@@ -270,7 +274,7 @@
               <button class="icon-button" id="closeTextSettingsButton" type="button" aria-label="Close">×</button>
             </header>
             <div class="text-settings-panel" id="characterSettingsPanel" role="tabpanel" aria-labelledby="characterSettingsTab">
-              <label><span>Font family</span><input id="textToolPanelFontInput" type="text" value="Arial" list="fontPresetList" maxlength="256"></label>
+              <label><span>Font family</span><select id="textToolPanelFontInput"><option value="Arial">Arial</option></select></label>
               <label><span>Font style</span><select id="textToolPanelStyleInput"><option value="regular">Regular</option><option value="bold">Bold</option><option value="italic">Italic</option><option value="bold-italic">Bold Italic</option></select></label>
               <label><span>Size</span><input id="textToolPanelSizeInput" type="number" min="1" max="512" step="1" value="48"></label>
               <label><span>Leading</span><input id="textToolPanelLeadingInput" type="number" min="0" max="4096" step="0.1" value="0" aria-description="Zero uses automatic leading"></label>
@@ -865,10 +869,9 @@
         <section>
           <label class="dialog-field"><span>Content</span><textarea id="textValueInput" maxlength="1024" rows="4" required></textarea></label>
           <div class="field-row">
-            <label><span>Font</span><input id="textFontInput" type="text" value="Arial" list="fontPresetList" maxlength="256" required></label>
+            <label><span>Font</span><select id="textFontInput" required><option value="Arial">Arial</option></select></label>
             <label><span>Size</span><input id="textSizeInput" type="number" min="1" max="512" value="48" required></label>
           </div>
-          <datalist id="fontPresetList"><option value="Arial"><option value="Georgia"><option value="Courier New"><option value="Times New Roman"><option value="Verdana"><option value="Trebuchet MS"></datalist>
           <div class="field-row text-style-row">
             <label><span>Color</span><input id="textColorInput" type="color" value="#111111"></label>
             <label class="check-field"><input id="textBoldInput" type="checkbox"><span>Bold</span></label>

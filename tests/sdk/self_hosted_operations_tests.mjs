@@ -32,6 +32,7 @@ async function createSite(root, marker) {
     ["history-deck.mjs", "export const history=true;"],
     ["dock-layout.mjs", "export const dock=true;"],
     ["workspace-context.mjs", "export const contexts=[];"],
+    ["font-catalog.mjs", "export const fonts=[];"],
     ["editor.css", "body{background:black}"],
     ["editor.mjs", `export const marker=${JSON.stringify(marker)};`],
     ["reference-workflow.mjs", "export const ready=true;"],
@@ -93,7 +94,7 @@ test("verified releases install, activate and roll back without mutation", async
   const value = await fixture();
   t.after(() => rm(value.root, { recursive: true, force: true }));
   const first = await installRelease({ releaseDir: join(value.root, "built", value.firstId), hostRoot: value.host });
-  assert.equal(first.fileCount, 88);
+  assert.equal(first.fileCount, 91);
   assert.ok(first.elapsedMs < 600_000);
   const firstActivation = await activateRelease({ hostRoot: value.host, releaseId: value.firstId });
   assert.equal(firstActivation.previousReleaseId, null);

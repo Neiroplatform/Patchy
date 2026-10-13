@@ -40,7 +40,8 @@ test("selection, paint, retouch and tone contexts expose only relevant existing 
       "shapeToolStrokeWidthInput", "shapeToolSidesInput"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.text.controls,
     ["textToolFontInput", "textToolStyleInput", "textToolSizeInput", "textToolColorInput",
-      "textToolAlignmentInput", "textSettingsButton", "paragraphSettingsButton"]);
+      "textToolAlignmentInput", "textSettingsButton", "paragraphSettingsButton",
+      "cancelInlineTextButton", "applyInlineTextButton"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.pen.controls,
     ["cancelPenPathButton", "finishPenPathButton", "closePenPathButton", "makePenSelectionButton"]);
   assert.deepEqual(WORKSPACE_TOOL_CONTEXTS.patch.controls,

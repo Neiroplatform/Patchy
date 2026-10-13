@@ -630,13 +630,19 @@ if(PATCHY_BUILD_WASM_SDK)
     "${PROJECT_SOURCE_DIR}/sdk/engine/exports.json")
   patchy_configure_target(patchy_engine_wasm_sdk)
   set(PATCHY_WASM_SDK_SITE_DIR "${CMAKE_CURRENT_BINARY_DIR}/site")
+  file(GLOB_RECURSE PATCHY_WASM_SDK_WEB_FONT_FILES CONFIGURE_DEPENDS
+    "${PATCHY_BUNDLED_FONTS_WEB_DIR}/*")
   add_custom_target(patchy_engine_wasm_site ALL
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf
+            "${PATCHY_WASM_SDK_SITE_DIR}/fonts"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${PATCHY_WASM_SDK_SITE_DIR}/engine"
+            "${PATCHY_WASM_SDK_SITE_DIR}/fonts"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/patchy.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/font-catalog.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/command-surface.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/authoring-deck.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/workspace-deck.mjs"
@@ -675,6 +681,9 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/support-diagnostics.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/workspace-store.mjs"
             "${PATCHY_WASM_SDK_SITE_DIR}/engine"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${PATCHY_BUNDLED_FONTS_WEB_DIR}"
+            "${PATCHY_WASM_SDK_SITE_DIR}/fonts"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "$<TARGET_FILE:patchy_engine_wasm_sdk>"
             "$<TARGET_FILE_DIR:patchy_engine_wasm_sdk>/patchy-engine.wasm"
@@ -687,7 +696,7 @@ if(PATCHY_BUILD_WASM_SDK)
             --site-root "${PATCHY_WASM_SDK_SITE_DIR}"
             --map "${PATCHY_WASM_SDK_LINK_MAP}"
             --source-sha "${PATCHY_WASM_SDK_SOURCE_SHA}"
-    DEPENDS patchy_engine_wasm_sdk
+    DEPENDS patchy_engine_wasm_sdk ${PATCHY_WASM_SDK_WEB_FONT_FILES}
     COMMENT "Staging the self-hosted Patchy Worker editor")
 endif()
 

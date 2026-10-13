@@ -31,9 +31,13 @@ const context = await browser.newContext({ viewport: { width: 1731, height: 1000
 const page = await context.newPage();
 const pageErrors = [];
 const failedRequests = [];
+const fontRequests = [];
 page.on("pageerror", (error) => pageErrors.push(String(error)));
 page.on("requestfailed", (request) => failedRequests.push(
   `${request.url()} ${request.failure()?.errorText || "failed"}`));
+page.on("request", (request) => {
+  if (/\.(?:ttf|otf|woff2?)(?:\?|$)/i.test(request.url())) fontRequests.push(request.url());
+});
 
 const firstRaster = fileURLToPath(new URL(
   "../../test-fixtures/readme/stylized_sunset_cc0.png", import.meta.url));
@@ -337,7 +341,17 @@ try {
 
   await selectTool("marqueeToolButton");
   let before = await revision();
-  await dragCanvas({ x: .18, y: .18 }, { x: .42, y: .42 });
+  {
+    const box = await page.locator("#documentCanvas").boundingBox();
+    await page.mouse.move(box.x + box.width * .18, box.y + box.height * .18);
+    await page.mouse.down();
+    assert.equal(await page.locator("#selectionOverlay").isHidden(), false,
+      "Marquee did not show its initial outline on pointer-down");
+    await page.mouse.move(box.x + box.width * .42, box.y + box.height * .42, { steps: 12 });
+    assert.match(await page.locator("#selectionMarchPath").getAttribute("d"), /^M\s+\d/,
+      "Marquee did not render a live selection contour before pointer-up");
+    await page.mouse.up();
+  }
   await waitForMutation(before, "Selecting area");
   await runPixelTool({ buttonId: "patchToolButton", label: "Applying Patch",
     from: { x: .3, y: .3 }, to: { x: .48, y: .48 } });
@@ -582,7 +596,10 @@ try {
     `shape Move/Transform surfaced ${await page.textContent("#errorMessage")}`);
 
   await selectTool("textToolButton");
-  await page.locator("#textToolFontInput").fill("Georgia");
+  assert.ok(await page.locator("#textToolFontInput option").count() >= 19,
+    "Text toolbar did not expose bundled and browser font families");
+  await page.locator("#textToolFontInput").selectOption("Noto Sans");
+  await page.waitForFunction(() => document.fonts.check('16px "Noto Sans"'));
   await page.locator("#textToolSizeInput").fill("28");
   await page.locator("#textToolStyleInput").selectOption("bold");
   await page.locator("#textToolAlignmentInput").selectOption("2");
@@ -611,7 +628,7 @@ try {
     family: node.style.fontFamily, size: node.style.fontSize, weight: node.style.fontWeight,
     align: node.style.textAlign, tracking: node.style.letterSpacing,
   }));
-  assert.match(inlineStyle.family, /Georgia/);
+  assert.match(inlineStyle.family, /Noto Sans/);
   assert.equal(inlineStyle.weight, "700");
   assert.equal(inlineStyle.align, "center");
   assert.notEqual(inlineStyle.tracking, "0px");
@@ -624,7 +641,7 @@ try {
     `Text surfaced ${await page.textContent("#errorMessage")}`);
   await page.locator("#textLayerButton").evaluate((button) => button.click());
   await page.waitForFunction(() => document.querySelector("#textDialog")?.open);
-  assert.equal(await page.locator("#textFontInput").inputValue(), "Georgia");
+  assert.equal(await page.locator("#textFontInput").inputValue(), "Noto Sans");
   assert.equal(await page.locator("#textSizeInput").inputValue(), "28");
   assert.equal(await page.locator("#textTrackingInput").inputValue(), "40");
   assert.equal(await page.locator("#textLeadingInput").inputValue(), "34");
@@ -632,19 +649,77 @@ try {
   assert.equal(await page.locator("#textFirstIndentInput").inputValue(), "7");
   await page.locator('#textDialog button.button[value="cancel"]').click();
 
+  const layerCountBeforeReedit = await page.locator("#layerList [data-layer-id]").count();
+  const revisionBeforeReedit = await revision();
+  await selectTool("moveToolButton");
+  const textTransformPoints = (await page.locator("#transformPolygon").getAttribute("points"))
+    .trim().split(/[ ,]+/).map(Number);
+  assert.equal(textTransformPoints.length, 8, "Created text did not expose its authored bounds");
+  const textCanvasBox = await page.locator("#documentCanvas").boundingBox();
+  const textCanvasSize = await page.locator("#documentCanvas").evaluate((node) =>
+    ({ width: node.width, height: node.height }));
+  const textCenter = { x: (textTransformPoints[0] + textTransformPoints[2] +
+    textTransformPoints[4] + textTransformPoints[6]) / 4,
+  y: (textTransformPoints[1] + textTransformPoints[3] +
+    textTransformPoints[5] + textTransformPoints[7]) / 4 };
+  await selectTool("textToolButton");
+  const textClick = { x: textCanvasBox.x + textCenter.x / textCanvasSize.width * textCanvasBox.width,
+    y: textCanvasBox.y + textCenter.y / textCanvasSize.height * textCanvasBox.height };
+  const textClickTarget = await page.evaluate(({ x, y }) => {
+    const node = document.elementFromPoint(x, y);
+    return { id: node?.id || "", tag: node?.tagName || "", hidden: Boolean(node?.hidden) };
+  }, textClick);
+  assert.equal(textClickTarget.id, "documentCanvas",
+    `Text click is obstructed: ${JSON.stringify({ textClick, textClickTarget, textCenter })}`);
+  await page.mouse.click(textClick.x, textClick.y);
+  await page.waitForFunction(() => !document.querySelector("#inlineTextEditor")?.hidden);
+  assert.equal(await page.locator("#inlineTextEditor").inputValue(), "Editable browser text",
+    `Text hit-test opened a new field at ${JSON.stringify(textCenter)}`);
+  assert.equal(await page.locator("#layerList [data-layer-id]").count(), layerCountBeforeReedit,
+    "Clicking existing text created a duplicate layer before editing");
+  await page.locator("#textToolFontInput").selectOption("Montserrat");
+  await page.locator("#textToolStyleInput").selectOption("italic");
+  await page.click("#textSettingsButton");
+  await page.locator("#textToolPanelTrackingInput").fill("65");
+  assert.equal(await page.locator("#inlineTextEditor").isVisible(), true,
+    "Text settings ended the active inline edit session");
+  assert.equal(await page.locator("#inlineTextEditor").inputValue(), "Editable browser text",
+    "Text settings discarded the active inline value");
+  assert.equal(await revision(), revisionBeforeReedit,
+    "Text settings committed before explicit Apply");
+  await page.click("#closeTextSettingsButton");
+  await page.locator("#inlineTextEditor").fill("Editable browser text revised");
+  await page.waitForFunction(() => document.fonts.check('16px "Montserrat"'));
+  before = await revision();
+  await page.click("#applyInlineTextButton");
+  await waitForMutation(before, "Updating text");
+  assert.equal(await page.locator("#layerList [data-layer-id]").count(), layerCountBeforeReedit,
+    "Updating text changed the layer count");
+  await page.locator("#textLayerButton").evaluate((button) => button.click());
+  await page.waitForFunction(() => document.querySelector("#textDialog")?.open);
+  assert.equal(await page.locator("#textValueInput").inputValue(), "Editable browser text revised");
+  assert.equal(await page.locator("#textFontInput").inputValue(), "Montserrat");
+  assert.equal(await page.locator("#textItalicInput").isChecked(), true);
+  assert.equal(await page.locator("#textTrackingInput").inputValue(), "65");
+  await page.locator('#textDialog button.button[value="cancel"]').click();
+  assert.ok(fontRequests.length >= 2, "Bundled font choices did not request local font assets");
+  assert.ok(fontRequests.every((url) => new URL(url).origin === new URL(editorUrl).origin),
+    `Bundled fonts escaped the editor origin: ${JSON.stringify(fontRequests)}`);
+
   const layerCountBeforeSecondText = await page.locator("#layerList [data-layer-id]").count();
-  await dragCanvas({ x: .74, y: .58 }, { x: .92, y: .76 });
+  await dragCanvas({ x: .74, y: .08 }, { x: .92, y: .28 });
   await page.waitForFunction(() => !document.querySelector("#inlineTextEditor")?.hidden);
   await page.locator("#inlineTextEditor").fill("Second text layer");
   before = await revision();
-  await page.locator("#inlineTextEditor").evaluate((node) => node.blur());
+  await page.mouse.click(textCanvas.x + textCanvas.width * .48,
+    textCanvas.y + textCanvas.height * .42);
   await waitForMutation(before, "Creating text");
   assert.equal(await page.locator("#layerList [data-layer-id]").count(),
     layerCountBeforeSecondText + 1, "The second text gesture did not create a new layer");
   const revisionBeforeCancel = await revision();
   const layerCountBeforeCancel = await page.locator("#layerList [data-layer-id]").count();
   await page.mouse.click(textCanvas.x + textCanvas.width * .48,
-    textCanvas.y + textCanvas.height * .55);
+    textCanvas.y + textCanvas.height * .42);
   await page.waitForFunction(() => !document.querySelector("#inlineTextEditor")?.hidden);
   await page.locator("#inlineTextEditor").fill("Cancel me");
   await page.locator("#inlineTextEditor").press("Escape");
@@ -683,7 +758,7 @@ try {
     "hover=idle-brush-radius wand=contiguous-all-layers-active-layer-svg gradient=preset-guard-noop-neutral " +
     `brush=color-dynamics-opacity-cap-${maximumStrokeAlpha} ` +
     "paint=advanced-brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill " +
-    "authoring=eyedropper-shape-smooth-ellipse-move-resize-rotate-text real-pointer=pass");
+    "authoring=eyedropper-shape-smooth-ellipse-move-resize-rotate-text-reedit-fonts-live-selection real-pointer=pass");
 } catch (error) {
   const diagnostic = await page.evaluate(() => ({
     state: document.querySelector(".editor-shell")?.dataset.state,
