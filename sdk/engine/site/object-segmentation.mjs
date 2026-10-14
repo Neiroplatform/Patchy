@@ -10,6 +10,13 @@ export const OBJECT_SEGMENTATION_RUNTIME = Object.freeze({
   bundleSha256: "9d5fc9ef74b22329cf9aa88dc543956d192b8c254210b187271614713eb5b10c",
 });
 
+export function objectSegmentationDelegate(renderer) {
+  const value = String(renderer || "").trim();
+  if (!value || /swiftshader|llvmpipe|lavapipe|software|basic render|\bwarp\b|virtualbox|vmware/i.test(value))
+    return "wasm";
+  return "gpu";
+}
+
 export function proposalMatchesSnapshot(proposal, snapshot) {
   return Boolean(proposal && snapshot &&
     proposal.documentId === String(snapshot.documentId) &&

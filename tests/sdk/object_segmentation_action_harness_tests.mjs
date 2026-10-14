@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
   clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
-  scaleConfidenceMask, combineSelectionMasks, objectSelectionIdentityMatches } from "../../sdk/engine/site/object-segmentation.mjs";
+  scaleConfidenceMask, combineSelectionMasks, objectSegmentationDelegate,
+  objectSelectionIdentityMatches } from "../../sdk/engine/site/object-segmentation.mjs";
 import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlannerAdapter,
   actionPlanSummary, planPrompt, validateActionPlan } from "../../sdk/engine/site/action-harness.mjs";
 import { installSameOriginFetch } from "../../sdk/engine/site/ml-network-policy.mjs";
@@ -27,6 +28,14 @@ test("object model and runtime identities are immutable release inputs", () => {
   assert.match(OBJECT_SEGMENTATION_MODEL.sha256, /^[0-9a-f]{64}$/);
   assert.equal(OBJECT_SEGMENTATION_MODEL.bytes, 30525312);
   assert.match(OBJECT_SEGMENTATION_RUNTIME.bundleSha256, /^[0-9a-f]{64}$/);
+});
+
+test("object inference rejects software WebGL delegates before model initialization", () => {
+  assert.equal(objectSegmentationDelegate("ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Ultra)"), "gpu");
+  assert.equal(objectSegmentationDelegate("ANGLE (Google, Vulkan 1.3 (SwiftShader Device))"), "wasm");
+  assert.equal(objectSegmentationDelegate("Microsoft Basic Render Driver"), "wasm");
+  assert.equal(objectSegmentationDelegate("llvmpipe (LLVM 18.1.8)"), "wasm");
+  assert.equal(objectSegmentationDelegate(""), "wasm");
 });
 
 test("inference Worker fetch policy permits same-origin assets and blocks telemetry origins", async () => {

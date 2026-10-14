@@ -1,6 +1,6 @@
 import { installSameOriginFetch } from "./ml-network-policy.mjs";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME,
-  objectSelectionIdentityMatches } from "./object-segmentation.mjs";
+  objectSegmentationDelegate, objectSelectionIdentityMatches } from "./object-segmentation.mjs";
 
 installSameOriginFetch(globalThis, { cacheName:
   `patchy-ml-${OBJECT_SEGMENTATION_MODEL.sha256.slice(0, 12)}-${OBJECT_SEGMENTATION_RUNTIME.bundleSha256.slice(0, 12)}` });
@@ -14,6 +14,16 @@ let runtimeTier = null;
 let imageIdentity = null;
 const renderCanvas = new OffscreenCanvas(1, 1);
 
+function preferredDelegate() {
+  try {
+    const canvas = new OffscreenCanvas(1, 1);
+    const context = canvas.getContext("webgl2") || canvas.getContext("webgl");
+    const extension = context?.getExtension("WEBGL_debug_renderer_info");
+    const renderer = extension ? context.getParameter(extension.UNMASKED_RENDERER_WEBGL) : "";
+    return objectSegmentationDelegate(renderer);
+  } catch { return "wasm"; }
+}
+
 async function segmenter(requestId) {
   segmenterPromise ??= (async () => {
     self.postMessage({ type: "progress", requestId, phase: "runtime", ratio: .05 });
@@ -24,6 +34,7 @@ async function segmenter(requestId) {
     const modelAssetBuffer = new Uint8Array(await response.arrayBuffer());
     self.postMessage({ type: "progress", requestId, phase: "initializing", ratio: .65 });
     try {
+      if (preferredDelegate() !== "gpu") throw new Error("Software WebGL delegate rejected");
       const engine = await InteractiveSegmenter.createFromOptions(files, {
         baseOptions: { modelAssetBuffer, delegate: "GPU" }, canvas: renderCanvas,
       });
