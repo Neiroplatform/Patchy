@@ -13,7 +13,8 @@ async function loadPlaywright() {
 }
 
 const { chromium } = await loadPlaywright();
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ headless: true,
+  ...(process.env.PATCHY_BROWSER_CHANNEL ? { channel: process.env.PATCHY_BROWSER_CHANNEL } : {}) });
 const context = await browser.newContext({ extraHTTPHeaders: { "Accept-Encoding": "identity" } });
 const page = await context.newPage();
 try {
