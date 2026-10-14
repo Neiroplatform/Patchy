@@ -1235,6 +1235,7 @@ const RU = new Map(Object.entries({
   "Visible composite": "Видимая композиция",
   "Add a prompt, review the preview, then Apply selection.": "Добавьте указание, проверьте предпросмотр, затем примените выделение.",
   "Loading local model and finding the object…": "Загрузка локальной модели и поиск объекта…",
+  "Refining local object preview…": "Уточнение локального предпросмотра объекта…",
   "Object preview cancelled": "Предпросмотр объекта отменён",
   "Object preview unavailable · use Magic Wand, Pen or Marquee on this device": "Предпросмотр объекта недоступен · используйте Волшебную палочку, Перо или Прямоугольное выделение на этом устройстве",
   "Preparing local inference": "Подготовка локального распознавания",

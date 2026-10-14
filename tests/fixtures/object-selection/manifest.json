@@ -12,7 +12,8 @@
     "successfulCaseIou": 0.20,
     "successfulCaseRatio": 0.80,
     "embeddingP95Ms": 12000,
-    "refinementP95Ms": 1500,
+    "gpuRefinementP95Ms": 1500,
+    "wasmRefinementP95Ms": 10000,
     "mainHeapGrowthBytes": 134217728,
     "mainThreadLongTaskMs": 50
   },

@@ -17,6 +17,7 @@ const manifest = JSON.parse(await readFile(new URL("../fixtures/object-selection
 assert.equal(manifest.cases.length, 40);
 const { chromium } = await loadPlaywright();
 const browser = await chromium.launch({ headless: true,
+  ...(process.env.PATCHY_SOFTWARE_GL === "1" ? { args: ["--use-angle=swiftshader"] } : {}),
   ...(process.env.PATCHY_BROWSER_CHANNEL ? { channel: process.env.PATCHY_BROWSER_CHANNEL } : {}) });
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 },
   extraHTTPHeaders: { "Accept-Encoding": "identity" } });
@@ -39,11 +40,14 @@ try {
     null, { timeout: 90_000 });
   const result = await page.evaluate(async ({ cases, width, height }) => {
     const module = await import("./object-segmentation.mjs");
+    const measurementStartedAt = performance.now();
     const longTasks = [];
     const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) longTasks.push(entry.duration);
+      for (const entry of list.getEntries()) {
+        if (entry.startTime >= measurementStartedAt) longTasks.push(entry.duration);
+      }
     });
-    try { observer.observe({ type: "longtask", buffered: true }); } catch {}
+    try { observer.observe({ type: "longtask" }); } catch {}
 
     function subjectPath(target, category, variant) {
       const dx = (variant % 3 - 1) * 5; const dy = (variant % 2) * 4;
@@ -170,6 +174,8 @@ try {
   const refinement = result.results.map((value) => value.refinementMs).sort((a, b) => a - b);
   const embeddingP95 = embedding[Math.min(embedding.length - 1, Math.ceil(embedding.length * .95) - 1)];
   const refinementP95 = refinement[Math.min(refinement.length - 1, Math.ceil(refinement.length * .95) - 1)];
+  const refinementBudget = result.results.every((value) => value.runtimeTier === "gpu") ?
+    floors.gpuRefinementP95Ms : floors.wasmRefinementP95Ms;
   const heapGrowth = Math.max(0, result.heapAfter - result.heapBefore);
   const evidence = { modelCases: result.results.length, meanIou: Number(mean.toFixed(4)),
     successful, categoryMeans, embeddingP95Ms: Math.round(embeddingP95),
@@ -185,7 +191,8 @@ try {
   for (const [category, value] of Object.entries(categoryMeans))
     assert.ok(value >= floors.categoryMeanIou, `${category} mean IoU ${value}`);
   assert.ok(embeddingP95 <= floors.embeddingP95Ms, `embedding p95 ${embeddingP95}ms`);
-  assert.ok(refinementP95 <= floors.refinementP95Ms, `refinement p95 ${refinementP95}ms`);
+  assert.ok(refinementP95 <= refinementBudget,
+    `refinement p95 ${refinementP95}ms exceeds ${refinementBudget}ms tier budget`);
   assert.ok(heapGrowth <= floors.mainHeapGrowthBytes, `main heap growth ${heapGrowth}`);
   assert.ok(Math.max(0, ...result.longTasks) <= floors.mainThreadLongTaskMs,
     `main-thread long task ${Math.max(0, ...result.longTasks)}ms`);

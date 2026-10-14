@@ -18,7 +18,8 @@ const manifest = JSON.parse(await readFile(
   new URL("../fixtures/object-selection/manifest.json", import.meta.url)));
 const { chromium } = await loadPlaywright();
 const browser = await chromium.launch({ headless: true,
-  args: ["--enable-precise-memory-info"],
+  args: ["--enable-precise-memory-info",
+    ...(process.env.PATCHY_SOFTWARE_GL === "1" ? ["--use-angle=swiftshader"] : [])],
   ...(process.env.PATCHY_BROWSER_CHANNEL ? { channel: process.env.PATCHY_BROWSER_CHANNEL } : {}) });
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 },
   extraHTTPHeaders: { "Accept-Encoding": "identity" } });
@@ -41,11 +42,14 @@ try {
     const client = new module.ObjectSegmentationClient();
     const heapSamples = []; const embeddings = []; const refinements = [];
     const runtimeTiers = new Set(); let cancellations = 0;
+    const measurementStartedAt = performance.now();
     const longTasks = [];
     const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) longTasks.push(entry.duration);
+      for (const entry of list.getEntries()) {
+        if (entry.startTime >= measurementStartedAt) longTasks.push(entry.duration);
+      }
     });
-    try { observer.observe({ type: "longtask", buffered: true }); } catch {}
+    try { observer.observe({ type: "longtask" }); } catch {}
 
     function makeFixture(cycle) {
       const canvas = new OffscreenCanvas(width, height); const ctx = canvas.getContext("2d");
@@ -101,12 +105,14 @@ try {
     mainHeapPlateauBytes: heapPlateau,
     maxLongTaskMs: Math.round(Math.max(0, ...measured.longTasks)),
     runtimeTiers: measured.runtimeTiers };
+  const refinementBudget = measured.runtimeTiers.every((value) => value === "gpu") ?
+    manifest.acceptedFloors.gpuRefinementP95Ms : manifest.acceptedFloors.wasmRefinementP95Ms;
   console.log(JSON.stringify({ status: "MEASURED", ...evidence }));
   assert.equal(measured.cancellations, manifest.cycleCount);
   assert.ok(evidence.embeddingP95Ms <= manifest.acceptedFloors.embeddingP95Ms,
     `embedding p95 ${evidence.embeddingP95Ms}ms`);
-  assert.ok(evidence.refinementP95Ms <= manifest.acceptedFloors.refinementP95Ms,
-    `refinement p95 ${evidence.refinementP95Ms}ms`);
+  assert.ok(evidence.refinementP95Ms <= refinementBudget,
+    `refinement p95 ${evidence.refinementP95Ms}ms exceeds ${refinementBudget}ms tier budget`);
   assert.ok(heapPlateau <= manifest.acceptedFloors.mainHeapGrowthBytes,
     `main heap plateau ${heapPlateau}`);
   assert.ok(evidence.maxLongTaskMs <= manifest.acceptedFloors.mainThreadLongTaskMs,

@@ -47,6 +47,7 @@ await new Promise((resolveListen, reject) => {
 
 const { chromium } = await loadPlaywright();
 const browser = await chromium.launch({ headless: true,
+  ...(process.env.PATCHY_SOFTWARE_GL === "1" ? { args: ["--use-angle=swiftshader"] } : {}),
   ...(process.env.PATCHY_BROWSER_CHANNEL ? { channel: process.env.PATCHY_BROWSER_CHANNEL } : {}) });
 const context = await browser.newContext({ extraHTTPHeaders: { "Accept-Encoding": "identity" } });
 const page = await context.newPage(); const remoteRequests = []; const errors = [];
