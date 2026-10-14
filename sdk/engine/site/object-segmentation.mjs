@@ -8,16 +8,18 @@ export const OBJECT_SEGMENTATION_RUNTIME = Object.freeze({
   id: "mediapipe-tasks-vision",
   version: "1.1.0",
   bundleSha256: "9d5fc9ef74b22329cf9aa88dc543956d192b8c254210b187271614713eb5b10c",
+  wasmModuleSha256: "ee03b14a878e6c3c053a1bfa62e166dc45244be54dc0bbe61c578f710b771f6a",
+  wasmModuleBytes: 12997272,
 });
 
 export async function readResponseBytesWithProgress(response, expectedBytes, onProgress = null) {
   if (!(response instanceof Response) || !Number.isInteger(expectedBytes) || expectedBytes <= 0)
-    throw new TypeError("A bounded model response is required");
+    throw new TypeError("A bounded asset response is required");
   const bytes = new Uint8Array(expectedBytes);
   const reader = response.body?.getReader?.();
   if (!reader) {
     const fallback = new Uint8Array(await response.arrayBuffer());
-    if (fallback.byteLength !== expectedBytes) throw new RangeError("Model asset byte count mismatch");
+    if (fallback.byteLength !== expectedBytes) throw new RangeError("Asset byte count mismatch");
     bytes.set(fallback); onProgress?.(1); return bytes;
   }
   let received = 0;
@@ -25,11 +27,11 @@ export async function readResponseBytesWithProgress(response, expectedBytes, onP
     const { done, value } = await reader.read();
     if (done) break;
     if (!(value instanceof Uint8Array) || received + value.byteLength > expectedBytes)
-      throw new RangeError("Model asset byte count mismatch");
+      throw new RangeError("Asset byte count mismatch");
     bytes.set(value, received); received += value.byteLength;
     onProgress?.(received / expectedBytes);
   }
-  if (received !== expectedBytes) throw new RangeError("Model asset byte count mismatch");
+  if (received !== expectedBytes) throw new RangeError("Asset byte count mismatch");
   return bytes;
 }
 

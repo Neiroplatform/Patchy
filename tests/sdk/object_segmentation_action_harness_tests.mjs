@@ -30,6 +30,8 @@ test("object model and runtime identities are immutable release inputs", () => {
   assert.match(OBJECT_SEGMENTATION_MODEL.sha256, /^[0-9a-f]{64}$/);
   assert.equal(OBJECT_SEGMENTATION_MODEL.bytes, 30525312);
   assert.match(OBJECT_SEGMENTATION_RUNTIME.bundleSha256, /^[0-9a-f]{64}$/);
+  assert.match(OBJECT_SEGMENTATION_RUNTIME.wasmModuleSha256, /^[0-9a-f]{64}$/);
+  assert.equal(OBJECT_SEGMENTATION_RUNTIME.wasmModuleBytes, 12997272);
 });
 
 test("object inference rejects software WebGL delegates before model initialization", () => {
@@ -85,7 +87,7 @@ test("model bytes stream with bounded progress while cache publication completes
   assert.equal(await (await scope.fetch("./model.task")).arrayBuffer().then(
     (buffer) => new Uint8Array(buffer)[3]), 4);
   await assert.rejects(readResponseBytesWithProgress(
-    new Response(new Uint8Array([1, 2, 3])), 4), /byte count mismatch/);
+    new Response(new Uint8Array([1, 2, 3])), 4), /byte count mismatch/i);
 });
 
 test("object selection cancellation rejects work and terminates the synchronous inference Worker", async () => {

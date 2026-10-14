@@ -29,6 +29,18 @@ async function segmenter(requestId) {
   segmenterPromise ??= (async () => {
     self.postMessage({ type: "progress", requestId, phase: "runtime", ratio: .05 });
     const files = await FilesetResolver.forVisionTasks(WASM_ROOT, true);
+    const wasmResponse = await fetch(files.wasmBinaryPath,
+      { cache: "force-cache", credentials: "same-origin" });
+    if (!wasmResponse.ok) throw new Error(`Could not load local runtime (${wasmResponse.status}).`);
+    let lastRuntimePercent = -1;
+    const wasmBinary = await readResponseBytesWithProgress(wasmResponse,
+      OBJECT_SEGMENTATION_RUNTIME.wasmModuleBytes, (ratio) => {
+        const percent = Math.floor(ratio * 100);
+        if (percent === lastRuntimePercent) return;
+        lastRuntimePercent = percent;
+        self.postMessage({ type: "progress", requestId, phase: "runtime", ratio: .05 + ratio * .1 });
+      });
+    await responseCacheCommit(wasmResponse);
     self.postMessage({ type: "progress", requestId, phase: "model", ratio: .2 });
     const response = await fetch(MODEL_PATH, { cache: "force-cache", credentials: "same-origin" });
     if (!response.ok) throw new Error(`Could not load local model (${response.status}).`);
@@ -44,11 +56,13 @@ async function segmenter(requestId) {
     self.postMessage({ type: "progress", requestId, phase: "initializing", ratio: .65 });
     try {
       if (preferredDelegate() !== "gpu") throw new Error("Software WebGL delegate rejected");
+      self.Module = { wasmBinary };
       const engine = await InteractiveSegmenter.createFromOptions(files, {
         baseOptions: { modelAssetBuffer, delegate: "GPU" }, canvas: renderCanvas,
       });
       runtimeTier = "gpu"; return engine;
     } catch {
+      self.Module = { wasmBinary };
       const engine = await InteractiveSegmenter.createFromOptions(files, {
         baseOptions: { modelAssetBuffer }, canvas: renderCanvas,
       });
