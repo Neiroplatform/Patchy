@@ -71,6 +71,14 @@ test("object selection cancellation rejects work and terminates the synchronous 
   await assert.rejects(client.segment([], {}), /closed|terminated|cancelled/i);
 });
 
+test("cold object setup allows the hosted model transfer and initialization budget", () => {
+  const worker = { addEventListener() {}, postMessage() {}, terminate() {} };
+  const client = new ObjectSegmentationClient(worker);
+  assert.equal(client.timeouts.setImage, 120_000);
+  assert.equal(client.timeouts.segment, 15_000);
+  client.close();
+});
+
 test("stalled inference fails closed and terminates its Worker", async () => {
   const worker = { terminated: false, addEventListener() {}, postMessage() {},
     terminate() { this.terminated = true; } };

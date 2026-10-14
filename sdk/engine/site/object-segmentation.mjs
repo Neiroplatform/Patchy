@@ -93,7 +93,7 @@ export class ObjectSegmentationClient {
   constructor(worker = null, timeouts = {}) {
     this.externalWorker = Boolean(worker); this.closed = false;
     this.sequence = 0; this.pending = new Map(); this.outbox = [];
-    this.timeouts = { setImage: Number(timeouts.setImage) > 0 ? Number(timeouts.setImage) : 45_000,
+    this.timeouts = { setImage: Number(timeouts.setImage) > 0 ? Number(timeouts.setImage) : 120_000,
       segment: Number(timeouts.segment) > 0 ? Number(timeouts.segment) : 15_000 };
     this.attach(worker || this.createWorker());
   }
