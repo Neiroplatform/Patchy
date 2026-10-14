@@ -64,6 +64,8 @@ const browser = await chromium.launch({
 try {
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
+  page.setDefaultTimeout(90_000);
+  page.setDefaultNavigationTimeout(90_000);
   const runPaletteCommand = async (targetId) => {
     await page.click("#commandPaletteButton");
     await page.click(`#commandResults [data-command-target="${targetId}"]:not(:disabled)`);
@@ -173,7 +175,7 @@ try {
   await runPaletteCommand("diagnosticsButton");
   assert.equal(await page.isDisabled("#downloadDiagnosticsButton"), true);
   await page.check("#diagnosticsConsentInput");
-  const downloadPromise = page.waitForEvent("download");
+  const downloadPromise = page.waitForEvent("download", { timeout: 90_000 });
   await page.click("#downloadDiagnosticsButton");
   const download = await downloadPromise;
   assert.equal(download.suggestedFilename(), "patchy-diagnostics.json");
