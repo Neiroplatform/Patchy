@@ -171,13 +171,18 @@ try {
   await page.waitForFunction(() => /preview ready/i.test(
     document.querySelector("#objectSelectionStatus")?.textContent || ""), null, { timeout: 90_000 });
   await page.selectOption("#objectPromptPolarityInput", "negative");
-  const refinementStarted = Date.now();
   await page.evaluate(() => {
     globalThis.__objectStatusObserver?.disconnect(); globalThis.__objectStatusChanges = 0;
-    globalThis.__objectStatusObserver = new MutationObserver(() => { globalThis.__objectStatusChanges += 1; });
+    globalThis.__objectStatusValues = [];
+    globalThis.__objectStatusObserver = new MutationObserver(() => {
+      globalThis.__objectStatusChanges += 1;
+      globalThis.__objectStatusValues.push(document.querySelector("#objectSelectionStatus")?.textContent || "");
+    });
     globalThis.__objectStatusObserver.observe(document.querySelector("#objectSelectionStatus"),
       { childList: true, characterData: true, subtree: true });
   });
+  const modelRequestsBeforeRefinement = allRequests.filter((url) =>
+    url.includes("magic-touch-int8-v1.task")).length;
   await page.evaluate(() => {
     const canvas = document.querySelector("#documentCanvas"); const rect = canvas.getBoundingClientRect();
     const init = { bubbles: true, cancelable: true, pointerId: 903, pointerType: "mouse",
@@ -190,11 +195,22 @@ try {
     document.querySelector("#objectSelectionStatus")?.textContent || "") &&
     !document.querySelector("#applyObjectSelectionButton")?.disabled,
   null, { timeout: 10_000 });
-  assert.ok(Date.now() - refinementStarted <= 2500, "point refinement rebuilt the image embedding");
+  assert.equal(allRequests.filter((url) => url.includes("magic-touch-int8-v1.task")).length,
+    modelRequestsBeforeRefinement, "point refinement re-requested the immutable model");
+  const refinementEvidence = await page.evaluate(() => ({
+    status: document.querySelector("#objectSelectionStatus")?.textContent || "",
+    values: globalThis.__objectStatusValues || [],
+  }));
+  assert.equal(refinementEvidence.values.some((value) => /loading local|initializing/i.test(value)), false,
+    `point refinement rebuilt the image embedding: ${refinementEvidence.values.join(" | ")}`);
+  const refinementTiming = refinementEvidence.status.match(/\b(gpu|wasm)\s*·\s*(\d+)\s*ms/i);
+  assert.ok(refinementTiming, refinementEvidence.status);
+  assert.ok(Number(refinementTiming[2]) <= (refinementTiming[1].toLowerCase() === "gpu" ? 2500 : 10_000),
+    `point refinement exceeded its ${refinementTiming[1]} tier budget: ${refinementEvidence.status}`);
 
   await page.selectOption("#objectPromptModeInput", "box");
-  const boxStarted = Date.now();
-  await page.evaluate(() => { globalThis.__objectStatusChanges = 0; });
+  await page.evaluate(() => { globalThis.__objectStatusChanges = 0; globalThis.__objectStatusValues = []; });
+  const modelRequestsBeforeBox = allRequests.filter((url) => url.includes("magic-touch-int8-v1.task")).length;
   const canvasBounds = await page.locator("#documentCanvas").boundingBox();
   assert.ok(canvasBounds, "document canvas has no browser bounds");
   await page.mouse.move(canvasBounds.x + canvasBounds.width * .2,
@@ -207,7 +223,18 @@ try {
     document.querySelector("#objectSelectionStatus")?.textContent || "") &&
     !document.querySelector("#applyObjectSelectionButton")?.disabled,
   null, { timeout: 10_000 });
-  assert.ok(Date.now() - boxStarted <= 2500, "box prompt rebuilt the image embedding");
+  assert.equal(allRequests.filter((url) => url.includes("magic-touch-int8-v1.task")).length,
+    modelRequestsBeforeBox, "box prompt re-requested the immutable model");
+  const boxEvidence = await page.evaluate(() => ({
+    status: document.querySelector("#objectSelectionStatus")?.textContent || "",
+    values: globalThis.__objectStatusValues || [],
+  }));
+  assert.equal(boxEvidence.values.some((value) => /loading local|initializing/i.test(value)), false,
+    `box prompt rebuilt the image embedding: ${boxEvidence.values.join(" | ")}`);
+  const boxTiming = boxEvidence.status.match(/\b(gpu|wasm)\s*·\s*(\d+)\s*ms/i);
+  assert.ok(boxTiming, boxEvidence.status);
+  assert.ok(Number(boxTiming[2]) <= (boxTiming[1].toLowerCase() === "gpu" ? 2500 : 10_000),
+    `box prompt exceeded its ${boxTiming[1]} tier budget: ${boxEvidence.status}`);
   await page.click("#cancelObjectSelectionButton");
   assert.deepEqual(remoteRequests, []);
   assert.deepEqual(errors, []);

@@ -2412,12 +2412,14 @@ async function inferObjectSelection(strokes) {
   if (busy || !snapshot || !strokes.length) return;
   const requestSequence = ++objectSelectionRequestSequence;
   const identity = objectSelectionIdentity();
-  $("objectSelectionStatus").textContent = "Loading local model and finding the object…";
+  const needsImage = !objectSelectionIdentityMatches(objectSelectionImageIdentity, identity);
+  $("objectSelectionStatus").textContent = needsImage ?
+    "Loading local model and finding the object…" : "Refining local object preview…";
   $("applyObjectSelectionButton").disabled = true;
   try {
     objectSelectionClient ??= new ObjectSegmentationClient();
     let imageReady = { runtimeTier: objectSelectionProposal?.runtimeTier || null };
-    if (!objectSelectionIdentityMatches(objectSelectionImageIdentity, identity)) {
+    if (needsImage) {
       const bitmap = await objectSelectionBitmap();
       imageReady = await objectSelectionClient.setImage(bitmap, identity, (progress) => {
         if (requestSequence !== objectSelectionRequestSequence) return;
