@@ -258,15 +258,16 @@ try {
   const toolInventory = await page.locator("[data-tool-contract]").evaluateAll((buttons) =>
     buttons.map((button) => ({ id: button.id, contract: button.dataset.toolContract,
       description: button.getAttribute("aria-description") || "" })));
-  assert.equal(toolInventory.length, 30, "the browser tool catalog changed without runtime coverage");
-  assert.equal(new Set(toolInventory.map(({ contract }) => contract)).size, 30,
+  assert.equal(toolInventory.length, 31, "the browser tool catalog changed without runtime coverage");
+  assert.equal(new Set(toolInventory.map(({ contract }) => contract)).size, 31,
     "the browser tool catalog contains duplicate contracts");
   assert.equal(toolInventory.every(({ id, contract, description }) =>
     id && contract && description.trim().length > 0), true,
   `a browser tool lacks its usage contract: ${JSON.stringify(toolInventory)}`);
   for (const buttonId of [
     "moveToolButton", "cropToolButton", "marqueeToolButton", "lassoToolButton",
-    "polygonToolButton", "magicToolButton", "quickSelectToolButton", "magneticToolButton",
+    "polygonToolButton", "magicToolButton", "quickSelectToolButton", "objectSelectToolButton",
+    "magneticToolButton",
     "quickMaskToolButton", "panToolButton", "brushToolButton", "mixerToolButton",
     "patternStampToolButton", "eraserToolButton", "cloneToolButton", "healToolButton",
     "spotHealingToolButton", "smudgeToolButton", "dodgeToolButton", "burnToolButton",
@@ -754,7 +755,7 @@ try {
 
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(failedRequests, []);
-  console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained tools=30-described-activated ` +
+  console.log(`BROWSER-TOOL-RUNTIME browser=${browserName} open=png-jpeg-two-tabs layout=contained tools=31-described-activated ` +
     "hover=idle-brush-radius wand=contiguous-all-layers-active-layer-svg gradient=preset-guard-noop-neutral " +
     `brush=color-dynamics-opacity-cap-${maximumStrokeAlpha} ` +
     "paint=advanced-brush-eraser-clone-heal-spot-patch-smudge-dodge-burn-sponge-blur-sharpen-mixer-pattern-gradient-fill " +
