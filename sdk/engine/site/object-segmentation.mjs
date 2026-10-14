@@ -10,6 +10,29 @@ export const OBJECT_SEGMENTATION_RUNTIME = Object.freeze({
   bundleSha256: "9d5fc9ef74b22329cf9aa88dc543956d192b8c254210b187271614713eb5b10c",
 });
 
+export async function readResponseBytesWithProgress(response, expectedBytes, onProgress = null) {
+  if (!(response instanceof Response) || !Number.isInteger(expectedBytes) || expectedBytes <= 0)
+    throw new TypeError("A bounded model response is required");
+  const bytes = new Uint8Array(expectedBytes);
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const fallback = new Uint8Array(await response.arrayBuffer());
+    if (fallback.byteLength !== expectedBytes) throw new RangeError("Model asset byte count mismatch");
+    bytes.set(fallback); onProgress?.(1); return bytes;
+  }
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!(value instanceof Uint8Array) || received + value.byteLength > expectedBytes)
+      throw new RangeError("Model asset byte count mismatch");
+    bytes.set(value, received); received += value.byteLength;
+    onProgress?.(received / expectedBytes);
+  }
+  if (received !== expectedBytes) throw new RangeError("Model asset byte count mismatch");
+  return bytes;
+}
+
 export function objectSegmentationDelegate(renderer) {
   const value = String(renderer || "").trim();
   if (!value || /swiftshader|llvmpipe|lavapipe|software|basic render|\bwarp\b|virtualbox|vmware/i.test(value))
@@ -93,7 +116,7 @@ export class ObjectSegmentationClient {
   constructor(worker = null, timeouts = {}) {
     this.externalWorker = Boolean(worker); this.closed = false;
     this.sequence = 0; this.pending = new Map(); this.outbox = [];
-    this.timeouts = { setImage: Number(timeouts.setImage) > 0 ? Number(timeouts.setImage) : 120_000,
+    this.timeouts = { setImage: Number(timeouts.setImage) > 0 ? Number(timeouts.setImage) : 600_000,
       segment: Number(timeouts.segment) > 0 ? Number(timeouts.segment) : 15_000 };
     this.attach(worker || this.createWorker());
   }

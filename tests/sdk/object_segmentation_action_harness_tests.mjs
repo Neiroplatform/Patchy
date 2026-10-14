@@ -3,10 +3,12 @@ import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
   clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
   scaleConfidenceMask, combineSelectionMasks, objectSegmentationDelegate,
-  objectSelectionIdentityMatches } from "../../sdk/engine/site/object-segmentation.mjs";
+  objectSelectionIdentityMatches,
+  readResponseBytesWithProgress } from "../../sdk/engine/site/object-segmentation.mjs";
 import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlannerAdapter,
   actionPlanSummary, planPrompt, validateActionPlan } from "../../sdk/engine/site/action-harness.mjs";
-import { installSameOriginFetch } from "../../sdk/engine/site/ml-network-policy.mjs";
+import { installSameOriginFetch,
+  responseCacheCommit } from "../../sdk/engine/site/ml-network-policy.mjs";
 
 test("object proposals are exact-state bound", () => {
   const snapshot = { documentId: 7n, stateId: 9n, revision: 11, width: 2, height: 2 };
@@ -46,7 +48,9 @@ test("inference Worker fetch policy permits same-origin assets and blocks teleme
     fetch(input) { calls.push(String(input));
       return online ? Promise.resolve(new Response("model")) : Promise.reject(new Error("offline")); } };
   const restore = installSameOriginFetch(scope, { cacheName: "patchy-ml-test" });
-  assert.equal(await (await scope.fetch("./model.task")).text(), "model");
+  const firstResponse = await scope.fetch("./model.task");
+  assert.equal(await firstResponse.text(), "model");
+  await responseCacheCommit(firstResponse);
   online = false;
   assert.equal(await (await scope.fetch("./model.task")).text(), "model");
   const telemetry = await scope.fetch("https://odml.pa.googleapis.com/v1/log");
@@ -57,6 +61,31 @@ test("inference Worker fetch policy permits same-origin assets and blocks teleme
   restore();
   online = true; await scope.fetch("https://odml.pa.googleapis.com/v1/log");
   assert.equal(calls.length, 2);
+});
+
+test("model bytes stream with bounded progress while cache publication completes concurrently", async () => {
+  let releaseCache;
+  const cacheGate = new Promise((resolve) => { releaseCache = resolve; });
+  const stored = new Map();
+  const scope = { location: { href: "https://editor.test/runtime/worker.mjs" },
+    caches: { async open() { return { async match(key) { return stored.get(key); },
+      async put(key, response) { const body = await response.arrayBuffer(); await cacheGate;
+        stored.set(key, new Response(body)); } }; } },
+    fetch() { return Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4]))); } };
+  installSameOriginFetch(scope, { cacheName: "patchy-ml-stream" });
+  const response = await scope.fetch("./model.task");
+  const progress = [];
+  assert.deepEqual([...await readResponseBytesWithProgress(response, 4,
+    (ratio) => progress.push(ratio))], [1, 2, 3, 4]);
+  assert.equal(progress.at(-1), 1);
+  let committed = false;
+  responseCacheCommit(response).then(() => { committed = true; });
+  await Promise.resolve(); assert.equal(committed, false);
+  releaseCache(); await responseCacheCommit(response);
+  assert.equal(await (await scope.fetch("./model.task")).arrayBuffer().then(
+    (buffer) => new Uint8Array(buffer)[3]), 4);
+  await assert.rejects(readResponseBytesWithProgress(
+    new Response(new Uint8Array([1, 2, 3])), 4), /byte count mismatch/);
 });
 
 test("object selection cancellation rejects work and terminates the synchronous inference Worker", async () => {
@@ -74,7 +103,7 @@ test("object selection cancellation rejects work and terminates the synchronous 
 test("cold object setup allows the hosted model transfer and initialization budget", () => {
   const worker = { addEventListener() {}, postMessage() {}, terminate() {} };
   const client = new ObjectSegmentationClient(worker);
-  assert.equal(client.timeouts.setImage, 120_000);
+  assert.equal(client.timeouts.setImage, 600_000);
   assert.equal(client.timeouts.segment, 15_000);
   client.close();
 });

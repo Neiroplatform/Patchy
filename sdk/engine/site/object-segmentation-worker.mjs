@@ -1,6 +1,7 @@
-import { installSameOriginFetch } from "./ml-network-policy.mjs";
+import { installSameOriginFetch, responseCacheCommit } from "./ml-network-policy.mjs";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME,
-  objectSegmentationDelegate, objectSelectionIdentityMatches } from "./object-segmentation.mjs";
+  objectSegmentationDelegate, objectSelectionIdentityMatches,
+  readResponseBytesWithProgress } from "./object-segmentation.mjs";
 
 installSameOriginFetch(globalThis, { cacheName:
   `patchy-ml-${OBJECT_SEGMENTATION_MODEL.sha256.slice(0, 12)}-${OBJECT_SEGMENTATION_RUNTIME.bundleSha256.slice(0, 12)}` });
@@ -31,7 +32,15 @@ async function segmenter(requestId) {
     self.postMessage({ type: "progress", requestId, phase: "model", ratio: .2 });
     const response = await fetch(MODEL_PATH, { cache: "force-cache", credentials: "same-origin" });
     if (!response.ok) throw new Error(`Could not load local model (${response.status}).`);
-    const modelAssetBuffer = new Uint8Array(await response.arrayBuffer());
+    let lastPercent = -1;
+    const modelAssetBuffer = await readResponseBytesWithProgress(response,
+      OBJECT_SEGMENTATION_MODEL.bytes, (ratio) => {
+        const percent = Math.floor(ratio * 100);
+        if (percent === lastPercent) return;
+        lastPercent = percent;
+        self.postMessage({ type: "progress", requestId, phase: "model", ratio: .2 + ratio * .4 });
+      });
+    await responseCacheCommit(response);
     self.postMessage({ type: "progress", requestId, phase: "initializing", ratio: .65 });
     try {
       if (preferredDelegate() !== "gpu") throw new Error("Software WebGL delegate rejected");

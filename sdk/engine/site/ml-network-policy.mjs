@@ -1,3 +1,9 @@
+const responseCacheCommits = new WeakMap();
+
+export function responseCacheCommit(response) {
+  return responseCacheCommits.get(response) || Promise.resolve();
+}
+
 export function installSameOriginFetch(scope = globalThis, { cacheName = null } = {}) {
   if (typeof scope.fetch !== "function" || !scope.location?.href) {
     throw new Error("A Worker fetch implementation and location are required");
@@ -20,7 +26,8 @@ export function installSameOriginFetch(scope = globalThis, { cacheName = null } 
     if (cached) return cached;
     const response = await upstream(input, init);
     if (cache && response.ok && (!init?.method || String(init.method).toUpperCase() === "GET")) {
-      try { await cache.put(target.href, response.clone()); } catch {}
+      const commit = cache.put(target.href, response.clone()).catch(() => undefined);
+      responseCacheCommits.set(response, commit);
     }
     return response;
   };
