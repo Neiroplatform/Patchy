@@ -15,7 +15,7 @@ const VERSION_MANIFEST_VERSION = 1;
 const DEFAULT_VERSION_RETENTION = 20;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const TOOL_IDS = new Set(["move", "crop", "marquee", "lasso", "polygon", "magic",
-  "quickSelect", "magnetic", "quickMask", "pan", "brush", "eraser", "clone",
+  "quickSelect", "objectSelect", "magnetic", "quickMask", "pan", "brush", "eraser", "clone",
   "heal", "spotHealing", "patch", "smudge", "dodge", "burn", "sponge", "blur",
   "sharpen", "mixer", "patternStamp", "gradient", "fill", "eyedropper", "pen",
   "shape", "text"]);

@@ -93,6 +93,7 @@ async function selectTool(buttonId) {
   assert.equal(await button.getAttribute("aria-pressed"), "true", `${buttonId} did not activate`);
   assert.ok((await page.textContent("#toolInstruction")).trim().length > 0,
     `${buttonId} has no usage description`);
+  await page.waitForTimeout(50);
   assert.equal(await page.locator("#errorBanner").isHidden(), true,
     `${buttonId} surfaced ${await page.textContent("#errorMessage")}`);
 }
