@@ -61,9 +61,14 @@ const MIME_TYPES = Object.freeze({
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8",
+  ".otf": "font/otf",
+  ".task": "application/octet-stream",
+  ".ttf": "font/ttf",
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".wasm": "application/wasm",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
 });
 
 function listen(server) {
@@ -596,8 +601,8 @@ async function verifyReadableIconography(page) {
       color: getComputedStyle(button).color,
     };
   }));
-  assert.equal(inventory.length, 33, "packaged tool icon census drifted");
-  assert.equal(new Set(inventory.map(({ href }) => href)).size, 33,
+  assert.equal(inventory.length, 34, "packaged tool icon census drifted");
+  assert.equal(new Set(inventory.map(({ href }) => href)).size, 34,
     "packaged tools no longer have distinct icon silhouettes");
   for (const icon of inventory) {
     assert.ok(icon.id && icon.label && icon.title, `tool icon lost its accessible name: ${JSON.stringify(icon)}`);
@@ -693,7 +698,7 @@ async function verifyReadableIconography(page) {
     Number.parseFloat(getComputedStyle(document.querySelector(".tool-button")).transitionDuration) <= .000001),
   "reduced motion no longer reaches icon controls");
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  console.log(`ICONOGRAPHY browser=${browserName} tools=33 top-actions=4 groups=8 viewports=4 dynamic-controls=4`);
+  console.log(`ICONOGRAPHY browser=${browserName} tools=34 top-actions=4 groups=8 viewports=4 dynamic-controls=4`);
 }
 
 async function waitForEditorIdle(page) {
@@ -971,7 +976,7 @@ const server = createServer(async (request, response) => {
       }
     }
     body ??= await readFile(absolute);
-    const immutable = /\.(?:css|data|ico|js|mjs|png|svg|wasm)$/i.test(posixPath);
+    const immutable = /\.(?:css|data|ico|js|json|mjs|otf|png|svg|task|ttf|wasm|woff|woff2)$/i.test(posixPath);
     response.writeHead(200, {
       ...manifest.securityHeaders,
       "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
@@ -1067,7 +1072,7 @@ try {
   assert.equal(legalEvidence.hrefs.every((href) => href?.startsWith("./legal/")), true);
   assert.equal(legalEvidence.responses.every((response) => response.status === 200), true);
   assert.equal(legalEvidence.sbom.bomFormat, "CycloneDX");
-  assert.equal(legalEvidence.sbom.components.length, 11);
+  assert.equal(legalEvidence.sbom.components.length, 13);
   assert.equal(legalEvidence.sbom.compositions[0].aggregate, "complete");
   assert.equal(legalEvidence.linkInputs.inputs.length > 0, true);
   assert.equal(legalEvidence.linkInputs.excludedComponents.includes("Qt for WebAssembly"), true);

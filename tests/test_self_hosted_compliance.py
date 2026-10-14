@@ -32,6 +32,7 @@ class Fixture:
         source_files = {
             "LICENSE": "Patchy license\n",
             "NOTICE-THIRD-PARTY.md": "Patchy notice\n",
+            "sdk/engine/site/ml/mediapipe/LICENSE-APACHE-2.0.txt": "Apache License 2.0\n",
             "src/color/lcms2/LICENSE": "lcms\n",
             "src/formats/miniz/LICENSE": "miniz\n",
             "src/core/contour_presets.cpp": (
@@ -102,8 +103,14 @@ class Fixture:
             "patchy.html",
             "capabilities.html",
             "legal.html",
+            "ml/mediapipe/vision_bundle.mjs",
+            "ml/mediapipe/PROVENANCE.json",
+            "ml/models/magic-touch-int8-v1.task",
+            "ml/models/magic-touch-int8-v1.provenance.json",
         ):
-            (self.site / relative).write_bytes(b"wasm" if relative.endswith(".wasm") else f"fixture:{relative}\n".encode())
+            path = self.site / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"wasm" if relative.endswith((".wasm", ".task")) else f"fixture:{relative}\n".encode())
         self.map = self.build / "patchy-engine.map"
         self.map.write_text(self.map_text(), encoding="utf-8")
 
@@ -167,14 +174,14 @@ class SelfHostedComplianceTests(unittest.TestCase):
             }
             self.assertEqual(first, second)
             self.assertEqual(first_bytes, second_bytes)
-            self.assertEqual(first["componentCount"], 11)
+            self.assertEqual(first["componentCount"], 13)
             self.assertEqual(first["presetCount"], 3)
             self.assertEqual(first["distributionGate"], "BLOCKED")
 
             sbom = json.loads(first_bytes["artifact-sbom.cdx.json"])
             self.assertEqual(sbom["bomFormat"], "CycloneDX")
             self.assertEqual(sbom["compositions"], [{"aggregate": "complete", "assemblies": [f"patchy-self-hosted:release@{SHA}"]}])
-            self.assertEqual(len(sbom["components"]), 11)
+            self.assertEqual(len(sbom["components"]), 13)
             properties = {item["name"]: item["value"] for item in sbom["metadata"]["component"]["properties"]}
             self.assertEqual(properties["patchy:artifact:closure"], "complete-for-linked-and-staged-inputs")
             self.assertEqual(properties["patchy:artifact:distribution-gate"], "BLOCKED")
@@ -206,7 +213,7 @@ class SelfHostedComplianceTests(unittest.TestCase):
             )
 
             notices = json.loads(first_bytes["notices.json"])
-            self.assertEqual(len(notices["licenses"]), 11)
+            self.assertEqual(len(notices["licenses"]), 12)
             self.assertEqual(notices["distributionGate"], "BLOCKED")
             self.assertEqual(notices["presetProvenance"]["itemCount"], 3)
             self.assertEqual(notices["presetProvenance"]["sha256"], first["presetProvenanceSha256"])

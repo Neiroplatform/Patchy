@@ -98,7 +98,10 @@ COMPONENT_ORDER = (
     "compiler-rt",
     "libunwind",
     "dlmalloc",
+    "mediapipe-tasks-vision",
+    "magic-touch",
 )
+STAGED_COMPONENTS = frozenset({"mediapipe-tasks-vision", "magic-touch"})
 
 
 class VerificationError(RuntimeError):
@@ -254,7 +257,7 @@ def classify(inputs: list[dict[str, str | None]]) -> tuple[dict[str, list[dict[s
         else:
             raise VerificationError(f"unknown self-hosted SDK link input: {path}")
         grouped[component].append(record)
-    empty = [name for name, records in grouped.items() if not records]
+    empty = [name for name, records in grouped.items() if name not in STAGED_COMPONENTS and not records]
     if empty:
         raise VerificationError(f"expected runtime component has no contributing inputs: {', '.join(empty)}")
     exclusions = [
@@ -523,10 +526,17 @@ def build_sbom(
         "compiler-rt": ("LLVM compiler-rt runtime subset", "21.0.0", "Apache-2.0 WITH LLVM-exception", "legal/licenses/compiler-rt-LICENSE.txt", "none"),
         "libunwind": ("LLVM libunwind runtime subset", "21.0.0", "Apache-2.0 WITH LLVM-exception", "legal/licenses/libunwind-LICENSE.txt", "none"),
         "dlmalloc": ("dlmalloc", "2.8.6", "CC0-1.0", "legal/licenses/dlmalloc.c", "upstream-declaration-states-public-domain"),
+        "mediapipe-tasks-vision": ("MediaPipe Tasks Vision browser runtime", "1.1.0", "Apache-2.0", "legal/licenses/mediapipe-Apache-2.0.txt", "none"),
+        "magic-touch": ("MediaPipe MagicTouch interactive segmentation model", "int8-v1", "Apache-2.0", "legal/licenses/mediapipe-Apache-2.0.txt", "none"),
     }
     components = []
     for slug in COMPONENT_ORDER:
         name, version, expression, notice, unresolved = specs[slug]
+        component_inputs = grouped[slug]
+        if slug == "mediapipe-tasks-vision":
+            component_inputs = [item for item in site_files if str(item.get("path", "")).startswith("ml/mediapipe/")]
+        elif slug == "magic-touch":
+            component_inputs = [item for item in site_files if str(item.get("path", "")).startswith("ml/models/magic-touch-int8-v1")]
         components.append(
             component(
                 slug,
@@ -534,7 +544,7 @@ def build_sbom(
                 version,
                 expression,
                 notice,
-                grouped[slug],
+                component_inputs,
                 unresolved=unresolved,
                 extra_properties=(
                     [
@@ -600,6 +610,7 @@ def copy_licenses(source_root: Path, emscripten_root: Path, destination: Path) -
         "compiler-rt-LICENSE.txt": emscripten_root / "system/lib/compiler-rt/LICENSE.TXT",
         "libunwind-LICENSE.txt": emscripten_root / "system/lib/libunwind/LICENSE.TXT",
         "dlmalloc.c": emscripten_root / "system/lib/dlmalloc.c",
+        "mediapipe-Apache-2.0.txt": source_root / "sdk/engine/site/ml/mediapipe/LICENSE-APACHE-2.0.txt",
     }
     destination.mkdir(parents=True)
     records = []

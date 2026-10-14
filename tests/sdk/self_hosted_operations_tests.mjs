@@ -35,6 +35,21 @@ async function createSite(root, marker) {
     ["font-catalog.mjs", "export const fonts=[];"],
     ["editor.css", "body{background:black}"],
     ["editor.mjs", `export const marker=${JSON.stringify(marker)};`],
+    ["object-segmentation.mjs", "export const model=true;"],
+    ["object-segmentation-worker.mjs", "self.onmessage=()=>{};"],
+    ["ml-network-policy.mjs", "export const localOnly=true;"],
+    ["action-harness.mjs", "export const planner=true;"],
+    ["ml/models/magic-touch-int8-v1.task", Buffer.from([1, 2, 3, 4])],
+    ["ml/models/magic-touch-int8-v1.provenance.json", "{}\n"],
+    ["ml/mediapipe/LICENSE-APACHE-2.0.txt", "Apache License 2.0\n"],
+    ["ml/mediapipe/PROVENANCE.json", "{}\n"],
+    ["ml/mediapipe/vision_bundle.mjs", "export const vision=true;"],
+    ["ml/mediapipe/wasm/vision_wasm_internal.js", "self.Module={};"],
+    ["ml/mediapipe/wasm/vision_wasm_internal.wasm", Buffer.from([0, 97, 115, 109, 1, 0, 0, 0])],
+    ["ml/mediapipe/wasm/vision_wasm_module_internal.js", "self.Module={};"],
+    ["ml/mediapipe/wasm/vision_wasm_module_internal.wasm", Buffer.from([0, 97, 115, 109, 1, 0, 0, 0])],
+    ["ml/mediapipe/wasm/vision_wasm_nosimd_internal.js", "self.Module={};"],
+    ["ml/mediapipe/wasm/vision_wasm_nosimd_internal.wasm", Buffer.from([0, 97, 115, 109, 1, 0, 0, 0])],
     ["reference-workflow.mjs", "export const ready=true;"],
     ["legal.html", "<!doctype html><main>Legal evidence</main>"],
     ["patchy-engine.mjs", "export default async()=>({});"],
@@ -60,6 +75,7 @@ async function createSite(root, marker) {
     ["legal/licenses/libunwind-LICENSE.txt", "libunwind license\n"],
     ["legal/licenses/little-cms-LICENSE.txt", "Little CMS license\n"],
     ["legal/licenses/miniz-LICENSE.txt", "miniz license\n"],
+    ["legal/licenses/mediapipe-Apache-2.0.txt", "Apache License 2.0\n"],
     ["legal/licenses/musl-COPYRIGHT.txt", "musl copyright\n"],
   ]);
   for (const [name, contents] of files) {
@@ -94,7 +110,7 @@ test("verified releases install, activate and roll back without mutation", async
   const value = await fixture();
   t.after(() => rm(value.root, { recursive: true, force: true }));
   const first = await installRelease({ releaseDir: join(value.root, "built", value.firstId), hostRoot: value.host });
-  assert.equal(first.fileCount, 91);
+  assert.equal(first.fileCount, 129);
   assert.ok(first.elapsedMs < 600_000);
   const firstActivation = await activateRelease({ hostRoot: value.host, releaseId: value.firstId });
   assert.equal(firstActivation.previousReleaseId, null);

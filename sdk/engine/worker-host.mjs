@@ -30,6 +30,14 @@ export class PatchyWorkerHost {
           message.name || "Untitled.psd");
         return this.#snapshot();
       case "snapshot": return this.#snapshot();
+      case "beginHistoryGroup":
+        return { groupId: this.#engine.beginHistoryGroup(this.#requireSession()) };
+      case "commitHistoryGroup":
+        this.#engine.commitHistoryGroup(this.#requireSession(), BigInt(message.groupId));
+        return this.#snapshot();
+      case "abortHistoryGroup":
+        this.#engine.abortHistoryGroup(this.#requireSession(), BigInt(message.groupId));
+        return this.#snapshot();
       case "listDocuments": return this.#documentList();
       case "activateDocument":
         this.#activateDocument(message.documentId);
@@ -709,7 +717,7 @@ export class PatchyWorkerHost {
         }
         const source = this.#engine.layerPixels(this.#requireSession(), layer.id);
         let payload;
-        if (before.selection?.length || before.selectionMask) {
+        if (!message.ignoreSelection && (before.selection?.length || before.selectionMask)) {
           const mask = selectionGray(before);
           const selectionBounds = before.selectionMask?.bounds || selectionMask(before).bounds;
           payload = copyLayerSelection({ layer, rgba: source, selectionMask: mask, selectionBounds,

@@ -1649,6 +1649,34 @@ export class EmscriptenPatchyEngine {
         event, error));
   }
 
+  beginHistoryGroup(session) {
+    return this.#withError((error) => {
+      const groupId = this.#module._patchy_engine_session_begin_history_group(session, error);
+      if (!groupId) this.#throwError(error);
+      return BigInt(groupId);
+    });
+  }
+
+  commitHistoryGroup(session, groupId) {
+    if (typeof groupId !== "bigint" || groupId <= 0n) {
+      throw new TypeError("A positive history group id is required");
+    }
+    return this.#withError((error) => {
+      this.#check(this.#module._patchy_engine_session_commit_history_group(
+        session, groupId, error), error);
+      return true;
+    });
+  }
+
+  abortHistoryGroup(session, groupId) {
+    if (typeof groupId !== "bigint" || groupId <= 0n) {
+      throw new TypeError("A positive history group id is required");
+    }
+    return this.#mutation((event, error) =>
+      this.#module._patchy_engine_session_abort_history_group(
+        session, groupId, event, error));
+  }
+
   undo(session) {
     return this.#mutation((event, error) =>
       this.#module._patchy_engine_session_undo(session, event, error));

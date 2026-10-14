@@ -97,6 +97,13 @@ export class PatchyWorkerClient {
     return this.#request("create", { width, height, name });
   }
   snapshot() { return this.#request("snapshot"); }
+  beginHistoryGroup() { return this.#request("beginHistoryGroup"); }
+  commitHistoryGroup(groupId) {
+    return this.#request("commitHistoryGroup", { groupId: String(groupId) });
+  }
+  abortHistoryGroup(groupId) {
+    return this.#request("abortHistoryGroup", { groupId: String(groupId) });
+  }
   listDocuments() { return this.#request("listDocuments"); }
   activateDocument(documentId) { return this.#request("activateDocument", { documentId }); }
   copyLayerToDocument(input) {
@@ -444,9 +451,10 @@ export class PatchyWorkerClient {
   copyLayerSelection(layerId, name) {
     return this.#request("copyLayerSelection", { layerId: String(layerId), name });
   }
-  captureLayerPixels(layerId, expectedStateId, expectedRevision) {
+  captureLayerPixels(layerId, expectedStateId, expectedRevision, { ignoreSelection = false } = {}) {
     return this.#request("captureLayerPixels", { layerId: String(layerId),
-      expectedStateId: String(expectedStateId), expectedRevision: String(expectedRevision) });
+      expectedStateId: String(expectedStateId), expectedRevision: String(expectedRevision),
+      ignoreSelection: Boolean(ignoreSelection) });
   }
   layerPixels(layerId) { return this.#request("layerPixels", { layerId: String(layerId) }); }
   layerThumbnail(layerId, maximumEdge, expectedStateId, expectedRevision) {

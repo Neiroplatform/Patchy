@@ -5027,6 +5027,47 @@ int patchy_engine_session_execute(patchy_engine_session *session,
   }
 }
 
+std::uint64_t patchy_engine_session_begin_history_group(
+    patchy_engine_session *session, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT, "session is required");
+    return 0;
+  }
+  const auto group_id = session->value->begin_history_group();
+  if (group_id == 0) {
+    fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+         "another history group is already active");
+  }
+  return group_id;
+}
+
+int patchy_engine_session_commit_history_group(
+    patchy_engine_session *session, std::uint64_t group_id,
+    patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || group_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and history group id are required");
+  }
+  const auto result = session->value->commit_history_group(group_id);
+  return result ? 1 : fail(error, result.error);
+}
+
+int patchy_engine_session_abort_history_group(
+    patchy_engine_session *session, std::uint64_t group_id,
+    patchy_engine_event *event, patchy_engine_error *error) {
+  clear_error(error);
+  if (session == nullptr || session->value == nullptr || group_id == 0) {
+    return fail(error, PATCHY_ENGINE_ERROR_INVALID_ARGUMENT,
+                "session and history group id are required");
+  }
+  const auto result = session->value->abort_history_group(group_id);
+  if (!result) return fail(error, result.error);
+  if (result.changed) publish_event(*session->value, result, event);
+  return 1;
+}
+
 int patchy_engine_session_set_layer_visibility(
     patchy_engine_session *session, std::uint64_t expected_state_id,
     std::uint64_t expected_revision, std::uint64_t layer_id,

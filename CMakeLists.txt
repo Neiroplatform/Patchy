@@ -634,7 +634,7 @@ if(PATCHY_BUILD_WASM_SDK)
     "${PATCHY_BUNDLED_FONTS_WEB_DIR}/*")
   add_custom_target(patchy_engine_wasm_site ALL
     COMMAND "${CMAKE_COMMAND}" -E rm -rf
-            "${PATCHY_WASM_SDK_SITE_DIR}/fonts"
+            "${PATCHY_WASM_SDK_SITE_DIR}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
             "${PATCHY_WASM_SDK_SITE_DIR}/engine"
             "${PATCHY_WASM_SDK_SITE_DIR}/fonts"
@@ -642,6 +642,10 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/patchy.html"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.css"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/editor.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/object-segmentation.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/object-segmentation-worker.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/ml-network-policy.mjs"
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/action-harness.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/font-catalog.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/command-surface.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/authoring-deck.mjs"
@@ -664,6 +668,9 @@ if(PATCHY_BUILD_WASM_SDK)
             "${PROJECT_SOURCE_DIR}/sdk/engine/site/text-layout.mjs"
             "${PROJECT_SOURCE_DIR}/packaging/web/.htaccess"
             "${PATCHY_WASM_SDK_SITE_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${PROJECT_SOURCE_DIR}/sdk/engine/site/ml"
+            "${PATCHY_WASM_SDK_SITE_DIR}/ml"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${PROJECT_SOURCE_DIR}/sdk/engine/client.mjs"
             "${PROJECT_SOURCE_DIR}/sdk/engine/index.mjs"

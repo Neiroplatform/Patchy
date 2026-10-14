@@ -663,6 +663,13 @@ public:
   execute_grouped(const DocumentCommand &command, HistoryGroupId group_id,
                   const FilterProgress *filter_progress = nullptr);
   [[nodiscard]] HistoryGroupId allocate_history_group_id() noexcept;
+  // Opens an explicit automation transaction. Every ordinary execute() call
+  // joins the same undo baseline until commit_history_group() is called.
+  // abort_history_group() restores that baseline and removes the aborted
+  // transaction from both undo and redo history.
+  [[nodiscard]] HistoryGroupId begin_history_group() noexcept;
+  [[nodiscard]] CommandResult commit_history_group(HistoryGroupId group_id);
+  [[nodiscard]] CommandResult abort_history_group(HistoryGroupId group_id);
   // Direct legacy mutations can transfer their already-captured baseline and
   // bind it to the same automation group before typed commands continue it.
   void adopt_history_group(HistoryGroupId group_id) noexcept;
@@ -736,6 +743,8 @@ private:
   std::uint64_t saved_state_id_{1};
   std::uint64_t next_state_id_{2};
   std::optional<HistoryGroupId> active_history_group_{};
+  bool explicit_history_group_{false};
+  bool explicit_history_group_recorded_{false};
   HistoryGroupId next_history_group_id_{1};
   FilterRegistry filter_registry_{};
   EventSink event_sink_{};

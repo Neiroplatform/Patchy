@@ -1715,6 +1715,14 @@ int patchy_engine_session_execute(patchy_engine_session *session,
                                   const patchy_engine_command *command,
                                   patchy_engine_event *event,
                                   patchy_engine_error *error);
+uint64_t patchy_engine_session_begin_history_group(
+    patchy_engine_session *session, patchy_engine_error *error);
+int patchy_engine_session_commit_history_group(
+    patchy_engine_session *session, uint64_t group_id,
+    patchy_engine_error *error);
+int patchy_engine_session_abort_history_group(
+    patchy_engine_session *session, uint64_t group_id,
+    patchy_engine_event *event, patchy_engine_error *error);
 int patchy_engine_session_set_layer_visibility(
     patchy_engine_session *session, uint64_t expected_state_id,
     uint64_t expected_revision, uint64_t layer_id, uint8_t visible,

@@ -796,6 +796,29 @@ void engine_session_groups_typed_automation_history_atomically() {
   CHECK(static_cast<bool>(adopted.execute_grouped(
       SetLayerVisibility{adopted_layer_id, false}, 11)));
   CHECK(adopted.undo_size() == 1);
+
+  DocumentSession explicit_group(make_session_document());
+  const auto explicit_layer_id = explicit_group.document().layers().front().id();
+  const auto explicit_name = explicit_group.document().layers().front().name();
+  const auto committed_group = explicit_group.begin_history_group();
+  CHECK(committed_group != 0);
+  CHECK(static_cast<bool>(explicit_group.execute(
+      SetLayerVisibility{explicit_layer_id, false})));
+  CHECK(static_cast<bool>(explicit_group.execute(
+      RenameLayer{explicit_layer_id, "One undo group"})));
+  CHECK(static_cast<bool>(explicit_group.commit_history_group(committed_group)));
+  CHECK(explicit_group.undo_size() == 1);
+  CHECK(static_cast<bool>(explicit_group.undo()));
+  CHECK(explicit_group.document().find_layer(explicit_layer_id)->visible());
+  CHECK(explicit_group.document().find_layer(explicit_layer_id)->name() == explicit_name);
+
+  const auto aborted_group = explicit_group.begin_history_group();
+  CHECK(aborted_group != 0);
+  CHECK(static_cast<bool>(explicit_group.execute(
+      RenameLayer{explicit_layer_id, "Must roll back"})));
+  CHECK(static_cast<bool>(explicit_group.abort_history_group(aborted_group)));
+  CHECK(explicit_group.document().find_layer(explicit_layer_id)->name() == explicit_name);
+  CHECK(!explicit_group.can_redo());
 }
 
 void engine_selection_snapshot_is_qt_free_and_accounts_retained_bytes() {

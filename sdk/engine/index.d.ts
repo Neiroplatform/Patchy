@@ -167,6 +167,9 @@ export class PatchyWorkerClient {
     layerId?: bigint | null): Promise<DocumentProjection>;
   create(width: number, height: number, name?: string): Promise<DocumentProjection>;
   snapshot(): Promise<DocumentProjection>;
+  beginHistoryGroup(): Promise<{ groupId: bigint }>;
+  commitHistoryGroup(groupId: bigint): Promise<DocumentProjection>;
+  abortHistoryGroup(groupId: bigint): Promise<DocumentProjection>;
   listDocuments(): Promise<DocumentTabProjection[]>;
   activateDocument(documentId: number): Promise<DocumentProjection>;
   copyLayerToDocument(input: { sourceDocumentId: number; targetDocumentId: number;
@@ -328,7 +331,7 @@ export class PatchyWorkerClient {
     bounds: Rect; rgba: Uint8Array }, options?: TransferOptions): Promise<DocumentProjection>;
   copyLayerSelection(layerId: bigint, name: string): Promise<DocumentProjection>;
   captureLayerPixels(layerId: bigint, expectedStateId: bigint,
-    expectedRevision: bigint): Promise<{ width: number; height: number;
+    expectedRevision: bigint, options?: { ignoreSelection?: boolean }): Promise<{ width: number; height: number;
       bounds: Rect; rgba: Uint8Array }>;
   layerPixels(layerId: bigint): Promise<Uint8Array>;
   layerThumbnail(layerId: bigint, maximumEdge: number, expectedStateId: bigint,

@@ -4,6 +4,19 @@ Patchy's current Windows release package uses the Qt 6 desktop runtime and
 app-local Microsoft Visual C++ runtime DLLs. Planned libraries that are not
 linked into the application are intentionally not listed here.
 
+## MediaPipe Tasks Vision and MagicTouch (web build only)
+
+The self-hosted web editor bundles `@mediapipe/tasks-vision` 1.1.0 and the
+MagicTouch int8 interactive-segmentation model. They run locally in a dedicated
+browser Worker for Object Select; document pixels are not sent to a remote
+inference service. The JavaScript/Wasm runtime and model are distributed under
+the Apache License 2.0. The exact runtime files, model, hashes and license are
+included in the immutable web artifact under `ml/mediapipe/` and `ml/models/`.
+The npm package integrity recorded for the vendored runtime is
+`sha512-ZJqh0wMKOINorfSffvDAxzyO1//c+FiG3IkzOdNDnLqvBB3DbMfj0bB/tys2SNf9S914sgoIbIpF4HTOi336cg==`;
+the model SHA-256 is
+`38431bc66b883404e8397f74c3579404315b9b52b04a46c6346fe906a7309b03`.
+
 ## Qt 6
 
 The Windows application dynamically links Qt 6 modules from the local Qt

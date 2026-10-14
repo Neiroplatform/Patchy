@@ -29,6 +29,9 @@ import { installHistoryDeck } from "./history-deck.mjs";
 import { installDockLayout } from "./dock-layout.mjs";
 import { BUNDLED_FONT_CATALOG, BUNDLED_FONT_FAMILIES,
   loadBundledFontFamily } from "./font-catalog.mjs";
+import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient, clickPromptStroke, combineSelectionMasks, proposalMatchesSnapshot,
+  objectSelectionIdentityMatches, rectanglePromptStroke, scaleConfidenceMask } from "./object-segmentation.mjs";
+import { actionPlanSummary, planPrompt, validateActionPlan } from "./action-harness.mjs";
 
 const $ = (id) => document.getElementById(id);
 const shell = document.querySelector(".editor-shell");
@@ -162,6 +165,14 @@ let penDraft = null;
 let penHoverPoint = null;
 let brushHoverPoint = null;
 let quickSelectDraft = null;
+let objectSelectionClient = null;
+let objectSelectionImageIdentity = null;
+let objectSelectionDraft = null;
+let objectSelectionProposal = null;
+let objectPromptStrokes = [];
+let objectSelectionRequestSequence = 0;
+let pendingActionPlan = null;
+let reviewedActionPlan = null;
 let magneticDraft = null;
 let quickMaskDraft = null;
 let selectionRefinementDraft = null;
@@ -431,6 +442,7 @@ function reconcileHistoryLabels(projection, labels = historyLabels(projection?.d
 
 function recordHistoryMutation(before, after, title) {
   if (!after || (before?.documentId === after.documentId && before.revision === after.revision)) return;
+  if (pendingActionPlan?.groupId) return;
   const labels = historyLabels(after.documentId);
   labels.undo.push(title); labels.redo.length = 0;
   reconcileHistoryLabels(after, labels);
@@ -534,6 +546,7 @@ function updateControls() {
   }
   $("exportFormatSelect").disabled = busy || !snapshot;
   $("exportButton").disabled = busy || !snapshot;
+  $("actionHarnessButton").disabled = busy || !snapshot;
   $("jpegQualityRange").disabled = busy || !snapshot;
   $("jpegQualityInput").disabled = busy || !snapshot;
   $("copyPixelsButton").disabled = busy || !snapshot;
@@ -618,6 +631,16 @@ function updateControls() {
   $("transformButton").disabled = busy || !snapshot;
   $("selectAllButton").disabled = busy || !snapshot;
   $("clearSelectionButton").disabled = busy || !snapshot?.selection?.length;
+  $("applyObjectSelectionButton").disabled = busy ||
+    !proposalMatchesSnapshot(objectSelectionProposal, snapshot);
+  $("cancelObjectSelectionButton").disabled = busy ||
+    (!objectSelectionProposal && !objectPromptStrokes.length && !objectSelectionDraft);
+  $("objectSourceInput").disabled = busy || Boolean(objectPromptStrokes.length);
+  $("objectPromptModeInput").disabled = busy;
+  $("objectPromptPolarityInput").disabled = busy;
+  $("objectRefineEdgesInput").disabled = busy;
+  $("stopActionPlanButton").hidden = !pendingActionPlan;
+  $("stopActionPlanButton").disabled = !pendingActionPlan;
   $("layerNameInput").disabled = busy || !single;
   $("layerOpacityInput").disabled = busy || !layers.length;
   $("layerFillInput").disabled = busy || !layers.length || layers.some((item) => item.kind === 1);
@@ -2300,13 +2323,190 @@ function renderQuickMask(gray = null) {
   target.putImageData(image, 0, 0);
 }
 
+function objectSelectionIdentity() {
+  return snapshot ? { documentId: String(snapshot.documentId), stateId: String(snapshot.stateId),
+    revision: Number(snapshot.revision), width: snapshot.width, height: snapshot.height,
+    source: $("objectSourceInput").value,
+    sourceLayerIds: $("objectSourceInput").value === "active" && selectedLayer()
+      ? [String(selectedLayer().id)] : snapshot.layers.filter((layer) => layer.visible).map((layer) => String(layer.id)) } : null;
+}
+
+async function objectSelectionBitmap() {
+  if ($("objectSourceInput").value !== "active") return createImageBitmap(canvas);
+  const layer = selectedLayer();
+  if (layer?.kind !== 0 || !layer.visible) {
+    throw new Error("Active-layer object selection requires one visible pixel layer.");
+  }
+  const payload = await client.captureLayerPixels(layer.id, snapshot.stateId, snapshot.revision,
+    { ignoreSelection: true });
+  const { rgba, bounds } = payload;
+  if (!(rgba instanceof Uint8Array) || rgba.byteLength !== bounds.width * bounds.height * 4) {
+    throw new Error("Active layer pixels are incomplete.");
+  }
+  const source = new OffscreenCanvas(snapshot.width, snapshot.height);
+  const sourceContext = source.getContext("2d", { alpha: true });
+  const pixels = new ImageData(new Uint8ClampedArray(rgba), bounds.width, bounds.height);
+  const layerCanvas = new OffscreenCanvas(bounds.width, bounds.height);
+  layerCanvas.getContext("2d", { alpha: true }).putImageData(pixels, 0, 0);
+  sourceContext.drawImage(layerCanvas, bounds.x, bounds.y);
+  return createImageBitmap(source);
+}
+
+function clearObjectSelectionProposal({ keepStrokes = false } = {}) {
+  objectSelectionRequestSequence += 1;
+  objectSelectionProposal = null; objectSelectionDraft = null;
+  if (!keepStrokes) objectPromptStrokes = [];
+  if (canvasTool === "objectSelect") {
+    const overlay = $("gestureCanvas").getContext("2d");
+    overlay.clearRect(0, 0, canvas.width, canvas.height);
+    $("objectSelectionStatus").textContent = "Click an object to create a local preview.";
+  }
+  $("applyObjectSelectionButton").disabled = true;
+  $("cancelObjectSelectionButton").disabled = !objectPromptStrokes.length;
+}
+
+function renderObjectSelectionProposal() {
+  const overlay = $("gestureCanvas").getContext("2d");
+  overlay.clearRect(0, 0, canvas.width, canvas.height);
+  if (!proposalMatchesSnapshot(objectSelectionProposal, snapshot)) {
+    if (objectSelectionProposal) clearObjectSelectionProposal();
+    return;
+  }
+  const image = overlay.createImageData(snapshot.width, snapshot.height);
+  for (let index = 0; index < objectSelectionProposal.gray.length; ++index) {
+    const coverage = objectSelectionProposal.gray[index];
+    if (!coverage) continue;
+    const x = index % snapshot.width; const y = Math.floor(index / snapshot.width);
+    const edge = coverage >= 128 && (x === 0 || y === 0 || x === snapshot.width - 1 ||
+      y === snapshot.height - 1 || objectSelectionProposal.gray[index - 1] < 128 ||
+      objectSelectionProposal.gray[index + 1] < 128 ||
+      objectSelectionProposal.gray[index - snapshot.width] < 128 ||
+      objectSelectionProposal.gray[index + snapshot.width] < 128);
+    image.data[index * 4] = edge ? 199 : 68;
+    image.data[index * 4 + 1] = edge ? 255 : 185;
+    image.data[index * 4 + 2] = edge ? 64 : 255;
+    image.data[index * 4 + 3] = edge ? 255 : Math.round(coverage * .16);
+  }
+  overlay.putImageData(image, 0, 0);
+  overlay.save(); overlay.lineWidth = Math.max(1, 2 / Math.max(zoom, .05));
+  for (const stroke of objectPromptStrokes) {
+    const points = stroke.point.map((point) => ({ x: point.x * snapshot.width, y: point.y * snapshot.height }));
+    overlay.strokeStyle = stroke.brushMode === 2 ? "#ff5c7a" : "#bfff31";
+    overlay.fillStyle = overlay.strokeStyle;
+    if (points.length === 5 && points[0].x === points.at(-1).x && points[0].y === points.at(-1).y) {
+      overlay.beginPath(); overlay.moveTo(points[0].x, points[0].y);
+      for (const point of points.slice(1)) overlay.lineTo(point.x, point.y);
+      overlay.stroke();
+    } else {
+      const point = points[Math.floor(points.length / 2)];
+      overlay.beginPath(); overlay.arc(point.x, point.y, Math.max(3, 5 / Math.max(zoom, .05)), 0, Math.PI * 2);
+      overlay.fill();
+    }
+  }
+  overlay.restore();
+  $("applyObjectSelectionButton").disabled = false;
+  $("cancelObjectSelectionButton").disabled = false;
+}
+
+async function inferObjectSelection(strokes) {
+  if (busy || !snapshot || !strokes.length) return;
+  const requestSequence = ++objectSelectionRequestSequence;
+  const identity = objectSelectionIdentity();
+  $("objectSelectionStatus").textContent = "Loading local model and finding the object…";
+  $("applyObjectSelectionButton").disabled = true;
+  try {
+    objectSelectionClient ??= new ObjectSegmentationClient();
+    let imageReady = { runtimeTier: objectSelectionProposal?.runtimeTier || null };
+    if (!objectSelectionIdentityMatches(objectSelectionImageIdentity, identity)) {
+      const bitmap = await objectSelectionBitmap();
+      imageReady = await objectSelectionClient.setImage(bitmap, identity, (progress) => {
+        if (requestSequence !== objectSelectionRequestSequence) return;
+        const labels = { runtime: "Loading local runtime", model: "Loading 29.1 MiB model",
+          initializing: "Initializing local inference" };
+        $("objectSelectionStatus").textContent =
+          `${labels[progress.phase] || "Preparing local inference"} · ${Math.round(progress.ratio * 100)}%`;
+      });
+      if (requestSequence !== objectSelectionRequestSequence) return;
+      objectSelectionImageIdentity = structuredClone(identity);
+    }
+    if (!proposalMatchesSnapshot(identity, snapshot)) throw new Error("Document changed while preparing the preview.");
+    const result = await objectSelectionClient.segment(strokes, identity);
+    if (requestSequence !== objectSelectionRequestSequence) return;
+    if (!proposalMatchesSnapshot(identity, snapshot)) throw new Error("Document changed while segmenting the object.");
+    const gray = scaleConfidenceMask(result.confidence, result.width, result.height,
+      snapshot.width, snapshot.height);
+    if ($("objectRefineEdgesInput").checked) {
+      for (let index = 0; index < gray.length; ++index) {
+        if (gray[index] < 80) gray[index] = 0;
+        else if (gray[index] > 176) gray[index] = 255;
+      }
+    }
+    const confidenceMean = result.confidence.reduce((sum, value) => sum + value, 0) /
+      Math.max(1, result.confidence.length);
+    objectSelectionProposal = { ...identity, proposalId: `${identity.stateId}:${requestSequence}`,
+      requestSequence,
+      modelHash: OBJECT_SEGMENTATION_MODEL.sha256,
+      runtimeHash: OBJECT_SEGMENTATION_RUNTIME.bundleSha256,
+      runtimeTier: result.runtimeTier || imageReady.runtimeTier || "wasm",
+      previewRect: { x: 0, y: 0, width: snapshot.width, height: snapshot.height },
+      scale: { x: 1, y: 1 }, orientation: "top-left", colorSpace: "srgb",
+      encoding: "gray8", maskWidth: snapshot.width, maskHeight: snapshot.height,
+      confidenceMean, latencyMs: result.latencyMs, gray };
+    renderObjectSelectionProposal();
+    $("objectSelectionStatus").textContent =
+      `Local preview ready · ${result.runtimeTier || imageReady.runtimeTier || "wasm"} · ${Math.round(result.latencyMs)} ms`;
+  } catch (error) {
+    if (requestSequence !== objectSelectionRequestSequence) return;
+    clearObjectSelectionProposal({ keepStrokes: true });
+    objectSelectionImageIdentity = null;
+    if (error?.name === "AbortError") {
+      $("objectSelectionStatus").textContent = "Object preview cancelled";
+      return;
+    }
+    $("objectSelectionStatus").textContent =
+      "Object preview unavailable · use Magic Wand, Pen or Marquee on this device";
+    showError("Object Select unavailable",
+      new Error(`${error?.message || error} Use Magic Wand, Pen or Marquee instead.`));
+  }
+}
+
+async function applyObjectSelectionProposal() {
+  if (!proposalMatchesSnapshot(objectSelectionProposal, snapshot)) {
+    clearObjectSelectionProposal();
+    const error = new Error("Create a new preview for the current document state.");
+    if (pendingActionPlan) await abortPendingActionPlan(error);
+    else showError("Object selection is stale", error);
+    return;
+  }
+  if (pendingActionPlan) {
+    try {
+      validateActionPlan(pendingActionPlan.plan, actionPlanContext());
+      await ensureActionHistoryGroup();
+    } catch (error) { await abortPendingActionPlan(error); return; }
+  }
+  const gray = combinedSelectionMask(new Uint8Array(objectSelectionProposal.gray),
+    $("selectionModeInput").value || "replace");
+  clearObjectSelectionProposal();
+  const result = await commitSelectionMask("Selecting object locally", gray);
+  if (result !== DIAGNOSTIC_COMMAND_FAILED && pendingActionPlan) {
+    rebindPendingActionPlan(); await continueActionPlan();
+  } else if (result === DIAGNOSTIC_COMMAND_FAILED && pendingActionPlan) {
+    await abortPendingActionPlan(new Error("Object selection could not be committed."));
+  }
+}
+
 function setCanvasTool(tool) {
+  if (pendingActionPlan && canvasTool === "objectSelect" && tool !== "objectSelect") {
+    void abortPendingActionPlan(new Error("The plan was cancelled because Object Select was left before Apply."));
+    return;
+  }
   if (tool !== "text" && inlineTextDraft) void commitInlineText({ restoreFocus: false });
   if (tool !== "text") closeTextSettings();
   if (!["brush", "eraser"].includes(tool)) closeBrushQuickPicker();
   if (tool !== "pen") { penDraft = null; penHoverPoint = null; previewPolygon([]); }
   if (tool !== "magnetic") magneticDraft = null;
   if (tool !== "quickSelect") quickSelectDraft = null;
+  if (tool !== "objectSelect") clearObjectSelectionProposal();
   if (tool !== "quickMask") quickMaskDraft = null;
   if (tool !== "shape" && shapeDraft) { shapeDraft = null; renderDirectShapeDraft(); }
   if (tool !== "text" && textBoxDraft) { textBoxDraft = null; renderTextBoxDraft(); }
@@ -2318,7 +2518,8 @@ function setCanvasTool(tool) {
   for (const [id, value] of [["moveToolButton", "move"], ["cropToolButton", "crop"],
     ["marqueeToolButton", "marquee"],
     ["lassoToolButton", "lasso"], ["polygonToolButton", "polygon"], ["magicToolButton", "magic"],
-    ["quickSelectToolButton", "quickSelect"], ["magneticToolButton", "magnetic"],
+    ["quickSelectToolButton", "quickSelect"], ["objectSelectToolButton", "objectSelect"],
+    ["magneticToolButton", "magnetic"],
     ["quickMaskToolButton", "quickMask"],
     ["panToolButton", "pan"], ["brushToolButton", "brush"],
     ["mixerToolButton", "mixer"], ["patternStampToolButton", "patternStamp"],
@@ -2341,6 +2542,7 @@ function setCanvasTool(tool) {
   renderBrushHover();
   renderTransformOverlay();
   if (tool === "quickMask") renderQuickMask();
+  else if (tool === "objectSelect") renderObjectSelectionProposal();
   else if (quickMaskDraft == null) $("gestureCanvas").getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   syncToolRoving(document.querySelector('.tool-rail [aria-pressed="true"]') || document.activeElement);
   updateControls();
@@ -2496,14 +2698,7 @@ function openSelectionRefinementDialog() {
 }
 
 function combinedSelectionMask(next, mode = "replace") {
-  if (mode === "replace") return next;
-  const current = fullSelectionMask();
-  for (let index = 0; index < next.length; ++index) {
-    if (mode === "add") next[index] = Math.max(current[index], next[index]);
-    else if (mode === "subtract") next[index] = Math.round(current[index] * (255 - next[index]) / 255);
-    else next[index] = Math.min(current[index], next[index]);
-  }
-  return next;
+  return combineSelectionMasks(fullSelectionMask(), next, mode);
 }
 
 function selectionMode(event) {
@@ -2513,6 +2708,215 @@ function selectionMode(event) {
 
 function selectionCombineValue(mode) {
   return ({ replace: 0, add: 1, subtract: 2, intersect: 3 })[mode] ?? 0;
+}
+
+function actionPlanContext() {
+  return snapshot ? { documentId: String(snapshot.documentId), stateId: String(snapshot.stateId),
+    revision: Number(snapshot.revision), foregroundColor: $("brushColorInput").value,
+    exportFormat: $("exportFormatSelect").value, exportFilename: exportBaseName(),
+    objectSource: $("objectSourceInput").value } : null;
+}
+
+function rebindPendingActionPlan() {
+  if (pendingActionPlan && snapshot) pendingActionPlan.plan.document = {
+    documentId: String(snapshot.documentId), stateId: String(snapshot.stateId), revision: Number(snapshot.revision) };
+}
+
+async function ensureActionHistoryGroup() {
+  const run = pendingActionPlan;
+  if (!run || run.cancelled) throw Object.assign(new Error("Action plan was stopped"), { name: "AbortError" });
+  if (run.groupId) return run.groupId;
+  if (run.groupPromise) return run.groupPromise;
+  run.groupPromise = (async () => {
+    const result = await client.beginHistoryGroup();
+    if (run.cancelled || pendingActionPlan !== run) {
+      await client.abortHistoryGroup(result.groupId);
+      throw Object.assign(new Error("Action plan was stopped"), { name: "AbortError" });
+    }
+    run.groupId = result.groupId;
+    $("stopActionPlanButton").hidden = false;
+    $("stopActionPlanButton").disabled = false;
+    return result.groupId;
+  })();
+  try { return await run.groupPromise; }
+  finally { run.groupPromise = null; }
+}
+
+async function abortPendingActionPlan(error = null, requestedRun = pendingActionPlan) {
+  const run = requestedRun;
+  if (run?.rollbackPromise) return run.rollbackPromise;
+  if (run) run.cancelled = true;
+  const rollback = (async () => {
+    if (pendingActionPlan === run) pendingActionPlan = null;
+    objectSelectionClient?.cancel();
+    objectSelectionImageIdentity = null;
+    cancelActiveOperation?.();
+    cancelActiveOperation = null;
+    $("stopActionPlanButton").hidden = true;
+    $("stopActionPlanButton").disabled = true;
+    if (run?.groupPromise) {
+      try { await run.groupPromise; } catch {}
+    }
+    if (run?.groupId) {
+      try {
+        const restored = await client.abortHistoryGroup(run.groupId);
+        run.groupId = null;
+        await acceptSnapshot(restored);
+      } catch (rollbackError) {
+        showError("AI edit rollback failed", rollbackError);
+        return;
+      }
+    }
+    clearObjectSelectionProposal();
+    if (error) showError("AI edit stopped", error);
+    else showToast("AI edit plan cancelled; document restored");
+  })();
+  if (run) run.rollbackPromise = rollback;
+  return rollback;
+}
+
+async function executeHarnessFilter(step) {
+  if (!snapshot?.selection?.length && !snapshot?.selectionMask) {
+    throw new Error("The filter recipe requires a committed selection.");
+  }
+  const layer = selectedLayer();
+  if (selectedLayers().length !== 1 || layer?.kind !== 0 || !layer.visible || layer.lockFlags) {
+    throw new Error("The filter recipe requires one visible unlocked pixel layer.");
+  }
+  const before = snapshot;
+  const operation = client.applyFilter(layer.id, step.filterId, step.parameters, (progress) => {
+    $("objectSelectionStatus").textContent = `Running ${step.filterId} · ${Math.round(progress.ratio * 100)}%`;
+  });
+  cancelActiveOperation = operation.cancel;
+  const next = await operation.promise;
+  cancelActiveOperation = null;
+  recordHistoryMutation(before, next, `AI edit · ${step.filterId}`);
+  await acceptSnapshot(next); scheduleCheckpoint(next);
+  return next;
+}
+
+async function executeActionStep(step) {
+  const requireSelection = () => {
+    if (!snapshot?.selection?.length && !snapshot?.selectionMask) {
+      throw new Error(`${step.action} requires a committed selection.`);
+    }
+  };
+  if (step.action === "invert-selection")
+    { requireSelection(); return mutate("AI edit · invert selection", () => client.invertSelection()); }
+  if (step.action === "copy-selection") { requireSelection(); return copyRenderedPixels(); }
+  if (step.action === "copy-selection-to-layer") {
+    requireSelection();
+    const beforeCount = snapshot.layers.length;
+    const copied = await layerViaCopy();
+    if (copied === DIAGNOSTIC_COMMAND_FAILED) return copied;
+    if (snapshot.layers.length <= beforeCount) return DIAGNOSTIC_COMMAND_FAILED;
+    const layer = selectedLayer();
+    if (layer && step.name) await mutate("Naming copied object", () => client.renameLayer(layer.id, step.name));
+    return snapshot;
+  }
+  if (step.action === "cut-selection") {
+    requireSelection();
+    const layer = selectedLayer();
+    if (selectedLayers().length !== 1 || layer?.kind !== 0 || !layer.visible || layer.lockFlags) {
+      throw new Error("Cutting requires one visible unlocked pixel layer.");
+    }
+    return cutSelectedPixels();
+  }
+  if (step.action === "mask-selection") {
+    requireSelection();
+    const layer = selectedLayer();
+    if (selectedLayers().length !== 1 || layer?.kind !== 0 || layer.mask)
+      throw new Error("Masking requires one unmasked pixel layer.");
+    return mutate("AI edit · mask selected object", () => client.createLayerMask(layer.id));
+  }
+  if (step.action === "clear-selection")
+    return mutate("AI edit · clear selection", () => client.clearSelection());
+  if (step.action === "fill-selection") {
+    requireSelection();
+    const layer = selectedLayer();
+    if (selectedLayers().length !== 1 || layer?.kind !== 0 || !layer.visible || layer.lockFlags) {
+      throw new Error("Filling requires one visible unlocked pixel layer.");
+    }
+    $("brushColorInput").value = step.color;
+    const bounds = canvas.getBoundingClientRect();
+    return fillSelectedPixels({ clientX: bounds.left + bounds.width / 2,
+      clientY: bounds.top + bounds.height / 2 });
+  }
+  if (step.action === "filter-selection") return executeHarnessFilter(step);
+  if (step.action === "crop-selection") {
+    const bounds = selectionBounds();
+    if (!bounds) throw new Error("Crop recipe requires a committed selection.");
+    const padding = step.padding;
+    const crop = { x: Math.max(0, bounds.x - padding), y: Math.max(0, bounds.y - padding),
+      width: Math.min(snapshot.width, bounds.x + bounds.width + padding) - Math.max(0, bounds.x - padding),
+      height: Math.min(snapshot.height, bounds.y + bounds.height + padding) - Math.max(0, bounds.y - padding) };
+    return mutate("AI edit · crop to selection", () => client.cropDocument(crop));
+  }
+  if (step.action === "resize-document") {
+    ensureMemorySafe({ width: step.width, height: step.height }, "AI resize");
+    return mutate("AI edit · resize document", () => client.resizeImage(step.width, step.height));
+  }
+  if (step.action === "export-document") {
+    $("exportFormatSelect").value = step.format; syncJpegQualityControls();
+    return exportDocument(step.filename);
+  }
+  throw new Error(`Unsupported action: ${step.action}`);
+}
+
+async function continueActionPlan() {
+  const run = pendingActionPlan;
+  if (!run || !snapshot) return;
+  try {
+    validateActionPlan(run.plan, actionPlanContext());
+    while (run.index < run.plan.steps.length) {
+      if (run.cancelled || pendingActionPlan !== run)
+        throw Object.assign(new Error("Action plan was stopped"), { name: "AbortError" });
+      const step = run.plan.steps[run.index];
+      $("objectSelectionStatus").textContent = `AI edit · ${run.index + 1}/${run.plan.steps.length} · ${step.action}`;
+      if (step.action === "select-object") {
+        run.index += 1; rebindPendingActionPlan(); setCanvasTool("objectSelect");
+        $("objectSourceInput").value = step.source;
+        $("stopActionPlanButton").hidden = false;
+        $("stopActionPlanButton").disabled = false;
+        $("objectSelectionStatus").textContent = "Add a prompt, review the preview, then Apply selection.";
+        return;
+      }
+      await ensureActionHistoryGroup();
+      if (run.cancelled || pendingActionPlan !== run)
+        throw Object.assign(new Error("Action plan was stopped"), { name: "AbortError" });
+      const result = await executeActionStep(step);
+      if (run.cancelled || pendingActionPlan !== run)
+        throw Object.assign(new Error("Action plan was stopped"), { name: "AbortError" });
+      if (result === DIAGNOSTIC_COMMAND_FAILED) throw new Error(`Action failed: ${step.action}`);
+      run.index += 1; rebindPendingActionPlan();
+    }
+    if (run.groupId) {
+      if (run.cancelled || pendingActionPlan !== run)
+        throw Object.assign(new Error("Action plan was stopped"), { name: "AbortError" });
+      await client.commitHistoryGroup(run.groupId);
+      run.groupId = null;
+      const mutated = String(snapshot.documentId) === run.startDocumentId &&
+        (String(snapshot.stateId) !== run.startStateId || Number(snapshot.revision) !== run.startRevision);
+      if (mutated) {
+        const labels = historyLabels(snapshot.documentId);
+        labels.undo.push(`AI edit · ${run.plan.prompt}`); labels.redo.length = 0;
+        reconcileHistoryLabels(snapshot, labels); renderHistory();
+      }
+    }
+    if (pendingActionPlan === run) pendingActionPlan = null;
+    $("stopActionPlanButton").hidden = true;
+    $("stopActionPlanButton").disabled = true;
+    showToast("AI edit plan completed locally · one Undo restores it");
+  } catch (error) {
+    await abortPendingActionPlan(error, run);
+  }
+}
+
+function openActionHarness() {
+  if (busy || !snapshot) return;
+  reviewedActionPlan = null; $("actionPlanReview").hidden = true;
+  $("actionPlanSteps").replaceChildren(); $("actionPlanStatus").textContent = "";
+  $("actionHarnessDialog").showModal(); $("actionPromptInput").focus();
 }
 
 function paintMaskPoint(gray, point, radius, value) {
@@ -2889,6 +3293,7 @@ async function acceptSnapshot(next, rerender = true, rememberPrevious = true) {
   if (!next) {
     diagnostics.setDocument(null);
     cancelInlineText({ restoreFocus: false });
+    clearObjectSelectionProposal(); pendingActionPlan = null;
     snapshot = null; clearLayerSelection(); selectedChannelId = null; selectedPathId = null;
     renderedDocument = null;
     $("emptyState").hidden = false; setSessionState("ready", "Engine ready");
@@ -2899,6 +3304,8 @@ async function acceptSnapshot(next, rerender = true, rememberPrevious = true) {
   const previousDocumentId = snapshot?.documentId;
   if (rememberPrevious && previousDocumentId && previousDocumentId !== next.documentId) rememberViewport();
   snapshot = next;
+  if (objectSelectionProposal && !proposalMatchesSnapshot(objectSelectionProposal, snapshot))
+    clearObjectSelectionProposal();
   const restoredViewport = previousDocumentId !== next.documentId
     ? documentViewports.get(next.documentId) : null;
   if (previousDocumentId !== next.documentId) {
@@ -3258,7 +3665,7 @@ function syncJpegQualityControls(source = null) {
   $("jpegQualityInput").value = String(value);
 }
 
-async function exportDocument() {
+async function exportDocument(baseName = exportBaseName()) {
   if (busy || !snapshot) return;
   clearError(); setBusy(true, "Exporting document", "Encoding the rendered composite locally");
   try {
@@ -3269,8 +3676,8 @@ async function exportDocument() {
       throw new Error("Engine returned an incomplete flattened export");
     }
     const blob = await encodeFlatDocument({ rgba, width: snapshot.width, height: snapshot.height,
-      format, title: exportBaseName(), jpegQuality: jpegQuality() });
-    downloadBlob(blob, `${exportBaseName()}.${format === "jpeg" ? "jpg" : format}`);
+      format, title: baseName, jpegQuality: jpegQuality() });
+    downloadBlob(blob, `${baseName}.${format === "jpeg" ? "jpg" : format}`);
   } catch (error) { showError("Could not export document", error); return DIAGNOSTIC_COMMAND_FAILED; }
   finally { setBusy(false); }
 }
@@ -5686,7 +6093,7 @@ registerCommand("tool.move", "moveToolButton", () => setCanvasTool("move"),
   () => !busy && Boolean(selectedLayer()));
 registerCommand("tool.crop", "cropToolButton", () => setCanvasTool("crop"),
   () => !busy && Boolean(snapshot));
-for (const tool of ["marquee", "lasso", "polygon", "magic", "quickSelect", "magnetic", "quickMask"])
+for (const tool of ["marquee", "lasso", "polygon", "magic", "quickSelect", "objectSelect", "magnetic", "quickMask"])
   registerCommand(`tool.${tool}`, `${tool}ToolButton`, () => setCanvasTool(tool),
     () => !busy && Boolean(snapshot));
 registerCommand("tool.pan", "panToolButton", () => setCanvasTool("pan"),
@@ -5794,6 +6201,52 @@ $("fileInput").addEventListener("change", async () => {
 $("dismissErrorButton").addEventListener("click", clearError);
 $("importLayerButton").addEventListener("click", () => { if (!busy && snapshot) $("imageInput").click(); });
 $("imageInput").addEventListener("change", () => { importPixelLayer($("imageInput").files[0]); $("imageInput").value = ""; });
+$("applyObjectSelectionButton").addEventListener("click", () => void applyObjectSelectionProposal());
+$("cancelObjectSelectionButton").addEventListener("click", () => {
+  objectSelectionClient?.cancel(); objectSelectionImageIdentity = null; clearObjectSelectionProposal();
+  if (pendingActionPlan) void abortPendingActionPlan();
+});
+$("objectPromptModeInput").addEventListener("change", () => clearObjectSelectionProposal());
+$("objectSourceInput").addEventListener("change", () => clearObjectSelectionProposal());
+$("objectRefineEdgesInput").addEventListener("change", () => clearObjectSelectionProposal());
+$("stopActionPlanButton").addEventListener("click", () => void abortPendingActionPlan());
+$("actionHarnessButton").addEventListener("click", openActionHarness);
+$("buildActionPlanButton").addEventListener("click", () => {
+  try {
+    reviewedActionPlan = planPrompt($("actionPromptInput").value, actionPlanContext());
+    validateActionPlan(reviewedActionPlan, actionPlanContext());
+    $("actionPlanSteps").replaceChildren(...actionPlanSummary(reviewedActionPlan).map((summary) => {
+      const item = document.createElement("li"); item.textContent = summary; return item;
+    }));
+    const warnings = reviewedActionPlan.warnings.length
+      ? ` Warnings: ${reviewedActionPlan.warnings.join(" ")}` : "";
+    const outputs = reviewedActionPlan.outputs.length
+      ? ` Outputs: ${reviewedActionPlan.outputs.join(", ")}.` : "";
+    const modelCost = reviewedActionPlan.modelCost.downloadBytes
+      ? ` Optional local model: ${(reviewedActionPlan.modelCost.downloadBytes / 1048576).toFixed(1)} MiB; memory class ${reviewedActionPlan.modelCost.memoryClass}.`
+      : " No model download is needed.";
+    $("actionPlanStatus").textContent = `Target: ${snapshot.name || "current document"}. ` +
+      `Expected: ${reviewedActionPlan.expectedEffect}. Nothing runs until you confirm.` +
+      `${modelCost}${outputs}${warnings}`;
+    $("actionPlanReview").hidden = false;
+  } catch (error) {
+    reviewedActionPlan = null; $("actionPlanReview").hidden = false;
+    $("actionPlanSteps").replaceChildren(); $("actionPlanStatus").textContent = error.message;
+  }
+});
+$("discardActionPlanButton").addEventListener("click", () => {
+  reviewedActionPlan = null; $("actionPlanReview").hidden = true;
+});
+$("executeActionPlanButton").addEventListener("click", () => {
+  try {
+    validateActionPlan(reviewedActionPlan, actionPlanContext());
+    pendingActionPlan = { plan: structuredClone(reviewedActionPlan), index: 0,
+      groupId: null, groupPromise: null, rollbackPromise: null, cancelled: false,
+      startDocumentId: String(snapshot.documentId), startStateId: String(snapshot.stateId),
+      startRevision: Number(snapshot.revision) };
+    $("actionHarnessDialog").close(); void continueActionPlan();
+  } catch (error) { $("actionPlanStatus").textContent = error.message; }
+});
 
 const canvasContextMenu = $("canvasContextMenu");
 function closeCanvasContextMenu({ restoreFocus = false } = {}) {
@@ -6899,6 +7352,22 @@ canvas.addEventListener("pointerdown", async (event) => {
     previewPolygon(quickSelectDraft.points);
     return;
   }
+  if (canvasTool === "objectSelect") {
+    const point = canvasPoint(event); const mode = $("objectPromptModeInput").value;
+    if (mode === "box") {
+      canvas.setPointerCapture(event.pointerId);
+      objectSelectionDraft = { pointerId: event.pointerId, start: point, end: point };
+      previewPolygon([point, point, point, point], true);
+    } else {
+      if (mode === "click") objectPromptStrokes = [];
+      objectPromptStrokes.push({ isCompleted: true,
+        brushMode: $("objectPromptPolarityInput").value === "negative" ? 2 : 1,
+        point: clickPromptStroke(point, snapshot.width, snapshot.height) });
+      $("cancelObjectSelectionButton").disabled = false;
+      void inferObjectSelection(objectPromptStrokes);
+    }
+    return;
+  }
   if (canvasTool === "magnetic") {
     const point = canvasPoint(event);
     magneticDraft ??= { anchors: [], mode: selectionMode(event) };
@@ -7037,6 +7506,12 @@ canvas.addEventListener("pointermove", (event) => {
       quickSelectDraft.points.push(point); previewPolygon(quickSelectDraft.points);
     }
   }
+  if (objectSelectionDraft?.pointerId === event.pointerId) {
+    objectSelectionDraft.end = canvasPoint(event);
+    const { start, end } = objectSelectionDraft;
+    previewPolygon([{ x: start.x, y: start.y }, { x: end.x, y: start.y },
+      { x: end.x, y: end.y }, { x: start.x, y: end.y }], true);
+  }
   if (quickMaskDraft?.pointerId === event.pointerId) {
     const point = canvasPoint(event); const distance = Math.hypot(point.x - quickMaskDraft.last.x, point.y - quickMaskDraft.last.y);
     const steps = Math.max(1, Math.ceil(distance / Math.max(1, quickMaskDraft.radius / 2)));
@@ -7092,6 +7567,15 @@ canvas.addEventListener("pointerup", (event) => {
       expectedStateId: snapshot.stateId, expectedRevision: snapshot.revision,
     }));
   }
+  if (objectSelectionDraft?.pointerId === event.pointerId) {
+    const draft = objectSelectionDraft; objectSelectionDraft = null; previewPolygon([]);
+    const points = rectanglePromptStroke(draft.start, draft.end, snapshot.width, snapshot.height);
+    if (Math.abs(draft.end.x - draft.start.x) >= 2 && Math.abs(draft.end.y - draft.start.y) >= 2) {
+      objectPromptStrokes = [{ isCompleted: true, brushMode: 3, point: points }];
+      $("cancelObjectSelectionButton").disabled = false;
+      void inferObjectSelection(objectPromptStrokes);
+    }
+  }
   if (quickMaskDraft?.pointerId === event.pointerId) {
     const draft = quickMaskDraft; quickMaskDraft = null;
     commitSelectionMask("Committing Quick Mask stroke", draft.gray);
@@ -7112,7 +7596,8 @@ canvas.addEventListener("pointercancel", (event) => {
   finishAdvancedPaint(event, true);
   finishDirectShape(event, true);
   finishTextBox(event, true);
-  quickSelectDraft = null; quickMaskDraft = null; previewPolygon([]); clearTransformPreview(true);
+  quickSelectDraft = null; quickMaskDraft = null; objectSelectionDraft = null;
+  previewPolygon([]); clearTransformPreview(true);
   renderTransformOverlay();
   if (canvasTool === "quickMask") renderQuickMask();
 });

@@ -39,6 +39,21 @@ const REQUIRED_FILES = Object.freeze([
   "font-catalog.mjs",
   "editor.css",
   "editor.mjs",
+  "object-segmentation.mjs",
+  "object-segmentation-worker.mjs",
+  "ml-network-policy.mjs",
+  "action-harness.mjs",
+  "ml/models/magic-touch-int8-v1.task",
+  "ml/models/magic-touch-int8-v1.provenance.json",
+  "ml/mediapipe/LICENSE-APACHE-2.0.txt",
+  "ml/mediapipe/PROVENANCE.json",
+  "ml/mediapipe/vision_bundle.mjs",
+  "ml/mediapipe/wasm/vision_wasm_internal.js",
+  "ml/mediapipe/wasm/vision_wasm_internal.wasm",
+  "ml/mediapipe/wasm/vision_wasm_module_internal.js",
+  "ml/mediapipe/wasm/vision_wasm_module_internal.wasm",
+  "ml/mediapipe/wasm/vision_wasm_nosimd_internal.js",
+  "ml/mediapipe/wasm/vision_wasm_nosimd_internal.wasm",
   "engine/client.mjs",
   "engine/index.mjs",
   "engine/protocol.mjs",
@@ -59,6 +74,7 @@ const REQUIRED_FILES = Object.freeze([
   "legal/licenses/libunwind-LICENSE.txt",
   "legal/licenses/little-cms-LICENSE.txt",
   "legal/licenses/miniz-LICENSE.txt",
+  "legal/licenses/mediapipe-Apache-2.0.txt",
   "legal/licenses/musl-COPYRIGHT.txt",
   "legal.html",
   "patchy-engine.mjs",
@@ -181,9 +197,9 @@ function rollbackFor(releaseId, previousReleaseId) {
 function deploymentFiles(releaseId, apacheConfig) {
   const csp = SECURITY_HEADERS["Content-Security-Policy"];
   return {
-    "deploy/Caddyfile": `# Generated for immutable Patchy release ${releaseId}\nhandle_path /releases/${releaseId}/* {\n  root * /srv/patchy/releases/${releaseId}\n  header {\n    Cross-Origin-Opener-Policy \"same-origin\"\n    Cross-Origin-Embedder-Policy \"require-corp\"\n    Cross-Origin-Resource-Policy \"same-origin\"\n    Content-Security-Policy \"${csp}\"\n    Permissions-Policy \"${SECURITY_HEADERS["Permissions-Policy"]}\"\n    Referrer-Policy \"no-referrer\"\n    X-Content-Type-Options \"nosniff\"\n  }\n  @entry path *.html\n  header @entry Cache-Control \"no-cache\"\n  @asset path *.css *.js *.mjs *.wasm *.data *.svg *.png *.ico *.ttf *.otf *.woff *.woff2 *.br *.gz\n  header @asset Cache-Control \"public, max-age=31536000, immutable\"\n  file_server {\n    precompressed br gzip\n  }\n}\n`,
+    "deploy/Caddyfile": `# Generated for immutable Patchy release ${releaseId}\nhandle_path /releases/${releaseId}/* {\n  root * /srv/patchy/releases/${releaseId}\n  header {\n    Cross-Origin-Opener-Policy \"same-origin\"\n    Cross-Origin-Embedder-Policy \"require-corp\"\n    Cross-Origin-Resource-Policy \"same-origin\"\n    Content-Security-Policy \"${csp}\"\n    Permissions-Policy \"${SECURITY_HEADERS["Permissions-Policy"]}\"\n    Referrer-Policy \"no-referrer\"\n    X-Content-Type-Options \"nosniff\"\n  }\n  @entry path *.html\n  header @entry Cache-Control \"no-cache\"\n  @asset path *.css *.js *.mjs *.wasm *.data *.task *.json *.svg *.png *.ico *.ttf *.otf *.woff *.woff2 *.br *.gz\n  header @asset Cache-Control \"public, max-age=31536000, immutable\"\n  file_server {\n    precompressed br gzip\n  }\n}\n`,
     "deploy/apache.htaccess": apacheConfig,
-    "deploy/nginx.conf": `# Generated for immutable Patchy release ${releaseId}\nlocation /releases/${releaseId}/ {\n  root /srv/patchy;\n  set $patchy_cache_control \"no-cache\";\n  if ($uri ~* \\.(?:css|js|mjs|wasm|data|svg|png|ico|ttf|otf|woff|woff2|br|gz)$) { set $patchy_cache_control \"public, max-age=31536000, immutable\"; }\n  gzip_static on;\n  # Enable brotli_static here when the optional nginx Brotli module is loaded.\n  add_header Cache-Control $patchy_cache_control always;\n  add_header Cross-Origin-Opener-Policy \"same-origin\" always;\n  add_header Cross-Origin-Embedder-Policy \"require-corp\" always;\n  add_header Cross-Origin-Resource-Policy \"same-origin\" always;\n  add_header Content-Security-Policy \"${csp}\" always;\n  add_header Permissions-Policy \"${SECURITY_HEADERS["Permissions-Policy"]}\" always;\n  add_header Referrer-Policy \"no-referrer\" always;\n  add_header X-Content-Type-Options \"nosniff\" always;\n  try_files $uri =404;\n}\n`,
+    "deploy/nginx.conf": `# Generated for immutable Patchy release ${releaseId}\nlocation /releases/${releaseId}/ {\n  root /srv/patchy;\n  set $patchy_cache_control \"no-cache\";\n  if ($uri ~* \\.(?:css|js|mjs|wasm|data|task|json|svg|png|ico|ttf|otf|woff|woff2|br|gz)$) { set $patchy_cache_control \"public, max-age=31536000, immutable\"; }\n  gzip_static on;\n  # Enable brotli_static here when the optional nginx Brotli module is loaded.\n  add_header Cache-Control $patchy_cache_control always;\n  add_header Cross-Origin-Opener-Policy \"same-origin\" always;\n  add_header Cross-Origin-Embedder-Policy \"require-corp\" always;\n  add_header Cross-Origin-Resource-Policy \"same-origin\" always;\n  add_header Content-Security-Policy \"${csp}\" always;\n  add_header Permissions-Policy \"${SECURITY_HEADERS["Permissions-Policy"]}\" always;\n  add_header Referrer-Policy \"no-referrer\" always;\n  add_header X-Content-Type-Options \"nosniff\" always;\n  try_files $uri =404;\n}\n`,
   };
 }
 

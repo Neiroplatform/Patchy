@@ -128,6 +128,12 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     "selectionRefinementDialog", "selectionSmoothInput", "selectionFeatherInput",
     "selectionContrastInput", "selectionShiftInput", "selectionOutputInput",
     "selectionLayerInput", "commitSelectionRefinementButton",
+    "objectSelectToolButton", "objectSourceInput", "objectPromptModeInput",
+    "objectPromptPolarityInput", "objectRefineEdgesInput", "objectSelectionStatus",
+    "applyObjectSelectionButton", "cancelObjectSelectionButton", "stopActionPlanButton",
+    "actionHarnessButton", "actionHarnessDialog", "actionPromptInput", "buildActionPlanButton",
+    "actionPlanReview", "actionPlanSteps", "actionPlanStatus", "discardActionPlanButton",
+    "executeActionPlanButton",
     "saveChannelButton", "savePathButton", "channelList", "pathList",
     "rasterizeLayerButton", "mergeVisibleButton", "channelRenameButton",
     "channelInvertButton", "channelUpButton", "channelDownButton", "channelDeleteButton",
@@ -143,6 +149,7 @@ test("self-hosted editor closes the minimal product workflow without remote asse
     assert.match(html, new RegExp(`id="${id}"`));
   }
   for (const method of ["client.open", "client.activateDocument", "client.closeDocument",
+    "client.beginHistoryGroup", "client.commitHistoryGroup", "client.abortHistoryGroup",
     "client.copyLayersToDocument",
     "client.editLayers", "client.moveLayers", "client.addPixelLayer", "client.copyLayerSelection",
     "client.groupLayers", "client.ungroupLayers", "client.removeLayers",
@@ -268,7 +275,10 @@ test("self-hosted editor closes the minimal product workflow without remote asse
   assert.match(script, /client\.applyRetouchRepair/);
   assert.match(script, /client\.applyLocalAdjustmentBrush/);
   assert.match(script, /client\.applyAdvancedPaintStroke/);
+  assert.match(script, /run\.cancelled \|\| pendingActionPlan !== run/);
+  assert.match(script, /await client\.abortHistoryGroup\(result\.groupId\)/);
   for (const contract of ["selectionMask:", "documentId:", "documents:", "setSelectionMask(",
+    "beginHistoryGroup(", "commitHistoryGroup(", "abortHistoryGroup(",
     "magicWand(", "quickSelect(", "magneticLasso(", "previewSelectionRefinement(", "refineSelection(",
     "activateDocument(", "closeDocument(", "saveDocument(", "layerThumbnail(", "openSmartObjectContents(",
     "saveSmartObjectContents(", "placePsdSmartObject(", "contentsEditable:", "growSelection(", "selectSimilar(", "setLayerStylePreset(", "historyTravel(",
@@ -364,6 +374,32 @@ test("Worker history travel is stale-guarded, bounded and returns one final proj
     expectedStateId: "2", expectedRevision: "8" }), /available states/);
   await assert.rejects(host.dispatch({ method: "historyTravel", steps: 41,
     expectedStateId: "2", expectedRevision: "8" }), /1\.\.40/);
+  host.dispose();
+});
+
+test("Worker exposes explicit history-group begin, commit and rollback without retargeting sessions", async () => {
+  let revision = 1n; let stateId = 1n; let active = 0n; const calls = [];
+  const engine = {
+    capabilities: 0n,
+    create() { return 17; },
+    snapshot() { return { ...projection(Number(revision)), revision, stateId }; },
+    beginHistoryGroup(session) { assert.equal(session, 17); active = 41n; calls.push("begin"); return active; },
+    commitHistoryGroup(session, groupId) { assert.deepEqual([session, groupId], [17, active]);
+      calls.push("commit"); active = 0n; },
+    abortHistoryGroup(session, groupId) { assert.deepEqual([session, groupId], [17, active]);
+      calls.push("abort"); active = 0n; revision += 1n; stateId -= 1n; },
+    close() {}, dispose() {},
+  };
+  const host = new PatchyWorkerHost(engine);
+  await host.dispatch({ method: "create", width: 1, height: 1, name: "Grouped.psd" });
+  const first = await host.dispatch({ method: "beginHistoryGroup" });
+  assert.equal(first.groupId, 41n);
+  await host.dispatch({ method: "commitHistoryGroup", groupId: "41" });
+  const second = await host.dispatch({ method: "beginHistoryGroup" });
+  assert.equal(second.groupId, 41n);
+  const restored = await host.dispatch({ method: "abortHistoryGroup", groupId: "41" });
+  assert.equal(restored.revision, 2n); assert.equal(restored.stateId, 0n);
+  assert.deepEqual(calls, ["begin", "commit", "begin", "abort"]);
   host.dispose();
 });
 
@@ -1696,6 +1732,11 @@ test("worker host runs the minimal browser editing vertical workflow", async () 
     expectedRevision: String(clipboardBefore.revision) });
   assert.deepEqual(clipboard.bounds, { x: 0, y: 0, width: 1, height: 1 });
   assert.equal(clipboard.rgba.byteLength, 4);
+  const completeLayer = await host.dispatch({ method: "captureLayerPixels", layerId: "7",
+    expectedStateId: String(clipboardBefore.stateId),
+    expectedRevision: String(clipboardBefore.revision), ignoreSelection: true });
+  assert.deepEqual(completeLayer.bounds, { x: 0, y: 0, width: 3, height: 2 });
+  assert.equal(completeLayer.rgba.byteLength, 24);
   await host.dispatch({ method: "copyLayerSelection", layerId: "7", name: "Layer 1" });
   assert.deepEqual(calls.find((call) => call[0] === "pixels"), ["pixels", "Layer 1", 4]);
   await host.dispatch({ method: "setSelectionMask", bounds: { x: 0, y: 0, width: 3, height: 2 },

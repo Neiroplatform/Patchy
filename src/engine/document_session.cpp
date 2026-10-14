@@ -1251,7 +1251,13 @@ CommandResult DocumentSession::execute(const DocumentCommand &command,
         false, make_error(SessionErrorCode::InvalidArgument,
                           "cannot execute a command during a transient preview")};
   }
-  return execute_impl(command, true, filter_progress);
+  const bool record_history =
+      !explicit_history_group_ || !explicit_history_group_recorded_;
+  auto result = execute_impl(command, record_history, filter_progress);
+  if (result && result.changed && explicit_history_group_) {
+    explicit_history_group_recorded_ = true;
+  }
+  return result;
 }
 
 CommandResult DocumentSession::execute_grouped(
@@ -1282,6 +1288,63 @@ DocumentSession::allocate_history_group_id() noexcept {
     group_id = next_history_group_id_++;
   }
   return group_id;
+}
+
+DocumentSession::HistoryGroupId DocumentSession::begin_history_group() noexcept {
+  if (explicit_history_group_) {
+    return 0;
+  }
+  const auto group_id = allocate_history_group_id();
+  active_history_group_ = group_id;
+  explicit_history_group_ = true;
+  explicit_history_group_recorded_ = false;
+  return group_id;
+}
+
+CommandResult DocumentSession::commit_history_group(HistoryGroupId group_id) {
+  if (!explicit_history_group_ || !active_history_group_.has_value() ||
+      *active_history_group_ != group_id) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "history group is not active")};
+  }
+  explicit_history_group_ = false;
+  explicit_history_group_recorded_ = false;
+  active_history_group_.reset();
+  return CommandResult{true, {}};
+}
+
+CommandResult DocumentSession::abort_history_group(HistoryGroupId group_id) {
+  if (!explicit_history_group_ || !active_history_group_.has_value() ||
+      *active_history_group_ != group_id) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::InvalidArgument,
+                          "history group is not active")};
+  }
+  explicit_history_group_ = false;
+  active_history_group_.reset();
+  if (!explicit_history_group_recorded_) {
+    explicit_history_group_recorded_ = false;
+    return CommandResult{true, {}};
+  }
+  explicit_history_group_recorded_ = false;
+  if (undo_stack_.empty()) {
+    return CommandResult{
+        false, make_error(SessionErrorCode::CommandFailed,
+                          "history group baseline is missing")};
+  }
+  auto baseline = std::move(undo_stack_.back());
+  undo_stack_.pop_back();
+  document_ = std::move(baseline.document);
+  selection_ = std::move(baseline.selection);
+  state_id_ = baseline.state_id;
+  redo_stack_.clear();
+  ++revision_;
+  const auto affected_region =
+      std::optional<Rect>{Rect::from_size(document_.width(), document_.height())};
+  schedule_render(affected_region);
+  publish(SessionEventKind::UndoApplied, 0, affected_region);
+  return CommandResult{true, {}, 0, affected_region};
 }
 
 void DocumentSession::adopt_history_group(HistoryGroupId group_id) noexcept {
@@ -3589,19 +3652,19 @@ CommandResult DocumentSession::restore(bool backward) {
 }
 
 CommandResult DocumentSession::undo() {
-  if (preview_active()) {
+  if (preview_active() || explicit_history_group_) {
     return CommandResult{
         false, make_error(SessionErrorCode::InvalidArgument,
-                          "cannot undo during a transient preview")};
+                          "cannot undo during a preview or history group")};
   }
   return restore(true);
 }
 
 CommandResult DocumentSession::redo() {
-  if (preview_active()) {
+  if (preview_active() || explicit_history_group_) {
     return CommandResult{
         false, make_error(SessionErrorCode::InvalidArgument,
-                          "cannot redo during a transient preview")};
+                          "cannot redo during a preview or history group")};
   }
   return restore(false);
 }
@@ -3780,6 +3843,8 @@ void DocumentSession::clear_history() noexcept {
   undo_stack_.clear();
   redo_stack_.clear();
   active_history_group_.reset();
+  explicit_history_group_ = false;
+  explicit_history_group_recorded_ = false;
 }
 
 bool DocumentSession::evict_oldest_undo() noexcept {
@@ -3809,6 +3874,8 @@ void DocumentSession::restore_external(Document document,
   undo_stack_.clear();
   redo_stack_.clear();
   active_history_group_.reset();
+  explicit_history_group_ = false;
+  explicit_history_group_recorded_ = false;
   state_id_ = state_id;
   next_state_id_ = std::max(next_state_id_, state_id + 1U);
   ++revision_;
@@ -3822,6 +3889,8 @@ void DocumentSession::replace_external(Document document, bool saved) {
   undo_stack_.clear();
   redo_stack_.clear();
   active_history_group_.reset();
+  explicit_history_group_ = false;
+  explicit_history_group_recorded_ = false;
   state_id_ = next_state_id_++;
   ++revision_;
   if (saved) {

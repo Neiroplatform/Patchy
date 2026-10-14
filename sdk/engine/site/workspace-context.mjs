@@ -17,6 +17,11 @@ const contexts = {
     "Click a color to select matching pixels. Contiguous limits the result to the connected region; Sample all layers uses the visible composite."),
   quickSelect: descriptor("selection", "Quick Select", ["brushSizeInput", "selectionToleranceInput", "edgeContrastInput", "enhanceEdgeInput"], "document",
     "Drag over the subject to grow the selection; hold Alt to subtract."),
+  objectSelect: descriptor("selection", "Object Select", ["selectionModeInput", "selectionQuickFeatherInput",
+    "objectSourceInput", "objectPromptModeInput", "objectPromptPolarityInput", "objectRefineEdgesInput",
+    "cancelObjectSelectionButton", "applyObjectSelectionButton", "stopActionPlanButton",
+    "objectSelectionStatus"], "document",
+    "Click an object, drag a box, or add include/exclude points. Review the local model preview, then Apply to commit one canonical selection revision."),
   magnetic: descriptor("selection", "Magnetic Lasso", ["selectionModeInput", "selectionQuickFeatherInput", "edgeContrastInput"], "document",
     "Click edge anchors, then press Enter or double-click to close; Escape cancels the draft."),
   quickMask: descriptor("selection", "Quick Mask", ["brushSizeInput"], "selection-mask",
@@ -90,7 +95,7 @@ export const WORKSPACE_OPTION_CONTROL_IDS = Object.freeze([...new Set(
 export const WORKSPACE_TOOL_BUTTONS = Object.freeze({
   move: "moveToolButton", crop: "cropToolButton", marquee: "marqueeToolButton",
   lasso: "lassoToolButton", polygon: "polygonToolButton", magic: "magicToolButton",
-  quickSelect: "quickSelectToolButton", magnetic: "magneticToolButton",
+  quickSelect: "quickSelectToolButton", objectSelect: "objectSelectToolButton", magnetic: "magneticToolButton",
   quickMask: "quickMaskToolButton", pan: "panToolButton", brush: "brushToolButton",
   mixer: "mixerToolButton", patternStamp: "patternStampToolButton",
   eraser: "eraserToolButton", clone: "cloneToolButton", heal: "healToolButton",
@@ -115,7 +120,7 @@ export function installWorkspaceContext(document, { translate = (value) => value
   for (const id of WORKSPACE_OPTION_CONTROL_IDS) {
     const control = document.getElementById(id);
     const node = control?.closest(".direct-operation-actions") ||
-      control?.closest("label, .tool-option-button");
+      control?.closest("label, .tool-option-button, output");
     if (!node) continue;
     node.dataset.toolOption = id;
     optionNodes.set(id, node);

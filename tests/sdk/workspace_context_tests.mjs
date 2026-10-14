@@ -10,7 +10,7 @@ const source = (path) => readFile(new URL(path, root), "utf8");
 
 test("workspace contexts cover every shipped persistent and one-shot tool family", () => {
   assert.deepEqual(Object.keys(WORKSPACE_TOOL_CONTEXTS), [
-    "move", "crop", "marquee", "lasso", "polygon", "magic", "quickSelect", "magnetic",
+    "move", "crop", "marquee", "lasso", "polygon", "magic", "quickSelect", "objectSelect", "magnetic",
     "quickMask", "pan", "brush", "eraser", "mixer", "patternStamp", "clone", "heal",
     "spotHealing", "patch", "smudge", "blur", "sharpen", "dodge", "burn", "sponge",
     "gradient", "fill", "eyedropper", "pen", "shape", "text",

@@ -120,7 +120,8 @@ function placeFloatingMenu(panel, anchor, { submenu = false } = {}) {
 export const TOOL_GROUPS = Object.freeze([
   { id: "transform", label: "Move and crop tools", members: ["moveToolButton", "cropToolButton"] },
   { id: "selection", label: "Selection tools", members: ["marqueeToolButton", "lassoToolButton",
-    "polygonToolButton", "magicToolButton", "quickSelectToolButton", "magneticToolButton", "quickMaskToolButton"] },
+    "polygonToolButton", "magicToolButton", "quickSelectToolButton", "objectSelectToolButton",
+    "magneticToolButton", "quickMaskToolButton"] },
   { id: "paint", label: "Paint tools", members: ["brushToolButton", "mixerToolButton",
     "patternStampToolButton", "eraserToolButton"] },
   { id: "retouch", label: "Retouch tools", members: ["healToolButton", "spotHealingToolButton",

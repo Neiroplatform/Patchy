@@ -136,6 +136,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .document-actions::-webkit-scrollbar { display: none; }
 .document-actions :is(#recoveryButton, #versionsButton, #assetsButton, #diagnosticsButton, #transformButton,
   #copyPixelsButton, #cutPixelsButton, #pastePixelsButton) { display: none; }
+
+.action-harness-dialog { width: min(620px, calc(100vw - 28px)); }
+.action-harness-dialog textarea { width: 100%; min-height: 96px; resize: vertical; padding: 10px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); color: var(--text);
+  background: var(--surface-0); font: inherit; line-height: 1.45; }
+.action-harness-dialog ol { margin: 10px 0; padding-left: 24px; color: var(--text); }
+.action-harness-dialog li { padding: 4px 0; }
+#objectSelectionStatus { flex: 0 0 auto; max-width: 260px; overflow: hidden; color: var(--text-faint);
+  font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .document-actions > select, .tool-options select {
   min-height: 34px; max-width: 132px; padding: 0 8px; color: var(--text-muted);
   border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-1);

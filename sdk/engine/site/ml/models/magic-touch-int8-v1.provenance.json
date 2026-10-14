@@ -1,0 +1,8 @@
+{
+  "model": "MediaPipe MagicTouch Interactive Segmenter",
+  "variant": "int8/1",
+  "source": "https://storage.googleapis.com/mediapipe-models/interactive_segmenter_v2/magic_touch/int8/1/interactive_segmentation.task",
+  "sha256": "38431bc66b883404e8397f74c3579404315b9b52b04a46c6346fe906a7309b03",
+  "bytes": 30525312,
+  "license": "Apache-2.0"
+}

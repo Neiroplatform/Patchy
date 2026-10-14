@@ -32,6 +32,21 @@ const REQUIRED = [
   "font-catalog.mjs",
   "editor.css",
   "editor.mjs",
+  "object-segmentation.mjs",
+  "object-segmentation-worker.mjs",
+  "ml-network-policy.mjs",
+  "action-harness.mjs",
+  "ml/models/magic-touch-int8-v1.task",
+  "ml/models/magic-touch-int8-v1.provenance.json",
+  "ml/mediapipe/LICENSE-APACHE-2.0.txt",
+  "ml/mediapipe/PROVENANCE.json",
+  "ml/mediapipe/vision_bundle.mjs",
+  "ml/mediapipe/wasm/vision_wasm_internal.js",
+  "ml/mediapipe/wasm/vision_wasm_internal.wasm",
+  "ml/mediapipe/wasm/vision_wasm_module_internal.js",
+  "ml/mediapipe/wasm/vision_wasm_module_internal.wasm",
+  "ml/mediapipe/wasm/vision_wasm_nosimd_internal.js",
+  "ml/mediapipe/wasm/vision_wasm_nosimd_internal.wasm",
   "reference-workflow.mjs",
   "engine/client.mjs",
   "engine/index.mjs",
@@ -53,6 +68,7 @@ const REQUIRED = [
   "legal/licenses/libunwind-LICENSE.txt",
   "legal/licenses/little-cms-LICENSE.txt",
   "legal/licenses/miniz-LICENSE.txt",
+  "legal/licenses/mediapipe-Apache-2.0.txt",
   "legal/licenses/musl-COPYRIGHT.txt",
   "legal.html",
   "patchy-engine.mjs",
@@ -305,7 +321,7 @@ test("capability and legal pages preserve local-first and strict-CSP contracts",
   assert.match(browserVerifier, /crossOriginIsolated/);
   assert.match(browserVerifier, /precompressed asset was not served/);
   assert.match(browserVerifier, /"network\.proxy\.type": 0/);
-  assert.match(browserVerifier, /legalEvidence\.sbom\.components\.length, 11/);
+  assert.match(browserVerifier, /legalEvidence\.sbom\.components\.length, 13/);
   assert.match(browserVerifier, /legalEvidence\.presetProvenance\.itemCount, 63/);
   assert.match(browserVerifier, /durableRetention, "not_guaranteed_by_this_artifact"/);
 });
