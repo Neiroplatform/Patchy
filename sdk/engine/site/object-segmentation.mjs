@@ -122,7 +122,8 @@ export function refineObjectSelectionMask(source, width, height) {
   const result = new Uint8Array(source);
   if (width < 5 || height < 5) return result;
 
-  const binary = Uint8Array.from(source, (coverage) => coverage >= 128 ? 1 : 0);
+  const originalBinary = Uint8Array.from(source, (coverage) => coverage >= 128 ? 1 : 0);
+  const binary = new Uint8Array(originalBinary);
   const opened = binaryDilateCross(binaryErodeCross(binary, width, height), width, height);
   for (let index = 0; index < binary.length; ++index) {
     // A one-pixel, low-confidence spur is usually model noise. Preserve strong
@@ -131,12 +132,16 @@ export function refineObjectSelectionMask(source, width, height) {
   }
 
   const foreground = maskComponents(binary, width, height, true);
-  const largestArea = foreground.reduce((largest, component) =>
-    Math.max(largest, component.pixels.length), 0);
+  const largestComponent = foreground.reduce((largest, component) =>
+    !largest || component.pixels.length > largest.pixels.length ? component : largest, null);
+  const largestArea = largestComponent?.pixels.length || 0;
   const islandLimit = Math.max(4, Math.floor(Math.min(binary.length * .0005,
     largestArea * .02)));
   for (const component of foreground) {
-    if (component.pixels.length >= islandLimit) continue;
+    // A primary proposal can itself be a very small object at model
+    // resolution. Never classify a largest component as detached noise; ties
+    // remain because topology alone cannot safely infer which one owns a prompt.
+    if (component.pixels.length === largestArea || component.pixels.length >= islandLimit) continue;
     for (const index of component.pixels) binary[index] = 0;
   }
 
@@ -148,10 +153,18 @@ export function refineObjectSelectionMask(source, width, height) {
     for (const index of component.pixels) binary[index] = 1;
   }
 
+  let hadCoverage = false; let hasCoverage = false;
   for (let index = 0; index < result.length; ++index) {
-    if (!binary[index]) result[index] = 0;
-    else if (source[index] < 128) result[index] = 255;
+    hadCoverage ||= source[index] > 0;
+    // Topology is binary, but the proposal remains Gray8. Preserve ordinary
+    // antialiasing/soft confidence unless cleanup explicitly removed a
+    // foreground pixel, and synthesize opaque coverage only for a filled hole.
+    if (originalBinary[index] && !binary[index]) result[index] = 0;
+    else if (!originalBinary[index] && binary[index]) result[index] = 255;
+    hasCoverage ||= result[index] > 0;
   }
+  if (hadCoverage && !hasCoverage)
+    throw new RangeError("object selection cleanup emptied proposal");
   return result;
 }
 

@@ -165,6 +165,31 @@ test("automatic object-mask cleanup prunes weak spurs but preserves confident fi
   assert.equal(refined[8 * width + 17], 240, "high-confidence fine detail was removed");
 });
 
+test("automatic object-mask cleanup preserves Gray8 soft-edge coverage", () => {
+  const width = 9; const height = 9; const source = new Uint8Array(width * height);
+  for (let y = 3; y <= 5; ++y)
+    for (let x = 3; x <= 5; ++x) source[y * width + x] = 255;
+  for (const [x, y] of [[2, 3], [2, 4], [2, 5], [6, 3], [6, 4], [6, 5]])
+    source[y * width + x] = 64;
+  const refined = refineObjectSelectionMask(source, width, height);
+  for (const [x, y] of [[2, 3], [2, 4], [2, 5], [6, 3], [6, 4], [6, 5]])
+    assert.equal(refined[y * width + x], 64, `soft edge ${x},${y} was quantized away`);
+});
+
+test("automatic object-mask cleanup preserves the primary tiny object and fails closed on emptying", () => {
+  const width = 9; const height = 9;
+  for (const size of [1, 2, 3]) {
+    const source = new Uint8Array(width * height);
+    for (let x = 0; x < size; ++x) source[4 * width + 3 + x] = 255;
+    source[0] = 255;
+    const refined = refineObjectSelectionMask(source, width, height);
+    assert.equal(refined[4 * width + 3], 255, `primary ${size}-pixel object was removed`);
+    if (size > 1) assert.equal(refined[0], 0, "smaller detached noise survived");
+  }
+  const weakOnly = new Uint8Array(width * height); weakOnly[4 * width + 4] = 160;
+  assert.throws(() => refineObjectSelectionMask(weakOnly, width, height), /emptied proposal/);
+});
+
 test("automatic object-mask cleanup leaves large semantic openings intact", () => {
   const width = 30; const height = 30; const source = new Uint8Array(width * height);
   for (let y = 4; y <= 25; ++y)
