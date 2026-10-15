@@ -13,6 +13,7 @@ export const OBJECT_SEGMENTATION_RUNTIME = Object.freeze({
 });
 export const OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE = 1024;
 export const OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE = 256;
+export const OBJECT_SEGMENTATION_REQUEST_TIMEOUT_MS = 30_000;
 
 export async function readResponseBytesWithProgress(response, expectedBytes, onProgress = null) {
   if (!(response instanceof Response) || !Number.isInteger(expectedBytes) || expectedBytes <= 0)
@@ -310,7 +311,8 @@ export class ObjectSegmentationClient {
     this.externalWorker = Boolean(worker); this.closed = false;
     this.sequence = 0; this.pending = new Map(); this.outbox = [];
     this.timeouts = { setImage: Number(timeouts.setImage) > 0 ? Number(timeouts.setImage) : 600_000,
-      segment: Number(timeouts.segment) > 0 ? Number(timeouts.segment) : 15_000 };
+      segment: Number(timeouts.segment) > 0 ? Number(timeouts.segment) :
+        OBJECT_SEGMENTATION_REQUEST_TIMEOUT_MS };
     this.attach(worker || this.createWorker());
   }
 

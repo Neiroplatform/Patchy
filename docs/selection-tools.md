@@ -79,7 +79,10 @@ proposal is accepted only when it includes the prompt, covers at least four
 model pixels, stays below 20% of the preview, and—when the broad proposal
 includes the prompt—is at least 28% smaller. Explicit box and include/exclude
 prompts are not rewritten. This is what lets a watch or microphone nested on a
-person remain a separate target without degrading whole-person clicks.
+person remain a separate target without degrading whole-person clicks. Segment
+requests have a bounded 30-second deadline so the optional second local WASM
+solve can complete on the supported low-end tier; accepted quality gates retain
+their stricter measured latency floors.
 
 ## Quick Select: solve-on-release is a patent constraint, not a UX choice
 

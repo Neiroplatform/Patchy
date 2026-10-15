@@ -57,6 +57,23 @@ async function selectObjectTool() {
   await page.click("#objectSelectToolButton");
 }
 
+async function waitForObjectPreview(timeout = 90_000) {
+  await page.waitForFunction(() => {
+    const status = document.querySelector("#objectSelectionStatus")?.textContent || "";
+    const toast = document.querySelector("#actionToast")?.textContent || "";
+    return /preview ready|preview unavailable|cancelled/i.test(status) ||
+      /object select unavailable|failed/i.test(toast);
+  }, null, { timeout });
+  const state = await page.evaluate(() => ({
+    status: document.querySelector("#objectSelectionStatus")?.textContent || "",
+    toast: document.querySelector("#actionToast")?.textContent || "",
+    applyDisabled: Boolean(document.querySelector("#applyObjectSelectionButton")?.disabled),
+  }));
+  assert.match(state.status, /preview ready/i, JSON.stringify(state));
+  assert.equal(state.applyDisabled, false, JSON.stringify(state));
+  return state;
+}
+
 try {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "ready",
@@ -130,10 +147,7 @@ try {
     canvas.dispatchEvent(new PointerEvent("pointerdown", { ...init, buttons: 1 }));
     canvas.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
   });
-  await page.waitForFunction(() =>
-    /preview ready/i.test(document.querySelector("#objectSelectionStatus")?.textContent || "") &&
-    !document.querySelector("#applyObjectSelectionButton")?.disabled,
-  null, { timeout: 90_000 });
+  await waitForObjectPreview();
   await page.click("#applyObjectSelectionButton");
   await page.waitForFunction(() =>
     /one Undo restores/i.test(document.querySelector("#actionToast")?.textContent || "") &&

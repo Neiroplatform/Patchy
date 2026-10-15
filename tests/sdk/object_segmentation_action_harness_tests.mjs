@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
   OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE, OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE,
-  automaticDetailPromptStroke,
+  OBJECT_SEGMENTATION_REQUEST_TIMEOUT_MS, automaticDetailPromptStroke,
   boundedObjectPreviewSize, chooseAutomaticDetailConfidence,
   clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
   scaleConfidenceMask, refineObjectSelectionMask, combineSelectionMasks, hasSelectableObjectCoverage, objectSegmentationDelegate,
@@ -129,7 +129,8 @@ test("cold object setup allows the hosted model transfer and initialization budg
   const worker = { addEventListener() {}, postMessage() {}, terminate() {} };
   const client = new ObjectSegmentationClient(worker);
   assert.equal(client.timeouts.setImage, 600_000);
-  assert.equal(client.timeouts.segment, 15_000);
+  assert.equal(OBJECT_SEGMENTATION_REQUEST_TIMEOUT_MS, 30_000);
+  assert.equal(client.timeouts.segment, OBJECT_SEGMENTATION_REQUEST_TIMEOUT_MS);
   client.close();
 });
 
