@@ -84,6 +84,7 @@ try {
   assert.equal(await page.locator("#actionHarnessButton").count(), 1);
   await dropSvg("object-select-atomic.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
     <rect width="256" height="256" fill="#ffffff"/>
+    <circle cx="30" cy="128" r="16" fill="#0066ff"/>
     <rect x="72" y="56" width="112" height="144" rx="20" fill="#111111"/>
   </svg>`);
   await page.waitForFunction(() => !document.querySelector("#actionHarnessButton")?.disabled,
@@ -133,22 +134,9 @@ try {
   await page.fill("#actionPromptInput", "Удали фон");
   await page.click("#buildActionPlanButton");
   assert.deepEqual(await page.locator("#actionPlanSteps li").allTextContents(),
-    ["1. select-object · needs a canvas prompt", "2. invert-selection", "3. cut-selection"]);
+    ["1. select-object · automatic subject", "2. invert-selection", "3. cut-selection"]);
   assert.match(await page.locator("#actionPlanStatus").textContent(), /One Undo restores/i);
   await page.click("#executeActionPlanButton");
-  await page.waitForFunction(() => document.querySelector("#objectSelectToolButton")?.getAttribute("aria-pressed") === "true");
-  assert.match(await page.locator("#objectSelectionStatus").textContent(), /prompt/i);
-  await page.evaluate(() => {
-    const canvas = document.querySelector("#documentCanvas");
-    const rect = canvas.getBoundingClientRect();
-    const init = { bubbles: true, cancelable: true, pointerId: 901,
-      pointerType: "mouse", isPrimary: true, button: 0,
-      clientX: rect.left + rect.width * .5, clientY: rect.top + rect.height * .5 };
-    canvas.dispatchEvent(new PointerEvent("pointerdown", { ...init, buttons: 1 }));
-    canvas.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
-  });
-  await waitForObjectPreview();
-  await page.click("#applyObjectSelectionButton");
   await page.waitForFunction(() =>
     /one Undo restores/i.test(document.querySelector("#actionToast")?.textContent || "") &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
@@ -171,6 +159,59 @@ try {
     "one Undo did not restore the pre-plan document");
   assert.equal(await page.locator("#redoButton").isEnabled(), true);
 
+  await page.selectOption("#objectPromptModeInput", "click");
+  await page.selectOption("#selectionModeInput", "replace");
+  const clickCanvas = async (x, y, id, { shiftKey = false } = {}) => page.evaluate(
+    ({ x, y, id, shiftKey }) => {
+      const canvas = document.querySelector("#documentCanvas"); const rect = canvas.getBoundingClientRect();
+      const init = { bubbles: true, cancelable: true, pointerId: id,
+        pointerType: "mouse", isPrimary: true, button: 0, shiftKey,
+        clientX: rect.left + rect.width * x, clientY: rect.top + rect.height * y };
+      canvas.dispatchEvent(new PointerEvent("pointerdown", { ...init, buttons: 1 }));
+      canvas.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
+    }, { x, y, id, shiftKey });
+  await clickCanvas(.5, .5, 901);
+  await waitForObjectPreview();
+  await page.click("#applyObjectSelectionButton");
+  await page.waitForFunction(() =>
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  await clickCanvas(30 / 256, .5, 902, { shiftKey: true });
+  const additive = await waitForObjectPreview();
+  assert.match(additive.status, /^Add preview ready/i);
+  assert.equal(await page.locator("#selectionModeInput").inputValue(), "replace",
+    "Shift-add changed the stored selection mode");
+  await page.click("#applyObjectSelectionButton");
+  await page.waitForFunction(() =>
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  const leftBeforeCut = await canvasPixel(30, 128);
+  const centerBeforeCut = await canvasPixel(128, 128);
+  const backgroundBeforeReuse = await canvasPixel(220, 20);
+  const modelRequestsBeforeReuse = allRequests.filter((url) =>
+    url.includes("magic-touch-int8-v1.task")).length;
+  await page.click("#actionHarnessButton");
+  await page.fill("#actionPromptInput", "Удали фон");
+  await page.click("#buildActionPlanButton");
+  assert.deepEqual(await page.locator("#actionPlanSteps li").allTextContents(),
+    ["1. invert-selection", "2. cut-selection"],
+    "a committed additive selection was not reused by the action plan");
+  const revisionBeforeReuse = Number((await page.locator("#detailRevision").textContent()).trim());
+  await page.click("#executeActionPlanButton");
+  await page.waitForFunction(({ revisionBeforeReuse }) =>
+    Number(document.querySelector("#detailRevision")?.textContent) >= revisionBeforeReuse + 2 &&
+    [...document.querySelectorAll("#historyList .history-label")]
+      .some((item) => item.textContent === "AI edit · Удали фон") &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { revisionBeforeReuse }, { timeout: 90_000 });
+  assert.equal(allRequests.filter((url) => url.includes("magic-touch-int8-v1.task")).length,
+    modelRequestsBeforeReuse, "existing-selection recipe reran object inference");
+  assert.deepEqual(await canvasPixel(30, 128), leftBeforeCut, "Shift-added object was lost");
+  assert.deepEqual(await canvasPixel(128, 128), centerBeforeCut, "original selection was replaced");
+  assert.ok((await canvasPixel(220, 20))[3] < backgroundBeforeReuse[3],
+    "background was not removed around the additive selection");
+  await page.click("#undoButton");
+  await page.waitForFunction(() =>
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+
   await page.selectOption("#objectPromptModeInput", "points");
   await page.evaluate(() => {
     const canvas = document.querySelector("#documentCanvas"); const rect = canvas.getBoundingClientRect();
@@ -181,7 +222,7 @@ try {
       canvas.dispatchEvent(new PointerEvent("pointerdown", { ...init, buttons: 1 }));
       canvas.dispatchEvent(new PointerEvent("pointerup", { ...init, buttons: 0 }));
     };
-    fire(.5, .5, 902);
+    fire(.5, .5, 903);
   });
   await page.waitForFunction(() => /preview ready/i.test(
     document.querySelector("#objectSelectionStatus")?.textContent || ""), null, { timeout: 90_000 });
@@ -200,7 +241,7 @@ try {
     url.includes("magic-touch-int8-v1.task")).length;
   await page.evaluate(() => {
     const canvas = document.querySelector("#documentCanvas"); const rect = canvas.getBoundingClientRect();
-    const init = { bubbles: true, cancelable: true, pointerId: 903, pointerType: "mouse",
+    const init = { bubbles: true, cancelable: true, pointerId: 904, pointerType: "mouse",
       isPrimary: true, button: 0, clientX: rect.left + rect.width * .08,
       clientY: rect.top + rect.height * .08 };
     canvas.dispatchEvent(new PointerEvent("pointerdown", { ...init, buttons: 1 }));

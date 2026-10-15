@@ -16,7 +16,7 @@ const FILTERS = new Set([
   "patchy.filters.brightness_contrast",
 ]);
 const STEP_KEYS = Object.freeze({
-  "select-object": ["action", "requiresInput", "source"],
+  "select-object": ["action", "requiresInput", "source", "autoTarget"],
   "invert-selection": ["action"],
   "copy-selection": ["action"],
   "copy-selection-to-layer": ["action", "name"],
@@ -50,8 +50,9 @@ function boundedInteger(text, expression, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Math.round(value)));
 }
 
-function objectStep(source = "visible") {
-  return { action: "select-object", requiresInput: true, source };
+function objectStep(source = "visible", autoTarget = null) {
+  return { action: "select-object", requiresInput: !autoTarget, source,
+    ...(autoTarget ? { autoTarget } : {}) };
 }
 
 function filterStep(filterId, parameters) {
@@ -66,7 +67,8 @@ export function planPrompt(prompt, context = {}) {
     ["объект", "человек", "предмет", "субъект", "subject", "object", "person"]);
   const mentionsBackground = includesAny(text, ["фон", "background"]);
   const mutatesSelection = mentionsObject || mentionsBackground;
-  if (mutatesSelection) steps.push(objectStep(context.objectSource || "visible"));
+  if (mutatesSelection && !context.hasSelection) steps.push(objectStep(
+    context.objectSource || "visible", mentionsBackground ? "center" : null));
 
   if (mutatesSelection && includesAny(text, ["маск", "mask"])) {
     steps.push({ action: "mask-selection" });
@@ -156,9 +158,12 @@ export function validateActionPlan(plan, context = {}) {
     const keys = Object.keys(step);
     if (keys.some((key) => !STEP_KEYS[step.action].includes(key)))
       throw new Error("Action plan contains an unsupported parameter.");
-    if (step.action === "select-object" &&
-        (!step.requiresInput || !["active", "visible"].includes(step.source)))
-      throw new Error("Object selection requires an explicit source and canvas prompt.");
+    if (step.action === "select-object") {
+      const manual = step.requiresInput === true && step.autoTarget === undefined;
+      const automatic = step.requiresInput === false && step.autoTarget === "center";
+      if ((!manual && !automatic) || !["active", "visible"].includes(step.source))
+        throw new Error("Object selection requires a bounded canvas or automatic subject prompt.");
+    }
     if (step.action === "fill-selection" && !/^#[0-9a-f]{6}$/i.test(step.color || ""))
       throw new Error("Fill color is invalid.");
     if (step.action === "filter-selection" &&
@@ -204,6 +209,7 @@ export class DeterministicPlannerAdapter {
 }
 
 export function actionPlanSummary(plan) {
-  return plan.steps.map((step, index) => `${index + 1}. ${step.action}${step.requiresInput ? " · needs a canvas prompt" : ""}${
+  return plan.steps.map((step, index) => `${index + 1}. ${step.action}${step.requiresInput ? " · needs a canvas prompt" :
+    step.autoTarget ? " · automatic subject" : ""}${
     step.filterId ? ` · ${step.filterId}` : ""}${step.format ? ` · ${step.format}` : ""}`);
 }

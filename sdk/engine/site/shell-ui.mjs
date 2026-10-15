@@ -1234,6 +1234,7 @@ const RU = new Map(Object.entries({
   "Stop plan": "Остановить план",
   "Visible composite": "Видимая композиция",
   "Add a prompt, review the preview, then Apply selection.": "Добавьте указание, проверьте предпросмотр, затем примените выделение.",
+  "Finding the foreground subject locally…": "Локальный поиск объекта переднего плана…",
   "Loading local model and finding the object…": "Загрузка локальной модели и поиск объекта…",
   "Refining local object preview…": "Уточнение локального предпросмотра объекта…",
   "Object preview cancelled": "Предпросмотр объекта отменён",

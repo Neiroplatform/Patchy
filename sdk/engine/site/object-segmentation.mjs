@@ -285,6 +285,15 @@ export function combineSelectionMasks(current, proposed, mode = "replace") {
   return result;
 }
 
+export function selectionCombineModeForPointer(modifiers = {}, configured = "replace") {
+  if (!['replace', 'add', 'subtract', 'intersect'].includes(configured))
+    throw new TypeError("selection combine mode is invalid");
+  if (modifiers.shiftKey && modifiers.altKey) return "intersect";
+  if (modifiers.shiftKey) return "add";
+  if (modifiers.altKey) return "subtract";
+  return configured;
+}
+
 export function normalizedPromptPoint(point, width, height) {
   return { x: Math.max(0, Math.min(1, point.x / width)),
     y: Math.max(0, Math.min(1, point.y / height)) };
@@ -295,6 +304,13 @@ export function clickPromptStroke(point, width, height) {
   const start = Math.max(0, Math.min(.92, center.x - .04));
   return [0, .02, .04, .06, .08].map((delta) =>
     ({ x: Math.round((start + delta) * 1e6) / 1e6, y: center.y }));
+}
+
+export function automaticSubjectPromptStroke(width, height) {
+  if (![width, height].every((value) => Number.isInteger(value) && value > 0))
+    throw new RangeError("automatic subject dimensions must be positive integers");
+  return [{ isCompleted: true, brushMode: 1,
+    point: clickPromptStroke({ x: width / 2, y: height / 2 }, width, height) }];
 }
 
 export function rectanglePromptStroke(start, end, width, height) {

@@ -29,8 +29,9 @@ import { installHistoryDeck } from "./history-deck.mjs";
 import { installDockLayout } from "./dock-layout.mjs";
 import { BUNDLED_FONT_CATALOG, BUNDLED_FONT_FAMILIES,
   loadBundledFontFamily } from "./font-catalog.mjs";
-import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient, clickPromptStroke, combineSelectionMasks, hasSelectableObjectCoverage, proposalMatchesSnapshot,
-  objectSelectionIdentityMatches, rectanglePromptStroke, scaleConfidenceMask } from "./object-segmentation.mjs";
+import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient, automaticSubjectPromptStroke, clickPromptStroke, combineSelectionMasks, hasSelectableObjectCoverage, proposalMatchesSnapshot,
+  objectSelectionIdentityMatches, rectanglePromptStroke, scaleConfidenceMask,
+  selectionCombineModeForPointer } from "./object-segmentation.mjs";
 import { actionPlanSummary, planPrompt, validateActionPlan } from "./action-harness.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -2372,16 +2373,18 @@ function renderObjectSelectionProposal() {
     if (objectSelectionProposal) clearObjectSelectionProposal();
     return;
   }
+  const effectiveGray = combinedSelectionMask(objectSelectionProposal.gray,
+    objectSelectionProposal.combineMode || "replace");
   const image = overlay.createImageData(snapshot.width, snapshot.height);
-  for (let index = 0; index < objectSelectionProposal.gray.length; ++index) {
-    const coverage = objectSelectionProposal.gray[index];
+  for (let index = 0; index < effectiveGray.length; ++index) {
+    const coverage = effectiveGray[index];
     if (!coverage) continue;
     const x = index % snapshot.width; const y = Math.floor(index / snapshot.width);
     const edge = coverage >= 128 && (x === 0 || y === 0 || x === snapshot.width - 1 ||
-      y === snapshot.height - 1 || objectSelectionProposal.gray[index - 1] < 128 ||
-      objectSelectionProposal.gray[index + 1] < 128 ||
-      objectSelectionProposal.gray[index - snapshot.width] < 128 ||
-      objectSelectionProposal.gray[index + snapshot.width] < 128);
+      y === snapshot.height - 1 || effectiveGray[index - 1] < 128 ||
+      effectiveGray[index + 1] < 128 ||
+      effectiveGray[index - snapshot.width] < 128 ||
+      effectiveGray[index + snapshot.width] < 128);
     image.data[index * 4] = edge ? 199 : 68;
     image.data[index * 4 + 1] = edge ? 255 : 185;
     image.data[index * 4 + 2] = edge ? 64 : 255;
@@ -2408,8 +2411,9 @@ function renderObjectSelectionProposal() {
   $("cancelObjectSelectionButton").disabled = false;
 }
 
-async function inferObjectSelection(strokes) {
+async function inferObjectSelection(strokes, { combineMode = $("selectionModeInput").value || "replace" } = {}) {
   if (busy || !snapshot || !strokes.length) return;
+  combineMode = selectionCombineModeForPointer({}, combineMode);
   const requestSequence = ++objectSelectionRequestSequence;
   const identity = objectSelectionIdentity();
   const needsImage = !objectSelectionIdentityMatches(objectSelectionImageIdentity, identity);
@@ -2449,6 +2453,7 @@ async function inferObjectSelection(strokes) {
       Math.max(1, result.confidence.length);
     objectSelectionProposal = { ...identity, proposalId: `${identity.stateId}:${requestSequence}`,
       requestSequence,
+      combineMode,
       modelHash: OBJECT_SEGMENTATION_MODEL.sha256,
       runtimeHash: OBJECT_SEGMENTATION_RUNTIME.bundleSha256,
       runtimeTier: result.runtimeTier || imageReady.runtimeTier || "wasm",
@@ -2457,8 +2462,10 @@ async function inferObjectSelection(strokes) {
       encoding: "gray8", maskWidth: snapshot.width, maskHeight: snapshot.height,
       confidenceMean, latencyMs: result.latencyMs, gray };
     renderObjectSelectionProposal();
+    const combineLabel = ({ replace: "New", add: "Add", subtract: "Subtract",
+      intersect: "Intersect" })[combineMode];
     $("objectSelectionStatus").textContent =
-      `Local preview ready · ${result.runtimeTier || imageReady.runtimeTier || "wasm"} · ${Math.round(result.latencyMs)} ms`;
+      `${combineLabel} preview ready · ${result.runtimeTier || imageReady.runtimeTier || "wasm"} · ${Math.round(result.latencyMs)} ms`;
   } catch (error) {
     if (requestSequence !== objectSelectionRequestSequence) return;
     clearObjectSelectionProposal({ keepStrokes: true });
@@ -2490,7 +2497,7 @@ async function applyObjectSelectionProposal() {
     } catch (error) { await abortPendingActionPlan(error); return; }
   }
   const gray = combinedSelectionMask(new Uint8Array(objectSelectionProposal.gray),
-    $("selectionModeInput").value || "replace");
+    objectSelectionProposal.combineMode || "replace");
   clearObjectSelectionProposal();
   const result = await commitSelectionMask("Selecting object locally", gray);
   if (result !== DIAGNOSTIC_COMMAND_FAILED && pendingActionPlan) {
@@ -2719,7 +2726,8 @@ function actionPlanContext() {
   return snapshot ? { documentId: String(snapshot.documentId), stateId: String(snapshot.stateId),
     revision: Number(snapshot.revision), foregroundColor: $("brushColorInput").value,
     exportFormat: $("exportFormatSelect").value, exportFilename: exportBaseName(),
-    objectSource: $("objectSourceInput").value } : null;
+    objectSource: $("objectSourceInput").value,
+    hasSelection: Boolean(snapshot.selection?.length || snapshot.selectionMask) } : null;
 }
 
 function rebindPendingActionPlan() {
@@ -2883,6 +2891,19 @@ async function continueActionPlan() {
         $("objectSourceInput").value = step.source;
         $("stopActionPlanButton").hidden = false;
         $("stopActionPlanButton").disabled = false;
+        if (step.autoTarget === "center") {
+          clearObjectSelectionProposal();
+          objectPromptStrokes = automaticSubjectPromptStroke(snapshot.width, snapshot.height);
+          $("cancelObjectSelectionButton").disabled = false;
+          $("objectSelectionStatus").textContent =
+            "Finding the foreground subject locally…";
+          await inferObjectSelection(objectPromptStrokes, { combineMode: "replace" });
+          if (pendingActionPlan === run &&
+              proposalMatchesSnapshot(objectSelectionProposal, snapshot)) {
+            await applyObjectSelectionProposal();
+          }
+          return;
+        }
         $("objectSelectionStatus").textContent = "Add a prompt, review the preview, then Apply selection.";
         return;
       }
@@ -7359,9 +7380,12 @@ canvas.addEventListener("pointerdown", async (event) => {
   }
   if (canvasTool === "objectSelect") {
     const point = canvasPoint(event); const mode = $("objectPromptModeInput").value;
+    const combineMode = selectionCombineModeForPointer(event,
+      $("selectionModeInput").value || "replace");
     if (mode === "box") {
       canvas.setPointerCapture(event.pointerId);
-      objectSelectionDraft = { pointerId: event.pointerId, start: point, end: point };
+      objectSelectionDraft = { pointerId: event.pointerId, start: point, end: point,
+        combineMode };
       previewPolygon([point, point, point, point], true);
     } else {
       if (mode === "click") objectPromptStrokes = [];
@@ -7369,7 +7393,9 @@ canvas.addEventListener("pointerdown", async (event) => {
         brushMode: $("objectPromptPolarityInput").value === "negative" ? 2 : 1,
         point: clickPromptStroke(point, snapshot.width, snapshot.height) });
       $("cancelObjectSelectionButton").disabled = false;
-      void inferObjectSelection(objectPromptStrokes);
+      void inferObjectSelection(objectPromptStrokes, {
+        combineMode: mode === "click" ? combineMode : $("selectionModeInput").value || "replace",
+      });
     }
     return;
   }
@@ -7578,7 +7604,7 @@ canvas.addEventListener("pointerup", (event) => {
     if (Math.abs(draft.end.x - draft.start.x) >= 2 && Math.abs(draft.end.y - draft.start.y) >= 2) {
       objectPromptStrokes = [{ isCompleted: true, brushMode: 3, point: points }];
       $("cancelObjectSelectionButton").disabled = false;
-      void inferObjectSelection(objectPromptStrokes);
+      void inferObjectSelection(objectPromptStrokes, { combineMode: draft.combineMode });
     }
   }
   if (quickMaskDraft?.pointerId === event.pointerId) {

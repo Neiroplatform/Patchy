@@ -3,11 +3,13 @@ import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
   OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE, OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE,
   OBJECT_SEGMENTATION_REQUEST_TIMEOUT_MS, automaticDetailPromptStroke,
+  automaticSubjectPromptStroke,
   boundedObjectPreviewSize, chooseAutomaticDetailConfidence,
   clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
   scaleConfidenceMask, refineObjectSelectionMask, combineSelectionMasks, hasSelectableObjectCoverage, objectSegmentationDelegate,
   objectSelectionIdentityMatches,
   readResponseBytesWithProgress,
+  selectionCombineModeForPointer,
   shouldAttemptAutomaticDetailConfidence,
   withObjectSegmentationRuntimeFallback } from "../../sdk/engine/site/object-segmentation.mjs";
 import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlannerAdapter,
@@ -238,6 +240,16 @@ test("object proposals combine through replace, add, subtract and intersect cove
   assert.throws(() => combineSelectionMasks(current, new Uint8Array(2), "add"), /equal/);
 });
 
+test("Object Select captures Photoshop-style pointer modifier combine modes", () => {
+  assert.equal(selectionCombineModeForPointer({}, "replace"), "replace");
+  assert.equal(selectionCombineModeForPointer({}, "add"), "add");
+  assert.equal(selectionCombineModeForPointer({ shiftKey: true }, "replace"), "add");
+  assert.equal(selectionCombineModeForPointer({ altKey: true }, "replace"), "subtract");
+  assert.equal(selectionCombineModeForPointer({ shiftKey: true, altKey: true }, "replace"),
+    "intersect");
+  assert.throws(() => selectionCombineModeForPointer({}, "invalid"), /invalid/);
+});
+
 test("point and box prompts are normalized and bounded", () => {
   assert.deepEqual(normalizedPromptPoint({ x: -2, y: 200 }, 100, 100), { x: 0, y: 1 });
   assert.deepEqual(clickPromptStroke({ x: 50, y: 50 }, 100, 100),
@@ -246,6 +258,9 @@ test("point and box prompts are normalized and bounded", () => {
   const box = rectanglePromptStroke({ x: 80, y: 70 }, { x: 20, y: 10 }, 100, 100);
   assert.equal(box.length, 5); assert.deepEqual(box[0], { x: .2, y: .1 });
   assert.deepEqual(box.at(-1), box[0]);
+  assert.deepEqual(automaticSubjectPromptStroke(100, 80), [{ isCompleted: true, brushMode: 1,
+    point: clickPromptStroke({ x: 50, y: 40 }, 100, 80) }]);
+  assert.throws(() => automaticSubjectPromptStroke(0, 80), /positive integers/);
 });
 
 test("automatic click detail uses a bounded box and keeps only a valid tighter prompted object", () => {
@@ -312,6 +327,16 @@ test("RU and EN recipes cover background, geometry, fill and export safely", () 
     assert.deepEqual(plan.steps.map((step) => step.action), actions, prompt);
     assert.equal(validateActionPlan(plan, context), plan);
   }
+  const removeBackground = planPrompt("Удали фон", context);
+  assert.deepEqual(removeBackground.steps[0], { action: "select-object", requiresInput: false,
+    source: "visible", autoTarget: "center" });
+  assert.match(actionPlanSummary(removeBackground)[0], /automatic subject/);
+  const reuseSelection = planPrompt("Удали фон", { ...context, hasSelection: true });
+  assert.deepEqual(reuseSelection.steps.map((step) => step.action),
+    ["invert-selection", "cut-selection"]);
+  assert.throws(() => validateActionPlan({ ...removeBackground,
+    steps: [{ action: "select-object", requiresInput: false, source: "visible" }] }, context),
+  /bounded canvas or automatic subject/);
   assert.throws(() => planPrompt("нарисуй космический корабль", context),
     (error) => error instanceof ActionPlanClarificationError && error.code === "CLARIFICATION_REQUIRED");
   assert.throws(() => planPrompt("resize document", context), /Specify resize dimensions/);
