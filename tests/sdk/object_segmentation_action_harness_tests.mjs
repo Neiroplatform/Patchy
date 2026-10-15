@@ -14,7 +14,7 @@ import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentat
   withObjectSegmentationRuntimeFallback } from "../../sdk/engine/site/object-segmentation.mjs";
 import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlannerAdapter,
   actionPlanSummary, planPrompt, validateActionPlan } from "../../sdk/engine/site/action-harness.mjs";
-import { installSameOriginFetch,
+import { evictSameOriginCachedResponse, installSameOriginFetch,
   responseCacheCommit } from "../../sdk/engine/site/ml-network-policy.mjs";
 
 test("object proposals are exact-state bound", () => {
@@ -88,6 +88,36 @@ test("inference Worker fetch policy permits same-origin assets and blocks teleme
   restore();
   online = true; await scope.fetch("https://odml.pa.googleapis.com/v1/log");
   assert.equal(calls.length, 2);
+});
+
+test("asset cache recovery bypasses a poisoned response and replaces it from same-origin", async () => {
+  const modelUrl = "https://editor.test/runtime/model.task";
+  const stored = new Map([[modelUrl, new Response("stale")]]); const calls = [];
+  const scope = { location: { href: "https://editor.test/runtime/worker.mjs" },
+    caches: { async open() { return { async match(key) { return stored.get(key); },
+      async put(key, response) { stored.set(key, response); } }; } },
+    async fetch(input, init) {
+      calls.push({ input: String(input), cache: init?.cache });
+      return new Response("fresh");
+    } };
+  installSameOriginFetch(scope, { cacheName: "patchy-ml-recovery" });
+  assert.equal(await (await scope.fetch(modelUrl, { cache: "force-cache" })).text(), "stale");
+  const recovered = await scope.fetch(modelUrl, { cache: "reload" });
+  assert.equal(await recovered.clone().text(), "fresh");
+  await responseCacheCommit(recovered);
+  assert.deepEqual(calls, [{ input: modelUrl, cache: "reload" }]);
+  assert.equal(await (await scope.fetch(modelUrl, { cache: "force-cache" })).text(), "fresh");
+});
+
+test("asset cache eviction is same-origin and removes a failed immutable entry", async () => {
+  const modelUrl = "https://editor.test/runtime/model.task";
+  const stored = new Map([[modelUrl, new Response("truncated")]]);
+  const scope = { location: { href: "https://editor.test/runtime/worker.mjs" },
+    caches: { async open() { return { async delete(key) { return stored.delete(key); } }; } } };
+  assert.equal(await evictSameOriginCachedResponse(scope, "patchy-ml-recovery", modelUrl), true);
+  assert.equal(stored.has(modelUrl), false);
+  await assert.rejects(evictSameOriginCachedResponse(scope, "patchy-ml-recovery",
+    "https://remote.test/model.task"), { code: "REMOTE_FETCH_BLOCKED" });
 });
 
 test("model bytes stream with bounded progress while cache publication completes concurrently", async () => {

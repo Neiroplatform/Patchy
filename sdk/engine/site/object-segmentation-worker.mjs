@@ -1,4 +1,5 @@
-import { installSameOriginFetch, responseCacheCommit } from "./ml-network-policy.mjs";
+import { evictSameOriginCachedResponse, installSameOriginFetch,
+  responseCacheCommit } from "./ml-network-policy.mjs";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME,
   automaticDetailPromptStroke, boundedObjectPreviewSize, chooseAutomaticDetailConfidence,
   objectSegmentationDelegate, objectSelectionIdentityMatches,
@@ -6,8 +7,9 @@ import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME,
   shouldAttemptAutomaticDetailConfidence,
   withObjectSegmentationRuntimeFallback } from "./object-segmentation.mjs";
 
-installSameOriginFetch(globalThis, { cacheName:
-  `patchy-ml-${OBJECT_SEGMENTATION_MODEL.sha256.slice(0, 12)}-${OBJECT_SEGMENTATION_RUNTIME.bundleSha256.slice(0, 12)}` });
+const CACHE_NAME =
+  `patchy-ml-${OBJECT_SEGMENTATION_MODEL.sha256.slice(0, 12)}-${OBJECT_SEGMENTATION_RUNTIME.bundleSha256.slice(0, 12)}`;
+installSameOriginFetch(globalThis, { cacheName: CACHE_NAME });
 const { FilesetResolver, InteractiveSegmenter } =
   await import("./ml/mediapipe/vision_bundle.mjs");
 
@@ -21,6 +23,29 @@ let imageIdentity = null;
 const renderCanvas = new OffscreenCanvas(1, 1);
 const sourceCanvas = new OffscreenCanvas(1, 1);
 
+async function loadLocalAsset(path, expectedBytes, label, onProgress) {
+  let firstError = null;
+  for (const cache of ["force-cache", "reload"]) {
+    let response = null;
+    try {
+      response = await fetch(path, { cache, credentials: "same-origin" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = await readResponseBytesWithProgress(response, expectedBytes, onProgress);
+      await responseCacheCommit(response);
+      return bytes;
+    } catch (error) {
+      firstError ??= error;
+      if (response) await responseCacheCommit(response);
+      await evictSameOriginCachedResponse(globalThis, CACHE_NAME, path).catch(() => false);
+      if (cache === "force-cache") continue;
+      const reason = error instanceof Error ? error.message : String(error);
+      throw Object.assign(new Error(`Could not load local ${label} after cache recovery (${reason}).`,
+        { cause: firstError }), { code: "LOCAL_ASSET_LOAD_FAILED" });
+    }
+  }
+  throw firstError;
+}
+
 function preferredDelegate() {
   try {
     const canvas = new OffscreenCanvas(1, 1);
@@ -32,57 +57,58 @@ function preferredDelegate() {
 }
 
 async function assets(requestId) {
-  assetsPromise ??= (async () => {
-    self.postMessage({ type: "progress", requestId, phase: "runtime", ratio: .05 });
-    const files = await FilesetResolver.forVisionTasks(WASM_ROOT, true);
-    const wasmResponse = await fetch(files.wasmBinaryPath,
-      { cache: "force-cache", credentials: "same-origin" });
-    if (!wasmResponse.ok) throw new Error(`Could not load local runtime (${wasmResponse.status}).`);
-    let lastRuntimePercent = -1;
-    const wasmBinary = await readResponseBytesWithProgress(wasmResponse,
-      OBJECT_SEGMENTATION_RUNTIME.wasmModuleBytes, (ratio) => {
+  if (!assetsPromise) {
+    const pending = (async () => {
+      self.postMessage({ type: "progress", requestId, phase: "runtime", ratio: .05 });
+      const files = await FilesetResolver.forVisionTasks(WASM_ROOT, true);
+      let lastRuntimePercent = -1;
+      const wasmBinary = await loadLocalAsset(files.wasmBinaryPath,
+        OBJECT_SEGMENTATION_RUNTIME.wasmModuleBytes, "runtime", (ratio) => {
         const percent = Math.floor(ratio * 100);
         if (percent === lastRuntimePercent) return;
         lastRuntimePercent = percent;
         self.postMessage({ type: "progress", requestId, phase: "runtime", ratio: .05 + ratio * .1 });
-      });
-    await responseCacheCommit(wasmResponse);
-    self.postMessage({ type: "progress", requestId, phase: "model", ratio: .2 });
-    const response = await fetch(MODEL_PATH, { cache: "force-cache", credentials: "same-origin" });
-    if (!response.ok) throw new Error(`Could not load local model (${response.status}).`);
-    let lastPercent = -1;
-    const modelAssetBuffer = await readResponseBytesWithProgress(response,
-      OBJECT_SEGMENTATION_MODEL.bytes, (ratio) => {
+        });
+      self.postMessage({ type: "progress", requestId, phase: "model", ratio: .2 });
+      let lastPercent = -1;
+      const modelAssetBuffer = await loadLocalAsset(MODEL_PATH,
+        OBJECT_SEGMENTATION_MODEL.bytes, "model", (ratio) => {
         const percent = Math.floor(ratio * 100);
         if (percent === lastPercent) return;
         lastPercent = percent;
         self.postMessage({ type: "progress", requestId, phase: "model", ratio: .2 + ratio * .4 });
-      });
-    await responseCacheCommit(response);
-    return { files, wasmBinary, modelAssetBuffer };
-  })();
+        });
+      return { files, wasmBinary, modelAssetBuffer };
+    })();
+    assetsPromise = pending;
+    pending.catch(() => { if (assetsPromise === pending) assetsPromise = null; });
+  }
   return assetsPromise;
 }
 
 async function segmenter(requestId) {
-  segmenterPromise ??= (async () => {
-    const loaded = await assets(requestId);
-    self.postMessage({ type: "progress", requestId, phase: "initializing", ratio: .65 });
-    if (!forceWasm && preferredDelegate() === "gpu") {
-      try {
-        self.Module = { wasmBinary: loaded.wasmBinary.slice() };
-        const engine = await InteractiveSegmenter.createFromOptions(loaded.files, {
-          baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice(), delegate: "GPU" }, canvas: renderCanvas,
-        });
-        runtimeTier = "gpu"; return engine;
-      } catch { forceWasm = true; }
-    }
-    self.Module = { wasmBinary: loaded.wasmBinary.slice() };
-    const engine = await InteractiveSegmenter.createFromOptions(loaded.files, {
-      baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice() }, canvas: renderCanvas,
-    });
-    runtimeTier = "wasm"; return engine;
-  })();
+  if (!segmenterPromise) {
+    const pending = (async () => {
+      const loaded = await assets(requestId);
+      self.postMessage({ type: "progress", requestId, phase: "initializing", ratio: .65 });
+      if (!forceWasm && preferredDelegate() === "gpu") {
+        try {
+          self.Module = { wasmBinary: loaded.wasmBinary.slice() };
+          const engine = await InteractiveSegmenter.createFromOptions(loaded.files, {
+            baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice(), delegate: "GPU" }, canvas: renderCanvas,
+          });
+          runtimeTier = "gpu"; return engine;
+        } catch { forceWasm = true; }
+      }
+      self.Module = { wasmBinary: loaded.wasmBinary.slice() };
+      const engine = await InteractiveSegmenter.createFromOptions(loaded.files, {
+        baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice() }, canvas: renderCanvas,
+      });
+      runtimeTier = "wasm"; return engine;
+    })();
+    segmenterPromise = pending;
+    pending.catch(() => { if (segmenterPromise === pending) segmenterPromise = null; });
+  }
   return segmenterPromise;
 }
 
@@ -164,7 +190,8 @@ self.addEventListener("message", async ({ data }) => {
       automaticDetailApplied: result.automaticDetailApplied,
       latencyMs: performance.now() - started, runtimeTier }, [result.confidence.buffer]);
   } catch (error) {
-    self.postMessage({ type: "error", requestId: data.requestId, code: "INFERENCE_FAILED",
+    self.postMessage({ type: "error", requestId: data.requestId,
+      code: error?.code || "INFERENCE_FAILED",
       message: error instanceof Error ? error.message : String(error) });
   }
 });

@@ -93,16 +93,44 @@ try {
   assert.equal(allRequests.some((url) => url.includes("magic-touch-int8-v1.task")), false,
     "selecting Object Select must not download the optional model before a prompt");
 
+  const poisonedCache = await page.evaluate(async () => {
+    const { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME } =
+      await import("./object-segmentation.mjs");
+    const cacheName = `patchy-ml-${OBJECT_SEGMENTATION_MODEL.sha256.slice(0, 12)}-${
+      OBJECT_SEGMENTATION_RUNTIME.bundleSha256.slice(0, 12)}`;
+    const modelUrl = new URL(OBJECT_SEGMENTATION_MODEL.path, location.href).href;
+    const cache = await caches.open(cacheName);
+    await cache.put(modelUrl, new Response(new Uint8Array(32), {
+      status: 200, headers: { "Content-Type": "application/octet-stream" },
+    }));
+    return { cacheName, modelUrl, cachedBytes: (await (await cache.match(modelUrl)).arrayBuffer()).byteLength };
+  });
+  assert.equal(poisonedCache.cachedBytes, 32,
+    "the cache-recovery fixture did not install a truncated model response");
+  await page.route("**/magic-touch-int8-v1.task", async (route) => route.fulfill({
+    status: 200, contentType: "application/octet-stream", body: Buffer.alloc(32),
+  }), { times: 1 });
+
   const inference = await page.evaluate(async () => {
     const { ObjectSegmentationClient, clickPromptStroke, rectanglePromptStroke } =
       await import("./object-segmentation.mjs");
     const source = new OffscreenCanvas(96, 96); const target = source.getContext("2d");
     target.fillStyle = "#fff"; target.fillRect(0, 0, 96, 96);
     target.fillStyle = "#111"; target.fillRect(24, 20, 48, 56);
-    const bitmap = source.transferToImageBitmap();
     const identity = { documentId: "fixture", stateId: "1", revision: 0, width: 96, height: 96 };
     const client = new ObjectSegmentationClient(); const progress = [];
-    try { await client.setImage(bitmap, identity, ({ phase }) => progress.push(phase)); }
+    let firstFailure = null;
+    try {
+      await client.setImage(source.transferToImageBitmap(), identity,
+        ({ phase }) => progress.push(phase));
+    } catch (error) {
+      firstFailure = { code: error.code, message: error.message };
+    }
+    const retry = new OffscreenCanvas(96, 96); const retryTarget = retry.getContext("2d");
+    retryTarget.fillStyle = "#fff"; retryTarget.fillRect(0, 0, 96, 96);
+    retryTarget.fillStyle = "#111"; retryTarget.fillRect(24, 20, 48, 56);
+    try { await client.setImage(retry.transferToImageBitmap(), identity,
+      ({ phase }) => progress.push(phase)); }
     catch (error) { throw new Error(`${error.message}; progress=${progress.join(",")}`); }
     const positive = { isCompleted: true, brushMode: 1,
       point: clickPromptStroke({ x: 48, y: 48 }, 96, 96) };
@@ -116,11 +144,13 @@ try {
     const clickRange = range(result.confidence); const refinedRange = range(refined.confidence);
     const boxRange = range(boxed.confidence);
     client.close();
-    return { width: result.width, height: result.height, ...clickRange,
+    return { width: result.width, height: result.height, ...clickRange, firstFailure,
       refinedRange, boxRange, latencyMs: result.latencyMs,
       refinementMs: refined.latencyMs, boxMs: boxed.latencyMs };
   });
   assert.ok(inference.width > 0 && inference.height > 0);
+  assert.equal(inference.firstFailure?.code, "LOCAL_ASSET_LOAD_FAILED", JSON.stringify(inference));
+  assert.match(inference.firstFailure?.message || "", /after cache recovery/i);
   assert.ok(inference.maximum > inference.minimum, JSON.stringify(inference));
   assert.ok(inference.refinedRange.maximum > inference.refinedRange.minimum, JSON.stringify(inference));
   assert.ok(inference.boxRange.maximum > inference.boxRange.minimum, JSON.stringify(inference));
