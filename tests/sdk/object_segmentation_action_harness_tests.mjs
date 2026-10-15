@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
-  OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE, automaticDetailPromptStroke,
+  OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE, OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE,
+  automaticDetailPromptStroke,
   boundedObjectPreviewSize, chooseAutomaticDetailConfidence,
   clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
   scaleConfidenceMask, refineObjectSelectionMask, combineSelectionMasks, hasSelectableObjectCoverage, objectSegmentationDelegate,
@@ -248,15 +249,18 @@ test("point and box prompts are normalized and bounded", () => {
 
 test("automatic click detail uses a bounded box and keeps only a valid tighter prompted object", () => {
   const click = [{ isCompleted: true, brushMode: 1,
-    point: clickPromptStroke({ x: 80, y: 50 }, 200, 100) }];
-  const detailPrompt = automaticDetailPromptStroke(click, 200, 100);
+    point: clickPromptStroke({ x: 320, y: 200 }, 800, 400) }];
+  assert.equal(OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE, 256);
+  const detailPrompt = automaticDetailPromptStroke(click, 800, 400);
   assert.equal(detailPrompt.length, 1); assert.equal(detailPrompt[0].brushMode, 3);
-  assert.deepEqual(detailPrompt[0].point[0], { x: .34, y: .38 });
-  assert.deepEqual(detailPrompt[0].point[2], { x: .46, y: .62 });
-  assert.equal(automaticDetailPromptStroke([...click, click[0]], 200, 100), null);
+  assert.deepEqual(detailPrompt[0].point[0], { x: .3625, y: .425 });
+  assert.deepEqual(detailPrompt[0].point[2], { x: .4375, y: .575 });
+  assert.equal(automaticDetailPromptStroke(click, 800, 200), null,
+    "low-resolution previews must not pay for a second semantic solve");
+  assert.equal(automaticDetailPromptStroke([...click, click[0]], 800, 400), null);
   assert.equal(automaticDetailPromptStroke([{ isCompleted: true, brushMode: 1,
-    point: rectanglePromptStroke({ x: 10, y: 10 }, { x: 90, y: 90 }, 200, 100) }],
-  200, 100), null);
+    point: rectanglePromptStroke({ x: 10, y: 10 }, { x: 90, y: 90 }, 800, 400) }],
+  800, 400), null);
 
   const width = 20; const height = 10; const primary = new Float32Array(width * height);
   const detail = new Float32Array(width * height);

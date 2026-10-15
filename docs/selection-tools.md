@@ -69,14 +69,17 @@ image binding, or segmentation fails, the Worker disposes that delegate and
 retries the same local image once with the WASM delegate. A WASM failure remains
 fail-closed; no remote inference or third-party request is allowed.
 
-A single click first runs the ordinary proposal. If that proposal misses the
-prompt or covers more than 20% of the preview, the Worker automatically makes
-one additional bounded box proposal around the click. The detail proposal is
-accepted only when it includes the prompt, covers at least four model pixels,
-stays below 20% of the preview, and—when the broad proposal includes the
-prompt—is at least 28% smaller. Explicit box and include/exclude prompts are not
-rewritten. This is what lets a watch or microphone nested on a person remain a
-separate target without degrading whole-person clicks.
+A single click first runs the ordinary proposal. On retained previews with at
+least 256 pixels on the short edge, if that proposal misses the prompt or covers
+more than 20% of the preview, the Worker automatically makes one additional
+bounded box proposal around the click. Smaller previews keep the accepted
+single-pass path because another semantic solve cannot recover useful nested
+detail at that resolution and would only double WASM latency. The detail
+proposal is accepted only when it includes the prompt, covers at least four
+model pixels, stays below 20% of the preview, and—when the broad proposal
+includes the prompt—is at least 28% smaller. Explicit box and include/exclude
+prompts are not rewritten. This is what lets a watch or microphone nested on a
+person remain a separate target without degrading whole-person clicks.
 
 ## Quick Select: solve-on-release is a patent constraint, not a UX choice
 

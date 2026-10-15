@@ -12,6 +12,7 @@ export const OBJECT_SEGMENTATION_RUNTIME = Object.freeze({
   wasmModuleBytes: 12997272,
 });
 export const OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE = 1024;
+export const OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE = 256;
 
 export async function readResponseBytesWithProgress(response, expectedBytes, onProgress = null) {
   if (!(response instanceof Response) || !Number.isInteger(expectedBytes) || expectedBytes <= 0)
@@ -86,6 +87,11 @@ export function automaticDetailPromptStroke(strokes, width, height) {
       !Array.isArray(strokes[0].point) || strokes[0].point.length !== 5) return null;
   if (![width, height].every((value) => Number.isInteger(value) && value > 0))
     throw new RangeError("detail prompt dimensions must be positive integers");
+  // A second semantic solve cannot reveal a nested object when the retained
+  // preview itself has less than 256 pixels on its short edge. Keep the
+  // accepted single-pass path for those small sources instead of doubling
+  // WASM latency without adding usable detail.
+  if (Math.min(width, height) < OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE) return null;
   const first = strokes[0].point[0]; const last = strokes[0].point.at(-1);
   if (first?.x === last?.x && first?.y === last?.y) return null;
   const point = strokes[0].point[2];
