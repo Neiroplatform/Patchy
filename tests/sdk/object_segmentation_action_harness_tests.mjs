@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
   clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
-  scaleConfidenceMask, combineSelectionMasks, objectSegmentationDelegate,
+  scaleConfidenceMask, refineObjectSelectionMask, combineSelectionMasks, objectSegmentationDelegate,
   objectSelectionIdentityMatches,
   readResponseBytesWithProgress } from "../../sdk/engine/site/object-segmentation.mjs";
 import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlannerAdapter,
@@ -138,6 +138,42 @@ test("confidence masks scale deterministically to document coverage", () => {
   assert.deepEqual([...scaleConfidenceMask(new Float32Array([0, .25, .5, 1]), 2, 2, 4, 2)],
     [0, 0, 64, 64, 128, 128, 255, 255]);
   assert.throws(() => scaleConfidenceMask(new Float32Array(3), 2, 2, 2, 2), /invalid/);
+});
+
+test("automatic object-mask cleanup fills pinholes and removes detached noise", () => {
+  const width = 15; const height = 15; const source = new Uint8Array(width * height);
+  for (let y = 3; y <= 11; ++y)
+    for (let x = 3; x <= 11; ++x) source[y * width + x] = 255;
+  source[7 * width + 7] = 0;
+  source[0] = 255;
+  const refined = refineObjectSelectionMask(source, width, height);
+  assert.equal(refined[7 * width + 7], 255, "small enclosed hole was not filled");
+  assert.equal(refined[0], 0, "detached one-pixel island was not removed");
+  assert.equal(refined[6 * width + 6], 255, "main object was damaged");
+});
+
+test("automatic object-mask cleanup prunes weak spurs but preserves confident fine detail", () => {
+  const width = 21; const height = 21; const source = new Uint8Array(width * height);
+  for (let y = 5; y <= 15; ++y)
+    for (let x = 5; x <= 15; ++x) source[y * width + x] = 255;
+  source[10 * width + 16] = 160;
+  source[10 * width + 17] = 160;
+  source[8 * width + 16] = 240;
+  source[8 * width + 17] = 240;
+  const refined = refineObjectSelectionMask(source, width, height);
+  assert.equal(refined[10 * width + 17], 0, "low-confidence protrusion survived cleanup");
+  assert.equal(refined[8 * width + 17], 240, "high-confidence fine detail was removed");
+});
+
+test("automatic object-mask cleanup leaves large semantic openings intact", () => {
+  const width = 30; const height = 30; const source = new Uint8Array(width * height);
+  for (let y = 4; y <= 25; ++y)
+    for (let x = 4; x <= 25; ++x) source[y * width + x] = 255;
+  for (let y = 10; y <= 19; ++y)
+    for (let x = 10; x <= 19; ++x) source[y * width + x] = 0;
+  const refined = refineObjectSelectionMask(source, width, height);
+  assert.equal(refined[15 * width + 15], 0,
+    "large real opening was incorrectly filled as a pinhole");
 });
 
 test("object proposals combine through replace, add, subtract and intersect coverage", () => {

@@ -143,9 +143,11 @@ try {
         { isCompleted: true, brushMode: 2,
           point: module.clickPromptStroke({ x: 8, y: 8 }, width, height) }], identity);
       const refinementMs = performance.now() - refinementStarted;
+      const cleaned = module.scaleConfidenceMask(refined.confidence, refined.width, refined.height,
+        width, height);
       let intersection = 0; let union = 0;
       for (let pixel = 0; pixel < width * height; ++pixel) {
-        const predicted = refined.confidence[pixel] >= .5;
+        const predicted = cleaned[pixel] >= 128;
         const actual = generated.expected[pixel * 4 + 3] >= 128;
         if (predicted && actual) intersection += 1;
         if (predicted || actual) union += 1;

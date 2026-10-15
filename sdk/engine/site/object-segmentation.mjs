@@ -61,18 +61,114 @@ export function objectSelectionIdentityMatches(left, right) {
     leftLayers.every((value, index) => value === rightLayers[index]);
 }
 
+function binaryErodeCross(source, width, height) {
+  const result = new Uint8Array(source.length);
+  for (let y = 1; y + 1 < height; ++y) {
+    for (let x = 1; x + 1 < width; ++x) {
+      const index = y * width + x;
+      result[index] = source[index] && source[index - 1] && source[index + 1] &&
+        source[index - width] && source[index + width] ? 1 : 0;
+    }
+  }
+  return result;
+}
+
+function binaryDilateCross(source, width, height) {
+  const result = new Uint8Array(source.length);
+  for (let y = 0; y < height; ++y) {
+    for (let x = 0; x < width; ++x) {
+      const index = y * width + x;
+      result[index] = source[index] || (x > 0 && source[index - 1]) ||
+        (x + 1 < width && source[index + 1]) || (y > 0 && source[index - width]) ||
+        (y + 1 < height && source[index + width]) ? 1 : 0;
+    }
+  }
+  return result;
+}
+
+function maskComponents(binary, width, height, foreground, diagonals = true) {
+  const visited = new Uint8Array(binary.length); const components = [];
+  const queue = new Int32Array(binary.length);
+  for (let start = 0; start < binary.length; ++start) {
+    if (visited[start] || Boolean(binary[start]) !== foreground) continue;
+    let head = 0; let tail = 0; let touchesBorder = false;
+    queue[tail++] = start; visited[start] = 1;
+    while (head < tail) {
+      const index = queue[head++]; const x = index % width; const y = Math.floor(index / width);
+      if (x === 0 || y === 0 || x + 1 === width || y + 1 === height) touchesBorder = true;
+      for (let offsetY = -1; offsetY <= 1; ++offsetY) {
+        const nextY = y + offsetY; if (nextY < 0 || nextY >= height) continue;
+        for (let offsetX = -1; offsetX <= 1; ++offsetX) {
+          if (offsetX === 0 && offsetY === 0) continue;
+          if (!diagonals && offsetX !== 0 && offsetY !== 0) continue;
+          const nextX = x + offsetX; if (nextX < 0 || nextX >= width) continue;
+          const next = nextY * width + nextX;
+          if (!visited[next] && Boolean(binary[next]) === foreground) {
+            visited[next] = 1; queue[tail++] = next;
+          }
+        }
+      }
+    }
+    components.push({ pixels: queue.slice(0, tail), touchesBorder });
+  }
+  return components;
+}
+
+export function refineObjectSelectionMask(source, width, height) {
+  if (!(source instanceof Uint8Array) || source.length !== width * height)
+    throw new TypeError("invalid object selection mask");
+  if (![width, height].every((value) => Number.isInteger(value) && value > 0))
+    throw new RangeError("mask dimensions must be positive integers");
+  const result = new Uint8Array(source);
+  if (width < 5 || height < 5) return result;
+
+  const binary = Uint8Array.from(source, (coverage) => coverage >= 128 ? 1 : 0);
+  const opened = binaryDilateCross(binaryErodeCross(binary, width, height), width, height);
+  for (let index = 0; index < binary.length; ++index) {
+    // A one-pixel, low-confidence spur is usually model noise. Preserve strong
+    // fine detail (hair, whiskers and fingers) even when opening removes it.
+    if (binary[index] && !opened[index] && source[index] < 208) binary[index] = 0;
+  }
+
+  const foreground = maskComponents(binary, width, height, true);
+  const largestArea = foreground.reduce((largest, component) =>
+    Math.max(largest, component.pixels.length), 0);
+  const islandLimit = Math.max(4, Math.floor(Math.min(binary.length * .0005,
+    largestArea * .02)));
+  for (const component of foreground) {
+    if (component.pixels.length >= islandLimit) continue;
+    for (const index of component.pixels) binary[index] = 0;
+  }
+
+  const selectedArea = binary.reduce((sum, value) => sum + value, 0);
+  const holeLimit = Math.max(4, Math.floor(Math.min(binary.length * .0035,
+    selectedArea * .015)));
+  for (const component of maskComponents(binary, width, height, false, false)) {
+    if (component.touchesBorder || component.pixels.length > holeLimit) continue;
+    for (const index of component.pixels) binary[index] = 1;
+  }
+
+  for (let index = 0; index < result.length; ++index) {
+    if (!binary[index]) result[index] = 0;
+    else if (source[index] < 128) result[index] = 255;
+  }
+  return result;
+}
+
 export function scaleConfidenceMask(source, sourceWidth, sourceHeight, width, height) {
   if (!(source instanceof Float32Array) || source.length !== sourceWidth * sourceHeight)
     throw new TypeError("invalid confidence mask");
   if (![sourceWidth, sourceHeight, width, height].every((value) => Number.isInteger(value) && value > 0))
     throw new RangeError("mask dimensions must be positive integers");
+  const sourceMask = refineObjectSelectionMask(Uint8Array.from(source,
+    (coverage) => Math.round(Math.max(0, Math.min(1, coverage)) * 255)),
+  sourceWidth, sourceHeight);
   const result = new Uint8Array(width * height);
   for (let y = 0; y < height; ++y) {
     const sourceY = Math.min(sourceHeight - 1, Math.floor((y + .5) * sourceHeight / height));
     for (let x = 0; x < width; ++x) {
       const sourceX = Math.min(sourceWidth - 1, Math.floor((x + .5) * sourceWidth / width));
-      result[y * width + x] = Math.round(Math.max(0, Math.min(1,
-        source[sourceY * sourceWidth + sourceX])) * 255);
+      result[y * width + x] = sourceMask[sourceY * sourceWidth + sourceX];
     }
   }
   return result;
