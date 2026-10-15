@@ -29,7 +29,7 @@ import { installHistoryDeck } from "./history-deck.mjs";
 import { installDockLayout } from "./dock-layout.mjs";
 import { BUNDLED_FONT_CATALOG, BUNDLED_FONT_FAMILIES,
   loadBundledFontFamily } from "./font-catalog.mjs";
-import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient, clickPromptStroke, combineSelectionMasks, proposalMatchesSnapshot,
+import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient, clickPromptStroke, combineSelectionMasks, hasSelectableObjectCoverage, proposalMatchesSnapshot,
   objectSelectionIdentityMatches, rectanglePromptStroke, scaleConfidenceMask } from "./object-segmentation.mjs";
 import { actionPlanSummary, planPrompt, validateActionPlan } from "./action-harness.mjs";
 
@@ -2443,6 +2443,8 @@ async function inferObjectSelection(strokes) {
         else if (gray[index] > 176) gray[index] = 255;
       }
     }
+    if (!hasSelectableObjectCoverage(gray))
+      throw new RangeError("Object selection proposal has no applicable foreground.");
     const confidenceMean = result.confidence.reduce((sum, value) => sum + value, 0) /
       Math.max(1, result.confidence.length);
     objectSelectionProposal = { ...identity, proposalId: `${identity.stateId}:${requestSequence}`,
@@ -2467,8 +2469,9 @@ async function inferObjectSelection(strokes) {
     }
     $("objectSelectionStatus").textContent =
       "Object preview unavailable · use Magic Wand, Pen or Marquee on this device";
-    showError("Object Select unavailable",
-      new Error(`${error?.message || error} Use Magic Wand, Pen or Marquee instead.`));
+    const unavailable = new Error(`${error?.message || error} Use Magic Wand, Pen or Marquee instead.`);
+    if (pendingActionPlan) await abortPendingActionPlan(unavailable);
+    else showError("Object Select unavailable", unavailable);
   }
 }
 

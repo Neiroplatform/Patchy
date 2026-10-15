@@ -61,6 +61,11 @@ export function objectSelectionIdentityMatches(left, right) {
     leftLayers.every((value, index) => value === rightLayers[index]);
 }
 
+export function hasSelectableObjectCoverage(source) {
+  if (!(source instanceof Uint8Array)) throw new TypeError("invalid object selection mask");
+  return source.some((coverage) => coverage >= 128);
+}
+
 function binaryErodeCross(source, width, height) {
   const result = new Uint8Array(source.length);
   for (let y = 1; y + 1 < height; ++y) {
@@ -153,17 +158,15 @@ export function refineObjectSelectionMask(source, width, height) {
     for (const index of component.pixels) binary[index] = 1;
   }
 
-  let hadCoverage = false; let hasCoverage = false;
+  const hadSelectableCoverage = hasSelectableObjectCoverage(source);
   for (let index = 0; index < result.length; ++index) {
-    hadCoverage ||= source[index] > 0;
     // Topology is binary, but the proposal remains Gray8. Preserve ordinary
     // antialiasing/soft confidence unless cleanup explicitly removed a
     // foreground pixel, and synthesize opaque coverage only for a filled hole.
     if (originalBinary[index] && !binary[index]) result[index] = 0;
     else if (!originalBinary[index] && binary[index]) result[index] = 255;
-    hasCoverage ||= result[index] > 0;
   }
-  if (hadCoverage && !hasCoverage)
+  if (hadSelectableCoverage && !hasSelectableObjectCoverage(result))
     throw new RangeError("object selection cleanup emptied proposal");
   return result;
 }

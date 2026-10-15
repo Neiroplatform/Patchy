@@ -1255,6 +1255,7 @@ const RU = new Map(Object.entries({
   "Crop recipe requires a committed selection.": "Для кадрирования требуется применённое выделение.",
   "Document changed while preparing the preview.": "Документ изменился во время подготовки предпросмотра.",
   "Document changed while segmenting the object.": "Документ изменился во время выделения объекта.",
+  "Object selection proposal has no applicable foreground.": "В предложенном выделении объекта нет применимой области переднего плана.",
   "Object selection could not be committed.": "Не удалось применить выделение объекта.",
   "The filter recipe requires a committed selection.": "Для фильтра требуется применённое выделение.",
   "The filter recipe requires one visible unlocked pixel layer.": "Для фильтра нужен один видимый незаблокированный пиксельный слой.",

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
   clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
-  scaleConfidenceMask, refineObjectSelectionMask, combineSelectionMasks, objectSegmentationDelegate,
+  scaleConfidenceMask, refineObjectSelectionMask, combineSelectionMasks, hasSelectableObjectCoverage, objectSegmentationDelegate,
   objectSelectionIdentityMatches,
   readResponseBytesWithProgress } from "../../sdk/engine/site/object-segmentation.mjs";
 import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlannerAdapter,
@@ -186,8 +186,11 @@ test("automatic object-mask cleanup preserves the primary tiny object and fails 
     assert.equal(refined[4 * width + 3], 255, `primary ${size}-pixel object was removed`);
     if (size > 1) assert.equal(refined[0], 0, "smaller detached noise survived");
   }
-  const weakOnly = new Uint8Array(width * height); weakOnly[4 * width + 4] = 160;
-  assert.throws(() => refineObjectSelectionMask(weakOnly, width, height), /emptied proposal/);
+  const weakHalo = new Uint8Array(width * height); weakHalo[4 * width + 4] = 160;
+  for (const [x, y] of [[4, 3], [3, 4], [5, 4], [4, 5]]) weakHalo[y * width + x] = 64;
+  assert.throws(() => refineObjectSelectionMask(weakHalo, width, height), /emptied proposal/);
+  assert.equal(hasSelectableObjectCoverage(new Uint8Array([0, 64, 127])), false);
+  assert.equal(hasSelectableObjectCoverage(new Uint8Array([0, 128])), true);
 });
 
 test("automatic object-mask cleanup leaves large semantic openings intact", () => {
