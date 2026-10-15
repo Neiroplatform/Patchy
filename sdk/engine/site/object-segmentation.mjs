@@ -11,6 +11,7 @@ export const OBJECT_SEGMENTATION_RUNTIME = Object.freeze({
   wasmModuleSha256: "ee03b14a878e6c3c053a1bfa62e166dc45244be54dc0bbe61c578f710b771f6a",
   wasmModuleBytes: 12997272,
 });
+export const OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE = 1024;
 
 export async function readResponseBytesWithProgress(response, expectedBytes, onProgress = null) {
   if (!(response instanceof Response) || !Number.isInteger(expectedBytes) || expectedBytes <= 0)
@@ -42,6 +43,16 @@ export function objectSegmentationDelegate(renderer) {
   return "gpu";
 }
 
+export async function withObjectSegmentationRuntimeFallback(runtimeTier, run, fallback) {
+  if (typeof run !== "function" || typeof fallback !== "function")
+    throw new TypeError("object segmentation runtime operations are required");
+  try { return await run(); }
+  catch (error) {
+    if (runtimeTier !== "gpu") throw error;
+    return fallback(error);
+  }
+}
+
 export function proposalMatchesSnapshot(proposal, snapshot) {
   return Boolean(proposal && snapshot &&
     proposal.documentId === String(snapshot.documentId) &&
@@ -59,6 +70,68 @@ export function objectSelectionIdentityMatches(left, right) {
   const rightLayers = (right.sourceLayerIds || []).map(String);
   return leftLayers.length === rightLayers.length &&
     leftLayers.every((value, index) => value === rightLayers[index]);
+}
+
+export function boundedObjectPreviewSize(width, height,
+    maxLongEdge = OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE) {
+  if (![width, height, maxLongEdge].every((value) => Number.isInteger(value) && value > 0))
+    throw new RangeError("object preview dimensions must be positive integers");
+  const scale = Math.min(1, maxLongEdge / Math.max(width, height));
+  return { width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)) };
+}
+
+export function automaticDetailPromptStroke(strokes, width, height) {
+  if (!Array.isArray(strokes) || strokes.length !== 1 || strokes[0]?.brushMode !== 1 ||
+      !Array.isArray(strokes[0].point) || strokes[0].point.length !== 5) return null;
+  if (![width, height].every((value) => Number.isInteger(value) && value > 0))
+    throw new RangeError("detail prompt dimensions must be positive integers");
+  const first = strokes[0].point[0]; const last = strokes[0].point.at(-1);
+  if (first?.x === last?.x && first?.y === last?.y) return null;
+  const point = strokes[0].point[2];
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+  const center = { x: Math.max(0, Math.min(width - 1, point.x * width)),
+    y: Math.max(0, Math.min(height - 1, point.y * height)) };
+  const half = Math.max(12, Math.min(96, Math.round(Math.min(width, height) * .075)));
+  return [{ isCompleted: true, brushMode: 3,
+    point: rectanglePromptStroke({ x: center.x - half, y: center.y - half },
+      { x: center.x + half, y: center.y + half }, width, height) }];
+}
+
+export function chooseAutomaticDetailConfidence(primary, detail, width, height, prompt) {
+  if (!(primary instanceof Float32Array) || !(detail instanceof Float32Array) ||
+      primary.length !== width * height || detail.length !== primary.length)
+    throw new TypeError("automatic detail masks must match their dimensions");
+  if (!prompt || !Number.isFinite(prompt.x) || !Number.isFinite(prompt.y))
+    throw new TypeError("automatic detail prompt is invalid");
+  const x = Math.max(0, Math.min(width - 1, Math.floor(prompt.x * width)));
+  const y = Math.max(0, Math.min(height - 1, Math.floor(prompt.y * height)));
+  const promptIndex = y * width + x;
+  let primaryArea = 0; let detailArea = 0;
+  for (let index = 0; index < primary.length; ++index) {
+    if (primary[index] >= .5) primaryArea += 1;
+    if (detail[index] >= .5) detailArea += 1;
+  }
+  const detailContainsPrompt = detail[promptIndex] >= .5;
+  const primaryContainsPrompt = primary[promptIndex] >= .5;
+  const detailIsBounded = detailArea <= primary.length * .2;
+  const detailIsTighter = !primaryContainsPrompt || primaryArea === 0 || detailArea <= primaryArea * .72;
+  const automaticDetailApplied = detailContainsPrompt && detailArea >= 4 &&
+    detailIsBounded && detailIsTighter;
+  return { confidence: automaticDetailApplied ? detail : primary,
+    automaticDetailApplied, primaryArea, detailArea };
+}
+
+export function shouldAttemptAutomaticDetailConfidence(primary, width, height, prompt) {
+  if (!(primary instanceof Float32Array) || primary.length !== width * height)
+    throw new TypeError("automatic detail mask must match its dimensions");
+  if (!prompt || !Number.isFinite(prompt.x) || !Number.isFinite(prompt.y)) return false;
+  const x = Math.max(0, Math.min(width - 1, Math.floor(prompt.x * width)));
+  const y = Math.max(0, Math.min(height - 1, Math.floor(prompt.y * height)));
+  if (primary[y * width + x] < .5) return true;
+  let area = 0;
+  for (const coverage of primary) if (coverage >= .5) area += 1;
+  return area > primary.length * .2;
 }
 
 export function hasSelectableObjectCoverage(source) {

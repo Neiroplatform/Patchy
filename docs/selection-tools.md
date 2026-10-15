@@ -54,6 +54,30 @@ mutate the document; the next canvas click fills the existing selection, or
 first creates a contiguous Magic-Wand-equivalent colour selection when none is
 active and then fills that target.
 
+## Self-hosted Object Select runtime and nested-detail recovery
+
+Object Select remains a local, same-origin proposal tool: the browser Worker
+owns the MediaPipe runtime and model, while the canonical selection is committed
+only through the existing exact-state Worker/engine command. Before initializing
+the delegate, the Worker scales the source to an aspect-preserving preview with
+a maximum 1024-pixel long edge and fixes the inference canvas to those
+dimensions. This ordering is required: resizing a GPU delegate's WebGL canvas
+after initialization can invalidate its graph state.
+
+GPU is an optimization, not a correctness dependency. If GPU initialization,
+image binding, or segmentation fails, the Worker disposes that delegate and
+retries the same local image once with the WASM delegate. A WASM failure remains
+fail-closed; no remote inference or third-party request is allowed.
+
+A single click first runs the ordinary proposal. If that proposal misses the
+prompt or covers more than 20% of the preview, the Worker automatically makes
+one additional bounded box proposal around the click. The detail proposal is
+accepted only when it includes the prompt, covers at least four model pixels,
+stays below 20% of the preview, and—when the broad proposal includes the
+prompt—is at least 28% smaller. Explicit box and include/exclude prompts are not
+rewritten. This is what lets a watch or microphone nested on a person remain a
+separate target without degrading whole-person clicks.
+
 ## Quick Select: solve-on-release is a patent constraint, not a UX choice
 
 The Quick Select tool (`CanvasTool::QuickSelect`, Shift+W, flyout shared with the Magic Wand) segments each brush stroke ONCE on mouse-release: the drag only accumulates a seed footprint (`stamp_quick_select_segment`) and draws a translucent capsule overlay, then `finish_quick_select_stroke` runs the cut and commits one undo entry. **Do not add live per-mouse-move classification or selection preview before Nov 3, 2029**: Adobe's US 8050498 ("Live coherent image selection", term-adjusted) claims classify-and-display while brush input is being received. Related design rules, all deliberate: Enhance Edge is purely geometric majority smoothing (US 8013870 claims local-color-model edge opacity until 2028), the solve uses ONE window per stroke (US 8121407 claims overlapping-tile decomposition until 2030), and there is no input-driven auto-switching between segmentation algorithms (US 10698588). The foundations used are expired: Boykov-Jolly seeded min-cut (US 6973212), GrabCut color models (US 7660463), MSR Paint Selection (US 8452087, fee-lapsed). `ui_quick_select_stroke_selects_object_and_is_undoable` asserts the no-mid-drag-selection behavior, so a live-preview change will fail it.

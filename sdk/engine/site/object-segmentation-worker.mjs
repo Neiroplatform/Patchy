@@ -1,7 +1,10 @@
 import { installSameOriginFetch, responseCacheCommit } from "./ml-network-policy.mjs";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME,
+  automaticDetailPromptStroke, boundedObjectPreviewSize, chooseAutomaticDetailConfidence,
   objectSegmentationDelegate, objectSelectionIdentityMatches,
-  readResponseBytesWithProgress } from "./object-segmentation.mjs";
+  readResponseBytesWithProgress,
+  shouldAttemptAutomaticDetailConfidence,
+  withObjectSegmentationRuntimeFallback } from "./object-segmentation.mjs";
 
 installSameOriginFetch(globalThis, { cacheName:
   `patchy-ml-${OBJECT_SEGMENTATION_MODEL.sha256.slice(0, 12)}-${OBJECT_SEGMENTATION_RUNTIME.bundleSha256.slice(0, 12)}` });
@@ -10,10 +13,13 @@ const { FilesetResolver, InteractiveSegmenter } =
 
 const MODEL_PATH = new URL("./ml/models/magic-touch-int8-v1.task", import.meta.url).href;
 const WASM_ROOT = new URL("./ml/mediapipe/wasm/", import.meta.url).href;
+let assetsPromise = null;
 let segmenterPromise = null;
 let runtimeTier = null;
+let forceWasm = false;
 let imageIdentity = null;
 const renderCanvas = new OffscreenCanvas(1, 1);
+const sourceCanvas = new OffscreenCanvas(1, 1);
 
 function preferredDelegate() {
   try {
@@ -25,8 +31,8 @@ function preferredDelegate() {
   } catch { return "wasm"; }
 }
 
-async function segmenter(requestId) {
-  segmenterPromise ??= (async () => {
+async function assets(requestId) {
+  assetsPromise ??= (async () => {
     self.postMessage({ type: "progress", requestId, phase: "runtime", ratio: .05 });
     const files = await FilesetResolver.forVisionTasks(WASM_ROOT, true);
     const wasmResponse = await fetch(files.wasmBinaryPath,
@@ -53,33 +59,91 @@ async function segmenter(requestId) {
         self.postMessage({ type: "progress", requestId, phase: "model", ratio: .2 + ratio * .4 });
       });
     await responseCacheCommit(response);
+    return { files, wasmBinary, modelAssetBuffer };
+  })();
+  return assetsPromise;
+}
+
+async function segmenter(requestId) {
+  segmenterPromise ??= (async () => {
+    const loaded = await assets(requestId);
     self.postMessage({ type: "progress", requestId, phase: "initializing", ratio: .65 });
-    try {
-      if (preferredDelegate() !== "gpu") throw new Error("Software WebGL delegate rejected");
-      self.Module = { wasmBinary };
-      const engine = await InteractiveSegmenter.createFromOptions(files, {
-        baseOptions: { modelAssetBuffer, delegate: "GPU" }, canvas: renderCanvas,
-      });
-      runtimeTier = "gpu"; return engine;
-    } catch {
-      self.Module = { wasmBinary };
-      const engine = await InteractiveSegmenter.createFromOptions(files, {
-        baseOptions: { modelAssetBuffer }, canvas: renderCanvas,
-      });
-      runtimeTier = "wasm"; return engine;
+    if (!forceWasm && preferredDelegate() === "gpu") {
+      try {
+        self.Module = { wasmBinary: loaded.wasmBinary.slice() };
+        const engine = await InteractiveSegmenter.createFromOptions(loaded.files, {
+          baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice(), delegate: "GPU" }, canvas: renderCanvas,
+        });
+        runtimeTier = "gpu"; return engine;
+      } catch { forceWasm = true; }
     }
+    self.Module = { wasmBinary: loaded.wasmBinary.slice() };
+    const engine = await InteractiveSegmenter.createFromOptions(loaded.files, {
+      baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice() }, canvas: renderCanvas,
+    });
+    runtimeTier = "wasm"; return engine;
   })();
   return segmenterPromise;
 }
 
+async function disposeSegmenter() {
+  const pending = segmenterPromise;
+  segmenterPromise = null; runtimeTier = null;
+  if (!pending) return;
+  try { (await pending).close?.(); } catch {}
+}
+
+async function useWasmFallback(requestId) {
+  if (runtimeTier !== "gpu") throw new Error("Local WASM inference failed");
+  await disposeSegmenter(); forceWasm = true;
+  const engine = await segmenter(requestId);
+  engine.setImage(sourceCanvas);
+  return engine;
+}
+
+function confidenceFromMask(mask) {
+  const confidence = new Float32Array(mask.getAsFloat32Array());
+  const width = mask.width; const height = mask.height; mask.close();
+  return { confidence, width, height };
+}
+
+function segmentWithAutomaticDetail(engine, strokes) {
+  const primary = confidenceFromMask(engine.segment(strokes));
+  const detailStrokes = automaticDetailPromptStroke(strokes, sourceCanvas.width, sourceCanvas.height);
+  const prompt = strokes[0]?.point?.[2];
+  if (!detailStrokes || !shouldAttemptAutomaticDetailConfidence(primary.confidence,
+    primary.width, primary.height, prompt)) return { ...primary, automaticDetailApplied: false };
+  let detail;
+  try { detail = confidenceFromMask(engine.segment(detailStrokes)); }
+  catch (error) {
+    if (runtimeTier === "gpu") throw error;
+    return { ...primary, automaticDetailApplied: false };
+  }
+  if (detail.width !== primary.width || detail.height !== primary.height)
+    return { ...primary, automaticDetailApplied: false };
+  const chosen = chooseAutomaticDetailConfidence(primary.confidence, detail.confidence,
+    primary.width, primary.height, prompt);
+  return { confidence: chosen.confidence, width: primary.width, height: primary.height,
+    automaticDetailApplied: chosen.automaticDetailApplied };
+}
+
 self.addEventListener("message", async ({ data }) => {
   try {
-    const engine = await segmenter(data.requestId);
     if (data.type === "set-image") {
-      renderCanvas.width = data.bitmap.width; renderCanvas.height = data.bitmap.height;
-      engine.setImage(data.bitmap); data.bitmap.close?.(); imageIdentity = data.identity;
+      const size = boundedObjectPreviewSize(data.bitmap.width, data.bitmap.height);
+      const dimensionsChanged = renderCanvas.width !== size.width || renderCanvas.height !== size.height;
+      if (dimensionsChanged) await disposeSegmenter();
+      sourceCanvas.width = size.width; sourceCanvas.height = size.height;
+      sourceCanvas.getContext("2d", { alpha: true }).drawImage(data.bitmap, 0, 0, size.width, size.height);
+      data.bitmap.close?.();
+      if (dimensionsChanged) { renderCanvas.width = size.width; renderCanvas.height = size.height; }
+      let engine = await segmenter(data.requestId);
+      engine = await withObjectSegmentationRuntimeFallback(runtimeTier,
+        () => { engine.setImage(sourceCanvas); return engine; },
+        async () => useWasmFallback(data.requestId));
+      imageIdentity = data.identity;
       self.postMessage({ type: "image-ready", requestId: data.requestId, identity: imageIdentity,
-        runtimeTier });
+        runtimeTier, previewWidth: size.width, previewHeight: size.height });
       return;
     }
     if (data.type !== "segment") return;
@@ -89,11 +153,16 @@ self.addEventListener("message", async ({ data }) => {
       return;
     }
     const started = performance.now();
-    const mask = engine.segment(data.strokes);
-    const confidence = new Float32Array(mask.getAsFloat32Array());
-    const width = mask.width; const height = mask.height; mask.close();
+    let engine = await segmenter(data.requestId); let result;
+    result = await withObjectSegmentationRuntimeFallback(runtimeTier,
+      () => segmentWithAutomaticDetail(engine, data.strokes), async () => {
+        engine = await useWasmFallback(data.requestId);
+        return segmentWithAutomaticDetail(engine, data.strokes);
+      });
     self.postMessage({ type: "mask", requestId: data.requestId, identity: imageIdentity,
-      width, height, confidence, latencyMs: performance.now() - started, runtimeTier }, [confidence.buffer]);
+      width: result.width, height: result.height, confidence: result.confidence,
+      automaticDetailApplied: result.automaticDetailApplied,
+      latencyMs: performance.now() - started, runtimeTier }, [result.confidence.buffer]);
   } catch (error) {
     self.postMessage({ type: "error", requestId: data.requestId, code: "INFERENCE_FAILED",
       message: error instanceof Error ? error.message : String(error) });

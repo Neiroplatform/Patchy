@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
+  OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE, automaticDetailPromptStroke,
+  boundedObjectPreviewSize, chooseAutomaticDetailConfidence,
   clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
   scaleConfidenceMask, refineObjectSelectionMask, combineSelectionMasks, hasSelectableObjectCoverage, objectSegmentationDelegate,
   objectSelectionIdentityMatches,
-  readResponseBytesWithProgress } from "../../sdk/engine/site/object-segmentation.mjs";
+  readResponseBytesWithProgress,
+  shouldAttemptAutomaticDetailConfidence,
+  withObjectSegmentationRuntimeFallback } from "../../sdk/engine/site/object-segmentation.mjs";
 import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlannerAdapter,
   actionPlanSummary, planPrompt, validateActionPlan } from "../../sdk/engine/site/action-harness.mjs";
 import { installSameOriginFetch,
@@ -40,6 +44,24 @@ test("object inference rejects software WebGL delegates before model initializat
   assert.equal(objectSegmentationDelegate("Microsoft Basic Render Driver"), "wasm");
   assert.equal(objectSegmentationDelegate("llvmpipe (LLVM 18.1.8)"), "wasm");
   assert.equal(objectSegmentationDelegate(""), "wasm");
+});
+
+test("GPU inference failure retries once on WASM while WASM failure stays fail closed", async () => {
+  const calls = [];
+  assert.equal(await withObjectSegmentationRuntimeFallback("gpu", () => {
+    calls.push("gpu"); throw new Error("RET_CHECK failure");
+  }, () => { calls.push("wasm"); return "recovered"; }), "recovered");
+  assert.deepEqual(calls, ["gpu", "wasm"]);
+  await assert.rejects(withObjectSegmentationRuntimeFallback("wasm",
+    () => { throw new Error("cpu failure"); }, () => "must not run"), /cpu failure/);
+});
+
+test("object inference preview is aspect preserving and bounded before runtime initialization", () => {
+  assert.equal(OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE, 1024);
+  assert.deepEqual(boundedObjectPreviewSize(1600, 1000), { width: 1024, height: 640 });
+  assert.deepEqual(boundedObjectPreviewSize(640, 480), { width: 640, height: 480 });
+  assert.deepEqual(boundedObjectPreviewSize(1, 2000), { width: 1, height: 1024 });
+  assert.throws(() => boundedObjectPreviewSize(0, 10), /positive integers/);
 });
 
 test("inference Worker fetch policy permits same-origin assets and blocks telemetry origins", async () => {
@@ -222,6 +244,35 @@ test("point and box prompts are normalized and bounded", () => {
   const box = rectanglePromptStroke({ x: 80, y: 70 }, { x: 20, y: 10 }, 100, 100);
   assert.equal(box.length, 5); assert.deepEqual(box[0], { x: .2, y: .1 });
   assert.deepEqual(box.at(-1), box[0]);
+});
+
+test("automatic click detail uses a bounded box and keeps only a valid tighter prompted object", () => {
+  const click = [{ isCompleted: true, brushMode: 1,
+    point: clickPromptStroke({ x: 80, y: 50 }, 200, 100) }];
+  const detailPrompt = automaticDetailPromptStroke(click, 200, 100);
+  assert.equal(detailPrompt.length, 1); assert.equal(detailPrompt[0].brushMode, 3);
+  assert.deepEqual(detailPrompt[0].point[0], { x: .34, y: .38 });
+  assert.deepEqual(detailPrompt[0].point[2], { x: .46, y: .62 });
+  assert.equal(automaticDetailPromptStroke([...click, click[0]], 200, 100), null);
+  assert.equal(automaticDetailPromptStroke([{ isCompleted: true, brushMode: 1,
+    point: rectanglePromptStroke({ x: 10, y: 10 }, { x: 90, y: 90 }, 200, 100) }],
+  200, 100), null);
+
+  const width = 20; const height = 10; const primary = new Float32Array(width * height);
+  const detail = new Float32Array(width * height);
+  for (let y = 1; y < 9; ++y) for (let x = 2; x < 18; ++x) primary[y * width + x] = .9;
+  for (let y = 4; y < 7; ++y) for (let x = 7; x < 11; ++x) detail[y * width + x] = .95;
+  const chosen = chooseAutomaticDetailConfidence(primary, detail, width, height, { x: .4, y: .5 });
+  assert.equal(chosen.automaticDetailApplied, true); assert.equal(chosen.confidence, detail);
+  assert.equal(shouldAttemptAutomaticDetailConfidence(primary, width, height, { x: .4, y: .5 }), true);
+  const compact = new Float32Array(width * height); compact[5 * width + 8] = 1;
+  assert.equal(shouldAttemptAutomaticDetailConfidence(compact, width, height, { x: .4, y: .5 }), false);
+  detail.fill(0); detail[0] = 1;
+  assert.equal(chooseAutomaticDetailConfidence(primary, detail, width, height,
+    { x: .4, y: .5 }).automaticDetailApplied, false);
+  detail.fill(1);
+  assert.equal(chooseAutomaticDetailConfidence(new Float32Array(width * height), detail,
+    width, height, { x: .4, y: .5 }).automaticDetailApplied, false);
 });
 
 test("prompt planner emits only validated, state-bound recipes", () => {
