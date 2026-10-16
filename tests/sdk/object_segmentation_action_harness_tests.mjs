@@ -360,7 +360,7 @@ test("RU and EN recipes cover background, geometry, fill and export safely", () 
   const context = { documentId: "7", stateId: "9", revision: 11,
     foregroundColor: "#aabbcc", exportFormat: "webp", exportFilename: "result" };
   const cases = [
-    ["Удали фон", ["select-object", "invert-selection", "cut-selection"]],
+    ["Удали фон", ["select-object", "isolate-selection"]],
     ["Сделай маску объекта", ["select-object", "mask-selection"]],
     ["Blur background radius 7", ["select-object", "invert-selection", "filter-selection"]],
     ["Обесцветь фон", ["select-object", "invert-selection", "filter-selection"]],
@@ -380,7 +380,7 @@ test("RU and EN recipes cover background, geometry, fill and export safely", () 
   assert.match(actionPlanSummary(removeBackground)[0], /automatic subject/);
   const reuseSelection = planPrompt("Удали фон", { ...context, hasSelection: true });
   assert.deepEqual(reuseSelection.steps.map((step) => step.action),
-    ["invert-selection", "cut-selection"]);
+    ["isolate-selection"]);
   assert.throws(() => validateActionPlan({ ...removeBackground,
     steps: [{ action: "select-object", requiresInput: false, source: "visible" }] }, context),
   /bounded canvas or automatic subject/);

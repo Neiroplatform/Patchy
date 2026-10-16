@@ -2,7 +2,7 @@ export const ACTION_PLAN_VERSION = 1;
 export const ACTION_PLAN_PLANNER = "patchy.local-recipes.v1";
 export const ACTION_IDS = Object.freeze([
   "select-object", "invert-selection", "copy-selection", "cut-selection",
-  "copy-selection-to-layer", "mask-selection", "fill-selection",
+  "copy-selection-to-layer", "isolate-selection", "mask-selection", "fill-selection",
   "filter-selection", "crop-selection", "resize-document",
   "clear-selection", "export-document",
 ]);
@@ -20,6 +20,7 @@ const STEP_KEYS = Object.freeze({
   "invert-selection": ["action"],
   "copy-selection": ["action"],
   "copy-selection-to-layer": ["action", "name"],
+  "isolate-selection": ["action", "name"],
   "cut-selection": ["action"],
   "mask-selection": ["action"],
   "fill-selection": ["action", "color"],
@@ -73,7 +74,7 @@ export function planPrompt(prompt, context = {}) {
   if (mutatesSelection && includesAny(text, ["маск", "mask"])) {
     steps.push({ action: "mask-selection" });
   } else if (mentionsBackground && includesAny(text, ["удал", "убер", "remove", "delete"])) {
-    steps.push({ action: "invert-selection" }, { action: "cut-selection" });
+    steps.push({ action: "isolate-selection", name: "Background removed" });
   } else if (mentionsBackground && includesAny(text, ["размыт", "блюр", "blur"])) {
     const radius = boundedInteger(text, /(?:radius|радиус|blur|размыт\S*)\s*(\d+)/u, 8, 1, 12);
     steps.push({ action: "invert-selection" }, filterStep("patchy.filters.gaussian_blur",
@@ -120,7 +121,8 @@ export function planPrompt(prompt, context = {}) {
     modelCost: { downloadBytes: steps.some((step) => step.action === "select-object") ? 30525312 : 0,
       memoryClass: steps.some((step) => step.action === "select-object") ? "large" : "none",
       execution: "local-only" },
-    warnings: steps.some((step) => ["cut-selection", "crop-selection", "resize-document"].includes(step.action))
+    warnings: steps.some((step) => ["cut-selection", "isolate-selection", "crop-selection",
+      "resize-document"].includes(step.action))
       ? ["This plan changes document pixels or geometry. One Undo restores the complete plan."] : [],
     outputs: steps.filter((step) => step.action === "export-document")
       .map((step) => `${step.filename}.${step.format === "jpeg" ? "jpg" : step.format}`),
@@ -193,6 +195,9 @@ export function validateActionPlan(plan, context = {}) {
           step.width * step.height > 268435456))
       throw new Error("Resize dimensions are invalid.");
     if (step.action === "copy-selection-to-layer" &&
+        (typeof step.name !== "string" || !step.name.trim() || step.name.length > 128))
+      throw new Error("Output layer name is invalid.");
+    if (step.action === "isolate-selection" &&
         (typeof step.name !== "string" || !step.name.trim() || step.name.length > 128))
       throw new Error("Output layer name is invalid.");
     if (step.action === "export-document" && !["png", "jpeg", "webp", "svg"].includes(step.format))

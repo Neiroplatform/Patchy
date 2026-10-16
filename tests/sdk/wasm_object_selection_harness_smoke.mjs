@@ -163,7 +163,7 @@ try {
   await page.fill("#actionPromptInput", "Удали фон");
   await page.click("#buildActionPlanButton");
   assert.deepEqual(await page.locator("#actionPlanSteps li").allTextContents(),
-    ["1. select-object · automatic subject", "2. invert-selection", "3. cut-selection"]);
+    ["1. select-object · automatic subject", "2. isolate-selection"]);
   assert.match(await page.locator("#actionPlanStatus").textContent(), /One Undo restores/i);
   await page.click("#executeActionPlanButton");
   await page.waitForFunction(() =>
@@ -178,6 +178,10 @@ try {
   const backgroundAfter = await canvasPixel(16, 16);
   assert.ok(backgroundAfter[3] < backgroundBefore[3],
     `background was not removed: ${backgroundBefore} -> ${backgroundAfter}`);
+  assert.equal(Number(await page.locator("#layerCount").textContent()), 2,
+    "background removal did not create an isolated foreground layer");
+  assert.equal(await page.locator('#layerList .visibility-button[aria-label^="Show "]').count(), 1,
+    "background removal did not hide its source layer");
 
   await page.click("#undoButton");
   await page.waitForFunction(({ revisionAfter }) =>
@@ -186,7 +190,20 @@ try {
   { revisionAfter }, { timeout: 90_000 });
   assert.deepEqual(await canvasPixel(16, 16), backgroundBefore,
     "one Undo did not restore the pre-plan document");
+  assert.equal(Number(await page.locator("#layerCount").textContent()), 1,
+    "one Undo did not remove the isolated foreground layer");
   assert.equal(await page.locator("#redoButton").isEnabled(), true);
+
+  await page.keyboard.press("Control+a");
+  await page.click("#actionHarnessButton");
+  await page.fill("#actionPromptInput", "Удали фон");
+  await page.click("#buildActionPlanButton");
+  assert.deepEqual(await page.locator("#actionPlanSteps li").allTextContents(),
+    ["1. select-object · automatic subject", "2. isolate-selection"],
+    "a full-canvas selection was incorrectly reused as an object mask");
+  await page.click("#discardActionPlanButton");
+  await page.click('#actionHarnessDialog button[aria-label="Close"]');
+  await page.keyboard.press("Control+d");
 
   await page.selectOption("#objectPromptModeInput", "click");
   await page.selectOption("#selectionModeInput", "replace");
@@ -220,6 +237,12 @@ try {
     Number(document.querySelector("#layerCount")?.textContent) === layersBeforeClipboard &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
   { layersBeforeClipboard }, { timeout: 10_000 });
+  await page.keyboard.press("Control+v");
+  await page.waitForFunction(({ layersBeforeClipboard }) =>
+    Number(document.querySelector("#layerCount")?.textContent) === layersBeforeClipboard + 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { layersBeforeClipboard }, { timeout: 10_000 });
+  const layersBeforeRemoval = Number(await page.locator("#layerCount").textContent());
   const leftBeforeCut = await canvasPixel(30, 128);
   const centerBeforeCut = await canvasPixel(128, 128);
   const backgroundBeforeReuse = await canvasPixel(220, 20);
@@ -229,7 +252,7 @@ try {
   await page.fill("#actionPromptInput", "Удали фон");
   await page.click("#buildActionPlanButton");
   assert.deepEqual(await page.locator("#actionPlanSteps li").allTextContents(),
-    ["1. invert-selection", "2. cut-selection"],
+    ["1. isolate-selection"],
     "a committed additive selection was not reused by the action plan");
   const revisionBeforeReuse = Number((await page.locator("#detailRevision").textContent()).trim());
   await page.click("#executeActionPlanButton");
@@ -245,9 +268,15 @@ try {
   assert.deepEqual(await canvasPixel(128, 128), centerBeforeCut, "original selection was replaced");
   assert.ok((await canvasPixel(220, 20))[3] < backgroundBeforeReuse[3],
     "background was not removed around the additive selection");
+  assert.equal(Number(await page.locator("#layerCount").textContent()), layersBeforeRemoval + 1,
+    "background removal did not isolate the visible composite above duplicate layers");
+  assert.equal(await page.locator('#layerList .visibility-button[aria-label^="Show "]').count(),
+    layersBeforeRemoval, "background removal left a duplicate source visible");
   await page.click("#undoButton");
   await page.waitForFunction(() =>
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  assert.equal(Number(await page.locator("#layerCount").textContent()), layersBeforeRemoval,
+    "one Undo did not restore the duplicate-layer source document");
 
   await page.selectOption("#objectPromptModeInput", "points");
   await page.evaluate(() => {

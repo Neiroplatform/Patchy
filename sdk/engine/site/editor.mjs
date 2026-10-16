@@ -2756,7 +2756,16 @@ function actionPlanContext() {
     revision: Number(snapshot.revision), foregroundColor: $("brushColorInput").value,
     exportFormat: $("exportFormatSelect").value, exportFilename: exportBaseName(),
     objectSource: $("objectSourceInput").value,
-    hasSelection: Boolean(snapshot.selection?.length || snapshot.selectionMask) } : null;
+    hasSelection: reusableActionSelection() } : null;
+}
+
+function reusableActionSelection() {
+  if (!snapshot || !(snapshot.selection?.length || snapshot.selectionMask)) return false;
+  const mask = fullSelectionMask();
+  let selected = 0;
+  for (const value of mask) selected += value;
+  const coverage = selected / (255 * mask.length);
+  return coverage > 0 && coverage < .995;
 }
 
 function rebindPendingActionPlan() {
@@ -2837,6 +2846,31 @@ async function executeHarnessFilter(step) {
   return next;
 }
 
+async function isolateVisibleSelection(name) {
+  const bounds = selectionBounds();
+  if (!bounds) throw new Error("Background removal requires a committed object selection.");
+  const sourceLayerIds = snapshot.layers.filter((layer) => layer.visible).map((layer) => layer.id);
+  if (!sourceLayerIds.length) throw new Error("Background removal requires visible source layers.");
+  const output = renderedSelectionCanvas();
+  const image = output.getContext("2d", { alpha: true, willReadFrequently: true })
+    .getImageData(0, 0, output.width, output.height);
+  if (!image.data.some((value, index) => index % 4 === 3 && value > 0)) {
+    throw new Error("The selected object contains no visible pixels.");
+  }
+  const previousIds = new Set(snapshot.layers.map((layer) => layer.id));
+  const createdSnapshot = await mutate("AI edit · isolate foreground", () => client.addPixelLayer({
+    name, width: output.width, height: output.height, bounds,
+    rgba: new Uint8Array(image.data),
+  }, { transferOwnership: true }));
+  if (!createdSnapshot || createdSnapshot === DIAGNOSTIC_COMMAND_FAILED) return createdSnapshot;
+  const created = createdSnapshot.layers.find((layer) => layer.kind === 0 && !previousIds.has(layer.id));
+  if (!created) return DIAGNOSTIC_COMMAND_FAILED;
+  setSingleLayerSelection(created.id);
+  renderLayers(); renderLayerProperties();
+  return mutate("AI edit · hide source layers",
+    () => client.editLayers(sourceLayerIds, 0, { value: 0 }));
+}
+
 async function executeActionStep(step) {
   const requireSelection = () => {
     if (!snapshot?.selection?.length && !snapshot?.selectionMask) {
@@ -2855,6 +2889,10 @@ async function executeActionStep(step) {
     const layer = selectedLayer();
     if (layer && step.name) await mutate("Naming copied object", () => client.renameLayer(layer.id, step.name));
     return snapshot;
+  }
+  if (step.action === "isolate-selection") {
+    requireSelection();
+    return isolateVisibleSelection(step.name);
   }
   if (step.action === "cut-selection") {
     requireSelection();
@@ -3743,7 +3781,7 @@ function renderedSelectionCanvas() {
   const outputContext = output.getContext("2d", { alpha: true, willReadFrequently: true });
   outputContext.drawImage(canvas, bounds.x, bounds.y, bounds.width, bounds.height,
     0, 0, bounds.width, bounds.height);
-  if (snapshot.selection?.length) {
+  if (snapshot.selection?.length || snapshot.selectionMask) {
     const mask = fullSelectionMask();
     const pixels = outputContext.getImageData(0, 0, bounds.width, bounds.height);
     for (let y = 0; y < bounds.height; ++y) {
