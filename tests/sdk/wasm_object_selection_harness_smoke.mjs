@@ -143,9 +143,17 @@ try {
       minimum: mask.reduce((value, next) => Math.min(value, next), 1) });
     const clickRange = range(result.confidence); const refinedRange = range(refined.confidence);
     const boxRange = range(boxed.confidence);
+    const resized = new OffscreenCanvas(112, 96); const resizedTarget = resized.getContext("2d");
+    resizedTarget.fillStyle = "#fff"; resizedTarget.fillRect(0, 0, 112, 96);
+    resizedTarget.fillStyle = "#111"; resizedTarget.fillRect(32, 20, 48, 56);
+    const resizedIdentity = { ...identity, stateId: "2", width: 112 };
+    const recreatedReady = await client.setImage(resized.transferToImageBitmap(), resizedIdentity);
+    const recreated = await client.segment([{ isCompleted: true, brushMode: 1,
+      point: clickPromptStroke({ x: 56, y: 48 }, 112, 96) }], resizedIdentity);
+    const recreatedRange = range(recreated.confidence);
     client.close();
     return { width: result.width, height: result.height, ...clickRange, firstFailure,
-      refinedRange, boxRange, latencyMs: result.latencyMs,
+      refinedRange, boxRange, recreatedReady, recreatedRange, latencyMs: result.latencyMs,
       refinementMs: refined.latencyMs, boxMs: boxed.latencyMs };
   });
   assert.ok(inference.width > 0 && inference.height > 0);
@@ -154,6 +162,10 @@ try {
   assert.ok(inference.maximum > inference.minimum, JSON.stringify(inference));
   assert.ok(inference.refinedRange.maximum > inference.refinedRange.minimum, JSON.stringify(inference));
   assert.ok(inference.boxRange.maximum > inference.boxRange.minimum, JSON.stringify(inference));
+  assert.equal(inference.recreatedReady.previewWidth, 112, JSON.stringify(inference));
+  assert.equal(inference.recreatedReady.previewHeight, 96, JSON.stringify(inference));
+  assert.ok(inference.recreatedRange.maximum > inference.recreatedRange.minimum,
+    JSON.stringify(inference));
   assert.ok(inference.latencyMs >= 0);
 
   assert.equal(allRequests.some((url) => url.includes("magic-touch-int8-v1.task")), true,

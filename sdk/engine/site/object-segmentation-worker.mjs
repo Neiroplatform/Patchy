@@ -12,6 +12,8 @@ const CACHE_NAME =
 installSameOriginFetch(globalThis, { cacheName: CACHE_NAME });
 const { FilesetResolver, InteractiveSegmenter } =
   await import("./ml/mediapipe/vision_bundle.mjs");
+const { default: visionModuleFactory } =
+  await import("./ml/mediapipe/wasm/vision_wasm_module_internal.js");
 
 const MODEL_PATH = new URL("./ml/models/magic-touch-int8-v1.task", import.meta.url).href;
 const WASM_ROOT = new URL("./ml/mediapipe/wasm/", import.meta.url).href;
@@ -20,8 +22,24 @@ let segmenterPromise = null;
 let runtimeTier = null;
 let forceWasm = false;
 let imageIdentity = null;
-const renderCanvas = new OffscreenCanvas(1, 1);
+let renderCanvas = new OffscreenCanvas(1, 1);
 const sourceCanvas = new OffscreenCanvas(1, 1);
+
+function recreateRenderCanvas(width = renderCanvas.width, height = renderCanvas.height) {
+  renderCanvas = new OffscreenCanvas(width, height);
+}
+
+async function createSegmenter(loaded, delegate = null) {
+  // MediaPipe consumes and clears self.ModuleFactory after every construction.
+  // Re-importing the loader cannot restore it because ES modules are cached, so
+  // retain the exact local factory and explicitly install it for each runtime.
+  self.ModuleFactory = visionModuleFactory;
+  self.Module = { wasmBinary: loaded.wasmBinary.slice() };
+  return InteractiveSegmenter.createFromOptions(loaded.files, {
+    baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice(),
+      ...(delegate ? { delegate } : {}) }, canvas: renderCanvas,
+  });
+}
 
 async function loadLocalAsset(path, expectedBytes, label, onProgress) {
   let firstError = null;
@@ -93,17 +111,14 @@ async function segmenter(requestId) {
       self.postMessage({ type: "progress", requestId, phase: "initializing", ratio: .65 });
       if (!forceWasm && preferredDelegate() === "gpu") {
         try {
-          self.Module = { wasmBinary: loaded.wasmBinary.slice() };
-          const engine = await InteractiveSegmenter.createFromOptions(loaded.files, {
-            baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice(), delegate: "GPU" }, canvas: renderCanvas,
-          });
+          const engine = await createSegmenter(loaded, "GPU");
           runtimeTier = "gpu"; return engine;
-        } catch { forceWasm = true; }
+        } catch {
+          forceWasm = true;
+          recreateRenderCanvas();
+        }
       }
-      self.Module = { wasmBinary: loaded.wasmBinary.slice() };
-      const engine = await InteractiveSegmenter.createFromOptions(loaded.files, {
-        baseOptions: { modelAssetBuffer: loaded.modelAssetBuffer.slice() }, canvas: renderCanvas,
-      });
+      const engine = await createSegmenter(loaded);
       runtimeTier = "wasm"; return engine;
     })();
     segmenterPromise = pending;
@@ -122,6 +137,7 @@ async function disposeSegmenter() {
 async function useWasmFallback(requestId) {
   if (runtimeTier !== "gpu") throw new Error("Local WASM inference failed");
   await disposeSegmenter(); forceWasm = true;
+  recreateRenderCanvas();
   const engine = await segmenter(requestId);
   engine.setImage(sourceCanvas);
   return engine;
@@ -162,7 +178,7 @@ self.addEventListener("message", async ({ data }) => {
       sourceCanvas.width = size.width; sourceCanvas.height = size.height;
       sourceCanvas.getContext("2d", { alpha: true }).drawImage(data.bitmap, 0, 0, size.width, size.height);
       data.bitmap.close?.();
-      if (dimensionsChanged) { renderCanvas.width = size.width; renderCanvas.height = size.height; }
+      if (dimensionsChanged) recreateRenderCanvas(size.width, size.height);
       let engine = await segmenter(data.requestId);
       engine = await withObjectSegmentationRuntimeFallback(runtimeTier,
         () => { engine.setImage(sourceCanvas); return engine; },
