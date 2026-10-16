@@ -83,6 +83,12 @@ try {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "ready",
     null, { timeout: 90_000 });
+  // The product now warms the immutable local assets immediately after editor
+  // readiness. Let that single owner finish before the explicit online/offline
+  // clients exercise cache reuse, avoiding concurrent writes to the same
+  // CacheStorage entries on Edge.
+  await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.objectModel === "ready",
+    null, { timeout: 90_000 });
   const online = await infer("online");
   await context.setOffline(true);
   let offline;
