@@ -67,13 +67,18 @@ export function planPrompt(prompt, context = {}) {
   const mentionsObject = includesAny(text,
     ["объект", "человек", "предмет", "субъект", "subject", "object", "person"]);
   const mentionsBackground = includesAny(text, ["фон", "background"]);
+  const removesBackground = mentionsBackground && includesAny(text,
+    ["удал", "убер", "remove", "delete"]);
+  const explicitlyUsesSelection = includesAny(text,
+    ["по выделению", "вокруг выделения", "из выделения", "selected area", "selection", "selected object"]);
   const mutatesSelection = mentionsObject || mentionsBackground;
-  if (mutatesSelection && !context.hasSelection) steps.push(objectStep(
+  const needsFreshSubject = removesBackground && !explicitlyUsesSelection;
+  if (mutatesSelection && (!context.hasSelection || needsFreshSubject)) steps.push(objectStep(
     context.objectSource || "visible", mentionsBackground ? "center" : null));
 
   if (mutatesSelection && includesAny(text, ["маск", "mask"])) {
     steps.push({ action: "mask-selection" });
-  } else if (mentionsBackground && includesAny(text, ["удал", "убер", "remove", "delete"])) {
+  } else if (removesBackground) {
     steps.push({ action: "isolate-selection", name: "Background removed" });
   } else if (mentionsBackground && includesAny(text, ["размыт", "блюр", "blur"])) {
     const radius = boundedInteger(text, /(?:radius|радиус|blur|размыт\S*)\s*(\d+)/u, 8, 1, 12);

@@ -246,14 +246,12 @@ try {
   const leftBeforeCut = await canvasPixel(30, 128);
   const centerBeforeCut = await canvasPixel(128, 128);
   const backgroundBeforeReuse = await canvasPixel(220, 20);
-  const modelRequestsBeforeReuse = allRequests.filter((url) =>
-    url.includes("magic-touch-int8-v1.task")).length;
   await page.click("#actionHarnessButton");
   await page.fill("#actionPromptInput", "Удали фон");
   await page.click("#buildActionPlanButton");
   assert.deepEqual(await page.locator("#actionPlanSteps li").allTextContents(),
-    ["1. isolate-selection"],
-    "a committed additive selection was not reused by the action plan");
+    ["1. select-object · automatic subject", "2. isolate-selection"],
+    "plain background removal incorrectly reused a stale object selection");
   const revisionBeforeReuse = Number((await page.locator("#detailRevision").textContent()).trim());
   await page.click("#executeActionPlanButton");
   await page.waitForFunction(({ revisionBeforeReuse }) =>
@@ -262,10 +260,10 @@ try {
       .some((item) => item.textContent === "AI edit · Удали фон") &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
   { revisionBeforeReuse }, { timeout: 90_000 });
-  assert.equal(allRequests.filter((url) => url.includes("magic-touch-int8-v1.task")).length,
-    modelRequestsBeforeReuse, "existing-selection recipe reran object inference");
-  assert.deepEqual(await canvasPixel(30, 128), leftBeforeCut, "Shift-added object was lost");
-  assert.deepEqual(await canvasPixel(128, 128), centerBeforeCut, "original selection was replaced");
+  assert.ok((await canvasPixel(30, 128))[3] < leftBeforeCut[3],
+    "stale Shift-added object survived automatic foreground replacement");
+  assert.deepEqual(await canvasPixel(128, 128), centerBeforeCut,
+    "automatic foreground subject was lost");
   assert.ok((await canvasPixel(220, 20))[3] < backgroundBeforeReuse[3],
     "background was not removed around the additive selection");
   assert.equal(Number(await page.locator("#layerCount").textContent()), layersBeforeRemoval + 1,
@@ -277,6 +275,14 @@ try {
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
   assert.equal(Number(await page.locator("#layerCount").textContent()), layersBeforeRemoval,
     "one Undo did not restore the duplicate-layer source document");
+  await page.click("#actionHarnessButton");
+  await page.fill("#actionPromptInput", "Удали фон по выделению");
+  await page.click("#buildActionPlanButton");
+  assert.deepEqual(await page.locator("#actionPlanSteps li").allTextContents(),
+    ["1. isolate-selection"],
+    "an explicit request to use the committed selection triggered new inference");
+  await page.click("#discardActionPlanButton");
+  await page.click('#actionHarnessDialog button[aria-label="Close"]');
 
   await page.selectOption("#objectPromptModeInput", "points");
   await page.evaluate(() => {

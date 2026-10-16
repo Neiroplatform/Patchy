@@ -378,8 +378,12 @@ test("RU and EN recipes cover background, geometry, fill and export safely", () 
   assert.deepEqual(removeBackground.steps[0], { action: "select-object", requiresInput: false,
     source: "visible", autoTarget: "center" });
   assert.match(actionPlanSummary(removeBackground)[0], /automatic subject/);
-  const reuseSelection = planPrompt("Удали фон", { ...context, hasSelection: true });
-  assert.deepEqual(reuseSelection.steps.map((step) => step.action),
+  const replaceStaleSelection = planPrompt("Удали фон", { ...context, hasSelection: true });
+  assert.deepEqual(replaceStaleSelection.steps.map((step) => step.action),
+    ["select-object", "isolate-selection"]);
+  const reuseExplicitSelection = planPrompt("Удали фон по выделению",
+    { ...context, hasSelection: true });
+  assert.deepEqual(reuseExplicitSelection.steps.map((step) => step.action),
     ["isolate-selection"]);
   assert.throws(() => validateActionPlan({ ...removeBackground,
     steps: [{ action: "select-object", requiresInput: false, source: "visible" }] }, context),
