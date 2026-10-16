@@ -2372,12 +2372,16 @@ function preloadObjectSelectionAssets() {
   if (objectSelectionPreloadPromise) return objectSelectionPreloadPromise;
   objectSelectionClient ??= new ObjectSegmentationClient();
   const clientAtStart = objectSelectionClient;
-  objectSelectionPreloadPromise = clientAtStart.preload().catch(() => {
+  shell.dataset.objectModel = "loading";
+  objectSelectionPreloadPromise = clientAtStart.preload().then(() => {
+    if (objectSelectionClient === clientAtStart) shell.dataset.objectModel = "ready";
+  }).catch(() => {
     // Startup warming is opportunistic. Discard the failed Worker so the first
     // explicit Object Select gesture gets the ordinary bounded recovery path.
     if (objectSelectionClient === clientAtStart) {
       clientAtStart.close();
       objectSelectionClient = null;
+      shell.dataset.objectModel = "failed";
     }
   }).finally(() => { objectSelectionPreloadPromise = null; });
   return objectSelectionPreloadPromise;

@@ -60,8 +60,11 @@ const browser = await chromium.launch({
   channel: process.env.PATCHY_BROWSER_CHANNEL || "chrome",
   headless: true,
 });
+let smokeStage = "startup";
+const markStage = (stage) => { smokeStage = stage; };
 
 try {
+  markStage("open-editor");
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
   page.setDefaultTimeout(90_000);
@@ -84,12 +87,17 @@ try {
     { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "ready" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  markStage("model-preload");
+  await page.waitForFunction(() => ["ready", "failed"].includes(
+    document.querySelector(".editor-shell")?.dataset.objectModel));
 
+  markStage("empty-diagnostics");
   await page.selectOption("#localeSelect", "ru");
   await runPaletteCommand("diagnosticsButton");
   assert.equal(await page.textContent("#diagnosticsSummary"), "Документ не открыт");
   await page.click('#diagnosticsDialog button[value="cancel"]');
 
+  markStage("author-document");
   await page.click("#newButton");
   await page.waitForFunction(() => document.querySelector("#detailRevision")?.textContent === "0" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
@@ -130,6 +138,7 @@ try {
   await page.waitForFunction(() => Number(document.querySelector("#detailRevision")?.textContent) >= 2 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
 
+  markStage("version-history");
   await page.selectOption("#saveFormatSelect", "psb");
   await page.waitForFunction(() => document.querySelector("#recoveryLabel")?.dataset.state === "confirmed");
   await runPaletteCommand("versionsButton");
@@ -158,11 +167,13 @@ try {
   await page.waitForFunction(() => Number(document.querySelector("#layerCount")?.textContent) === 3 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
 
+  markStage("failed-command");
   await runPaletteCommand("pastePixelsButton");
   await page.waitForSelector("#errorBanner:not([hidden])");
   await page.click("#dismissErrorButton");
   await page.waitForFunction(() => document.querySelector("#recoveryLabel")?.dataset.state === "confirmed");
 
+  markStage("worker-recovery");
   const engineWorker = page.workers().find((worker) => /\/engine\/worker\.mjs(?:\?|$)/.test(worker.url()));
   assert.ok(engineWorker, "production engine Worker was not found");
   await engineWorker.evaluate(() => {
@@ -172,6 +183,7 @@ try {
     document.querySelector(".editor-shell")?.dataset.state === "document" &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true", null, { timeout: 45_000 });
 
+  markStage("diagnostics-export");
   await runPaletteCommand("diagnosticsButton");
   assert.equal(await page.isDisabled("#downloadDiagnosticsButton"), true);
   await page.check("#diagnosticsConsentInput");
@@ -181,6 +193,7 @@ try {
   assert.equal(download.suggestedFilename(), "patchy-diagnostics.json");
   await download.saveAs(bundlePath);
 
+  markStage("validate-export");
   const validator = join(repository, "scripts", "validate-browser-diagnostics.mjs");
   const validated = spawnSync(process.execPath, [validator, bundlePath], { encoding: "utf8" });
   assert.equal(validated.status, 0, validated.stderr);
@@ -217,7 +230,11 @@ try {
   assert.ok(pageErrors.length >= 1 && pageErrors.every((error) => error.includes("PRIVATE_CRASH_ERROR_SENTINEL")),
     `unexpected browser errors: ${pageErrors.join(" | ")}`);
   console.log(`PASS events=${summary.events} failed=${summary.failedCommands} crashes=${summary.crashes} recoveries=${summary.recoveries}`);
+  markStage("close-context");
   await context.close();
+} catch (error) {
+  console.error(`PATCHY_DIAGNOSTICS_FAILURE_STAGE=${smokeStage}`);
+  throw error;
 } finally {
   await browser.close();
   await rm(temporary, { recursive: true, force: true });

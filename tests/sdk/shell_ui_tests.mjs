@@ -239,6 +239,19 @@ test("production shell exposes keyboard, localization, responsive and motion con
   assert.match(shell, /event\.shiftKey && document\.activeElement === first/);
 });
 
+test("object model startup preload is observable without blocking editor readiness", async () => {
+  const [editor, diagnostics] = await Promise.all([
+    source("sdk/engine/site/editor.mjs"),
+    source("tests/sdk/wasm_diagnostics_recovery_smoke.mjs"),
+  ]);
+  assert.match(editor, /setSessionState\("ready", "Engine ready"\)[\s\S]*queueMicrotask\(\(\) => void preloadObjectSelectionAssets\(\)\)/);
+  assert.match(editor, /shell\.dataset\.objectModel = "loading"/);
+  assert.match(editor, /shell\.dataset\.objectModel = "ready"/);
+  assert.match(editor, /shell\.dataset\.objectModel = "failed"/);
+  assert.match(diagnostics, /dataset\.objectModel/);
+  assert.match(diagnostics, /PATCHY_DIAGNOSTICS_FAILURE_STAGE/);
+});
+
 test("shell contrast tokens meet text and non-text contrast floors", async () => {
   const css = await source("sdk/engine/site/editor.css");
   const token = (name) => css.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"))?.[1];
