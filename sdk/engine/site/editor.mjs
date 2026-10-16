@@ -167,6 +167,7 @@ let penHoverPoint = null;
 let brushHoverPoint = null;
 let quickSelectDraft = null;
 let objectSelectionClient = null;
+let objectSelectionPreloadPromise = null;
 let objectSelectionImageIdentity = null;
 let objectSelectionDraft = null;
 let objectSelectionProposal = null;
@@ -183,6 +184,7 @@ let selectionRefinementCancellation = null;
 let clipboardImageBlob = null;
 let layerClipboard = null;
 let pixelClipboard = null;
+let clipboardShortcutQueue = Promise.resolve();
 let pendingLayerAppearance = null;
 let layerAppearanceTimer = 0;
 let draggedLayer = null;
@@ -2366,6 +2368,21 @@ function clearObjectSelectionProposal({ keepStrokes = false } = {}) {
   $("cancelObjectSelectionButton").disabled = !objectPromptStrokes.length;
 }
 
+function preloadObjectSelectionAssets() {
+  if (objectSelectionPreloadPromise) return objectSelectionPreloadPromise;
+  objectSelectionClient ??= new ObjectSegmentationClient();
+  const clientAtStart = objectSelectionClient;
+  objectSelectionPreloadPromise = clientAtStart.preload().catch(() => {
+    // Startup warming is opportunistic. Discard the failed Worker so the first
+    // explicit Object Select gesture gets the ordinary bounded recovery path.
+    if (objectSelectionClient === clientAtStart) {
+      clientAtStart.close();
+      objectSelectionClient = null;
+    }
+  }).finally(() => { objectSelectionPreloadPromise = null; });
+  return objectSelectionPreloadPromise;
+}
+
 function renderObjectSelectionProposal() {
   const overlay = $("gestureCanvas").getContext("2d");
   overlay.clearRect(0, 0, canvas.width, canvas.height);
@@ -2411,7 +2428,9 @@ function renderObjectSelectionProposal() {
   $("cancelObjectSelectionButton").disabled = false;
 }
 
-async function inferObjectSelection(strokes, { combineMode = $("selectionModeInput").value || "replace" } = {}) {
+async function inferObjectSelection(strokes, {
+  combineMode = $("selectionModeInput").value || "replace", baseMask = null,
+} = {}) {
   if (busy || !snapshot || !strokes.length) return;
   combineMode = selectionCombineModeForPointer({}, combineMode);
   const requestSequence = ++objectSelectionRequestSequence;
@@ -2439,7 +2458,7 @@ async function inferObjectSelection(strokes, { combineMode = $("selectionModeInp
     const result = await objectSelectionClient.segment(strokes, identity);
     if (requestSequence !== objectSelectionRequestSequence) return;
     if (!proposalMatchesSnapshot(identity, snapshot)) throw new Error("Document changed while segmenting the object.");
-    const gray = scaleConfidenceMask(result.confidence, result.width, result.height,
+    let gray = scaleConfidenceMask(result.confidence, result.width, result.height,
       snapshot.width, snapshot.height);
     if ($("objectRefineEdgesInput").checked) {
       for (let index = 0; index < gray.length; ++index) {
@@ -2449,11 +2468,16 @@ async function inferObjectSelection(strokes, { combineMode = $("selectionModeInp
     }
     if (!hasSelectableObjectCoverage(gray))
       throw new RangeError("Object selection proposal has no applicable foreground.");
+    if (baseMask) {
+      if (!(baseMask instanceof Uint8Array) || baseMask.length !== gray.length)
+        throw new RangeError("Accumulated object selection no longer matches the document.");
+      gray = combineSelectionMasks(baseMask, gray, combineMode);
+    }
     const confidenceMean = result.confidence.reduce((sum, value) => sum + value, 0) /
       Math.max(1, result.confidence.length);
     objectSelectionProposal = { ...identity, proposalId: `${identity.stateId}:${requestSequence}`,
       requestSequence,
-      combineMode,
+      combineMode: baseMask ? "replace" : combineMode,
       modelHash: OBJECT_SEGMENTATION_MODEL.sha256,
       runtimeHash: OBJECT_SEGMENTATION_RUNTIME.bundleSha256,
       runtimeTier: result.runtimeTier || imageReady.runtimeTier || "wasm",
@@ -2488,13 +2512,13 @@ async function applyObjectSelectionProposal() {
     const error = new Error("Create a new preview for the current document state.");
     if (pendingActionPlan) await abortPendingActionPlan(error);
     else showError("Object selection is stale", error);
-    return;
+    return DIAGNOSTIC_COMMAND_FAILED;
   }
   if (pendingActionPlan) {
     try {
       validateActionPlan(pendingActionPlan.plan, actionPlanContext());
       await ensureActionHistoryGroup();
-    } catch (error) { await abortPendingActionPlan(error); return; }
+    } catch (error) { await abortPendingActionPlan(error); return DIAGNOSTIC_COMMAND_FAILED; }
   }
   const gray = combinedSelectionMask(new Uint8Array(objectSelectionProposal.gray),
     objectSelectionProposal.combineMode || "replace");
@@ -2505,6 +2529,7 @@ async function applyObjectSelectionProposal() {
   } else if (result === DIAGNOSTIC_COMMAND_FAILED && pendingActionPlan) {
     await abortPendingActionPlan(new Error("Object selection could not be committed."));
   }
+  return result;
 }
 
 function setCanvasTool(tool) {
@@ -3743,6 +3768,10 @@ async function captureSelectedLayerPixels(layer) {
 async function copyRenderedPixels() {
   if (busy || !snapshot) return;
   try {
+    if (proposalMatchesSnapshot(objectSelectionProposal, snapshot)) {
+      const committed = await applyObjectSelectionProposal();
+      if (committed === DIAGNOSTIC_COMMAND_FAILED) return DIAGNOSTIC_COMMAND_FAILED;
+    }
     const layer = selectedLayer();
     if (layer && (snapshot.selection?.length || snapshot.selectionMask)) {
       if (selectedLayers().length !== 1 || layer.kind !== 0 || !layer.visible) {
@@ -3776,6 +3805,10 @@ async function copyRenderedPixels() {
 }
 
 async function cutSelectedPixels() {
+  if (proposalMatchesSnapshot(objectSelectionProposal, snapshot)) {
+    const committed = await applyObjectSelectionProposal();
+    if (committed === DIAGNOSTIC_COMMAND_FAILED) return DIAGNOSTIC_COMMAND_FAILED;
+  }
   const layer = selectedLayer();
   if (busy || !snapshot || selectedLayers().length !== 1 || layer?.kind !== 0 ||
       !layer.visible || layer.lockFlags) return;
@@ -7388,6 +7421,10 @@ canvas.addEventListener("pointerdown", async (event) => {
         combineMode };
       previewPolygon([point, point, point, point], true);
     } else {
+      const baseMask = mode === "click" && combineMode !== "replace" &&
+          proposalMatchesSnapshot(objectSelectionProposal, snapshot)
+        ? combinedSelectionMask(new Uint8Array(objectSelectionProposal.gray),
+          objectSelectionProposal.combineMode || "replace") : null;
       if (mode === "click") objectPromptStrokes = [];
       objectPromptStrokes.push({ isCompleted: true,
         brushMode: $("objectPromptPolarityInput").value === "negative" ? 2 : 1,
@@ -7395,6 +7432,7 @@ canvas.addEventListener("pointerdown", async (event) => {
       $("cancelObjectSelectionButton").disabled = false;
       void inferObjectSelection(objectPromptStrokes, {
         combineMode: mode === "click" ? combineMode : $("selectionModeInput").value || "replace",
+        baseMask,
       });
     }
     return;
@@ -7751,6 +7789,11 @@ function shortcutLetter(event) {
   return /^[A-Za-z]$/.test(key) ? key.toLowerCase() : "";
 }
 
+function queueClipboardShortcut(commandId) {
+  clipboardShortcutQueue = clipboardShortcutQueue.catch(() => undefined)
+    .then(() => executeCommand(commandId));
+}
+
 window.addEventListener("keydown", (event) => {
   if (event.isComposing) return;
   if (!(event.ctrlKey || event.metaKey)) return;
@@ -7761,9 +7804,9 @@ window.addEventListener("keydown", (event) => {
   if (key === "s") {
     event.preventDefault(); executeCommand(event.shiftKey ? "document.saveAs" : "document.save");
   }
-  if (key === "c" && snapshot) { event.preventDefault(); executeCommand("document.copyPixels"); }
-  if (key === "x" && snapshot) { event.preventDefault(); executeCommand("document.cutPixels"); }
-  if (key === "v" && snapshot) { event.preventDefault(); executeCommand("document.pastePixels"); }
+  if (key === "c" && snapshot) { event.preventDefault(); queueClipboardShortcut("document.copyPixels"); }
+  if (key === "x" && snapshot) { event.preventDefault(); queueClipboardShortcut("document.cutPixels"); }
+  if (key === "v" && snapshot) { event.preventDefault(); queueClipboardShortcut("document.pastePixels"); }
   if (key === "z") {
     event.preventDefault();
     const redo = event.shiftKey;
@@ -7842,6 +7885,10 @@ window.addEventListener("keydown", (event) => {
   if (toolKey === "t") executeCommand("tool.text");
   if (toolKey === "p") executeCommand("tool.pen");
   if (event.key === "Enter" && cropDraft) { event.preventDefault(); commitCropDraft(); return; }
+  if (event.key === "Enter" && canvasTool === "objectSelect" &&
+      proposalMatchesSnapshot(objectSelectionProposal, snapshot)) {
+    event.preventDefault(); void applyObjectSelectionProposal(); return;
+  }
   if (event.key === "Escape" && cropDraft) { event.preventDefault(); cancelCropDraft(); return; }
   if (event.key === "Enter" && transformDialogDraft) {
     event.preventDefault(); $("commitLayerTransformButton").click(); return;
@@ -7924,6 +7971,10 @@ try {
   setSessionState("ready", "Engine ready");
   $("busyState").hidden = true;
   updateControls();
+  // Download and verify the immutable local model/runtime in the background so
+  // the first Object Select gesture does not pay the network-transfer delay.
+  // Editor readiness and every non-ML tool stay independent of this warm-up.
+  queueMicrotask(() => void preloadObjectSelectionAssets());
 } catch (error) {
   showError("Could not start engine", error);
   $("busyState").hidden = true;

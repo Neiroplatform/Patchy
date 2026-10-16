@@ -171,6 +171,13 @@ function segmentWithAutomaticDetail(engine, strokes) {
 
 self.addEventListener("message", async ({ data }) => {
   try {
+    if (data.type === "preload") {
+      await assets(data.requestId);
+      self.postMessage({ type: "assets-ready", requestId: data.requestId,
+        modelHash: OBJECT_SEGMENTATION_MODEL.sha256,
+        runtimeHash: OBJECT_SEGMENTATION_RUNTIME.bundleSha256 });
+      return;
+    }
     if (data.type === "set-image") {
       const size = boundedObjectPreviewSize(data.bitmap.width, data.bitmap.height);
       const dimensionsChanged = renderCanvas.width !== size.width || renderCanvas.height !== size.height;

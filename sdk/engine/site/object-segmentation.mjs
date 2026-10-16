@@ -363,7 +363,8 @@ export class ObjectSegmentationClient {
 
   send(request) {
     if (!this.pending.has(request.message.requestId)) return;
-    const timeoutMs = request.message.type === "set-image" ? this.timeouts.setImage : this.timeouts.segment;
+    const timeoutMs = ["preload", "set-image"].includes(request.message.type)
+      ? this.timeouts.setImage : this.timeouts.segment;
     request.pending.timeout = setTimeout(() => {
       if (!this.pending.has(request.message.requestId)) return;
       const error = Object.assign(new Error(`Object segmentation ${request.message.type} timed out`),
@@ -390,6 +391,7 @@ export class ObjectSegmentationClient {
   setImage(bitmap, identity, onProgress = null) {
     return this.request("set-image", { bitmap, identity }, [bitmap], onProgress);
   }
+  preload(onProgress = null) { return this.request("preload", {}, [], onProgress); }
   segment(strokes, identity) { return this.request("segment", { strokes, identity }); }
   cancel() {
     const error = Object.assign(new Error("Object segmentation cancelled"), { name: "AbortError" });

@@ -190,6 +190,23 @@ test("object model loading reports progress without resolving the request early"
   client.close();
 });
 
+test("object model preload uses the long bounded setup budget and resolves only when assets are ready", async () => {
+  let messageListener = null; const sent = []; const progress = [];
+  const worker = { addEventListener(type, listener) { if (type === "message") messageListener = listener; },
+    postMessage(message) { sent.push(message); queueMicrotask(() => {
+      messageListener({ data: { type: "progress", requestId: message.requestId,
+        phase: "model", ratio: .6 } });
+      messageListener({ data: { type: "assets-ready", requestId: message.requestId,
+        modelHash: OBJECT_SEGMENTATION_MODEL.sha256 } });
+    }); }, terminate() {} };
+  const client = new ObjectSegmentationClient(worker, { setImage: 1234, segment: 5 });
+  const ready = await client.preload((event) => progress.push(event.phase));
+  assert.equal(sent[0].type, "preload");
+  assert.deepEqual(progress, ["model"]);
+  assert.equal(ready.modelHash, OBJECT_SEGMENTATION_MODEL.sha256);
+  client.close();
+});
+
 test("confidence masks scale deterministically to document coverage", () => {
   assert.deepEqual([...scaleConfidenceMask(new Float32Array([0, .25, .5, 1]), 2, 2, 4, 2)],
     [0, 0, 64, 64, 128, 128, 255, 255]);

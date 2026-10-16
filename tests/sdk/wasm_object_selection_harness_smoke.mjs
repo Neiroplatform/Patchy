@@ -75,24 +75,7 @@ async function waitForObjectPreview(timeout = 90_000) {
 }
 
 try {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "ready",
-    null, { timeout: 90_000 });
-  assert.equal(allRequests.some((url) => url.includes("magic-touch-int8-v1.task")), false,
-    "optional model was included in the initial editor load");
-  assert.equal(await page.locator("#objectSelectToolButton").count(), 1);
-  assert.equal(await page.locator("#actionHarnessButton").count(), 1);
-  await dropSvg("object-select-atomic.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
-    <rect width="256" height="256" fill="#ffffff"/>
-    <circle cx="30" cy="128" r="16" fill="#0066ff"/>
-    <rect x="72" y="56" width="112" height="144" rx="20" fill="#111111"/>
-  </svg>`);
-  await page.waitForFunction(() => !document.querySelector("#actionHarnessButton")?.disabled,
-    null, { timeout: 90_000 });
-  await selectObjectTool();
-  assert.equal(allRequests.some((url) => url.includes("magic-touch-int8-v1.task")), false,
-    "selecting Object Select must not download the optional model before a prompt");
-
+  await page.goto(new URL("./capabilities.html", baseUrl).href, { waitUntil: "domcontentloaded" });
   const poisonedCache = await page.evaluate(async () => {
     const { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME } =
       await import("./object-segmentation.mjs");
@@ -103,13 +86,30 @@ try {
     await cache.put(modelUrl, new Response(new Uint8Array(32), {
       status: 200, headers: { "Content-Type": "application/octet-stream" },
     }));
-    return { cacheName, modelUrl, cachedBytes: (await (await cache.match(modelUrl)).arrayBuffer()).byteLength };
+    return (await (await cache.match(modelUrl)).arrayBuffer()).byteLength;
   });
-  assert.equal(poisonedCache.cachedBytes, 32,
-    "the cache-recovery fixture did not install a truncated model response");
+  assert.equal(poisonedCache, 32, "the startup cache fixture did not install a truncated model");
   await page.route("**/magic-touch-int8-v1.task", async (route) => route.fulfill({
     status: 200, contentType: "application/octet-stream", body: Buffer.alloc(32),
   }), { times: 1 });
+  const startupModelRequest = page.waitForRequest((request) =>
+    request.url().includes("magic-touch-int8-v1.task"), { timeout: 90_000 });
+  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelector(".editor-shell")?.dataset.state === "ready",
+    null, { timeout: 90_000 });
+  await startupModelRequest;
+  assert.equal(allRequests.some((url) => url.includes("magic-touch-int8-v1.task")), true,
+    "local Object Select model did not start background loading after editor readiness");
+  assert.equal(await page.locator("#objectSelectToolButton").count(), 1);
+  assert.equal(await page.locator("#actionHarnessButton").count(), 1);
+  await dropSvg("object-select-atomic.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
+    <rect width="256" height="256" fill="#ffffff"/>
+    <circle cx="30" cy="128" r="16" fill="#0066ff"/>
+    <rect x="72" y="56" width="112" height="144" rx="20" fill="#111111"/>
+  </svg>`);
+  await page.waitForFunction(() => !document.querySelector("#actionHarnessButton")?.disabled,
+    null, { timeout: 90_000 });
+  await selectObjectTool();
 
   const inference = await page.evaluate(async () => {
     const { ObjectSegmentationClient, clickPromptStroke, rectanglePromptStroke } =
@@ -119,17 +119,7 @@ try {
     target.fillStyle = "#111"; target.fillRect(24, 20, 48, 56);
     const identity = { documentId: "fixture", stateId: "1", revision: 0, width: 96, height: 96 };
     const client = new ObjectSegmentationClient(); const progress = [];
-    let firstFailure = null;
-    try {
-      await client.setImage(source.transferToImageBitmap(), identity,
-        ({ phase }) => progress.push(phase));
-    } catch (error) {
-      firstFailure = { code: error.code, message: error.message };
-    }
-    const retry = new OffscreenCanvas(96, 96); const retryTarget = retry.getContext("2d");
-    retryTarget.fillStyle = "#fff"; retryTarget.fillRect(0, 0, 96, 96);
-    retryTarget.fillStyle = "#111"; retryTarget.fillRect(24, 20, 48, 56);
-    try { await client.setImage(retry.transferToImageBitmap(), identity,
+    try { await client.setImage(source.transferToImageBitmap(), identity,
       ({ phase }) => progress.push(phase)); }
     catch (error) { throw new Error(`${error.message}; progress=${progress.join(",")}`); }
     const positive = { isCompleted: true, brushMode: 1,
@@ -152,13 +142,11 @@ try {
       point: clickPromptStroke({ x: 56, y: 48 }, 112, 96) }], resizedIdentity);
     const recreatedRange = range(recreated.confidence);
     client.close();
-    return { width: result.width, height: result.height, ...clickRange, firstFailure,
+    return { width: result.width, height: result.height, ...clickRange,
       refinedRange, boxRange, recreatedReady, recreatedRange, latencyMs: result.latencyMs,
       refinementMs: refined.latencyMs, boxMs: boxed.latencyMs };
   });
   assert.ok(inference.width > 0 && inference.height > 0);
-  assert.equal(inference.firstFailure?.code, "LOCAL_ASSET_LOAD_FAILED", JSON.stringify(inference));
-  assert.match(inference.firstFailure?.message || "", /after cache recovery/i);
   assert.ok(inference.maximum > inference.minimum, JSON.stringify(inference));
   assert.ok(inference.refinedRange.maximum > inference.refinedRange.minimum, JSON.stringify(inference));
   assert.ok(inference.boxRange.maximum > inference.boxRange.minimum, JSON.stringify(inference));
@@ -168,8 +156,7 @@ try {
     JSON.stringify(inference));
   assert.ok(inference.latencyMs >= 0);
 
-  assert.equal(allRequests.some((url) => url.includes("magic-touch-int8-v1.task")), true,
-    "direct inference smoke above should have loaded the optional model lazily");
+  assert.equal(allRequests.some((url) => url.includes("magic-touch-int8-v1.task")), true);
   const backgroundBefore = await canvasPixel(16, 16);
   const revisionBefore = Number((await page.locator("#detailRevision").textContent()).trim());
   await page.click("#actionHarnessButton");
@@ -214,17 +201,25 @@ try {
     }, { x, y, id, shiftKey });
   await clickCanvas(.5, .5, 901);
   await waitForObjectPreview();
-  await page.click("#applyObjectSelectionButton");
-  await page.waitForFunction(() =>
-    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
   await clickCanvas(30 / 256, .5, 902, { shiftKey: true });
   const additive = await waitForObjectPreview();
   assert.match(additive.status, /^Add preview ready/i);
   assert.equal(await page.locator("#selectionModeInput").inputValue(), "replace",
     "Shift-add changed the stored selection mode");
-  await page.click("#applyObjectSelectionButton");
-  await page.waitForFunction(() =>
-    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  const layersBeforeClipboard = Number(await page.locator("#layerCount").textContent());
+  // Ctrl+C on a reviewed Object Select preview commits that preview through
+  // the canonical selection command before copying, matching direct-editor UX.
+  await page.keyboard.press("Control+c");
+  await page.keyboard.press("Control+v");
+  await page.waitForFunction(({ layersBeforeClipboard }) =>
+    Number(document.querySelector("#layerCount")?.textContent) === layersBeforeClipboard + 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { layersBeforeClipboard }, { timeout: 10_000 });
+  await page.keyboard.press("Control+z");
+  await page.waitForFunction(({ layersBeforeClipboard }) =>
+    Number(document.querySelector("#layerCount")?.textContent) === layersBeforeClipboard &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { layersBeforeClipboard }, { timeout: 10_000 });
   const leftBeforeCut = await canvasPixel(30, 128);
   const centerBeforeCut = await canvasPixel(128, 128);
   const backgroundBeforeReuse = await canvasPixel(220, 20);

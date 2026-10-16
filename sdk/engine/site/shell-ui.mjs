@@ -1257,6 +1257,7 @@ const RU = new Map(Object.entries({
   "Document changed while preparing the preview.": "Документ изменился во время подготовки предпросмотра.",
   "Document changed while segmenting the object.": "Документ изменился во время выделения объекта.",
   "Object selection proposal has no applicable foreground.": "В предложенном выделении объекта нет применимой области переднего плана.",
+  "Accumulated object selection no longer matches the document.": "Накопленное выделение объекта больше не соответствует документу.",
   "Object selection could not be committed.": "Не удалось применить выделение объекта.",
   "The filter recipe requires a committed selection.": "Для фильтра требуется применённое выделение.",
   "The filter recipe requires one visible unlocked pixel layer.": "Для фильтра нужен один видимый незаблокированный пиксельный слой.",
