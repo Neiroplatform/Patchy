@@ -2510,7 +2510,7 @@ async function inferObjectSelection(strokes, {
   }
 }
 
-async function applyObjectSelectionProposal() {
+async function applyObjectSelectionProposal({ resumeActionPlan = true } = {}) {
   if (!proposalMatchesSnapshot(objectSelectionProposal, snapshot)) {
     clearObjectSelectionProposal();
     const error = new Error("Create a new preview for the current document state.");
@@ -2528,7 +2528,7 @@ async function applyObjectSelectionProposal() {
     objectSelectionProposal.combineMode || "replace");
   clearObjectSelectionProposal();
   const result = await commitSelectionMask("Selecting object locally", gray);
-  if (result !== DIAGNOSTIC_COMMAND_FAILED && pendingActionPlan) {
+  if (result !== DIAGNOSTIC_COMMAND_FAILED && pendingActionPlan && resumeActionPlan) {
     rebindPendingActionPlan(); await continueActionPlan();
   } else if (result === DIAGNOSTIC_COMMAND_FAILED && pendingActionPlan) {
     await abortPendingActionPlan(new Error("Object selection could not be committed."));
@@ -2851,24 +2851,46 @@ async function isolateVisibleSelection(name) {
   if (!bounds) throw new Error("Background removal requires a committed object selection.");
   const sourceLayerIds = snapshot.layers.filter((layer) => layer.visible).map((layer) => layer.id);
   if (!sourceLayerIds.length) throw new Error("Background removal requires visible source layers.");
-  const output = renderedSelectionCanvas();
-  const image = output.getContext("2d", { alpha: true, willReadFrequently: true })
-    .getImageData(0, 0, output.width, output.height);
-  if (!image.data.some((value, index) => index % 4 === 3 && value > 0)) {
-    throw new Error("The selected object contains no visible pixels.");
-  }
   const previousIds = new Set(snapshot.layers.map((layer) => layer.id));
-  const createdSnapshot = await mutate("AI edit · isolate foreground", () => client.addPixelLayer({
-    name, width: output.width, height: output.height, bounds,
-    rgba: new Uint8Array(image.data),
-  }, { transferOwnership: true }));
-  if (!createdSnapshot || createdSnapshot === DIAGNOSTIC_COMMAND_FAILED) return createdSnapshot;
-  const created = createdSnapshot.layers.find((layer) => layer.kind === 0 && !previousIds.has(layer.id));
+  const mask = fullSelectionMask();
+  const completed = await mutate("AI edit · isolate foreground", async () => {
+    const rgba = await client.render(bounds);
+    const expectedBytes = bounds.width * bounds.height * 4;
+    if (!(rgba instanceof Uint8Array) || rgba.byteLength !== expectedBytes) {
+      throw new Error("Background removal received an incomplete visible composite.");
+    }
+    let visiblePixels = 0;
+    for (let y = 0; y < bounds.height; ++y) {
+      for (let x = 0; x < bounds.width; ++x) {
+        const pixel = y * bounds.width + x;
+        const coverage = mask[(bounds.y + y) * snapshot.width + bounds.x + x];
+        const alpha = Math.round(rgba[pixel * 4 + 3] * coverage / 255);
+        rgba[pixel * 4 + 3] = alpha;
+        if (alpha) visiblePixels += 1;
+      }
+    }
+    if (!visiblePixels) throw new Error("The selected object contains no visible pixels.");
+    const createdSnapshot = await client.addPixelLayer({
+      name, width: bounds.width, height: bounds.height, bounds, rgba,
+    }, { transferOwnership: true });
+    const created = createdSnapshot.layers.find((layer) =>
+      layer.kind === 0 && !previousIds.has(layer.id));
+    if (!created) throw new Error("Background removal did not create the foreground layer.");
+    const finalSnapshot = await client.editLayers(sourceLayerIds, 0, { value: 0 });
+    const finalCreated = finalSnapshot.layers.find((layer) => layer.id === created.id);
+    const hiddenSources = sourceLayerIds.every((layerId) =>
+      finalSnapshot.layers.some((layer) => layer.id === layerId && !layer.visible));
+    if (!finalCreated?.visible || !hiddenSources) {
+      throw new Error("Background removal did not finish isolating the foreground.");
+    }
+    return finalSnapshot;
+  });
+  if (!completed || completed === DIAGNOSTIC_COMMAND_FAILED) return DIAGNOSTIC_COMMAND_FAILED;
+  const created = completed.layers.find((layer) => layer.kind === 0 && !previousIds.has(layer.id));
   if (!created) return DIAGNOSTIC_COMMAND_FAILED;
   setSingleLayerSelection(created.id);
   renderLayers(); renderLayerProperties();
-  return mutate("AI edit · hide source layers",
-    () => client.editLayers(sourceLayerIds, 0, { value: 0 }));
+  return completed;
 }
 
 async function executeActionStep(step) {
@@ -2967,7 +2989,12 @@ async function continueActionPlan() {
           await inferObjectSelection(objectPromptStrokes, { combineMode: "replace" });
           if (pendingActionPlan === run &&
               proposalMatchesSnapshot(objectSelectionProposal, snapshot)) {
-            await applyObjectSelectionProposal();
+            const committed = await applyObjectSelectionProposal({ resumeActionPlan: false });
+            if (committed === DIAGNOSTIC_COMMAND_FAILED) {
+              throw new Error("Object selection could not be committed.");
+            }
+            rebindPendingActionPlan();
+            continue;
           }
           return;
         }

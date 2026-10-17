@@ -28,7 +28,8 @@ page.on("request", (request) => {
   if (url.startsWith("http") && new URL(url).origin !== expectedOrigin) remoteRequests.push(url);
 });
 
-async function dropSvg(name, contents) {
+async function dropSvg(name, contents, { width = 256, height = 256 } = {}) {
+  const tabCountBefore = await page.locator('#documentTabs [role="tab"]').count();
   await page.evaluate(({ name, contents }) => {
     const transfer = new DataTransfer();
     transfer.items.add(new File([contents], name, { type: "image/svg+xml" }));
@@ -36,13 +37,13 @@ async function dropSvg(name, contents) {
       bubbles: true, cancelable: true, dataTransfer: transfer,
     }));
   }, { name, contents });
-  await page.waitForFunction(() =>
-    document.querySelectorAll('#documentTabs [role="tab"]').length === 1 &&
-    document.querySelector("#documentCanvas")?.width === 256 &&
-    document.querySelector("#documentCanvas")?.height === 256 &&
+  await page.waitForFunction(({ tabCountBefore, width, height }) =>
+    document.querySelectorAll('#documentTabs [role="tab"]').length === tabCountBefore + 1 &&
+    document.querySelector("#documentCanvas")?.width === width &&
+    document.querySelector("#documentCanvas")?.height === height &&
     Number(document.querySelector("#layerCount")?.textContent) === 1 &&
     document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
-  null, { timeout: 90_000 });
+  { tabCountBefore, width, height }, { timeout: 90_000 });
 }
 
 async function canvasPixel(x, y) {
@@ -374,6 +375,41 @@ try {
   assert.ok(Number(boxTiming[2]) <= (boxTiming[1].toLowerCase() === "gpu" ? 2500 : 10_000),
     `box prompt exceeded its ${boxTiming[1]} tier budget: ${boxEvidence.status}`);
   await page.click("#cancelObjectSelectionButton");
+
+  await dropSvg("object-select-production-size.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000">
+    <rect width="1600" height="1000" fill="#263038"/>
+    <rect x="590" y="120" width="560" height="820" rx="170" fill="#d7b7a2"/>
+    <rect x="500" y="470" width="760" height="470" rx="150" fill="#20262c"/>
+    <rect x="480" y="520" width="210" height="390" rx="95" fill="#20262c"/>
+    <rect x="1070" y="520" width="210" height="390" rx="95" fill="#20262c"/>
+    <ellipse cx="690" cy="555" rx="115" ry="78" fill="#14191d"/>
+  </svg>`, { width: 1600, height: 1000 });
+  const productionBackgroundBefore = await canvasPixel(40, 40);
+  const productionSubjectBefore = await canvasPixel(850, 700);
+  const productionRevisionBefore = Number((await page.locator("#detailRevision").textContent()).trim());
+  await page.click("#actionHarnessButton");
+  await page.fill("#actionPromptInput", "Удали фон");
+  await page.click("#buildActionPlanButton");
+  await page.click("#executeActionPlanButton");
+  await page.waitForFunction(({ productionRevisionBefore }) =>
+    Number(document.querySelector("#detailRevision")?.textContent) >= productionRevisionBefore + 3 &&
+    Number(document.querySelector("#layerCount")?.textContent) === 2 &&
+    /one Undo restores/i.test(document.querySelector("#actionToast")?.textContent || "") &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { productionRevisionBefore }, { timeout: 90_000 });
+  assert.ok((await canvasPixel(40, 40))[3] < productionBackgroundBefore[3],
+    "production-size background removal did not become transparent");
+  assert.deepEqual(await canvasPixel(850, 700), productionSubjectBefore,
+    "production-size background removal lost the main subject");
+  assert.equal(await page.locator('#layerList .visibility-button[aria-label^="Show "]').count(), 1,
+    "production-size background removal did not hide its source layer");
+  await page.click("#undoButton");
+  await page.waitForFunction(() =>
+    Number(document.querySelector("#layerCount")?.textContent) === 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  null, { timeout: 90_000 });
+  assert.deepEqual(await canvasPixel(40, 40), productionBackgroundBefore,
+    "production-size one-step Undo did not restore the source document");
   assert.deepEqual(remoteRequests, []);
   assert.deepEqual(errors, []);
   console.log(`OBJECT-SELECTION-HARNESS PASS model=${inference.width}x${inference.height} latencyMs=${Math.round(inference.latencyMs)} refinementMs=${Math.round(inference.refinementMs)} boxMs=${Math.round(inference.boxMs)} atomicUndo=1`);
