@@ -150,7 +150,10 @@ function confidenceFromMask(mask) {
 }
 
 function segmentWithAutomaticDetail(engine, strokes) {
-  const primary = confidenceFromMask(engine.segment(strokes));
+  // promptIntent belongs to Patchy's routing boundary, not MediaPipe's public
+  // prompt contract. Strip it before invoking the third-party runtime.
+  const modelStrokes = strokes.map(({ promptIntent: _promptIntent, ...stroke }) => stroke);
+  const primary = confidenceFromMask(engine.segment(modelStrokes));
   const detailStrokes = automaticDetailPromptStroke(strokes, sourceCanvas.width, sourceCanvas.height);
   const prompt = strokes[0]?.point?.[2];
   if (!detailStrokes || !shouldAttemptAutomaticDetailConfidence(primary.confidence,

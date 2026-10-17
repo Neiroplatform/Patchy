@@ -106,6 +106,7 @@ try {
     <rect width="256" height="256" fill="#ffffff"/>
     <circle cx="30" cy="128" r="16" fill="#0066ff"/>
     <rect x="72" y="56" width="112" height="144" rx="20" fill="#111111"/>
+    <circle cx="128" cy="128" r="18" fill="#f97316"/>
   </svg>`);
   await page.waitForFunction(() => !document.querySelector("#actionHarnessButton")?.disabled,
     null, { timeout: 90_000 });
@@ -158,6 +159,8 @@ try {
 
   assert.equal(allRequests.some((url) => url.includes("magic-touch-int8-v1.task")), true);
   const backgroundBefore = await canvasPixel(16, 16);
+  const upperSubjectBefore = await canvasPixel(100, 80);
+  const lowerSubjectBefore = await canvasPixel(156, 180);
   const revisionBefore = Number((await page.locator("#detailRevision").textContent()).trim());
   await page.click("#actionHarnessButton");
   await page.fill("#actionPromptInput", "Удали фон");
@@ -178,6 +181,10 @@ try {
   const backgroundAfter = await canvasPixel(16, 16);
   assert.ok(backgroundAfter[3] < backgroundBefore[3],
     `background was not removed: ${backgroundBefore} -> ${backgroundAfter}`);
+  assert.deepEqual(await canvasPixel(100, 80), upperSubjectBefore,
+    "automatic foreground collapsed to the small object covering the centre");
+  assert.deepEqual(await canvasPixel(156, 180), lowerSubjectBefore,
+    "automatic foreground lost the distant extent of the main subject");
   assert.equal(Number(await page.locator("#layerCount").textContent()), 2,
     "background removal did not create an isolated foreground layer");
   assert.equal(await page.locator('#layerList .visibility-button[aria-label^="Show "]').count(), 1,
@@ -245,6 +252,7 @@ try {
   const layersBeforeRemoval = Number(await page.locator("#layerCount").textContent());
   const leftBeforeCut = await canvasPixel(30, 128);
   const centerBeforeCut = await canvasPixel(128, 128);
+  const lowerBeforeCut = await canvasPixel(156, 180);
   const backgroundBeforeReuse = await canvasPixel(220, 20);
   await page.click("#actionHarnessButton");
   await page.fill("#actionPromptInput", "Удали фон");
@@ -264,6 +272,8 @@ try {
     "stale Shift-added object survived automatic foreground replacement");
   assert.deepEqual(await canvasPixel(128, 128), centerBeforeCut,
     "automatic foreground subject was lost");
+  assert.deepEqual(await canvasPixel(156, 180), lowerBeforeCut,
+    "automatic foreground narrowed to the nested centre detail");
   assert.ok((await canvasPixel(220, 20))[3] < backgroundBeforeReuse[3],
     "background was not removed around the additive selection");
   assert.equal(Number(await page.locator("#layerCount").textContent()), layersBeforeRemoval + 1,

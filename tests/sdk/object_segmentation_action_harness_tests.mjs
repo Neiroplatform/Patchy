@@ -305,8 +305,12 @@ test("point and box prompts are normalized and bounded", () => {
   const box = rectanglePromptStroke({ x: 80, y: 70 }, { x: 20, y: 10 }, 100, 100);
   assert.equal(box.length, 5); assert.deepEqual(box[0], { x: .2, y: .1 });
   assert.deepEqual(box.at(-1), box[0]);
-  assert.deepEqual(automaticSubjectPromptStroke(100, 80), [{ isCompleted: true, brushMode: 1,
+  const automatic = automaticSubjectPromptStroke(100, 80);
+  assert.deepEqual(automatic, [{ isCompleted: true, brushMode: 1,
+    promptIntent: "automatic-subject",
     point: clickPromptStroke({ x: 50, y: 40 }, 100, 80) }]);
+  assert.equal(automaticDetailPromptStroke(automaticSubjectPromptStroke(800, 400), 800, 400), null,
+    "automatic main-subject intent must not narrow to a nested centre detail");
   assert.throws(() => automaticSubjectPromptStroke(0, 80), /positive integers/);
 });
 

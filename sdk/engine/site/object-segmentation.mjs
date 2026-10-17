@@ -86,6 +86,11 @@ export function boundedObjectPreviewSize(width, height,
 export function automaticDetailPromptStroke(strokes, width, height) {
   if (!Array.isArray(strokes) || strokes.length !== 1 || strokes[0]?.brushMode !== 1 ||
       !Array.isArray(strokes[0].point) || strokes[0].point.length !== 5) return null;
+  // Automatic recipes ask for the dominant foreground subject. The bounded
+  // second solve below exists for an explicit click on a nested detail (watch,
+  // microphone, etc.); applying it to an automatic centre prompt can replace a
+  // valid broad person mask with the small object covering the centre.
+  if (strokes[0].promptIntent === "automatic-subject") return null;
   if (![width, height].every((value) => Number.isInteger(value) && value > 0))
     throw new RangeError("detail prompt dimensions must be positive integers");
   // A second semantic solve cannot reveal a nested object when the retained
@@ -309,7 +314,7 @@ export function clickPromptStroke(point, width, height) {
 export function automaticSubjectPromptStroke(width, height) {
   if (![width, height].every((value) => Number.isInteger(value) && value > 0))
     throw new RangeError("automatic subject dimensions must be positive integers");
-  return [{ isCompleted: true, brushMode: 1,
+  return [{ isCompleted: true, brushMode: 1, promptIntent: "automatic-subject",
     point: clickPromptStroke({ x: width / 2, y: height / 2 }, width, height) }];
 }
 
