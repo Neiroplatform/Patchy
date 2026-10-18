@@ -1,7 +1,10 @@
 import { evictSameOriginCachedResponse, installSameOriginFetch,
   responseCacheCommit } from "./ml-network-policy.mjs";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME,
-  automaticDetailPromptStroke, boundedObjectPreviewSize, chooseAutomaticDetailConfidence,
+  automaticDetailPromptStroke, automaticSubjectMaskMetrics,
+  automaticSubjectPromptCandidates, boundedObjectPreviewSize,
+  chooseAutomaticDetailConfidence, chooseAutomaticSubjectConfidence,
+  isAutomaticSubjectProposalStrong,
   objectSegmentationDelegate, objectSelectionIdentityMatches,
   readResponseBytesWithProgress,
   shouldAttemptAutomaticDetailConfidence,
@@ -172,6 +175,52 @@ function segmentWithAutomaticDetail(engine, strokes) {
     automaticDetailApplied: chosen.automaticDetailApplied };
 }
 
+function isAutomaticSubject(strokes) {
+  return strokes.length === 1 && strokes[0]?.brushMode === 1 &&
+    strokes[0]?.promptIntent === "automatic-subject";
+}
+
+function segmentAutomaticSubject(engine) {
+  const prompts = automaticSubjectPromptCandidates(sourceCanvas.width, sourceCanvas.height);
+  const candidates = [];
+  const chosenResult = () => {
+    const chosen = chooseAutomaticSubjectConfidence(candidates,
+      candidates[0].width, candidates[0].height);
+    return { confidence: chosen.confidence, width: candidates[0].width,
+      height: candidates[0].height, automaticDetailApplied: false,
+      automaticCandidatesEvaluated: candidates.length,
+      automaticMasksMerged: chosen.merged };
+  };
+  for (const strokes of prompts) {
+    const modelStrokes = strokes.map(({ promptIntent: _promptIntent, ...stroke }) => stroke);
+    const result = confidenceFromMask(engine.segment(modelStrokes));
+    if (candidates.length && (result.width !== candidates[0].width ||
+        result.height !== candidates[0].height)) {
+      throw new RangeError("automatic subject candidate dimensions changed");
+    }
+    const prompt = strokes[0].point[2];
+    const metrics = automaticSubjectMaskMetrics(result.confidence,
+      result.width, result.height, prompt);
+    candidates.push({ ...result, prompt });
+    // Preserve the one-pass path for a bounded centre subject. Alternate
+    // candidates are only paid for when the centre behaves like background.
+    if (candidates.length === 1 && isAutomaticSubjectProposalStrong(metrics)) {
+      return { ...result, automaticDetailApplied: false,
+        automaticCandidatesEvaluated: 1, automaticMasksMerged: 1 };
+    }
+    // A split foreground such as foliage plus its pot is already identified
+    // after the paired upper/lower probes on that side. Avoid paying for the
+    // opposite side once two related bounded masks have been joined.
+    if (candidates.length >= 3) {
+      try {
+        const partial = chosenResult();
+        if (partial.automaticMasksMerged >= 2) return partial;
+      } catch {}
+    }
+  }
+  return chosenResult();
+}
+
 self.addEventListener("message", async ({ data }) => {
   try {
     if (data.type === "preload") {
@@ -207,13 +256,17 @@ self.addEventListener("message", async ({ data }) => {
     const started = performance.now();
     let engine = await segmenter(data.requestId); let result;
     result = await withObjectSegmentationRuntimeFallback(runtimeTier,
-      () => segmentWithAutomaticDetail(engine, data.strokes), async () => {
+      () => isAutomaticSubject(data.strokes) ? segmentAutomaticSubject(engine) :
+        segmentWithAutomaticDetail(engine, data.strokes), async () => {
         engine = await useWasmFallback(data.requestId);
-        return segmentWithAutomaticDetail(engine, data.strokes);
+        return isAutomaticSubject(data.strokes) ? segmentAutomaticSubject(engine) :
+          segmentWithAutomaticDetail(engine, data.strokes);
       });
     self.postMessage({ type: "mask", requestId: data.requestId, identity: imageIdentity,
       width: result.width, height: result.height, confidence: result.confidence,
       automaticDetailApplied: result.automaticDetailApplied,
+      automaticCandidatesEvaluated: result.automaticCandidatesEvaluated || 1,
+      automaticMasksMerged: result.automaticMasksMerged || 1,
       latencyMs: performance.now() - started, runtimeTier }, [result.confidence.buffer]);
   } catch (error) {
     self.postMessage({ type: "error", requestId: data.requestId,

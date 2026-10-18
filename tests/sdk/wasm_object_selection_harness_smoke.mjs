@@ -376,6 +376,45 @@ try {
     `box prompt exceeded its ${boxTiming[1]} tier budget: ${boxEvidence.status}`);
   await page.click("#cancelObjectSelectionButton");
 
+  await dropSvg("object-select-off-centre-product.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000">
+    <rect width="1600" height="1000" fill="#caa574"/>
+    <g fill="#358b2d">
+      <ellipse cx="330" cy="220" rx="160" ry="90"/>
+      <ellipse cx="500" cy="180" rx="180" ry="110"/>
+      <ellipse cx="600" cy="310" rx="160" ry="100"/>
+      <ellipse cx="360" cy="360" rx="190" ry="110"/>
+    </g>
+    <rect x="330" y="420" width="300" height="350" fill="#eee1cb"/>
+    <rect x="900" y="670" width="600" height="220" fill="#fafafa"/>
+  </svg>`, { width: 1600, height: 1000 });
+  const productLeafBefore = await canvasPixel(400, 250);
+  const productPotBefore = await canvasPixel(450, 600);
+  const productBackgroundBefore = await canvasPixel(1200, 200);
+  const productDistractorBefore = await canvasPixel(1200, 760);
+  const productRevisionBefore = Number((await page.locator("#detailRevision").textContent()).trim());
+  await page.click("#actionHarnessButton");
+  await page.fill("#actionPromptInput", "Удали фон");
+  await page.click("#buildActionPlanButton");
+  await page.click("#executeActionPlanButton");
+  await page.waitForFunction(({ productRevisionBefore }) =>
+    Number(document.querySelector("#detailRevision")?.textContent) >= productRevisionBefore + 3 &&
+    /one Undo restores/i.test(document.querySelector("#actionToast")?.textContent || "") &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { productRevisionBefore }, { timeout: 90_000 });
+  assert.deepEqual(await canvasPixel(400, 250), productLeafBefore,
+    "off-centre non-person crown was removed");
+  assert.deepEqual(await canvasPixel(450, 600), productPotBefore,
+    "split lower part of the non-person subject was not joined");
+  assert.ok((await canvasPixel(1200, 200))[3] < productBackgroundBefore[3],
+    "off-centre product background remained opaque");
+  assert.ok((await canvasPixel(1200, 760))[3] < productDistractorBefore[3],
+    "separate product-scene distractor was retained");
+  await page.click("#undoButton");
+  await page.waitForFunction(() =>
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
+  assert.deepEqual(await canvasPixel(1200, 760), productDistractorBefore,
+    "one Undo did not restore the non-person source scene");
+
   await dropSvg("object-select-production-size.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000">
     <rect width="1600" height="1000" fill="#263038"/>
     <rect x="590" y="120" width="560" height="820" rx="170" fill="#d7b7a2"/>

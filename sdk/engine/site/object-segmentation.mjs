@@ -311,11 +311,107 @@ export function clickPromptStroke(point, width, height) {
     ({ x: Math.round((start + delta) * 1e6) / 1e6, y: center.y }));
 }
 
-export function automaticSubjectPromptStroke(width, height) {
+export function compactClickPromptStroke(point, width, height) {
+  const center = normalizedPromptPoint(point, width, height);
+  return [-.008, -.004, 0, .004, .008].map((delta) => ({
+    x: Math.round(Math.max(0, Math.min(1, center.x + delta)) * 1e6) / 1e6,
+    y: center.y,
+  }));
+}
+
+export function automaticSubjectPromptCandidates(width, height) {
   if (![width, height].every((value) => Number.isInteger(value) && value > 0))
     throw new RangeError("automatic subject dimensions must be positive integers");
-  return [{ isCompleted: true, brushMode: 1, promptIntent: "automatic-subject",
-    point: clickPromptStroke({ x: width / 2, y: height / 2 }, width, height) }];
+  // The centre remains the fast path for ordinary portraits. The four bounded
+  // alternatives cover an off-centre product/animal/plant without telling the
+  // semantic model that every touched region belongs to one object.
+  return [[.5, .5], [.32, .38], [.32, .55], [.68, .38], [.68, .55]].map(([x, y]) =>
+    [{ isCompleted: true, brushMode: 1, promptIntent: "automatic-subject",
+      point: compactClickPromptStroke({ x: x * width, y: y * height }, width, height) }]);
+}
+
+export function automaticSubjectPromptStroke(width, height) {
+  return automaticSubjectPromptCandidates(width, height)[0];
+}
+
+export function automaticSubjectMaskMetrics(confidence, width, height, prompt) {
+  if (!(confidence instanceof Float32Array) || confidence.length !== width * height)
+    throw new TypeError("automatic subject mask must match its dimensions");
+  if (!prompt || !Number.isFinite(prompt.x) || !Number.isFinite(prompt.y))
+    throw new TypeError("automatic subject prompt is invalid");
+  let area = 0; let border = 0;
+  let minX = width; let minY = height; let maxX = -1; let maxY = -1;
+  const edges = [false, false, false, false];
+  for (let y = 0; y < height; ++y) {
+    for (let x = 0; x < width; ++x) {
+      if (confidence[y * width + x] < .5) continue;
+      area += 1;
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+      if (x === 0) { border += 1; edges[0] = true; }
+      if (x + 1 === width) { border += 1; edges[1] = true; }
+      if (y === 0) { border += 1; edges[2] = true; }
+      if (y + 1 === height) { border += 1; edges[3] = true; }
+    }
+  }
+  const x = Math.max(0, Math.min(width - 1, Math.floor(prompt.x * width)));
+  const y = Math.max(0, Math.min(height - 1, Math.floor(prompt.y * height)));
+  const areaRatio = area / confidence.length;
+  const borderRatio = border / Math.max(1, width * 2 + height * 2);
+  const edgesTouched = edges.filter(Boolean).length;
+  const promptSelected = confidence[y * width + x] >= .5;
+  const viable = promptSelected && area >= 4 && areaRatio <= .82 &&
+    borderRatio <= .28 && edgesTouched <= 2;
+  return { area, areaRatio, border, borderRatio, edgesTouched, promptSelected,
+    bounds: area ? { minX, minY, maxX, maxY } : null,
+    viable, score: areaRatio - borderRatio * 2 - edgesTouched * .04 };
+}
+
+export function isAutomaticSubjectProposalStrong(metrics) {
+  return Boolean(metrics?.viable && metrics.borderRatio <= .2 && metrics.edgesTouched <= 1);
+}
+
+function automaticSubjectOverlap(left, right) {
+  let leftArea = 0; let rightArea = 0; let overlap = 0;
+  for (let index = 0; index < left.length; ++index) {
+    const leftSelected = left[index] >= .5; const rightSelected = right[index] >= .5;
+    if (leftSelected) leftArea += 1;
+    if (rightSelected) rightArea += 1;
+    if (leftSelected && rightSelected) overlap += 1;
+  }
+  return overlap / Math.max(1, Math.min(leftArea, rightArea));
+}
+
+function automaticSubjectBoundsOverlap(left, right) {
+  if (!left || !right) return 0;
+  const width = Math.max(0, Math.min(left.maxX, right.maxX) - Math.max(left.minX, right.minX) + 1);
+  const height = Math.max(0, Math.min(left.maxY, right.maxY) - Math.max(left.minY, right.minY) + 1);
+  const leftArea = (left.maxX - left.minX + 1) * (left.maxY - left.minY + 1);
+  const rightArea = (right.maxX - right.minX + 1) * (right.maxY - right.minY + 1);
+  return width * height / Math.max(1, Math.min(leftArea, rightArea));
+}
+
+export function chooseAutomaticSubjectConfidence(candidates, width, height) {
+  if (!Array.isArray(candidates) || !candidates.length)
+    throw new TypeError("automatic subject candidates are required");
+  const evaluated = candidates.map((candidate, index) => ({ ...candidate, index,
+    metrics: automaticSubjectMaskMetrics(candidate.confidence, width, height, candidate.prompt) }));
+  const ranked = evaluated.filter(({ metrics }) => metrics.viable)
+    .sort((left, right) => right.metrics.score - left.metrics.score || left.index - right.index);
+  if (!ranked.length) throw new RangeError("automatic subject discovery found only background masks");
+  const selected = ranked[0]; const confidence = new Float32Array(selected.confidence);
+  let merged = 1;
+  for (const candidate of ranked.slice(1)) {
+    const pixelOverlap = automaticSubjectOverlap(confidence, candidate.confidence);
+    const boundsOverlap = automaticSubjectBoundsOverlap(selected.metrics.bounds,
+      candidate.metrics.bounds);
+    if (pixelOverlap < .015 && boundsOverlap < .08) continue;
+    for (let index = 0; index < confidence.length; ++index)
+      confidence[index] = Math.max(confidence[index], candidate.confidence[index]);
+    merged += 1;
+  }
+  return { confidence, selectedIndex: selected.index, merged,
+    metrics: evaluated.map(({ metrics }) => metrics) };
 }
 
 export function rectanglePromptStroke(start, end, width, height) {

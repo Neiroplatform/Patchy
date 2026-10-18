@@ -4,9 +4,11 @@ import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
   OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE, OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE,
   OBJECT_SEGMENTATION_REQUEST_TIMEOUT_MS, automaticDetailPromptStroke,
+  automaticSubjectMaskMetrics, automaticSubjectPromptCandidates,
   automaticSubjectPromptStroke,
   boundedObjectPreviewSize, chooseAutomaticDetailConfidence,
-  clickPromptStroke, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
+  chooseAutomaticSubjectConfidence, clickPromptStroke, compactClickPromptStroke,
+  isAutomaticSubjectProposalStrong, normalizedPromptPoint, proposalMatchesSnapshot, rectanglePromptStroke,
   scaleConfidenceMask, refineObjectSelectionMask, combineSelectionMasks, hasSelectableObjectCoverage, objectSegmentationDelegate,
   objectSelectionIdentityMatches,
   readResponseBytesWithProgress,
@@ -323,10 +325,52 @@ test("point and box prompts are normalized and bounded", () => {
   const automatic = automaticSubjectPromptStroke(100, 80);
   assert.deepEqual(automatic, [{ isCompleted: true, brushMode: 1,
     promptIntent: "automatic-subject",
-    point: clickPromptStroke({ x: 50, y: 40 }, 100, 80) }]);
+    point: compactClickPromptStroke({ x: 50, y: 40 }, 100, 80) }]);
+  assert.equal(automaticSubjectPromptCandidates(100, 80).length, 5);
+  assert.deepEqual(automaticSubjectPromptCandidates(100, 80)[1][0].point,
+    compactClickPromptStroke({ x: 32, y: 30.4 }, 100, 80));
+  assert.deepEqual(automaticSubjectPromptCandidates(100, 80)[2][0].point,
+    compactClickPromptStroke({ x: 32, y: 44 }, 100, 80));
   assert.equal(automaticDetailPromptStroke(automaticSubjectPromptStroke(800, 400), 800, 400), null,
     "automatic main-subject intent must not narrow to a nested centre detail");
   assert.throws(() => automaticSubjectPromptStroke(0, 80), /positive integers/);
+});
+
+test("automatic subject discovery rejects border background and joins one split foreground", () => {
+  const width = 20; const height = 16;
+  const background = new Float32Array(width * height);
+  for (let y = 0; y < height; ++y)
+    for (let x = 0; x < width; ++x)
+      if (x < 8 || y < 3 || y > 12) background[y * width + x] = 1;
+  const crown = new Float32Array(width * height);
+  for (let y = 3; y <= 9; ++y)
+    for (let x = 4; x <= 12; ++x) crown[y * width + x] = 1;
+  const base = new Float32Array(width * height);
+  for (let y = 8; y <= 13; ++y)
+    for (let x = 7; x <= 11; ++x) base[y * width + x] = 1;
+  const distractor = new Float32Array(width * height);
+  for (let y = 3; y <= 5; ++y)
+    for (let x = 16; x <= 18; ++x) distractor[y * width + x] = 1;
+  const backgroundMetrics = automaticSubjectMaskMetrics(background, width, height,
+    { x: .25, y: .5 });
+  assert.equal(backgroundMetrics.viable, false);
+  assert.equal(isAutomaticSubjectProposalStrong(backgroundMetrics), false);
+  const crownMetrics = automaticSubjectMaskMetrics(crown, width, height, { x: .4, y: .4 });
+  assert.equal(crownMetrics.viable, true);
+  assert.equal(isAutomaticSubjectProposalStrong(crownMetrics), true);
+  const chosen = chooseAutomaticSubjectConfidence([
+    { confidence: background, prompt: { x: .25, y: .5 } },
+    { confidence: crown, prompt: { x: .4, y: .4 } },
+    { confidence: base, prompt: { x: .45, y: .7 } },
+    { confidence: distractor, prompt: { x: .85, y: .25 } },
+  ], width, height);
+  assert.equal(chosen.selectedIndex, 1);
+  assert.equal(chosen.merged, 2);
+  assert.equal(chosen.confidence[12 * width + 9], 1, "connected lower object was not joined");
+  assert.equal(chosen.confidence[4 * width + 17], 0, "separate distractor was joined");
+  assert.throws(() => chooseAutomaticSubjectConfidence([
+    { confidence: background, prompt: { x: .25, y: .5 } },
+  ], width, height), /only background masks/);
 });
 
 test("automatic click detail uses a bounded box and keeps only a valid tighter prompted object", () => {
