@@ -2883,6 +2883,17 @@ async function isolateVisibleSelection(name) {
     if (!finalCreated?.visible || !hiddenSources) {
       throw new Error("Background removal did not finish isolating the foreground.");
     }
+    const finalRgba = await client.render(bounds);
+    if (!(finalRgba instanceof Uint8Array) || finalRgba.byteLength !== expectedBytes) {
+      throw new Error("Background removal produced an incomplete final composite.");
+    }
+    let finalVisiblePixels = 0;
+    for (let index = 3; index < finalRgba.length; index += 4) {
+      if (finalRgba[index]) finalVisiblePixels += 1;
+    }
+    if (!finalVisiblePixels) {
+      throw new Error("Background removal produced an empty final composite.");
+    }
     return finalSnapshot;
   });
   if (!completed || completed === DIAGNOSTIC_COMMAND_FAILED) return DIAGNOSTIC_COMMAND_FAILED;
@@ -3013,14 +3024,22 @@ async function continueActionPlan() {
     if (run.groupId) {
       if (run.cancelled || pendingActionPlan !== run)
         throw Object.assign(new Error("Action plan was stopped"), { name: "AbortError" });
-      await client.commitHistoryGroup(run.groupId);
-      run.groupId = null;
-      const mutated = String(snapshot.documentId) === run.startDocumentId &&
-        (String(snapshot.stateId) !== run.startStateId || Number(snapshot.revision) !== run.startRevision);
-      if (mutated) {
-        const labels = historyLabels(snapshot.documentId);
-        labels.undo.push(`AI edit · ${run.plan.prompt}`); labels.redo.length = 0;
-        reconcileHistoryLabels(snapshot, labels); renderHistory();
+      setBusy(true, "Finishing AI edit", "Accepting the committed document revision");
+      try {
+        const committed = await client.commitHistoryGroup(run.groupId);
+        run.groupId = null;
+        const mutated = String(committed.documentId) === run.startDocumentId &&
+          (String(committed.stateId) !== run.startStateId ||
+            Number(committed.revision) !== run.startRevision);
+        await acceptSnapshot(committed);
+        scheduleCheckpoint(committed);
+        if (mutated) {
+          const labels = historyLabels(committed.documentId);
+          labels.undo.push(`AI edit · ${run.plan.prompt}`); labels.redo.length = 0;
+          reconcileHistoryLabels(committed, labels); renderHistory();
+        }
+      } finally {
+        setBusy(false);
       }
     }
     if (pendingActionPlan === run) pendingActionPlan = null;

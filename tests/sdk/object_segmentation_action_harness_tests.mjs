@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentationClient,
   OBJECT_SEGMENTATION_DETAIL_MIN_SHORT_EDGE, OBJECT_SEGMENTATION_PREVIEW_MAX_LONG_EDGE,
@@ -17,11 +18,25 @@ import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlanner
 import { evictSameOriginCachedResponse, installSameOriginFetch,
   responseCacheCommit } from "../../sdk/engine/site/ml-network-policy.mjs";
 
+const editorSource = () => readFileSync(
+  new URL("../../sdk/engine/site/editor.mjs", import.meta.url), "utf8");
+
 test("object proposals are exact-state bound", () => {
   const snapshot = { documentId: 7n, stateId: 9n, revision: 11, width: 2, height: 2 };
   const proposal = { documentId: "7", stateId: "9", revision: 11, width: 2, height: 2 };
   assert.equal(proposalMatchesSnapshot(proposal, snapshot), true);
   assert.equal(proposalMatchesSnapshot({ ...proposal, revision: 12 }, snapshot), false);
+});
+
+test("atomic AI actions accept the exact committed projection and reject empty isolation", () => {
+  const source = editorSource();
+  const commit = source.indexOf("const committed = await client.commitHistoryGroup(run.groupId)");
+  const accept = source.indexOf("await acceptSnapshot(committed)", commit);
+  const complete = source.indexOf("AI edit plan completed locally", accept);
+  assert.ok(commit >= 0 && accept > commit && complete > accept,
+    "the action executor exposed a stale pre-commit document projection");
+  assert.match(source, /const finalRgba = await client\.render\(bounds\)[\s\S]*?Background removal produced an empty final composite/,
+    "background removal lacks a rendered-output postcondition");
 });
 
 test("object embedding reuse is bound to exact document source identity", () => {

@@ -403,6 +403,32 @@ try {
     "production-size background removal lost the main subject");
   assert.equal(await page.locator('#layerList .visibility-button[aria-label^="Show "]').count(), 1,
     "production-size background removal did not hide its source layer");
+  const productionLayersAfterRemoval = Number(await page.locator("#layerCount").textContent());
+  const revisionBeforeClearingPostActionSelection = Number(
+    (await page.locator("#detailRevision").textContent()).trim());
+  await page.keyboard.press("Control+d");
+  await page.waitForFunction(({ revisionBeforeClearingPostActionSelection }) =>
+    Number(document.querySelector("#detailRevision")?.textContent) >
+      revisionBeforeClearingPostActionSelection &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { revisionBeforeClearingPostActionSelection }, { timeout: 10_000 });
+  await page.keyboard.press("Control+c");
+  await page.keyboard.press("Control+v");
+  await page.waitForFunction(({ productionLayersAfterRemoval }) =>
+    Number(document.querySelector("#layerCount")?.textContent) === productionLayersAfterRemoval + 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { productionLayersAfterRemoval }, { timeout: 10_000 });
+  assert.doesNotMatch(await page.locator("#actionToast").textContent(),
+    /stale document state|request is stale/i,
+    "the first clipboard operation after the atomic action used a stale snapshot");
+  await page.click("#undoButton");
+  await page.waitForFunction(({ productionLayersAfterRemoval }) =>
+    Number(document.querySelector("#layerCount")?.textContent) === productionLayersAfterRemoval &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { productionLayersAfterRemoval }, { timeout: 10_000 });
+  await page.click("#undoButton");
+  await page.waitForFunction(() =>
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true");
   await page.click("#undoButton");
   await page.waitForFunction(() =>
     Number(document.querySelector("#layerCount")?.textContent) === 1 &&
