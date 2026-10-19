@@ -238,12 +238,18 @@ self.addEventListener("message", async ({ data }) => {
       const dimensionsChanged = renderCanvas.width !== size.width || renderCanvas.height !== size.height;
       if (dimensionsChanged) await disposeSegmenter();
       sourceCanvas.width = size.width; sourceCanvas.height = size.height;
-      const sourceContext = sourceCanvas.getContext("2d", { alpha: true, willReadFrequently: true });
+      const sourceContext = sourceCanvas.getContext("2d", { alpha: true });
       sourceContext.drawImage(data.bitmap, 0, 0, size.width, size.height);
-      data.bitmap.close?.();
+      // Keep readback off the canvas passed to MediaPipe. Chromium may switch a
+      // read-back canvas to a software backing store; on Windows that changed
+      // the explicit nested-detail proposal even though the pixels were equal.
+      const boundsCanvas = new OffscreenCanvas(size.width, size.height);
+      const boundsContext = boundsCanvas.getContext("2d", { alpha: true, willReadFrequently: true });
+      boundsContext.drawImage(data.bitmap, 0, 0, size.width, size.height);
       sourceContentBounds = visibleContentBounds(
-        sourceContext.getImageData(0, 0, size.width, size.height).data,
+        boundsContext.getImageData(0, 0, size.width, size.height).data,
         size.width, size.height) || { x: 0, y: 0, width: size.width, height: size.height };
+      data.bitmap.close?.();
       if (dimensionsChanged) recreateRenderCanvas(size.width, size.height);
       let engine = await segmenter(data.requestId);
       engine = await withObjectSegmentationRuntimeFallback(runtimeTier,
