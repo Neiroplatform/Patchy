@@ -221,6 +221,15 @@ export function refineObjectSelectionMask(source, width, height) {
     if (binary[index] && !opened[index] && source[index] < 208) binary[index] = 0;
   }
 
+  // A small subject can occupy only one or two model pixels after a large,
+  // mostly-transparent document is reduced to the bounded inference preview.
+  // Cross opening has no meaningful topology at that scale. If it removed
+  // every selectable pixel, keep the original model proposal and let the
+  // component and rendered-output postconditions below decide whether it is
+  // usable. A genuinely empty model result still fails closed.
+  if (!binary.some(Boolean) && hasSelectableObjectCoverage(source))
+    binary.set(originalBinary);
+
   const foreground = maskComponents(binary, width, height, true);
   const largestComponent = foreground.reduce((largest, component) =>
     !largest || component.pixels.length > largest.pixels.length ? component : largest, null);
@@ -319,15 +328,40 @@ export function compactClickPromptStroke(point, width, height) {
   }));
 }
 
-export function automaticSubjectPromptCandidates(width, height) {
+export function visibleContentBounds(source, width, height, alphaThreshold = 0) {
+  if (!(source instanceof Uint8Array || source instanceof Uint8ClampedArray) ||
+      source.length !== width * height * 4)
+    throw new TypeError("visible content pixels must match their dimensions");
+  if (![width, height].every((value) => Number.isInteger(value) && value > 0) ||
+      !Number.isInteger(alphaThreshold) || alphaThreshold < 0 || alphaThreshold > 255)
+    throw new RangeError("visible content bounds are invalid");
+  let minX = width; let minY = height; let maxX = -1; let maxY = -1;
+  for (let index = 0; index < width * height; ++index) {
+    if (source[index * 4 + 3] <= alphaThreshold) continue;
+    const x = index % width; const y = Math.floor(index / width);
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+  }
+  return maxX < minX ? null : { x: minX, y: minY,
+    width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
+export function automaticSubjectPromptCandidates(width, height, contentBounds = null) {
   if (![width, height].every((value) => Number.isInteger(value) && value > 0))
     throw new RangeError("automatic subject dimensions must be positive integers");
+  const bounds = contentBounds || { x: 0, y: 0, width, height };
+  if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) ||
+      bounds.x < 0 || bounds.y < 0 || bounds.width <= 0 || bounds.height <= 0 ||
+      bounds.x + bounds.width > width || bounds.y + bounds.height > height)
+    throw new RangeError("automatic subject content bounds are invalid");
   // The centre remains the fast path for ordinary portraits. The four bounded
-  // alternatives cover an off-centre product/animal/plant without telling the
-  // semantic model that every touched region belongs to one object.
+  // alternatives cover an off-centre product/animal/plant. For a pasted or
+  // placed raster on a larger transparent document, all probes are relative to
+  // the actual visible content instead of landing in transparent canvas space.
   return [[.5, .5], [.32, .38], [.32, .55], [.68, .38], [.68, .55]].map(([x, y]) =>
     [{ isCompleted: true, brushMode: 1, promptIntent: "automatic-subject",
-      point: compactClickPromptStroke({ x: x * width, y: y * height }, width, height) }]);
+      point: compactClickPromptStroke({ x: bounds.x + x * bounds.width,
+        y: bounds.y + y * bounds.height }, width, height) }]);
 }
 
 export function automaticSubjectPromptStroke(width, height) {

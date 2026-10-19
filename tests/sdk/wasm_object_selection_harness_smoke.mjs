@@ -415,6 +415,47 @@ try {
   assert.deepEqual(await canvasPixel(1200, 760), productDistractorBefore,
     "one Undo did not restore the non-person source scene");
 
+  await dropSvg("object-select-offset-animal.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000">
+    <rect x="80" y="70" width="560" height="380" rx="8" fill="#91b57a"/>
+    <g fill="#71452f" stroke="#4a2b20" stroke-width="10" stroke-linejoin="round">
+      <ellipse cx="390" cy="270" rx="155" ry="82"/>
+      <circle cx="220" cy="235" r="66"/>
+      <path d="M172 190L185 125L225 181L252 124L275 198Z"/>
+      <rect x="285" y="315" width="42" height="95" rx="18"/>
+      <rect x="450" y="315" width="42" height="95" rx="18"/>
+      <path d="M525 250Q610 170 602 305" fill="none" stroke-width="34" stroke-linecap="round"/>
+    </g>
+  </svg>`, { width: 1600, height: 1000 });
+  const animalTransparentBefore = await canvasPixel(1000, 700);
+  const animalBackgroundBefore = await canvasPixel(120, 100);
+  const animalSubjectBefore = await canvasPixel(390, 270);
+  assert.equal(animalTransparentBefore[3], 0, "offset-animal fixture lost transparent canvas");
+  assert.equal(animalBackgroundBefore[3], 255, "offset-animal fixture lacks opaque photo background");
+  const animalRevisionBefore = Number((await page.locator("#detailRevision").textContent()).trim());
+  await page.click("#actionHarnessButton");
+  await page.fill("#actionPromptInput", "Удали фон");
+  await page.click("#buildActionPlanButton");
+  await page.click("#executeActionPlanButton");
+  await page.waitForFunction(({ animalRevisionBefore }) =>
+    Number(document.querySelector("#detailRevision")?.textContent) >= animalRevisionBefore + 3 &&
+    Number(document.querySelector("#layerCount")?.textContent) === 2 &&
+    /one Undo restores/i.test(document.querySelector("#actionToast")?.textContent || "") &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  { animalRevisionBefore }, { timeout: 90_000 });
+  assert.ok((await canvasPixel(120, 100))[3] < animalBackgroundBefore[3],
+    "offset animal photo background remained opaque");
+  assert.deepEqual(await canvasPixel(390, 270), animalSubjectBefore,
+    "offset animal was lost during background removal");
+  assert.equal((await canvasPixel(1000, 700))[3], 0,
+    "transparent canvas outside the offset animal became opaque");
+  await page.click("#undoButton");
+  await page.waitForFunction(() =>
+    Number(document.querySelector("#layerCount")?.textContent) === 1 &&
+    document.querySelector(".editor-shell")?.getAttribute("aria-busy") !== "true",
+  null, { timeout: 90_000 });
+  assert.deepEqual(await canvasPixel(120, 100), animalBackgroundBefore,
+    "one Undo did not restore the offset-animal source scene");
+
   await dropSvg("object-select-production-size.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000">
     <rect width="1600" height="1000" fill="#263038"/>
     <rect x="590" y="120" width="560" height="820" rx="170" fill="#d7b7a2"/>

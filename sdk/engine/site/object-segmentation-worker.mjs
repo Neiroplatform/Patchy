@@ -8,6 +8,7 @@ import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME,
   objectSegmentationDelegate, objectSelectionIdentityMatches,
   readResponseBytesWithProgress,
   shouldAttemptAutomaticDetailConfidence,
+  visibleContentBounds,
   withObjectSegmentationRuntimeFallback } from "./object-segmentation.mjs";
 
 const CACHE_NAME =
@@ -27,6 +28,7 @@ let forceWasm = false;
 let imageIdentity = null;
 let renderCanvas = new OffscreenCanvas(1, 1);
 const sourceCanvas = new OffscreenCanvas(1, 1);
+let sourceContentBounds = { x: 0, y: 0, width: 1, height: 1 };
 
 function recreateRenderCanvas(width = renderCanvas.width, height = renderCanvas.height) {
   renderCanvas = new OffscreenCanvas(width, height);
@@ -181,7 +183,8 @@ function isAutomaticSubject(strokes) {
 }
 
 function segmentAutomaticSubject(engine) {
-  const prompts = automaticSubjectPromptCandidates(sourceCanvas.width, sourceCanvas.height);
+  const prompts = automaticSubjectPromptCandidates(sourceCanvas.width, sourceCanvas.height,
+    sourceContentBounds);
   const candidates = [];
   const chosenResult = () => {
     const chosen = chooseAutomaticSubjectConfidence(candidates,
@@ -235,8 +238,12 @@ self.addEventListener("message", async ({ data }) => {
       const dimensionsChanged = renderCanvas.width !== size.width || renderCanvas.height !== size.height;
       if (dimensionsChanged) await disposeSegmenter();
       sourceCanvas.width = size.width; sourceCanvas.height = size.height;
-      sourceCanvas.getContext("2d", { alpha: true }).drawImage(data.bitmap, 0, 0, size.width, size.height);
+      const sourceContext = sourceCanvas.getContext("2d", { alpha: true, willReadFrequently: true });
+      sourceContext.drawImage(data.bitmap, 0, 0, size.width, size.height);
       data.bitmap.close?.();
+      sourceContentBounds = visibleContentBounds(
+        sourceContext.getImageData(0, 0, size.width, size.height).data,
+        size.width, size.height) || { x: 0, y: 0, width: size.width, height: size.height };
       if (dimensionsChanged) recreateRenderCanvas(size.width, size.height);
       let engine = await segmenter(data.requestId);
       engine = await withObjectSegmentationRuntimeFallback(runtimeTier,

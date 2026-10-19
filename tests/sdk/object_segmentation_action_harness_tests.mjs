@@ -14,6 +14,7 @@ import { OBJECT_SEGMENTATION_MODEL, OBJECT_SEGMENTATION_RUNTIME, ObjectSegmentat
   readResponseBytesWithProgress,
   selectionCombineModeForPointer,
   shouldAttemptAutomaticDetailConfidence,
+  visibleContentBounds,
   withObjectSegmentationRuntimeFallback } from "../../sdk/engine/site/object-segmentation.mjs";
 import { ACTION_PLAN_PLANNER, ActionPlanClarificationError, DeterministicPlannerAdapter,
   actionPlanSummary, planPrompt, validateActionPlan } from "../../sdk/engine/site/action-harness.mjs";
@@ -266,7 +267,7 @@ test("automatic object-mask cleanup preserves Gray8 soft-edge coverage", () => {
     assert.equal(refined[y * width + x], 64, `soft edge ${x},${y} was quantized away`);
 });
 
-test("automatic object-mask cleanup preserves the primary tiny object and fails closed on emptying", () => {
+test("automatic object-mask cleanup preserves primary and low-resolution tiny objects", () => {
   const width = 9; const height = 9;
   for (const size of [1, 2, 3]) {
     const source = new Uint8Array(width * height);
@@ -278,7 +279,8 @@ test("automatic object-mask cleanup preserves the primary tiny object and fails 
   }
   const weakHalo = new Uint8Array(width * height); weakHalo[4 * width + 4] = 160;
   for (const [x, y] of [[4, 3], [3, 4], [5, 4], [4, 5]]) weakHalo[y * width + x] = 64;
-  assert.throws(() => refineObjectSelectionMask(weakHalo, width, height), /emptied proposal/);
+  assert.equal(refineObjectSelectionMask(weakHalo, width, height)[4 * width + 4], 160,
+    "low-resolution subject was erased by topology cleanup");
   assert.equal(hasSelectableObjectCoverage(new Uint8Array([0, 64, 127])), false);
   assert.equal(hasSelectableObjectCoverage(new Uint8Array([0, 128])), true);
 });
@@ -334,6 +336,31 @@ test("point and box prompts are normalized and bounded", () => {
   assert.equal(automaticDetailPromptStroke(automaticSubjectPromptStroke(800, 400), 800, 400), null,
     "automatic main-subject intent must not narrow to a nested centre detail");
   assert.throws(() => automaticSubjectPromptStroke(0, 80), /positive integers/);
+});
+
+test("automatic subject prompts follow visible alpha content on a transparent document", () => {
+  const width = 100; const height = 80; const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let y = 8; y < 28; ++y)
+    for (let x = 10; x < 50; ++x) rgba[(y * width + x) * 4 + 3] = 255;
+  const bounds = visibleContentBounds(rgba, width, height);
+  assert.deepEqual(bounds, { x: 10, y: 8, width: 40, height: 20 });
+  const prompts = automaticSubjectPromptCandidates(width, height, bounds);
+  assert.deepEqual(prompts[0][0].point,
+    compactClickPromptStroke({ x: 30, y: 18 }, width, height));
+  assert.deepEqual(prompts[1][0].point,
+    compactClickPromptStroke({ x: 22.8, y: 15.6 }, width, height));
+  assert.equal(visibleContentBounds(new Uint8Array(width * height * 4), width, height), null);
+  assert.throws(() => automaticSubjectPromptCandidates(width, height,
+    { x: 90, y: 0, width: 20, height: 10 }), /content bounds/);
+});
+
+test("selection cleanup retains a real tiny proposal when opening has no topology", () => {
+  const mask = new Uint8Array(12 * 10); mask[5 * 12 + 6] = 160;
+  const refined = refineObjectSelectionMask(mask, 12, 10);
+  assert.equal(refined[5 * 12 + 6], 160);
+  assert.equal(hasSelectableObjectCoverage(refined), true);
+  assert.equal(hasSelectableObjectCoverage(refineObjectSelectionMask(
+    new Uint8Array(12 * 10), 12, 10)), false);
 });
 
 test("automatic subject discovery rejects border background and joins one split foreground", () => {
