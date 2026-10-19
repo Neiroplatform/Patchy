@@ -454,6 +454,8 @@ test("RU and EN recipes cover background, geometry, fill and export safely", () 
     foregroundColor: "#aabbcc", exportFormat: "webp", exportFilename: "result" };
   const cases = [
     ["Удали фон", ["select-object", "isolate-selection"]],
+    ["Убери фон", ["select-object", "isolate-selection"]],
+    ["Убрать фон", ["select-object", "isolate-selection"]],
     ["Сделай маску объекта", ["select-object", "mask-selection"]],
     ["Blur background radius 7", ["select-object", "invert-selection", "filter-selection"]],
     ["Обесцветь фон", ["select-object", "invert-selection", "filter-selection"]],

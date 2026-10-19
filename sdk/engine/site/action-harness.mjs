@@ -68,7 +68,7 @@ export function planPrompt(prompt, context = {}) {
     ["объект", "человек", "предмет", "субъект", "subject", "object", "person"]);
   const mentionsBackground = includesAny(text, ["фон", "background"]);
   const removesBackground = mentionsBackground && includesAny(text,
-    ["удал", "убер", "remove", "delete"]);
+    ["удал", "убер", "убра", "remove", "delete"]);
   const explicitlyUsesSelection = includesAny(text,
     ["по выделению", "вокруг выделения", "из выделения", "selected area", "selection", "selected object"]);
   const mutatesSelection = mentionsObject || mentionsBackground;
