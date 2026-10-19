@@ -164,7 +164,7 @@ try {
   const lowerSubjectBefore = await canvasPixel(156, 180);
   const revisionBefore = Number((await page.locator("#detailRevision").textContent()).trim());
   await page.click("#actionHarnessButton");
-  await page.fill("#actionPromptInput", "Убрать фон");
+  await page.fill("#actionPromptInput", "Удали фон");
   await page.click("#buildActionPlanButton");
   assert.deepEqual(await page.locator("#actionPlanSteps li").allTextContents(),
     ["1. select-object · automatic subject", "2. isolate-selection"]);
@@ -178,7 +178,7 @@ try {
   assert.ok(revisionAfter >= revisionBefore + 3, `${revisionBefore}->${revisionAfter}`);
   assert.equal(await page.locator("#undoButton").isEnabled(), true);
   assert.equal((await page.locator("#historyList .history-label").allTextContents())
-    .filter((label) => label === "AI edit · Убрать фон").length, 1);
+    .filter((label) => label === "AI edit · Удали фон").length, 1);
   const backgroundAfter = await canvasPixel(16, 16);
   assert.ok(backgroundAfter[3] < backgroundBefore[3],
     `background was not removed: ${backgroundBefore} -> ${backgroundAfter}`);
@@ -393,7 +393,7 @@ try {
   const productDistractorBefore = await canvasPixel(1200, 760);
   const productRevisionBefore = Number((await page.locator("#detailRevision").textContent()).trim());
   await page.click("#actionHarnessButton");
-  await page.fill("#actionPromptInput", "Удали фон");
+  await page.fill("#actionPromptInput", "Убрать фон");
   await page.click("#buildActionPlanButton");
   await page.click("#executeActionPlanButton");
   await page.waitForFunction(({ productRevisionBefore }) =>
