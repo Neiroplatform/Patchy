@@ -2462,8 +2462,10 @@ async function inferObjectSelection(strokes, {
     const result = await objectSelectionClient.segment(strokes, identity);
     if (requestSequence !== objectSelectionRequestSequence) return;
     if (!proposalMatchesSnapshot(identity, snapshot)) throw new Error("Document changed while segmenting the object.");
+    const automaticSubject = strokes.length === 1 && strokes[0]?.brushMode === 1 &&
+      strokes[0]?.promptIntent === "automatic-subject";
     let gray = scaleConfidenceMask(result.confidence, result.width, result.height,
-      snapshot.width, snapshot.height);
+      snapshot.width, snapshot.height, { preserveNonEmptyProposal: automaticSubject });
     if ($("objectRefineEdgesInput").checked) {
       for (let index = 0; index < gray.length; ++index) {
         if (gray[index] < 80) gray[index] = 0;

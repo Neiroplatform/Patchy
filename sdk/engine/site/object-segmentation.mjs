@@ -204,7 +204,8 @@ function maskComponents(binary, width, height, foreground, diagonals = true) {
   return components;
 }
 
-export function refineObjectSelectionMask(source, width, height) {
+export function refineObjectSelectionMask(source, width, height,
+    { preserveNonEmptyProposal = false } = {}) {
   if (!(source instanceof Uint8Array) || source.length !== width * height)
     throw new TypeError("invalid object selection mask");
   if (![width, height].every((value) => Number.isInteger(value) && value > 0))
@@ -227,7 +228,7 @@ export function refineObjectSelectionMask(source, width, height) {
   // every selectable pixel, keep the original model proposal and let the
   // component and rendered-output postconditions below decide whether it is
   // usable. A genuinely empty model result still fails closed.
-  if (!binary.some(Boolean) && hasSelectableObjectCoverage(source))
+  if (preserveNonEmptyProposal && !binary.some(Boolean) && hasSelectableObjectCoverage(source))
     binary.set(originalBinary);
 
   const foreground = maskComponents(binary, width, height, true);
@@ -265,14 +266,15 @@ export function refineObjectSelectionMask(source, width, height) {
   return result;
 }
 
-export function scaleConfidenceMask(source, sourceWidth, sourceHeight, width, height) {
+export function scaleConfidenceMask(source, sourceWidth, sourceHeight, width, height,
+    { preserveNonEmptyProposal = false } = {}) {
   if (!(source instanceof Float32Array) || source.length !== sourceWidth * sourceHeight)
     throw new TypeError("invalid confidence mask");
   if (![sourceWidth, sourceHeight, width, height].every((value) => Number.isInteger(value) && value > 0))
     throw new RangeError("mask dimensions must be positive integers");
   const sourceMask = refineObjectSelectionMask(Uint8Array.from(source,
     (coverage) => Math.round(Math.max(0, Math.min(1, coverage)) * 255)),
-  sourceWidth, sourceHeight);
+  sourceWidth, sourceHeight, { preserveNonEmptyProposal });
   const result = new Uint8Array(width * height);
   for (let y = 0; y < height; ++y) {
     const sourceY = Math.min(sourceHeight - 1, Math.floor((y + .5) * sourceHeight / height));

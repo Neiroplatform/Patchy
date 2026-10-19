@@ -279,8 +279,10 @@ test("automatic object-mask cleanup preserves primary and low-resolution tiny ob
   }
   const weakHalo = new Uint8Array(width * height); weakHalo[4 * width + 4] = 160;
   for (const [x, y] of [[4, 3], [3, 4], [5, 4], [4, 5]]) weakHalo[y * width + x] = 64;
-  assert.equal(refineObjectSelectionMask(weakHalo, width, height)[4 * width + 4], 160,
-    "low-resolution subject was erased by topology cleanup");
+  assert.throws(() => refineObjectSelectionMask(weakHalo, width, height), /emptied proposal/);
+  assert.equal(refineObjectSelectionMask(weakHalo, width, height,
+    { preserveNonEmptyProposal: true })[4 * width + 4], 160,
+  "automatic low-resolution subject was erased by topology cleanup");
   assert.equal(hasSelectableObjectCoverage(new Uint8Array([0, 64, 127])), false);
   assert.equal(hasSelectableObjectCoverage(new Uint8Array([0, 128])), true);
 });
@@ -356,7 +358,8 @@ test("automatic subject prompts follow visible alpha content on a transparent do
 
 test("selection cleanup retains a real tiny proposal when opening has no topology", () => {
   const mask = new Uint8Array(12 * 10); mask[5 * 12 + 6] = 160;
-  const refined = refineObjectSelectionMask(mask, 12, 10);
+  const refined = refineObjectSelectionMask(mask, 12, 10,
+    { preserveNonEmptyProposal: true });
   assert.equal(refined[5 * 12 + 6], 160);
   assert.equal(hasSelectableObjectCoverage(refined), true);
   assert.equal(hasSelectableObjectCoverage(refineObjectSelectionMask(
